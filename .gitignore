@@ -1,0 +1,6 @@
+node_modules/
+*.log
+.rereview.log
+dist/
+.DS_Store
+*.tmp

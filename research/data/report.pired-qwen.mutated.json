@@ -1,0 +1,967 @@
+{
+  "window": 3,
+  "summary": {
+    "total_truth": 53,
+    "total_findings": 59,
+    "true_positives": 39,
+    "false_negatives": 14,
+    "false_positives": 20,
+    "precision": 0.661,
+    "recall": 0.7358,
+    "f1": 0.6964
+  },
+  "recall_by_severity": {
+    "critical": {
+      "total": 14,
+      "tp": 14,
+      "recall": 1.0
+    },
+    "high": {
+      "total": 27,
+      "tp": 19,
+      "recall": 0.7037
+    },
+    "low": {
+      "total": 3,
+      "tp": 0,
+      "recall": 0.0
+    },
+    "medium": {
+      "total": 9,
+      "tp": 6,
+      "recall": 0.6667
+    }
+  },
+  "recall_by_owasp": {
+    "A01:2021-Broken Access Control": {
+      "total": 12,
+      "tp": 7,
+      "recall": 0.5833
+    },
+    "A02:2021-Cryptographic Failures": {
+      "total": 4,
+      "tp": 3,
+      "recall": 0.75
+    },
+    "A03:2021-Injection": {
+      "total": 14,
+      "tp": 13,
+      "recall": 0.9286
+    },
+    "A04:2021-Insecure Design": {
+      "total": 3,
+      "tp": 2,
+      "recall": 0.6667
+    },
+    "A05:2021-Security Misconfiguration": {
+      "total": 9,
+      "tp": 6,
+      "recall": 0.6667
+    },
+    "A06:2021-Vulnerable and Outdated Components": {
+      "total": 1,
+      "tp": 0,
+      "recall": 0.0
+    },
+    "A07:2021-Identification and Authentication Failures": {
+      "total": 4,
+      "tp": 3,
+      "recall": 0.75
+    },
+    "A08:2021-Software and Data Integrity Failures": {
+      "total": 3,
+      "tp": 3,
+      "recall": 1.0
+    },
+    "A09:2021-Security Logging and Monitoring Failures": {
+      "total": 1,
+      "tp": 0,
+      "recall": 0.0
+    },
+    "A10:2021-Server-Side Request Forgery": {
+      "total": 2,
+      "tp": 2,
+      "recall": 1.0
+    }
+  },
+  "decoys": {
+    "enabled": true,
+    "total_decoys": 6,
+    "decoy_fp_count": 0,
+    "decoys_triggered": 0,
+    "decoy_fp_rate": 0.0,
+    "hits": []
+  },
+  "matches": [
+    {
+      "truth_id": "jwt-none-alg-bypass",
+      "file": "eval/variants/mutated/backend/auth.py",
+      "truth_line_range": [
+        27,
+        34
+      ],
+      "finding_index": 0,
+      "predicted_line": 30,
+      "line_distance": 0
+    },
+    {
+      "truth_id": "weak-password-hash-md5",
+      "file": "eval/variants/mutated/backend/models.py",
+      "truth_line_range": [
+        31,
+        35
+      ],
+      "finding_index": 47,
+      "predicted_line": 32,
+      "line_distance": 0
+    },
+    {
+      "truth_id": "hardcoded-flask-secret",
+      "file": "eval/variants/mutated/backend/app.py",
+      "truth_line_range": [
+        23,
+        23
+      ],
+      "finding_index": 48,
+      "predicted_line": 23,
+      "line_distance": 0
+    },
+    {
+      "truth_id": "cors-reflect-origin",
+      "file": "eval/variants/mutated/backend/app.py",
+      "truth_line_range": [
+        56,
+        62
+      ],
+      "finding_index": 49,
+      "predicted_line": 59,
+      "line_distance": 0
+    },
+    {
+      "truth_id": "debug-mode-enabled",
+      "file": "eval/variants/mutated/backend/app.py",
+      "truth_line_range": [
+        237,
+        237
+      ],
+      "finding_index": 50,
+      "predicted_line": 237,
+      "line_distance": 0
+    },
+    {
+      "truth_id": "sqli-register",
+      "file": "eval/variants/mutated/backend/routes/auth_routes.py",
+      "truth_line_range": [
+        26,
+        28
+      ],
+      "finding_index": 3,
+      "predicted_line": 27,
+      "line_distance": 0
+    },
+    {
+      "truth_id": "sqli-login",
+      "file": "eval/variants/mutated/backend/routes/auth_routes.py",
+      "truth_line_range": [
+        41,
+        42
+      ],
+      "finding_index": 2,
+      "predicted_line": 41,
+      "line_distance": 0
+    },
+    {
+      "truth_id": "insecure-session-cookie",
+      "file": "eval/variants/mutated/backend/routes/auth_routes.py",
+      "truth_line_range": [
+        79,
+        79
+      ],
+      "finding_index": 8,
+      "predicted_line": 79,
+      "line_distance": 0
+    },
+    {
+      "truth_id": "idor-update-password",
+      "file": "eval/variants/mutated/backend/routes/auth_routes.py",
+      "truth_line_range": [
+        151,
+        161
+      ],
+      "finding_index": 4,
+      "predicted_line": 153,
+      "line_distance": 0
+    },
+    {
+      "truth_id": "predictable-reset-token",
+      "file": "eval/variants/mutated/backend/routes/auth_routes.py",
+      "truth_line_range": [
+        180,
+        180
+      ],
+      "finding_index": 5,
+      "predicted_line": 180,
+      "line_distance": 0
+    },
+    {
+      "truth_id": "yaml-deserialization",
+      "file": "eval/variants/mutated/backend/routes/auth_routes.py",
+      "truth_line_range": [
+        219,
+        223
+      ],
+      "finding_index": 6,
+      "predicted_line": 223,
+      "line_distance": 0
+    },
+    {
+      "truth_id": "sqli-get-transactions",
+      "file": "eval/variants/mutated/backend/routes/transaction_routes.py",
+      "truth_line_range": [
+        52,
+        54
+      ],
+      "finding_index": 11,
+      "predicted_line": 54,
+      "line_distance": 0
+    },
+    {
+      "truth_id": "sqli-search",
+      "file": "eval/variants/mutated/backend/routes/transaction_routes.py",
+      "truth_line_range": [
+        94,
+        100
+      ],
+      "finding_index": 13,
+      "predicted_line": 98,
+      "line_distance": 0
+    },
+    {
+      "truth_id": "biz-logic-negative-amount",
+      "file": "eval/variants/mutated/backend/routes/transaction_routes.py",
+      "truth_line_range": [
+        17,
+        42
+      ],
+      "finding_index": 14,
+      "predicted_line": 35,
+      "line_distance": 0
+    },
+    {
+      "truth_id": "stored-xss-receipt",
+      "file": "eval/variants/mutated/backend/routes/transaction_routes.py",
+      "truth_line_range": [
+        165,
+        193
+      ],
+      "finding_index": 17,
+      "predicted_line": 187,
+      "line_distance": 0
+    },
+    {
+      "truth_id": "broken-access-split-bill",
+      "file": "eval/variants/mutated/backend/routes/transaction_routes.py",
+      "truth_line_range": [
+        204,
+        219
+      ],
+      "finding_index": 16,
+      "predicted_line": 217,
+      "line_distance": 0
+    },
+    {
+      "truth_id": "unrestricted-file-upload",
+      "file": "eval/variants/mutated/backend/routes/upload_routes.py",
+      "truth_line_range": [
+        29,
+        55
+      ],
+      "finding_index": 45,
+      "predicted_line": 41,
+      "line_distance": 0
+    },
+    {
+      "truth_id": "upload-path-traversal",
+      "file": "eval/variants/mutated/backend/routes/upload_routes.py",
+      "truth_line_range": [
+        37,
+        41
+      ],
+      "finding_index": 44,
+      "predicted_line": 38,
+      "line_distance": 0
+    },
+    {
+      "truth_id": "cmdi-generate-report",
+      "file": "eval/variants/mutated/backend/routes/admin_routes.py",
+      "truth_line_range": [
+        41,
+        51
+      ],
+      "finding_index": 18,
+      "predicted_line": 48,
+      "line_distance": 0
+    },
+    {
+      "truth_id": "cmdi-system-status",
+      "file": "eval/variants/mutated/backend/routes/admin_routes.py",
+      "truth_line_range": [
+        54,
+        61
+      ],
+      "finding_index": 19,
+      "predicted_line": 59,
+      "line_distance": 0
+    },
+    {
+      "truth_id": "cmdi-ping",
+      "file": "eval/variants/mutated/backend/routes/admin_routes.py",
+      "truth_line_range": [
+        64,
+        81
+      ],
+      "finding_index": 20,
+      "predicted_line": 70,
+      "line_distance": 0
+    },
+    {
+      "truth_id": "cmdi-dns-lookup",
+      "file": "eval/variants/mutated/backend/routes/admin_routes.py",
+      "truth_line_range": [
+        84,
+        97
+      ],
+      "finding_index": 21,
+      "predicted_line": 88,
+      "line_distance": 0
+    },
+    {
+      "truth_id": "ssrf-webhook-test",
+      "file": "eval/variants/mutated/backend/routes/admin_routes.py",
+      "truth_line_range": [
+        104,
+        117
+      ],
+      "finding_index": 22,
+      "predicted_line": 111,
+      "line_distance": 0
+    },
+    {
+      "truth_id": "ssrf-fetch-avatar",
+      "file": "eval/variants/mutated/backend/routes/admin_routes.py",
+      "truth_line_range": [
+        120,
+        129
+      ],
+      "finding_index": 23,
+      "predicted_line": 126,
+      "line_distance": 0
+    },
+    {
+      "truth_id": "path-traversal-download",
+      "file": "eval/variants/mutated/backend/routes/admin_routes.py",
+      "truth_line_range": [
+        136,
+        142
+      ],
+      "finding_index": 24,
+      "predicted_line": 142,
+      "line_distance": 0
+    },
+    {
+      "truth_id": "path-traversal-view-log",
+      "file": "eval/variants/mutated/backend/routes/admin_routes.py",
+      "truth_line_range": [
+        145,
+        153
+      ],
+      "finding_index": 25,
+      "predicted_line": 150,
+      "line_distance": 0
+    },
+    {
+      "truth_id": "xxe-import-data",
+      "file": "eval/variants/mutated/backend/routes/admin_routes.py",
+      "truth_line_range": [
+        160,
+        177
+      ],
+      "finding_index": 26,
+      "predicted_line": 165,
+      "line_distance": 0
+    },
+    {
+      "truth_id": "pickle-deser-import-session",
+      "file": "eval/variants/mutated/backend/routes/admin_routes.py",
+      "truth_line_range": [
+        184,
+        193
+      ],
+      "finding_index": 27,
+      "predicted_line": 191,
+      "line_distance": 0
+    },
+    {
+      "truth_id": "mass-assignment-update-user",
+      "file": "eval/variants/mutated/backend/routes/admin_routes.py",
+      "truth_line_range": [
+        213,
+        226
+      ],
+      "finding_index": 28,
+      "predicted_line": 223,
+      "line_distance": 0
+    },
+    {
+      "truth_id": "ssti-preview-email",
+      "file": "eval/variants/mutated/backend/routes/admin_routes.py",
+      "truth_line_range": [
+        233,
+        242
+      ],
+      "finding_index": 29,
+      "predicted_line": 240,
+      "line_distance": 0
+    },
+    {
+      "truth_id": "open-redirect",
+      "file": "eval/variants/mutated/backend/routes/admin_routes.py",
+      "truth_line_range": [
+        249,
+        253
+      ],
+      "finding_index": 30,
+      "predicted_line": 253,
+      "line_distance": 0
+    },
+    {
+      "truth_id": "redos-search-users",
+      "file": "eval/variants/mutated/backend/routes/admin_routes.py",
+      "truth_line_range": [
+        315,
+        327
+      ],
+      "finding_index": 31,
+      "predicted_line": 324,
+      "line_distance": 0
+    },
+    {
+      "truth_id": "code-injection-calculate",
+      "file": "eval/variants/mutated/backend/routes/admin_routes.py",
+      "truth_line_range": [
+        335,
+        345
+      ],
+      "finding_index": 32,
+      "predicted_line": 342,
+      "line_distance": 0
+    },
+    {
+      "truth_id": "code-injection-run-script",
+      "file": "eval/variants/mutated/backend/routes/admin_routes.py",
+      "truth_line_range": [
+        348,
+        357
+      ],
+      "finding_index": 33,
+      "predicted_line": 355,
+      "line_distance": 0
+    },
+    {
+      "truth_id": "code-injection-format-data",
+      "file": "eval/variants/mutated/backend/routes/admin_routes.py",
+      "truth_line_range": [
+        360,
+        370
+      ],
+      "finding_index": 34,
+      "predicted_line": 367,
+      "line_distance": 0
+    },
+    {
+      "truth_id": "weak-hash-sha1",
+      "file": "eval/variants/mutated/backend/routes/admin_routes.py",
+      "truth_line_range": [
+        377,
+        389
+      ],
+      "finding_index": 35,
+      "predicted_line": 384,
+      "line_distance": 0
+    },
+    {
+      "truth_id": "weak-hash-md5-token",
+      "file": "eval/variants/mutated/backend/routes/admin_routes.py",
+      "truth_line_range": [
+        392,
+        400
+      ],
+      "finding_index": 36,
+      "predicted_line": 398,
+      "line_distance": 0
+    },
+    {
+      "truth_id": "hardcoded-password-master-login",
+      "file": "eval/variants/mutated/backend/routes/admin_routes.py",
+      "truth_line_range": [
+        407,
+        416
+      ],
+      "finding_index": 37,
+      "predicted_line": 413,
+      "line_distance": 0
+    },
+    {
+      "truth_id": "secrets-leak-dashboard",
+      "file": "eval/variants/mutated/backend/routes/admin_routes.py",
+      "truth_line_range": [
+        453,
+        466
+      ],
+      "finding_index": 42,
+      "predicted_line": 460,
+      "line_distance": 0
+    }
+  ],
+  "false_negatives": [
+    {
+      "id": "verbose-error-disclosure",
+      "title": "Error handlers leak str(error) to clients",
+      "file": "eval/variants/mutated/backend/app.py",
+      "line": 82,
+      "line_range": [
+        76,
+        82
+      ],
+      "cwe": "CWE-209",
+      "vuln_class": "info-disclosure",
+      "severity": "low",
+      "owasp_2021": "A05:2021-Security Misconfiguration"
+    },
+    {
+      "id": "pii-ssn-exposure",
+      "title": "Sensitive PII (SSN) stored/returned in user profile",
+      "file": "eval/variants/mutated/backend/app.py",
+      "line": 102,
+      "line_range": [
+        94,
+        172
+      ],
+      "cwe": "CWE-359",
+      "vuln_class": "sensitive-data-exposure",
+      "severity": "medium",
+      "owasp_2021": "A02:2021-Cryptographic Failures"
+    },
+    {
+      "id": "host-header-reset-poisoning",
+      "title": "Password-reset link built from Host header",
+      "file": "eval/variants/mutated/backend/routes/auth_routes.py",
+      "line": 186,
+      "line_range": [
+        186,
+        187
+      ],
+      "cwe": "CWE-644",
+      "vuln_class": "host-header-injection",
+      "severity": "medium",
+      "owasp_2021": "A07:2021-Identification and Authentication Failures"
+    },
+    {
+      "id": "race-double-spend",
+      "title": "Non-atomic balance update (race-condition double-spend)",
+      "file": "eval/variants/mutated/backend/routes/transaction_routes.py",
+      "line": 38,
+      "line_range": [
+        27,
+        42
+      ],
+      "cwe": "CWE-362",
+      "vuln_class": "race-condition",
+      "severity": "high",
+      "owasp_2021": "A04:2021-Insecure Design"
+    },
+    {
+      "id": "csrf-quickpay",
+      "title": "CSRF: cookie-auth transfer with no CSRF token",
+      "file": "eval/variants/mutated/backend/routes/transaction_routes.py",
+      "line": 127,
+      "line_range": [
+        127,
+        150
+      ],
+      "cwe": "CWE-352",
+      "vuln_class": "csrf",
+      "severity": "high",
+      "owasp_2021": "A01:2021-Broken Access Control"
+    },
+    {
+      "id": "idor-receipt",
+      "title": "Unauthenticated IDOR on transaction receipt",
+      "file": "eval/variants/mutated/backend/routes/transaction_routes.py",
+      "line": 165,
+      "line_range": [
+        165,
+        176
+      ],
+      "cwe": "CWE-639",
+      "vuln_class": "idor",
+      "severity": "high",
+      "owasp_2021": "A01:2021-Broken Access Control"
+    },
+    {
+      "id": "stored-xss-upload-serve",
+      "title": "Uploaded SVG/HTML served inline (stored XSS)",
+      "file": "eval/variants/mutated/backend/routes/upload_routes.py",
+      "line": 64,
+      "line_range": [
+        58,
+        68
+      ],
+      "cwe": "CWE-79",
+      "vuln_class": "xss",
+      "severity": "high",
+      "owasp_2021": "A03:2021-Injection"
+    },
+    {
+      "id": "vulnerable-dependencies",
+      "title": "Pinned known-vulnerable dependencies",
+      "file": "eval/variants/mutated/backend/requirements.txt",
+      "line": 1,
+      "line_range": [
+        1,
+        9
+      ],
+      "cwe": "CWE-1395",
+      "vuln_class": "vulnerable-dependency",
+      "severity": "high",
+      "owasp_2021": "A06:2021-Vulnerable and Outdated Components"
+    },
+    {
+      "id": "hardcoded-secrets-block",
+      "title": "Hardcoded API keys and credentials",
+      "file": "eval/variants/mutated/backend/routes/admin_routes.py",
+      "line": 23,
+      "line_range": [
+        23,
+        31
+      ],
+      "cwe": "CWE-798",
+      "vuln_class": "hardcoded-secret",
+      "severity": "high",
+      "owasp_2021": "A05:2021-Security Misconfiguration"
+    },
+    {
+      "id": "log-injection-audit",
+      "title": "Log injection via unescaped user input",
+      "file": "eval/variants/mutated/backend/routes/admin_routes.py",
+      "line": 267,
+      "line_range": [
+        260,
+        278
+      ],
+      "cwe": "CWE-117",
+      "vuln_class": "log-injection",
+      "severity": "low",
+      "owasp_2021": "A09:2021-Security Logging and Monitoring Failures"
+    },
+    {
+      "id": "broken-access-list-users",
+      "title": "Broken access control + password_hash leak in list users",
+      "file": "eval/variants/mutated/backend/routes/admin_routes.py",
+      "line": 295,
+      "line_range": [
+        285,
+        297
+      ],
+      "cwe": "CWE-285",
+      "vuln_class": "broken-access-control",
+      "severity": "high",
+      "owasp_2021": "A01:2021-Broken Access Control"
+    },
+    {
+      "id": "broken-access-delete-user",
+      "title": "Broken access control in delete user",
+      "file": "eval/variants/mutated/backend/routes/admin_routes.py",
+      "line": 300,
+      "line_range": [
+        300,
+        308
+      ],
+      "cwe": "CWE-285",
+      "vuln_class": "broken-access-control",
+      "severity": "high",
+      "owasp_2021": "A01:2021-Broken Access Control"
+    },
+    {
+      "id": "assert-authorization",
+      "title": "Assert used for authorization",
+      "file": "eval/variants/mutated/backend/routes/admin_routes.py",
+      "line": 426,
+      "line_range": [
+        423,
+        431
+      ],
+      "cwe": "CWE-617",
+      "vuln_class": "broken-access-control",
+      "severity": "medium",
+      "owasp_2021": "A01:2021-Broken Access Control"
+    },
+    {
+      "id": "insecure-temp-file",
+      "title": "Insecure predictable temp file",
+      "file": "eval/variants/mutated/backend/routes/admin_routes.py",
+      "line": 443,
+      "line_range": [
+        437,
+        447
+      ],
+      "cwe": "CWE-377",
+      "vuln_class": "insecure-temp-file",
+      "severity": "low",
+      "owasp_2021": "A05:2021-Security Misconfiguration"
+    }
+  ],
+  "false_positives": [
+    {
+      "finding_index": 1,
+      "file": "backend/auth.py",
+      "predicted_line": 27,
+      "interval": [
+        27,
+        27
+      ],
+      "cwe": "CWE-798",
+      "vuln_class": "hardcoded-secret",
+      "is_decoy": false
+    },
+    {
+      "finding_index": 7,
+      "file": "backend/routes/auth_routes.py",
+      "predicted_line": 26,
+      "interval": [
+        26,
+        26
+      ],
+      "cwe": "CWE-328",
+      "vuln_class": "weak-crypto",
+      "is_decoy": false
+    },
+    {
+      "finding_index": 9,
+      "file": "backend/routes/auth_routes.py",
+      "predicted_line": 107,
+      "interval": [
+        107,
+        107
+      ],
+      "cwe": "CWE-200",
+      "vuln_class": "sensitive-data-exposure",
+      "is_decoy": false
+    },
+    {
+      "finding_index": 10,
+      "file": "backend/routes/auth_routes.py",
+      "predicted_line": 127,
+      "interval": [
+        127,
+        127
+      ],
+      "cwe": "CWE-915",
+      "vuln_class": "mass-assignment",
+      "is_decoy": false
+    },
+    {
+      "finding_index": 12,
+      "file": "backend/routes/transaction_routes.py",
+      "predicted_line": 50,
+      "interval": [
+        50,
+        50
+      ],
+      "cwe": "CWE-639",
+      "vuln_class": "idor",
+      "is_decoy": false
+    },
+    {
+      "finding_index": 15,
+      "file": "backend/routes/transaction_routes.py",
+      "predicted_line": 140,
+      "interval": [
+        140,
+        140
+      ],
+      "cwe": "CWE-841",
+      "vuln_class": "business-logic",
+      "is_decoy": false
+    },
+    {
+      "finding_index": 38,
+      "file": "backend/routes/admin_routes.py",
+      "predicted_line": 426,
+      "interval": [
+        426,
+        426
+      ],
+      "cwe": "CWE-862",
+      "vuln_class": "broken-authz",
+      "is_decoy": false
+    },
+    {
+      "finding_index": 39,
+      "file": "backend/routes/admin_routes.py",
+      "predicted_line": 295,
+      "interval": [
+        295,
+        295
+      ],
+      "cwe": "CWE-200",
+      "vuln_class": "sensitive-data-exposure",
+      "is_decoy": false
+    },
+    {
+      "finding_index": 40,
+      "file": "backend/routes/admin_routes.py",
+      "predicted_line": 284,
+      "interval": [
+        284,
+        284
+      ],
+      "cwe": "CWE-862",
+      "vuln_class": "broken-authz",
+      "is_decoy": false
+    },
+    {
+      "finding_index": 41,
+      "file": "backend/routes/admin_routes.py",
+      "predicted_line": 444,
+      "interval": [
+        444,
+        444
+      ],
+      "cwe": "CWE-733",
+      "vuln_class": "insecure-file-perms",
+      "is_decoy": false
+    },
+    {
+      "finding_index": 43,
+      "file": "backend/routes/admin_routes.py",
+      "predicted_line": 17,
+      "interval": [
+        17,
+        17
+      ],
+      "cwe": "CWE-798",
+      "vuln_class": "hardcoded-secret",
+      "is_decoy": false
+    },
+    {
+      "finding_index": 46,
+      "file": "backend/routes/upload_routes.py",
+      "predicted_line": 60,
+      "interval": [
+        60,
+        60
+      ],
+      "cwe": "CWE-22",
+      "vuln_class": "path-traversal",
+      "is_decoy": false
+    },
+    {
+      "finding_index": 51,
+      "file": "backend/app.py",
+      "predicted_line": 93,
+      "interval": [
+        93,
+        93
+      ],
+      "cwe": "CWE-1393",
+      "vuln_class": "hardcoded-credentials",
+      "is_decoy": false
+    },
+    {
+      "finding_index": 52,
+      "file": "docker-compose.yml",
+      "predicted_line": 15,
+      "interval": [
+        15,
+        15
+      ],
+      "cwe": "CWE-798",
+      "vuln_class": "hardcoded-secret",
+      "is_decoy": false
+    },
+    {
+      "finding_index": 53,
+      "file": "frontend/src/components/AdminPanel.js",
+      "predicted_line": 112,
+      "interval": [
+        112,
+        112
+      ],
+      "cwe": "CWE-95",
+      "vuln_class": "xss",
+      "is_decoy": false
+    },
+    {
+      "finding_index": 54,
+      "file": "frontend/src/components/AdminPanel.js",
+      "predicted_line": 171,
+      "interval": [
+        171,
+        171
+      ],
+      "cwe": "CWE-79",
+      "vuln_class": "xss",
+      "is_decoy": false
+    },
+    {
+      "finding_index": 55,
+      "file": "frontend/src/components/AdminPanel.js",
+      "predicted_line": 55,
+      "interval": [
+        55,
+        55
+      ],
+      "cwe": "CWE-95",
+      "vuln_class": "code-injection",
+      "is_decoy": false
+    },
+    {
+      "finding_index": 56,
+      "file": "frontend/src/components/AdminPanel.js",
+      "predicted_line": 102,
+      "interval": [
+        102,
+        102
+      ],
+      "cwe": "CWE-79",
+      "vuln_class": "xss",
+      "is_decoy": false
+    },
+    {
+      "finding_index": 57,
+      "file": "frontend/src/components/AdminPanel.js",
+      "predicted_line": 164,
+      "interval": [
+        164,
+        164
+      ],
+      "cwe": "CWE-79",
+      "vuln_class": "xss",
+      "is_decoy": false
+    },
+    {
+      "finding_index": 58,
+      "file": "frontend/src/components/AdminPanel.js",
+      "predicted_line": 71,
+      "interval": [
+        71,
+        71
+      ],
+      "cwe": "CWE-798",
+      "vuln_class": "hardcoded-secret",
+      "is_decoy": false
+    }
+  ],
+  "manifest_applied": 53
+}

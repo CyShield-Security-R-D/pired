@@ -1,0 +1,12 @@
+{
+  "source": "OpenRouter per-request logs (qwen arms, exact) + codex CLI token report (estimated cost at list price)",
+  "rates_usd_per_1M_tokens": {
+    "qwen/qwen3.8-27b":   {"input": 0.40, "output": 3.00, "provider": "OpenRouter/Parasail"},
+    "openai/gpt-5.6-sol": {"input": 2.00, "output": 10.00, "provider": "OpenAI Codex CLI v0.147.0"}
+  },
+  "arms": {
+    "A_pired_qwen":   {"turns": 17, "input_tokens": 485130, "output_tokens": 13664, "total_tokens": 498794, "cost_usd": 0.2619, "true_positives": 39, "cost_per_vuln_cents": 0.67, "measured": true},
+    "C_vanilla_qwen": {"turns": 16, "input_tokens": 401513, "output_tokens": 11992, "total_tokens": 413505, "cost_usd": 0.1577, "true_positives": 31, "cost_per_vuln_cents": 0.51, "measured": true},
+    "B_codex_gpt56sol": {"total_tokens": 55272, "cost_usd_est": 0.19, "true_positives": 36, "cost_per_vuln_cents": 0.53, "measured": false, "note": "CLI-reported token total; cost estimated at list price; likely benefits from OpenAI prompt caching"}
+  }
+}

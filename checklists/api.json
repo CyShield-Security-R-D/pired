@@ -1,0 +1,19 @@
+{
+  "v": 1,
+  "targetType": "api",
+  "classes": [
+    { "id": "idor",              "title": "Broken object-level authorization (BOLA / IDOR)",   "cwe": ["CWE-639", "CWE-284"] },
+    { "id": "authn",             "title": "Broken authentication",                             "cwe": ["CWE-287", "CWE-345"] },
+    { "id": "authz",             "title": "Broken function-level authorization (BFLA)",         "cwe": ["CWE-285", "CWE-862"] },
+    { "id": "dataexposure",      "title": "Excessive data exposure (object property level)",   "cwe": ["CWE-213", "CWE-200"] },
+    { "id": "massassign",        "title": "Mass assignment / over-posting",                    "cwe": ["CWE-915"] },
+    { "id": "ratelimit",         "title": "Unrestricted resource consumption / rate limiting", "cwe": ["CWE-770", "CWE-799"] },
+    { "id": "logic",             "title": "Unrestricted access to sensitive business flows",   "cwe": ["CWE-840", "CWE-841"] },
+    { "id": "ssrf",              "title": "Server-side request forgery",                       "cwe": ["CWE-918"] },
+    { "id": "injection",         "title": "Injection (SQL / NoSQL / command)",                 "cwe": ["CWE-89", "CWE-943", "CWE-78"] },
+    { "id": "misconfig",         "title": "Security misconfiguration (CORS / headers / XXE)",  "cwe": ["CWE-16", "CWE-611"] },
+    { "id": "inventory",         "title": "Improper inventory / version management",           "cwe": ["CWE-1059", "CWE-668"] },
+    { "id": "unsafe-consumption","title": "Unsafe consumption of upstream APIs",               "cwe": ["CWE-20", "CWE-345"] },
+    { "id": "secrets",           "title": "Exposed API keys / secrets",                        "cwe": ["CWE-798", "CWE-200"] }
+  ]
+}

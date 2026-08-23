@@ -1,0 +1,27 @@
+{
+  "v": 1,
+  "targetType": "web",
+  "classes": [
+    { "id": "authz",     "title": "Broken access control / privilege escalation", "cwe": ["CWE-284", "CWE-862", "CWE-863"] },
+    { "id": "idor",      "title": "Insecure direct object reference (IDOR)",       "cwe": ["CWE-639", "CWE-566"] },
+    { "id": "massassign","title": "Mass assignment / over-posting",                "cwe": ["CWE-915", "CWE-913"] },
+    { "id": "authn",     "title": "Broken authentication & session management",    "cwe": ["CWE-287", "CWE-384", "CWE-613"] },
+    { "id": "sqli",      "title": "SQL injection",                                 "cwe": ["CWE-89"] },
+    { "id": "nosqli",    "title": "NoSQL injection",                               "cwe": ["CWE-943"] },
+    { "id": "cmdi",      "title": "OS command injection",                          "cwe": ["CWE-78"] },
+    { "id": "injection", "title": "LDAP / XPath / other injection",                "cwe": ["CWE-90", "CWE-643", "CWE-91"] },
+    { "id": "xss",       "title": "Cross-site scripting",                          "cwe": ["CWE-79"] },
+    { "id": "ssti",      "title": "Server-side template injection",                "cwe": ["CWE-1336", "CWE-94"] },
+    { "id": "ssrf",      "title": "Server-side request forgery",                   "cwe": ["CWE-918"] },
+    { "id": "xxe",       "title": "XML external entity injection",                 "cwe": ["CWE-611"] },
+    { "id": "deser",     "title": "Insecure deserialization",                      "cwe": ["CWE-502"] },
+    { "id": "traversal", "title": "Path traversal / local file inclusion",         "cwe": ["CWE-22", "CWE-98"] },
+    { "id": "upload",    "title": "Unrestricted file upload",                      "cwe": ["CWE-434"] },
+    { "id": "csrf",      "title": "Cross-site request forgery",                    "cwe": ["CWE-352"] },
+    { "id": "redirect",  "title": "Open redirect",                                 "cwe": ["CWE-601"] },
+    { "id": "secrets",   "title": "Sensitive data exposure / exposed secrets",     "cwe": ["CWE-200", "CWE-798"] },
+    { "id": "misconfig", "title": "Security misconfiguration & missing headers",   "cwe": ["CWE-16", "CWE-693"] },
+    { "id": "ratelimit", "title": "Missing rate limiting / anti-automation",       "cwe": ["CWE-307", "CWE-799"] },
+    { "id": "logic",     "title": "Business logic flaws",                          "cwe": ["CWE-840", "CWE-841"] }
+  ]
+}

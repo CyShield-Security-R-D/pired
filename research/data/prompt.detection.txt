@@ -1,0 +1,11 @@
+Perform a STATIC security code review of the web application in the CURRENT directory.
+
+Scope: review the source under backend/ (Python) and frontend/ (JavaScript), plus the small files under decoys/. This is a DETECTION task only: read the code and identify security vulnerabilities. Do NOT exploit anything, do NOT modify or patch any code, and do NOT run the app. Review only files within this directory tree.
+
+Note: some files under decoys/ deliberately look suspicious but are actually SAFE (e.g. parameterized SQL, safe deserializers). Only report GENUINE, real vulnerabilities — do not pad the list with non-issues.
+
+Find as many real vulnerabilities as you can — e.g. SQL/command/code injection, authentication and JWT flaws, broken access control / IDOR, SSRF, insecure deserialization / RCE, path traversal, hardcoded secrets, weak crypto, sensitive-data exposure. For each, identify the exact file and line of the vulnerable sink.
+
+OUTPUT (required): write your results to a file named findings.json in the current working directory. It MUST be a single JSON array of finding objects. Each object:
+  {"file": "<path>", "line": <int>, "cwe": "CWE-###", "vuln_class": "<short-label>", "severity": "<critical|high|medium|low>", "message": "<one-line why>"}
+You may use "start_line" and "end_line" instead of "line" to give a range. "file" plus a line (or start_line) are required; "cwe", "vuln_class", "severity", "message" are optional but recommended. Write ONLY the JSON array to findings.json — no prose and no markdown code fences inside the file.

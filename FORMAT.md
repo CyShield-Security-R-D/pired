@@ -1,0 +1,239 @@
+# pired — Engagement Workspace Format
+
+> **Status: specification (design phase).** This documents the on-disk formats
+> pired reads and writes. It is intentionally independent of any implementation:
+> the formats are the artifact meant to outlive the code (see `PLAN.md` §3.1, §5).
+> An engagement captured under this spec must remain readable and migratable by
+> any future pired or third-party tool.
+
+## 1. Principles
+
+- **Disk is the source of truth.** All durable engagement state lives in files, not in a session transcript or a database.
+- **Open, boring formats.** JSON, JSONL, and Markdown only. No binary, no proprietary container.
+- **Append-only where possible.** Ledgers (`*.jsonl`) are append-only; "updates" are new records with the same `id` (last-write-wins on read). This is crash-safe and merge-friendly.
+- **Branch-independent facts.** A record, once written, is a fact about the engagement, not about a conversation branch. Navigating a session backward never rewinds these files.
+- **Tolerant readers.** Unknown fields are preserved, not dropped. A newer writer may add fields an older reader ignores.
+- **Versioned + migratable.** Every store is versioned; migrations are forward-only and documented here.
+
+## 2. Location
+
+```
+~/.pired/engagements/<name>/      # default; overridable via scope config `workspace`
+```
+
+`<name>` is the engagement id (slug of `scope.engagement`). The workspace is kept
+**outside the target tree** so loot and notes never land in a repository under review.
+
+## 3. Versioning
+
+- The workspace root holds a `manifest.json` declaring `formatVersion` (integer) and per-store versions.
+- **Every JSONL record also carries its own `v` (integer schema version)** so a single file can contain mixed versions during a migration and still be read safely.
+- Current `formatVersion`: **1**. All record `v`: **1**.
+
+Migration rules:
+
+- Forward-only. A reader at version *N* can read records at version ≤ *N*.
+- On load, pired may rewrite a store to the current version (append-only stores are rewritten atomically via temp-file + rename); the pre-migration file is retained as `<store>.v<old>.bak` until the next clean run.
+- Removing or repurposing a field is a **major** format change (bump `formatVersion`) with a migration note in §12. Adding an optional field is **not** a version bump.
+
+## 4. Common record shape (JSONL stores)
+
+Every line in a `*.jsonl` store is one JSON object sharing this base:
+
+```jsonc
+{
+  "v": 1,                      // record schema version
+  "id": "f3a9",                // short, stable id, unique within its store
+  "createdAt": "2026-08-23T14:02:11Z",   // ISO-8601 UTC
+  "updatedAt": "2026-08-23T15:20:04Z",   // present when the record was superseded
+  "kind": "...",               // discriminator (store-specific; see below)
+  // ...store-specific fields
+}
+```
+
+Read semantics: group by `id`, keep the record with the latest `createdAt`/`updatedAt`.
+A record with `"deleted": true` (soft-delete tombstone) hides the id from reads.
+
+## 5. `manifest.json`
+
+Single JSON object at the workspace root.
+
+```jsonc
+{
+  "formatVersion": 1,
+  "engagement": "acme-webapp-2026",
+  "createdAt": "2026-08-23T14:00:00Z",
+  "stores": {
+    "inventory": 1, "hypotheses": 1, "findings": 1,
+    "blockers": 1, "loot": 1
+  }
+}
+```
+
+## 6. `scope.json`
+
+Single JSON object — the authorized engagement scope. Canonical copy of the
+`pired.scope.json` the engagement was launched with. See `PLAN.md` §8.
+
+```jsonc
+{
+  "v": 1,
+  "engagement": "acme-webapp-2026",
+  "authorized": false,             // must be true for offensive tools in enforce mode
+  "mode": "enforce",               // "enforce" | "warn" | "off"
+  "workspace": "~/.pired/engagements/acme-webapp-2026",
+  "targets": {
+    "domains": ["*.acme.test", "acme.test"],
+    "ips": ["10.10.10.5"],
+    "cidrs": ["10.10.20.0/24"],
+    "urls": ["https://app.acme.test/"]
+  },
+  "exclude": { "domains": ["admin.acme.test"], "ips": ["10.10.20.1"] }
+}
+```
+
+Matching rules (documented for interoperability): `*.base` matches `base` and any
+subdomain; IPs match exactly; CIDRs use IPv4 containment; `exclude` wins over
+`targets`. URL entries are prefix matches on the normalized URL.
+
+## 7. `checklist.json`
+
+Single JSON object — the vuln-class checklist for the engagement, seeded from a
+target-type template (`web` / `api` / `network` / `code-review`) and editable.
+Drives the coverage matrix (§9 of this doc, `PLAN.md` §6).
+
+```jsonc
+{
+  "v": 1,
+  "targetType": "web",
+  "classes": [
+    { "id": "authz",   "title": "Broken access control / IDOR", "cwe": ["CWE-639","CWE-284"] },
+    { "id": "sqli",    "title": "SQL injection",                "cwe": ["CWE-89"] },
+    { "id": "ssrf",    "title": "Server-side request forgery",  "cwe": ["CWE-918"] },
+    { "id": "xss",     "title": "Cross-site scripting",         "cwe": ["CWE-79"] },
+    { "id": "secrets", "title": "Exposed secrets / keys",       "cwe": ["CWE-798"] }
+    // ...
+  ]
+}
+```
+
+## 8. Ledgers
+
+### 8.1 `inventory.jsonl` — the attack surface (what EXISTS)
+
+```jsonc
+{ "v":1, "id":"h1", "kind":"host",     "createdAt":"...", "value":"app.acme.test", "ip":"10.10.20.7", "tech":["nginx","node"] }
+{ "v":1, "id":"s1", "kind":"service",  "createdAt":"...", "host":"h1", "port":443, "proto":"tcp", "name":"https" }
+{ "v":1, "id":"e1", "kind":"endpoint", "createdAt":"...", "host":"h1", "method":"GET", "path":"/api/user", "params":["id"], "auth":"session" }
+```
+
+`kind` ∈ `host` | `service` | `endpoint` | `param` | `tech`. Endpoints/params are
+the surface elements coverage is computed over.
+
+### 8.2 `hypotheses.jsonl` — test cases (what was DONE)
+
+```jsonc
+{
+  "v":1, "id":"y7", "kind":"hypothesis", "createdAt":"...", "updatedAt":"...",
+  "statement":"GET /api/user?id= is IDOR-able",
+  "target":"e1",                 // surface element (inventory id) or raw target string
+  "class":"authz",               // checklist class id
+  "method":"Swapped id to another user's; observed response",
+  "outcome":"refuted",           // "proposed" | "testing" | "confirmed" | "refuted" | "inconclusive"
+  "evidence":"evidence/y7-idor.txt",
+  "findingId":"f3a9"             // set when outcome=confirmed and a finding was created
+}
+```
+
+Refuted and inconclusive hypotheses are **retained** (no-retest + report rigor).
+
+### 8.3 `findings.jsonl` — confirmed vulns (what's REAL)
+
+```jsonc
+{
+  "v":1, "id":"f3a9", "kind":"finding", "createdAt":"...", "updatedAt":"...",
+  "title":"IDOR in /api/user allows reading other users",
+  "severity":"high",             // "info" | "low" | "medium" | "high" | "critical"
+  "target":"e1",
+  "class":"authz",
+  "cwe":"CWE-639",
+  "cvss":"AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:N/A:N",   // optional, CVSS vector string
+  "description":"...",
+  "repro":"1. Log in as user A ... 2. GET /api/user?id=<B> ...",
+  "evidence":["evidence/f3a9-req.http","artifacts/f3a9-screenshot.png"],
+  "status":"confirmed",          // "open" | "confirmed" | "triaged" | "reported" | "false-positive"
+  "hypothesisId":"y7"
+}
+```
+
+Findings are a subset of confirmed hypotheses. `cwe`/`cvss` align with the stable
+standards named in `PLAN.md` §3.1; findings export can render SARIF from these.
+
+### 8.4 `blockers.jsonl` — parked operator questions (async)
+
+```jsonc
+{
+  "v":1, "id":"b2", "kind":"blocker", "createdAt":"...", "updatedAt":"...",
+  "type":"approval",             // "decision" | "input" | "approval" | "scope-clarification" | "credential-request"
+  "question":"Approve an active SQLi confirmation against /login (single benign payload)?",
+  "context":"Error-based SQLi strongly suspected; needs approval for an active check.",
+  "options":["approve","deny"],  // optional (for type=decision/approval)
+  "blocks":["y12"],              // work items (hypothesis/coverage-cell/target ids) this gates
+  "priority":"high",             // "low" | "medium" | "high"
+  "status":"open",               // "open" | "answered" | "dismissed"
+  "answer":"approve",            // present when answered
+  "answeredAt":"...", "answeredBy":"operator"
+}
+```
+
+Blockers are deduped by (`question` + `blocks`). Answering (via the app or by
+editing this file directly) sets `status:"answered"` + `answer`; the agent resumes
+the gated work on its next `recall`. See `PLAN.md` §7.1.
+
+### 8.5 `loot.jsonl` — credentials / secrets
+
+> **Sensitive.** This file holds plaintext secrets and MUST be `chmod 600`. It is
+> never auto-shared. Redaction applies only at export/share boundaries (`PLAN.md` §9).
+
+```jsonc
+{
+  "v":1, "id":"c1", "kind":"loot", "createdAt":"...",
+  "handle":"cred:web-admin",     // stable reference used instead of reprinting the secret
+  "type":"password",             // "password" | "hash" | "token" | "apikey" | "cookie" | "key"
+  "username":"admin",
+  "secret":"S3cr3t!",            // plaintext (file is chmod 600)
+  "target":"h1",
+  "source":"y5",                 // how it was obtained (hypothesis/evidence ref)
+  "notes":"Reused on SSH"
+}
+```
+
+Elsewhere (context, notes, reports) secrets are referred to by `handle`; the raw
+`secret` value is masked at every export/share boundary.
+
+## 9. `notes.md`
+
+Freeform Markdown, append-oriented. Convention: timestamped `##` sections so
+appends are unambiguous and human-diffable.
+
+```markdown
+## 2026-08-23T14:10Z
+Login uses a legacy session cookie without SameSite. Worth an CSRF pass on state-changing endpoints.
+```
+
+## 10. `evidence/` and `artifacts/`
+
+- `evidence/` — raw tool output and request/response dumps that back findings/hypotheses. Filenames should embed the referencing id, e.g. `evidence/y7-idor.txt`.
+- `artifacts/` — screenshots, dumped files, PoC scripts, e.g. `artifacts/f3a9-screenshot.png`.
+- Records reference these by **workspace-relative path**. No separate index file is required; the referencing record is the index.
+
+## 11. Derived data (never stored)
+
+- **Coverage matrix** = `checklist.classes` × inventory surface elements, with each cell's status derived from `hypotheses` outcomes (`not-tested` | `testing` | `clear` | `vulnerable` | `blocked` | `n/a`). A cell is `blocked` when an open blocker in `blockers.jsonl` gates it. Coverage is recomputed on read so it can never drift from the ledgers.
+- **`recall` summaries** (coverage, gaps, next, …) are projections over these files, not stored artifacts.
+
+## 12. Migration log
+
+- `formatVersion 1` — initial specification. No prior versions.
+
+*(Future breaking changes append here with the old→new field mapping and reader behavior.)*

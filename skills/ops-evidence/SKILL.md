@@ -1,0 +1,67 @@
+---
+name: ops-evidence
+description: Use when a tool produces bulky output — redirect raw output to evidence/ files, capture request/response pairs, pull only distilled summaries into context.
+---
+
+# Evidence discipline & context hygiene
+
+Goal: keep raw tool output OUT of the conversation and IN files, so context stays small and the model stays sharp (principle 8; especially important for weak local models). The rule: **raw output → `evidence/` file; distilled summary → `record`/`note` → context.** Evidence files also back your findings — a finding without a saved artifact is hard to defend.
+
+## Why this matters
+- Context is the scarce resource. A 5,000-line nmap/ffuf dump pasted into the chat drowns the signal and can push scope/findings out of the compaction window.
+- Findings need durable proof. `evidence/` and `artifacts/` live in the engagement workspace (`~/.pired/engagements/<name>/`), survive across sessions, and are referenced by workspace-relative path from records.
+
+## 1. Redirect raw output to a file, read back only what matters
+```bash
+# capture everything to a file; keep it out of context
+nmap -sV -sC -p- 10.10.20.7 -oA evidence/nmap_h7 > /dev/null 2>&1
+# now pull only the distilled lines into context
+grep -E '^[0-9]+/tcp' evidence/nmap_h7.nmap        # just the open-port table
+```
+Patterns:
+- Prefer a tool's own output flag (`-oA`, `-o file`, `-oN`, `-of json`) over piping the whole thing to the screen.
+- For chatty tools, redirect then `grep`/`jq`/`head` back the essence: `... > evidence/x.txt 2>&1; grep -i <signal> evidence/x.txt`.
+- `tee` when you want both a file and a quick glance: `whatweb -a3 URL | tee evidence/whatweb.txt | head`.
+- Even bash auto-truncates long output — don't rely on that; redirect on purpose so nothing important is lost mid-buffer.
+
+## 2. Capture request/response pairs (the gold-standard web evidence)
+```bash
+# full request headers + response headers + body to one file
+curl -sS -D evidence/y7-idor.headers 'https://app.TARGET/api/user?id=1002' -o evidence/y7-idor.body
+# or a single dump with the request line visible
+curl -sSv 'https://app.TARGET/api/user?id=1002' > evidence/y7-idor.txt 2>&1
+```
+- Name the file after the record it backs: `evidence/<id>-<slug>.txt` (e.g. `evidence/y7-idor.txt`, `evidence/f3a9-req.http`). The referencing record IS the index — no separate index file needed.
+- For a proof that needs before/after (IDOR, authz), save both requests: `evidence/y7-userA.txt`, `evidence/y7-userB.txt`.
+- Screenshots and PoC scripts go in `artifacts/` (e.g. `artifacts/f3a9-screenshot.png`).
+
+## 3. Distill into the workspace, not the transcript
+After capturing, record the takeaway — not the dump:
+```
+record kind=note text="nmap h7: 22,445,3389,5985 open; Win2019; SMB signing not required"
+record kind=service host=h1 port=445 proto=tcp name=microsoft-ds
+```
+Then, when you promote a finding, point it at the files:
+```
+record kind=finding title="IDOR in /api/user" severity=high target=e1 class=authz cwe=CWE-639 evidence=["evidence/y7-userA.txt","evidence/y7-userB.txt"]
+```
+
+## 4. Naming & layout conventions
+```
+evidence/
+  hostsweep.gnmap            # broad scans keyed by phase
+  h7-smb.txt                 # per-host/service, keyed by inventory id where possible
+  y7-idor.txt                # per-hypothesis, keyed by hypothesis id
+  f3a9-req.http              # per-finding, keyed by finding id
+artifacts/
+  f3a9-screenshot.png        # screenshots, dumped files, PoC scripts
+```
+- Embed the referencing id in the filename so evidence and record stay linked.
+- Keep secrets OUT of filenames; refer to loot by handle (see `ops-loot-credentials`).
+
+## 5. Checklist
+- [ ] Bulky output was redirected to `evidence/`, not pasted into context.
+- [ ] Only a distilled summary / structured `record` entered context.
+- [ ] Every finding references at least one `evidence/` (or `artifacts/`) path.
+- [ ] Files are named after the id they back; request+response captured for web PoCs.
+- [ ] No plaintext secrets embedded in evidence filenames or context (mask/handle them).

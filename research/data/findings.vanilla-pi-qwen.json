@@ -1,0 +1,453 @@
+[
+  {
+    "file": "backend/auth.py",
+    "start_line": 25,
+    "end_line": 28,
+    "cwe": "CWE-347",
+    "vuln_class": "JWT signature verification bypass",
+    "severity": "critical",
+    "message": "_decode_token falls back to jwt.decode with verify_signature=False and algorithms ['HS256','none'], so any unsigned/unsigned-'none' token is accepted and full authentication is bypassed."
+  },
+  {
+    "file": "backend/auth.py",
+    "line": 22,
+    "cwe": "CWE-798",
+    "vuln_class": "Hardcoded secret",
+    "severity": "high",
+    "message": "JWT tokens verified with hardcoded key 'secret' instead of the configured SECRET_KEY; attacker can forge valid tokens."
+  },
+  {
+    "file": "backend/app.py",
+    "line": 18,
+    "cwe": "CWE-798",
+    "vuln_class": "Hardcoded secret",
+    "severity": "high",
+    "message": "Flask SECRET_KEY hardcoded to 'supersecret' in source (also duplicated in docker-compose.yml), enabling session/signature forgery."
+  },
+  {
+    "file": "backend/app.py",
+    "start_line": 53,
+    "end_line": 57,
+    "cwe": "CWE-942",
+    "vuln_class": "CORS misconfiguration",
+    "severity": "high",
+    "message": "Any Origin header is reflected into Access-Control-Allow-Origin together with Access-Control-Allow-Credentials: true, letting any site make credentialed cross-origin requests."
+  },
+  {
+    "file": "backend/app.py",
+    "line": 232,
+    "cwe": "CWE-489",
+    "vuln_class": "Insecure debug configuration",
+    "severity": "high",
+    "message": "app.run(host='0.0.0.0', debug=True) exposes the interactive Werkzeug debugger (remote code execution) on all interfaces."
+  },
+  {
+    "file": "backend/models.py",
+    "start_line": 27,
+    "end_line": 30,
+    "cwe": "CWE-328",
+    "vuln_class": "Weak password hashing",
+    "severity": "high",
+    "message": "Passwords hashed/verified with unsalted MD5; trivially rainbow-tabled/cracked, no key stretching."
+  },
+  {
+    "file": "backend/routes/auth_routes.py",
+    "line": 22,
+    "cwe": "CWE-89",
+    "vuln_class": "SQL injection",
+    "severity": "critical",
+    "message": "register() interpolates user-supplied username into an f-string INSERT executed via db.session.execute - classic SQL injection."
+  },
+  {
+    "file": "backend/routes/auth_routes.py",
+    "line": 36,
+    "cwe": "CWE-89",
+    "vuln_class": "SQL injection",
+    "severity": "critical",
+    "message": "login() interpolates username into an f-string SELECT - SQL injection against the user table."
+  },
+  {
+    "file": "backend/routes/auth_routes.py",
+    "line": 48,
+    "cwe": "CWE-798",
+    "vuln_class": "Hardcoded secret",
+    "severity": "high",
+    "message": "Login JWT signed with hardcoded key 'secret'; token forgery for any user_id."
+  },
+  {
+    "file": "backend/routes/auth_routes.py",
+    "line": 74,
+    "cwe": "CWE-614",
+    "vuln_class": "Insecure cookie flags",
+    "severity": "medium",
+    "message": "session_token cookie set with httponly=False and secure=False, exposing the auth token to JavaScript (XSS) and to unencrypted transport."
+  },
+  {
+    "file": "backend/routes/auth_routes.py",
+    "start_line": 146,
+    "end_line": 156,
+    "cwe": "CWE-639",
+    "vuln_class": "IDOR / broken access control",
+    "severity": "critical",
+    "message": "update-password lets any authenticated user change the password of any other user by supplying a user_id, with no old-password verification - full account takeover of arbitrary accounts."
+  },
+  {
+    "file": "backend/routes/auth_routes.py",
+    "start_line": 175,
+    "end_line": 203,
+    "cwe": "CWE-330",
+    "vuln_class": "Predictable password reset token",
+    "severity": "high",
+    "message": "Reset token is deterministic md5(username) with no expiry; anyone who knows the username can compute a valid reset token and take over the account."
+  },
+  {
+    "file": "backend/routes/auth_routes.py",
+    "line": 187,
+    "cwe": "CWE-204",
+    "vuln_class": "Sensitive data exposure",
+    "severity": "high",
+    "message": "forgot-password returns the reset token itself in the 'debug_token' response field, hand-delivering a valid account-takeover token to the caller."
+  },
+  {
+    "file": "backend/routes/auth_routes.py",
+    "line": 218,
+    "cwe": "CWE-502",
+    "vuln_class": "Insecure deserialization (RCE)",
+    "severity": "critical",
+    "message": "yaml.load with Loader=yaml.Loader (full loader) on user-supplied YAML allows arbitrary Python object construction -> remote code execution."
+  },
+  {
+    "file": "backend/routes/transaction_routes.py",
+    "line": 49,
+    "cwe": "CWE-89",
+    "vuln_class": "SQL injection",
+    "severity": "critical",
+    "message": "get_transactions interpolates the user_id query param (a raw string) into an f-string SQL query - SQL injection."
+  },
+  {
+    "file": "backend/routes/transaction_routes.py",
+    "line": 47,
+    "cwe": "CWE-639",
+    "vuln_class": "Broken access control / IDOR",
+    "severity": "medium",
+    "message": "Any authenticated user can pass an arbitrary user_id to read another user's transaction history."
+  },
+  {
+    "file": "backend/routes/transaction_routes.py",
+    "line": 93,
+    "cwe": "CWE-89",
+    "vuln_class": "SQL injection",
+    "severity": "critical",
+    "message": "search_transactions interpolates the description search term into a LIKE clause inside an f-string SQL query - SQL injection."
+  },
+  {
+    "file": "backend/routes/transaction_routes.py",
+    "line": 29,
+    "cwe": "CWE-841",
+    "vuln_class": "Missing input validation (business logic)",
+    "severity": "high",
+    "message": "Transfer amount is never validated as positive or bounded; a negative amount increases the sender's balance (self-transfer prints money) / drains the receiver."
+  },
+  {
+    "file": "backend/routes/transaction_routes.py",
+    "line": 131,
+    "cwe": "CWE-841",
+    "vuln_class": "Missing balance check",
+    "severity": "medium",
+    "message": "quickpay debits current_user.balance with no sufficiency or sign check (unlike /api/transfer), allowing negative balances and negative-amount money creation; also relies on a non-HttpOnly cookie auth path."
+  },
+  {
+    "file": "backend/routes/transaction_routes.py",
+    "start_line": 207,
+    "end_line": 214,
+    "cwe": "CWE-639",
+    "vuln_class": "Broken access control / IDOR",
+    "severity": "critical",
+    "message": "split-bill accepts a client-controlled from_user_id and debits that user's balance, letting any authenticated user move funds out of any other account (no payer auth, no balance check)."
+  },
+  {
+    "file": "backend/routes/transaction_routes.py",
+    "line": 160,
+    "cwe": "CWE-862",
+    "vuln_class": "Missing authentication",
+    "severity": "medium",
+    "message": "transaction_receipt has no auth decorator at all; any unauthenticated party can read arbitrary transaction details by id."
+  },
+  {
+    "file": "backend/routes/transaction_routes.py",
+    "line": 182,
+    "cwe": "CWE-79",
+    "vuln_class": "Stored XSS",
+    "severity": "medium",
+    "message": "Receipt HTML template interpolates attacker-controlled transaction.description (and sender/receiver names) unescaped into an HTML document."
+  },
+  {
+    "file": "backend/routes/upload_routes.py",
+    "start_line": 32,
+    "end_line": 36,
+    "cwe": "CWE-22",
+    "vuln_class": "Path traversal / arbitrary file write",
+    "severity": "critical",
+    "message": "Upload filename is taken verbatim from the client and joined to UPLOAD_DIR (with os.makedirs on the attacker-controlled dirname), allowing writes outside the upload dir, e.g. '../../' overwrites."
+  },
+  {
+    "file": "backend/routes/upload_routes.py",
+    "start_line": 55,
+    "end_line": 60,
+    "cwe": "CWE-22",
+    "vuln_class": "Path traversal (file read)",
+    "severity": "high",
+    "message": "serve_upload joins <path:filename> to UPLOAD_DIR without normalization; the isfile() check is bypassed by '../' sequences, enabling arbitrary file read (unauthenticated)."
+  },
+  {
+    "file": "backend/routes/admin_routes.py",
+    "start_line": 18,
+    "end_line": 26,
+    "cwe": "CWE-798",
+    "vuln_class": "Hardcoded secrets",
+    "severity": "critical",
+    "message": "Production credentials committed in source: live API key, AWS access/secret keys, Stripe key, database password, SendGrid key, GitHub token, JWT private key, Slack webhook."
+  },
+  {
+    "file": "backend/routes/admin_routes.py",
+    "line": 44,
+    "cwe": "CWE-78",
+    "vuln_class": "OS command injection",
+    "severity": "critical",
+    "message": "generate_report passes user-controlled report_type/date_range into a shell=True subprocess via f-string - arbitrary command execution."
+  },
+  {
+    "file": "backend/routes/admin_routes.py",
+    "line": 54,
+    "cwe": "CWE-78",
+    "vuln_class": "OS command injection",
+    "severity": "critical",
+    "message": "system_status passes the service query param directly into os.popen(f\"systemctl status {service}\") - shell command injection."
+  },
+  {
+    "file": "backend/routes/admin_routes.py",
+    "line": 65,
+    "cwe": "CWE-78",
+    "vuln_class": "OS command injection",
+    "severity": "critical",
+    "message": "ping_host runs f\"ping -c 3 {host}\" with shell=True on user input - arbitrary command execution."
+  },
+  {
+    "file": "backend/routes/admin_routes.py",
+    "line": 84,
+    "cwe": "CWE-78",
+    "vuln_class": "OS command injection",
+    "severity": "high",
+    "message": "dns_lookup runs f\"nslookup {domain}\" with shell=True on user input - arbitrary command execution."
+  },
+  {
+    "file": "backend/routes/admin_routes.py",
+    "line": 106,
+    "cwe": "CWE-918",
+    "vuln_class": "SSRF",
+    "severity": "high",
+    "message": "webhook-test fetches a fully user-supplied URL (requests.get) with no scheme/host restrictions and returns the response body - server-side request forgery (cloud metadata, internal services)."
+  },
+  {
+    "file": "backend/routes/admin_routes.py",
+    "line": 121,
+    "cwe": "CWE-918",
+    "vuln_class": "SSRF + TLS verification disabled",
+    "severity": "high",
+    "message": "fetch-avatar requests a user-supplied URL with verify=False - SSRF plus disabled certificate validation; response exfiltrated as base64."
+  },
+  {
+    "file": "backend/routes/admin_routes.py",
+    "line": 137,
+    "cwe": "CWE-22",
+    "vuln_class": "Path traversal (file read)",
+    "severity": "high",
+    "message": "download_statement sends os.path.join('/app/statements/', filename) with an unvalidated filename; '../' sequences read arbitrary files."
+  },
+  {
+    "file": "backend/routes/admin_routes.py",
+    "line": 145,
+    "cwe": "CWE-22",
+    "vuln_class": "Path traversal (file read)",
+    "severity": "high",
+    "message": "view_log opens /var/log/{file} with a raw user-supplied file name; '../' traversal reads arbitrary files such as /etc/passwd."
+  },
+  {
+    "file": "backend/routes/admin_routes.py",
+    "line": 160,
+    "cwe": "CWE-611",
+    "vuln_class": "XXE (XML External Entity)",
+    "severity": "critical",
+    "message": "lxml parser configured with resolve_entities=True and no_network=False on user-supplied XML; DOCTYPE external entities enable file disclosure and SSRF (lxml can execute external entities)."
+  },
+  {
+    "file": "backend/routes/admin_routes.py",
+    "line": 186,
+    "cwe": "CWE-502",
+    "vuln_class": "Insecure deserialization (RCE)",
+    "severity": "critical",
+    "message": "import-session base64-decodes user input and calls pickle.loads on it - arbitrary code execution via a crafted pickle payload."
+  },
+  {
+    "file": "backend/routes/admin_routes.py",
+    "line": 218,
+    "cwe": "CWE-915",
+    "vuln_class": "Mass assignment / privilege escalation",
+    "severity": "critical",
+    "message": "update_user applies every JSON field via setattr(user, key), so any caller can set role='admin' (or balance, reset_token, password_hash) on any user."
+  },
+  {
+    "file": "backend/routes/admin_routes.py",
+    "line": 235,
+    "cwe": "CWE-1336",
+    "vuln_class": "Server-side template injection",
+    "severity": "critical",
+    "message": "preview_email renders the user-supplied template string with Jinja render_template_string - SSTI leads to RCE (e.g. {{config}}/{{request.application...}})."
+  },
+  {
+    "file": "backend/routes/admin_routes.py",
+    "line": 248,
+    "cwe": "CWE-601",
+    "vuln_class": "Open redirect",
+    "severity": "medium",
+    "message": "/api/redirect sends a 302 to an unvalidated, user-supplied url parameter (unauthenticated open redirect usable for phishing)."
+  },
+  {
+    "file": "backend/routes/admin_routes.py",
+    "line": 286,
+    "cwe": "CWE-862",
+    "vuln_class": "Missing authorization",
+    "severity": "critical",
+    "message": "Admin endpoints (list_all_users and the whole admin blueprint) only require a valid token; no role=='admin' check, so any regular user can invoke admin APIs."
+  },
+  {
+    "file": "backend/routes/admin_routes.py",
+    "line": 290,
+    "cwe": "CWE-200",
+    "vuln_class": "Sensitive data exposure",
+    "severity": "high",
+    "message": "list_all_users returns every user's password_hash and full profile (SSN, DOB, address) to any authenticated client."
+  },
+  {
+    "file": "backend/routes/admin_routes.py",
+    "line": 319,
+    "cwe": "CWE-1333",
+    "vuln_class": "ReDoS / unsafe regex",
+    "severity": "medium",
+    "message": "re.match is run with a fully user-controlled regex pattern over usernames - denial of service via catastrophic backtracking patterns."
+  },
+  {
+    "file": "backend/routes/admin_routes.py",
+    "line": 337,
+    "cwe": "CWE-94",
+    "vuln_class": "Code injection (eval)",
+    "severity": "critical",
+    "message": "calculate() calls eval() on a user-supplied expression string - arbitrary Python code execution."
+  },
+  {
+    "file": "backend/routes/admin_routes.py",
+    "line": 350,
+    "cwe": "CWE-94",
+    "vuln_class": "Code injection (exec)",
+    "severity": "critical",
+    "message": "run-script() calls exec() on a user-supplied script string - arbitrary Python code execution."
+  },
+  {
+    "file": "backend/routes/admin_routes.py",
+    "line": 363,
+    "cwe": "CWE-94",
+    "vuln_class": "Code injection (exec)",
+    "severity": "critical",
+    "message": "format-data() compiles then exec()s a user-supplied format string - arbitrary Python code execution."
+  },
+  {
+    "file": "backend/routes/admin_routes.py",
+    "line": 408,
+    "cwe": "CWE-798",
+    "vuln_class": "Hardcoded secret",
+    "severity": "high",
+    "message": "Hardcoded master admin password 'MasterAdmin@2024!' compared in source; anyone who finds it gets the admin flag."
+  },
+  {
+    "file": "backend/routes/admin_routes.py",
+    "line": 421,
+    "cwe": "CWE-754",
+    "vuln_class": "Weak authorization check",
+    "severity": "low",
+    "message": "Authorization enforced with assert(), which is stripped under python -O, silently removing the admin-only guard."
+  },
+  {
+    "file": "backend/routes/admin_routes.py",
+    "start_line": 456,
+    "end_line": 458,
+    "cwe": "CWE-200",
+    "vuln_class": "Secret exposure to clients",
+    "severity": "high",
+    "message": "dashboard-data returns the hardcoded ADMIN_API_KEY and AWS access key in the JSON response to any authenticated user."
+  },
+  {
+    "file": "frontend/src/App.js",
+    "line": 53,
+    "cwe": "CWE-922",
+    "vuln_class": "Token stored in localStorage",
+    "severity": "low",
+    "message": "JWT auth token persisted in localStorage, readable by any injected script (combined with the app's XSS sinks this yields full session theft)."
+  },
+  {
+    "file": "frontend/src/components/AdminPanel.js",
+    "line": 55,
+    "cwe": "CWE-95",
+    "vuln_class": "Client-side code injection (eval)",
+    "severity": "medium",
+    "message": "handleCalculate runs eval() on a user-typed expression in the browser - arbitrary JS execution in the admin's session."
+  },
+  {
+    "file": "frontend/src/components/AdminPanel.js",
+    "line": 112,
+    "cwe": "CWE-95",
+    "vuln_class": "Client-side code injection (eval of postMessage)",
+    "severity": "high",
+    "message": "A window 'message' listener evals data.payload from any origin with no event.origin check - any web page can execute JS in the admin panel."
+  },
+  {
+    "file": "frontend/src/components/AdminPanel.js",
+    "line": 164,
+    "cwe": "CWE-79",
+    "vuln_class": "XSS (dangerouslySetInnerHTML)",
+    "severity": "medium",
+    "message": "searchHtml is built by string-interpolating the raw, unescaped search query (line 37) and injected via dangerouslySetInnerHTML."
+  },
+  {
+    "file": "frontend/src/components/AdminPanel.js",
+    "line": 171,
+    "cwe": "CWE-79",
+    "vuln_class": "Reflected XSS (dangerouslySetInnerHTML)",
+    "severity": "high",
+    "message": "The ?notes= URL parameter is rendered unescaped via dangerouslySetInnerHTML - trivial reflected XSS (e.g. for admin links in phishing)."
+  },
+  {
+    "file": "frontend/src/components/AdminPanel.js",
+    "line": 102,
+    "cwe": "CWE-79",
+    "vuln_class": "DOM XSS (innerHTML)",
+    "severity": "medium",
+    "message": "renderAnnouncement concatenates unescaped user text into container.innerHTML, executing any HTML/script the admin or a spoofed input posts."
+  },
+  {
+    "file": "frontend/src/components/AdminPanel.js",
+    "line": 71,
+    "cwe": "CWE-798",
+    "vuln_class": "Hardcoded secret",
+    "severity": "low",
+    "message": "Hardcoded 'admin_master_key_2024' written to localStorage as a session secret alongside fabricated admin permission flags."
+  },
+  {
+    "file": "backend/requirements.txt",
+    "start_line": 1,
+    "end_line": 8,
+    "cwe": "CWE-1104",
+    "vuln_class": "Vulnerable dependency versions",
+    "severity": "medium",
+    "message": "Pins known-vulnerable versions: Werkzeug 2.0.1 (CVE-2023-46136 debugger RCE), Flask 2.0.1 (CVE-2023-30861 cookie injection), PyJWT 2.1.0, PyYAML 5.3.1 (unsafe yaml.load)."
+  }
+]
