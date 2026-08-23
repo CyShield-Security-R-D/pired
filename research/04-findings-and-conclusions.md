@@ -112,6 +112,97 @@ logic rather than only read it.
   unaffected, but it is a difference worth noting.
 - **qwen cost is estimated,** not metered (see the results doc's measurement note).
 
+## 7b. Methodology audit — blind spots (both directions)
+
+A post-hoc audit of the artifacts found measurement biases pushing **both ways**.
+None are large enough to overturn the qualitative story, but together they mean the
+pired-vs-codex F1 gap is **not robust** and should not be over-read.
+
+### The largest: frontend scope mismatch (penalized the qwen arms)
+
+The shared prompt asked reviewers to cover `backend/` **and `frontend/`**, but the
+answer key is **backend-only** — so every frontend finding is an automatic false
+positive. The two qwen arms each reported **7 real frontend bugs** (`eval` of
+untrusted input, DOM-XSS via `dangerouslySetInnerHTML`, `postMessage` without origin
+check); **codex reported none**. Excluding out-of-labeled-scope frontend findings:
+
+| | Recall | Precision (official → scope-normalized) | F1 (official → normalized) |
+|---|:--:|:--:|:--:|
+| pired + qwen | 0.736 | 0.629 → **0.709** | 0.678 → **0.722** |
+| codex | 0.679 | 0.800 (unchanged) | 0.735 (unchanged) |
+| vanilla + qwen | 0.585 | 0.564 → 0.646 | 0.574 → 0.614 |
+
+**The F1 gap between pired+qwen and codex collapses from 0.057 to 0.013 — a tie —
+once the arms are no longer penalized for finding real bugs the benchmark cannot
+score.** codex's precision lead is *partly an artifact of it not reporting frontend*,
+not sharper discrimination. (Counter-view, for honesty: one could argue codex's focus
+on the labeled scope is good judgment — but the prompt explicitly requested frontend,
+so the arms that complied were penalized.)
+
+### Biases that DEFLATED pired (understated it)
+
+- **Frontend scope mismatch** (above) — ~+0.044 F1 for pired when corrected.
+- **Real-but-unkeyed / duplicate FPs.** Several pired "false positives"
+  (`hardcoded-secret`, `debug-mode`, `hardcoded-credentials`) correspond to vulns
+  that *are* in the key (`hardcoded-secrets-block`, `debug-mode-enabled`) but were
+  matched on a sibling line — i.e. duplicate reports of *real* vulns, not false
+  alarms. Precision is a lower bound, more so for the arm that emits more findings.
+
+### Biases that INFLATED pired (overstated it)
+
+- **Finding density × line-window matching.** pired emitted the most findings (62;
+  26 on `admin_routes.py`). With a +/-3-line window and class-tolerant matching, a
+  noisier arm gets more coincidental-overlap chances. The class-match requirement
+  limits this, but it structurally favors the arm that sprays more findings.
+- **Prompt hint-list.** The prompt enumerated the vuln classes to look for, inflating
+  recall on *enumerated* classes; the ~9 vulns missed by all arms are exactly the
+  non-enumerated tail (business logic, race, CSRF, host-header). The benchmark
+  under-measures open-ended discovery. (Applied equally to all arms.)
+
+### Biases that INFLATED codex (overstated it)
+
+- **codex was never mutation-tested.** Only the pired arm got the memorization
+  control (the mutated variant). codex — a frontier model, the likeliest to have
+  public DVBank in its training data — was scored **only on the clean variant**, so
+  its score may carry a memorization advantage that pired's mutation-validated score
+  does not. This is an **asymmetric control** and the single most important fix.
+- **De-leak blank-line beacon.** The clean/mutated variants preserve line numbers by
+  leaving blank lines where answer-marking comments were stripped — a faint
+  "something was here" signal. Affects all arms; pired's stable mutated score
+  suggests limited exploitation.
+
+### Minor / neutral
+
+- **Single run for codex & vanilla** (the pired arm's reproducibility band is
+  ~+/-0.02 F1; the others were run once).
+- **codex output channel** — findings came back as a final message (its sandbox
+  could not write files here). The run stopped naturally (not truncated), but a
+  message has practical length limits that a file does not, which could slightly cap
+  codex's finding count.
+- **Basename matching** — harmless here (all target files have unique basenames).
+
+### What we do NOT do
+
+We deliberately **do not** replace the official numbers with the scope-normalized
+ones — that would be moving the goalposts toward pired. The official table stands;
+this section is the caveat around it.
+
+### The defensible claim
+
+Not "codex wins F1." Rather: **pired+qwen and codex are roughly F1-comparable
+(~0.72 vs ~0.735 once scope-normalized); pired leads on recall and critical coverage;
+codex is cleaner on raw precision; and the residual gap sits inside the combined
+uncertainty of the scope mismatch, an uncontrolled memorization confound for codex,
+and single-run variance.**
+
+### Fixes for a future run (no overfitting)
+
+1. Scope the prompt to backend-only, or add frontend ground-truth labels.
+2. Run codex **and** vanilla on the mutated variant too — symmetric memorization control.
+3. Report raw **and** scope-normalized precision.
+4. De-duplicate findings before grading (collapse multiple hits on one sink).
+5. Average 3+ runs per arm and report the band, as done for the pired arm.
+
 ## 8. One-paragraph summary
 
 A security-tuned harness (pired) turned a cheap 27B open-weight model into a
