@@ -1,6 +1,6 @@
 ---
 name: api-testing
-description: Use when testing a REST/JSON API — BOLA/BFLA, excessive data exposure, mass assignment, JSON injection, rate limits, JWT/key handling; OWASP API Top 10.
+description: Use when testing a REST/JSON API — BOLA/BFLA, excessive data exposure, mass assignment, JSON injection, rate limits, JWT/key handling; OWASP API Top 10 2023.
 ---
 
 # REST / JSON API abuse (OWASP API Security Top 10 2023)

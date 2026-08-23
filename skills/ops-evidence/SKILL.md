@@ -65,3 +65,10 @@ artifacts/
 - [ ] Every finding references at least one `evidence/` (or `artifacts/`) path.
 - [ ] Files are named after the id they back; request+response captured for web PoCs.
 - [ ] No plaintext secrets embedded in evidence filenames or context (mask/handle them).
+
+The point is no-loss: the file preserves the raw proof even after compaction discards the transcript, and the `record` preserves the takeaway. Capture at the moment of observation — an artifact you meant to save later is an artifact you lose.
+
+## References
+- PTES — Reporting — Penetration Testing Execution Standard — https://pentest-standard.readthedocs.io/en/latest/reporting.html (findings must be backed by reproducible evidence)
+- PTES — Pre-engagement Interactions — Penetration Testing Execution Standard — https://pentest-standard.readthedocs.io/en/latest/preengagement_interactions.html (rules of engagement cover evidence handling and storage)
+- Technical Guide to Information Security Testing and Assessment — NIST SP 800-115 — https://csrc.nist.gov/pubs/sp/800/115/final (documenting results, handling assessment data)

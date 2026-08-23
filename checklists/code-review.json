@@ -2,22 +2,158 @@
   "v": 1,
   "targetType": "code-review",
   "classes": [
-    { "id": "sqli",       "title": "SQL injection (string-built queries)",              "cwe": ["CWE-89"] },
-    { "id": "cmdi",       "title": "OS command injection",                             "cwe": ["CWE-78"] },
-    { "id": "codeinj",    "title": "Code injection / eval / unsafe reflection",         "cwe": ["CWE-94", "CWE-95", "CWE-470"] },
-    { "id": "ssti",       "title": "Server-side template injection",                    "cwe": ["CWE-1336", "CWE-94"] },
-    { "id": "authz",      "title": "Broken access control / authorization / IDOR",      "cwe": ["CWE-862", "CWE-285", "CWE-639"] },
-    { "id": "authn",      "title": "Broken authentication & session management",        "cwe": ["CWE-287", "CWE-384", "CWE-613"] },
-    { "id": "deser",      "title": "Insecure deserialization",                          "cwe": ["CWE-502"] },
-    { "id": "ssrf",       "title": "Server-side request forgery",                       "cwe": ["CWE-918"] },
-    { "id": "xxe",        "title": "XXE / unsafe XML & data parsing",                   "cwe": ["CWE-611", "CWE-776"] },
-    { "id": "pathtrav",   "title": "Path traversal / unsafe file handling",             "cwe": ["CWE-22", "CWE-73"] },
-    { "id": "upload",     "title": "Unrestricted / unsafe file upload",                 "cwe": ["CWE-434"] },
-    { "id": "secrets",    "title": "Hardcoded secrets / credentials",                   "cwe": ["CWE-798", "CWE-259"] },
-    { "id": "crypto",     "title": "Weak crypto & sensitive-data handling",             "cwe": ["CWE-327", "CWE-326", "CWE-311"] },
-    { "id": "sca",        "title": "Vulnerable / outdated dependencies (SCA)",          "cwe": ["CWE-1395", "CWE-1104"] },
-    { "id": "iac",        "title": "IaC / configuration misconfiguration",              "cwe": ["CWE-16", "CWE-732"] },
-    { "id": "logging",    "title": "Insecure logging & error handling",                 "cwe": ["CWE-532", "CWE-209", "CWE-778"] },
-    { "id": "reflection", "title": "Unsafe reflection / dynamic code execution",        "cwe": ["CWE-470", "CWE-94"] }
+    {
+      "id": "sqli",
+      "title": "SQL injection (string-built queries)",
+      "cwe": [
+        "CWE-89"
+      ]
+    },
+    {
+      "id": "cmdi",
+      "title": "OS command injection",
+      "cwe": [
+        "CWE-78"
+      ]
+    },
+    {
+      "id": "codeinj",
+      "title": "Code injection / eval / unsafe reflection",
+      "cwe": [
+        "CWE-94",
+        "CWE-95",
+        "CWE-470"
+      ]
+    },
+    {
+      "id": "ssti",
+      "title": "Server-side template injection",
+      "cwe": [
+        "CWE-1336",
+        "CWE-94"
+      ]
+    },
+    {
+      "id": "authz",
+      "title": "Broken access control / authorization / IDOR",
+      "cwe": [
+        "CWE-862",
+        "CWE-285",
+        "CWE-639"
+      ]
+    },
+    {
+      "id": "authn",
+      "title": "Broken authentication & session management",
+      "cwe": [
+        "CWE-287",
+        "CWE-384",
+        "CWE-613"
+      ]
+    },
+    {
+      "id": "deser",
+      "title": "Insecure deserialization",
+      "cwe": [
+        "CWE-502"
+      ]
+    },
+    {
+      "id": "ssrf",
+      "title": "Server-side request forgery",
+      "cwe": [
+        "CWE-918"
+      ]
+    },
+    {
+      "id": "xxe",
+      "title": "XXE / unsafe XML & data parsing",
+      "cwe": [
+        "CWE-611",
+        "CWE-776"
+      ]
+    },
+    {
+      "id": "pathtrav",
+      "title": "Path traversal / unsafe file handling",
+      "cwe": [
+        "CWE-22",
+        "CWE-73"
+      ]
+    },
+    {
+      "id": "upload",
+      "title": "Unrestricted / unsafe file upload",
+      "cwe": [
+        "CWE-434"
+      ]
+    },
+    {
+      "id": "secrets",
+      "title": "Hardcoded secrets / credentials",
+      "cwe": [
+        "CWE-798",
+        "CWE-259"
+      ]
+    },
+    {
+      "id": "crypto",
+      "title": "Weak crypto & sensitive-data handling",
+      "cwe": [
+        "CWE-327",
+        "CWE-326",
+        "CWE-311"
+      ]
+    },
+    {
+      "id": "sca",
+      "title": "Vulnerable / outdated dependencies (SCA)",
+      "cwe": [
+        "CWE-1395",
+        "CWE-1104"
+      ]
+    },
+    {
+      "id": "iac",
+      "title": "IaC / configuration misconfiguration",
+      "cwe": [
+        "CWE-732",
+        "CWE-1188"
+      ]
+    },
+    {
+      "id": "logging",
+      "title": "Insecure logging & error handling",
+      "cwe": [
+        "CWE-532",
+        "CWE-209",
+        "CWE-778"
+      ]
+    },
+    {
+      "id": "reflection",
+      "title": "Unsafe reflection / dynamic code execution",
+      "cwe": [
+        "CWE-470",
+        "CWE-94"
+      ]
+    },
+    {
+      "id": "logic",
+      "title": "Business logic / insecure design",
+      "cwe": [
+        "CWE-840",
+        "CWE-841"
+      ]
+    },
+    {
+      "id": "misconfig",
+      "title": "Security misconfiguration (debug/CORS/headers/cookies)",
+      "cwe": [
+        "CWE-693",
+        "CWE-489",
+        "CWE-942"
+      ]
+    }
   ]
 }

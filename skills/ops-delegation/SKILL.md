@@ -48,4 +48,9 @@ Harness-owned in `enforce` mode (PLAN.md §11):
 ## 5. The payoff
 - Parent context stays small → weak models don't drown and compaction keeps scope/findings.
 - A second skeptical pass kills false positives before they reach the report.
-- Distilled inventory/verdicts flow back into the same `record`/`recall` loop, so the engagement state stays single-source-of-truth.
+- Distilled inventory/verdicts flow back into the same `record`/`recall` loop, so the engagement state stays single-source-of-truth — the delegation is only worth it once its result is recorded, not just reported in prose.
+
+## References
+- PTES — Vulnerability Analysis (Validation) — Penetration Testing Execution Standard — https://pentest-standard.readthedocs.io/en/latest/vulnerability_analysis.html (manual validation & correlation to cut false positives — the verify agent's job)
+- Technical Guide to Information Security Testing and Assessment — NIST SP 800-115 — https://csrc.nist.gov/pubs/sp/800/115/final (validating findings and reducing false positives before reporting)
+- PTES — Reporting — Penetration Testing Execution Standard — https://pentest-standard.readthedocs.io/en/latest/reporting.html (distilled inventory/verdicts feed the single-source report)

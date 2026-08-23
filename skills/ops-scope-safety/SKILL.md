@@ -65,6 +65,7 @@ record kind=blocker blockerType=approval priority=high \
 - The operator answers this session or later (via `/answer <id>`, the `pired answer` subcommand, or editing `blockers.jsonl`); you pick it up on the next `recall`.
 - **Bias to momentum:** prefer proceeding under a *stated assumption* + a low-priority confirm-blocker over stopping — reserve real blockers for what only a human can decide (authorize escalation, provide creds, resolve material scope ambiguity).
 - Blockers dedupe on (question + blocks) — don't re-raise the same one. When no unblocked work remains, stop and summarize open blockers by priority instead of spinning.
+- **Parked ≠ abandoned.** A blocker is a durable record that `recall` keeps resurfacing until it's answered; the gated work item stays on the board (`blocked`, not dropped), so routing around it loses nothing. The failure mode to avoid is *stalling* the whole engagement on one gate — not the gate itself.
 
 ## 7. Missing tools
 pired ships no security tools; you run them via `bash` and they may be absent (principle 8). If a needed tool is missing: try an alternative, `record kind=note` the gap, and for a *critical* one `record kind=blocker blockerType=input question="install nmap?"`. Request installation as an operator-approved action; never install heavy tooling unprompted.
@@ -75,3 +76,8 @@ pired ships no security tools; you run them via `bash` and they may be absent (p
 - [ ] Action is non-destructive and within the benign-PoC line — else `approval` blocker parked.
 - [ ] Rate/intrusiveness appropriate for the target; no DoS.
 - [ ] Out-of-scope neighbors recorded as notes, not touched.
+
+## References
+- PTES — Pre-engagement Interactions — Penetration Testing Execution Standard — https://pentest-standard.readthedocs.io/en/latest/preengagement_interactions.html (scope definition, rules of engagement, Permission-to-Test / authorization)
+- PTES — Post Exploitation — Penetration Testing Execution Standard — https://pentest-standard.readthedocs.io/en/latest/post_exploitation.html (rules of engagement governing lateral movement / destructive actions)
+- Technical Guide to Information Security Testing and Assessment — NIST SP 800-115 — https://csrc.nist.gov/pubs/sp/800/115/final (§3–§5 planning, rules of engagement, and coordination boundaries)

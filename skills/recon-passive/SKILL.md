@@ -24,7 +24,7 @@ curl -s "https://crt.sh/?q=%25.TARGET&output=json" | jq -r '.[].name_value' | se
 cat evidence/subs_*.txt | sort -u > evidence/subs_all.txt && wc -l evidence/subs_all.txt
 ```
 - `amass enum -passive` and `subfinder` never touch the target; `amass enum -active`/`-brute` DO — do not use them in a passive pass.
-- Alternatives if missing: `assetfinder --subs-only TARGET`, `github-subdomains -d TARGET`, or crt.sh alone.
+- Run **several** sources and merge — no single source is complete, so breadth here directly bounds how much surface downstream testing can cover. Alternatives / additions if a tool is missing: `assetfinder --subs-only TARGET`, `github-subdomains -d TARGET`, `subfinder -all` (all sources), or crt.sh alone. A name you can't confirm yet still gets recorded as a lead — never drop it just because one source missed it.
 
 ## 2. DNS records (resolvers, not the target)
 ```bash
@@ -69,4 +69,13 @@ record kind=host value=admin.TARGET ip=203.0.113.5
 record kind=tech name=Cloudflare host=h1
 record kind=note text="Wayback shows /legacy/api/*; 4 buckets guessed, acme-backups listable"
 ```
-Then run `recall inventory` to confirm the surface landed, and move to `recon-active-web` to probe which of these hosts are actually alive. Anything already proven exposed (open bucket, live leaked key) goes straight to `record kind=finding` at the appropriate severity; everything else stays inventory/leads.
+Then run `recall inventory` to confirm the surface landed, and move to `recon-active-web` to probe which of these hosts are actually alive. Anything already proven exposed (open bucket, live leaked key) goes straight to `record kind=finding` at the appropriate severity; everything else stays inventory/leads — nothing discovered is discarded.
+
+## References
+- PTES — Intelligence Gathering (OSINT phasing & passive-source discipline) — cite by name
+- OWASP WSTG — Information Gathering (WSTG-INFO-*) — cite by name
+- subfinder — passive subdomain enumeration (`-all`, `-silent`, `-d`, `-o`) — https://github.com/projectdiscovery/subfinder
+- dnsx — DNS toolkit (`-a`/`-aaaa`/`-cname`/`-ptr`, `-resp`, `-silent`) — https://github.com/projectdiscovery/dnsx
+- crt.sh — Certificate Transparency log search (JSON output) — cite by name
+- CWE-200: Exposure of Sensitive Information to an Unauthorized Actor (open bucket/leak) — https://cwe.mitre.org/data/definitions/200.html
+- CWE-798: Use of Hard-coded Credentials (live leaked key) — https://cwe.mitre.org/data/definitions/798.html

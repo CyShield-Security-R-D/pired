@@ -7,10 +7,12 @@ description: Use when promoting a confirmed hypothesis to a finding — how to w
 
 Goal: a `record kind=finding` that a client could act on without asking you a single follow-up question — clear title, correct target, CWE, justified severity, a description that explains impact, exact reproduction steps, evidence paths, and remediation. Findings are the deliverable; everything else is scaffolding.
 
-## When a finding is warranted
-- Only **confirmed** hypotheses graduate to findings. A hypothesis you couldn't prove stays a hypothesis (`refuted`/`inconclusive`) — retained for rigor, not promoted.
-- In the `recon` profile, promising-but-unexploited leads are recorded at severity `info`.
-- Update the source hypothesis outcome to `confirmed` and link it (`hypothesisId`); set the hypothesis's `findingId` too so the chain is bidirectional.
+## Record everything — nothing gets dropped
+A complete ledger is a goal in itself: every issue you **confirm** *or* **strongly suspect** gets captured, and even thin leads are retained rather than forgotten. Match the record *type* to your confidence — don't discard a lead just because it isn't nailed down.
+- **Confirmed** hypothesis → a full `record kind=finding` (below). Update the source hypothesis outcome to `confirmed` and link it (`hypothesisId`); set the hypothesis's `findingId` too so the chain is bidirectional.
+- **Strongly suspected but not yet proven** → still record it — as an *unconfirmed / low-confidence* finding (leave `status=open`, pick an honest severity, and say in the description exactly what's unproven) plus a `blocker` for the step you can't take; or keep it as a live hypothesis. Never silently drop a plausible issue because you ran out of time to confirm it.
+- **Plausible but unconfirmed lead** → keep it as a hypothesis with `outcome=inconclusive` (retained, resurfaced by `recall gaps`); in the `recon` profile, promising-but-unexploited leads are recorded at severity `info`. Ideas you disproved are marked `refuted` — also retained, for rigor.
+- Before wrapping up, `recall gaps` / `recall hypotheses` to confirm no inconclusive lead was left un-recorded. Completeness first; the de-dup step below keeps breadth from turning into noise.
 
 ## Anatomy of a good finding
 ```
@@ -47,7 +49,7 @@ Field-by-field:
 - To correct/enrich an existing finding, pass its `id` to `record` to update it in place rather than creating a duplicate (last-write-wins on the id).
 
 ## Confirmation gate (avoid false positives)
-- Never promote on a scanner/SAST hit alone — reproduce it by hand and save the evidence first. Raw tool output is a lead, not a finding.
+- Never promote on a scanner/SAST hit alone — reproduce it by hand and save the evidence first. Raw tool output is a lead, not a finding — but don't drop the lead either: keep it as a hypothesis (`outcome=inconclusive`) so it survives to be retested.
 - If a subagent/`spawn` tool exists, hand borderline hypotheses to an adversarial `verify` agent to try to refute them; only survivors become findings (see `ops-delegation`).
 - State confidence honestly. If impact is likely but unproven, say so and consider `medium`/`info` with a note, or keep it a hypothesis with a blocker for the missing step.
 
@@ -55,3 +57,9 @@ Field-by-field:
 - Confirm the coverage cell flipped to `vulnerable` (`recall coverage`).
 - Keep testing: one finding doesn't end the class — `recall gaps` / `recall next`.
 - Export with `/findings` when asked; secrets are auto-masked at export (see `ops-loot-credentials`).
+
+## References
+- PTES — Reporting — Penetration Testing Execution Standard — https://pentest-standard.readthedocs.io/en/latest/reporting.html (report-grade finding structure: impact, reproduction, remediation)
+- Technical Guide to Information Security Testing and Assessment — NIST SP 800-115 — https://csrc.nist.gov/pubs/sp/800/115/final (analyzing findings, evidence, reporting)
+- CWE List — MITRE — https://cwe.mitre.org/ (pick the single most specific `cwe`)
+- CVSS v3.1 Specification Document — FIRST — https://www.first.org/cvss/v3.1/specification-document (the `cvss` vector; scoring in `ops-severity-cvss`)

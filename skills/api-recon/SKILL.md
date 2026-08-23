@@ -41,15 +41,16 @@ ffuf -u https://TARGET/api/FUZZ -w /usr/share/seclists/Discovery/Web-Content/api
 arjun -u https://TARGET/api/v1/user -m GET      # discover hidden params
 ```
 
-## 4. Versioned & shadow routes
-- Enumerate `/v1`, `/v2`, `/v3`, `/beta`, `/internal`, `/legacy`. Old versions often skip newer authz checks — record each as its own endpoint so coverage tracks them separately.
+## 4. Versioned & shadow routes (API9:2023 improper inventory · class=inventory)
+- Enumerate **every** version/prefix: `/v1`, `/v2`, `/v3`, `/beta`, `/internal`, `/legacy`, `/staging`, `/test`. Old/undocumented versions often skip newer authz checks — record each as its own endpoint so coverage tracks them separately and every one gets its own BOLA/BFLA pass downstream. A shadow/deprecated endpoint still reachable is itself an API9:2023 finding.
 - Try undocumented methods on documented paths (`OPTIONS` to reveal `Allow:`; `PUT`/`DELETE`/`PATCH` where only `GET` is documented).
+- A path that returns a suspicious non-404 you can't fully classify is a lead, not noise — `record kind=endpoint` (or a note) so `recall gaps` keeps it in scope rather than dropping it.
 
 ## 5. Detect the auth scheme
 ```bash
 curl -sI https://TARGET/api/v1/me                       # 401 + WWW-Authenticate reveals scheme
 ```
-- Identify: Bearer/JWT, API key (header vs query), Basic, session cookie, HMAC-signed, mTLS. Decode any JWT (`jwt_tool <tok> -T`) and record claims/alg.
+- Identify: Bearer/JWT, API key (header vs query), Basic, session cookie, HMAC-signed, mTLS. Decode any JWT (`jwt_tool <tok>`, or paste into a local decoder) and record claims/alg; note the `alg` and `kid` for the auth playbook in **web-auth-session**.
 - Note where the token goes (header name, query param) and whether TLS is enforced. Record as `tech name="auth: JWT bearer"`.
 
 ## 6. Seed the inventory & hand off
@@ -59,4 +60,11 @@ record kind=endpoint host=h1 method=GET path=/api/v1/users/{id} params=["id"] au
 record kind=param name=id endpoint=e1 location=path
 record kind=tech name=GraphQL host=h1
 ```
-Then propose first hypotheses (BOLA on `{id}` endpoints, BFLA on admin ops) and run `recall next`. Continue with **api-testing** (REST) or **api-graphql**.
+Aim for an **exhaustive** inventory — every operation, every parameter, every version — because coverage downstream can only be as complete as what you record here: a route you don't record never gets a BOLA/BFLA test. Then propose first hypotheses (BOLA on **every** `{id}` endpoint, BFLA on **every** admin/privileged op) and run `recall next`. Continue with **api-testing** (REST) or **api-graphql**.
+
+## References
+- OWASP API Security Top 10 — 2023 (API9:2023 Improper Inventory Management drives spec/version enumeration) — https://owasp.org/API-Security/editions/2023/en/0x11-t10/
+- katana — crawler & JS endpoint parsing (`-jc`, `-d`, `-o`) — https://github.com/projectdiscovery/katana
+- OWASP WSTG — Information Gathering (WSTG-INFO-*) & API testing (cite by name)
+- OWASP Cheat Sheet Series — REST Security Cheat Sheet (cite by name)
+- OpenAPI Specification — spec structure parsed in §2 (cite by name)

@@ -46,3 +46,8 @@ record kind=finding title="Default PostgreSQL credentials on 10.10.20.9" severit
 ```
 - Note in the finding refers to the loot by **handle**, never the password — the export stays clean automatically.
 - For post-exploitation cred reuse and the approval gate around it, see `network-post-exploit-notes`.
+
+## References
+- PTES — Post Exploitation — Penetration Testing Execution Standard — https://pentest-standard.readthedocs.io/en/latest/post_exploitation.html (credential harvesting and handling sensitive data under the rules of engagement)
+- CWE-798: Use of Hard-coded Credentials — MITRE — https://cwe.mitre.org/data/definitions/798.html (credential-exposure class for loot-backed findings; see also CWE-522 Insufficiently Protected Credentials, CWE-1392 Use of Default Credentials)
+- Technical Guide to Information Security Testing and Assessment — NIST SP 800-115 — https://csrc.nist.gov/pubs/sp/800/115/final (protecting and handling sensitive assessment data)

@@ -2,18 +2,107 @@
   "v": 1,
   "targetType": "network",
   "classes": [
-    { "id": "unauth-service",  "title": "Exposed / unauthenticated services",          "cwe": ["CWE-306", "CWE-668"] },
-    { "id": "default-creds",   "title": "Default / weak credentials",                   "cwe": ["CWE-1392", "CWE-521"] },
-    { "id": "outdated-service","title": "Outdated / vulnerable service versions",       "cwe": ["CWE-1395", "CWE-1104"] },
-    { "id": "smb-rpc",         "title": "SMB / RPC exposure & null sessions",           "cwe": ["CWE-306", "CWE-200"] },
-    { "id": "snmp",            "title": "SNMP misconfiguration / community strings",    "cwe": ["CWE-1392", "CWE-200"] },
-    { "id": "dns",             "title": "DNS zone transfer / misconfiguration",         "cwe": ["CWE-200"] },
-    { "id": "tls",             "title": "TLS/SSL & crypto weaknesses",                  "cwe": ["CWE-326", "CWE-327", "CWE-295"] },
-    { "id": "exposed-db",      "title": "Exposed databases / data stores",              "cwe": ["CWE-306", "CWE-668"] },
-    { "id": "exposed-admin",   "title": "Exposed admin / management interfaces",        "cwe": ["CWE-284", "CWE-668"] },
-    { "id": "authz",           "title": "Weak access control on services (null/anon)",  "cwe": ["CWE-284", "CWE-306"] },
-    { "id": "misconfig",       "title": "Service security misconfiguration",            "cwe": ["CWE-16", "CWE-306"] },
-    { "id": "infodisclosure",  "title": "Information disclosure / service banners",      "cwe": ["CWE-200"] },
-    { "id": "segmentation",    "title": "Missing network segmentation",                 "cwe": ["CWE-923"] }
+    {
+      "id": "unauth-service",
+      "title": "Exposed / unauthenticated services",
+      "cwe": [
+        "CWE-306",
+        "CWE-668"
+      ]
+    },
+    {
+      "id": "default-creds",
+      "title": "Default / weak credentials",
+      "cwe": [
+        "CWE-1392",
+        "CWE-521"
+      ]
+    },
+    {
+      "id": "outdated-service",
+      "title": "Outdated / vulnerable service versions",
+      "cwe": [
+        "CWE-1395",
+        "CWE-1104"
+      ]
+    },
+    {
+      "id": "smb-rpc",
+      "title": "SMB / RPC exposure & null sessions",
+      "cwe": [
+        "CWE-306",
+        "CWE-200"
+      ]
+    },
+    {
+      "id": "snmp",
+      "title": "SNMP misconfiguration / community strings",
+      "cwe": [
+        "CWE-1392",
+        "CWE-200"
+      ]
+    },
+    {
+      "id": "dns",
+      "title": "DNS zone transfer / misconfiguration",
+      "cwe": [
+        "CWE-200"
+      ]
+    },
+    {
+      "id": "tls",
+      "title": "TLS/SSL & crypto weaknesses",
+      "cwe": [
+        "CWE-326",
+        "CWE-327",
+        "CWE-295"
+      ]
+    },
+    {
+      "id": "exposed-db",
+      "title": "Exposed databases / data stores",
+      "cwe": [
+        "CWE-306",
+        "CWE-668"
+      ]
+    },
+    {
+      "id": "exposed-admin",
+      "title": "Exposed admin / management interfaces",
+      "cwe": [
+        "CWE-284",
+        "CWE-668"
+      ]
+    },
+    {
+      "id": "authz",
+      "title": "Weak access control on services (null/anon)",
+      "cwe": [
+        "CWE-284",
+        "CWE-306"
+      ]
+    },
+    {
+      "id": "misconfig",
+      "title": "Service security misconfiguration",
+      "cwe": [
+        "CWE-693",
+        "CWE-306"
+      ]
+    },
+    {
+      "id": "infodisclosure",
+      "title": "Information disclosure / service banners",
+      "cwe": [
+        "CWE-200"
+      ]
+    },
+    {
+      "id": "segmentation",
+      "title": "Missing network segmentation",
+      "cwe": [
+        "CWE-923"
+      ]
+    }
   ]
 }

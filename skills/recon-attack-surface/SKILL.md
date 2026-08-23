@@ -65,4 +65,12 @@ Keep hypotheses concrete (a target, a class, a method to prove it). Don't over-s
 - `recall gaps` shows surface-element × class cells that are `not-tested` or `blocked`. Work them via `recall next`; never quit while gaps remain.
 - Refuted hypotheses stay recorded (no re-test, and they document rigor). Update outcomes as you go.
 - If a whole class needs operator input (e.g. authorization to run active checks), `record kind=blocker` on it — the cell goes `blocked`, and `recall next` routes you elsewhere so the engagement never stalls.
+- Coverage must be **exhaustive, not sampled**: every surface element gets every applicable class queued (each `{id}`/`?id=` endpoint an `authz`/`idor` cell, each input-to-DB an `sqli` cell, etc.) — a class you never queue is a bug you can never find.
+- Calibrate rather than discard: a hypothesis you probe but can't prove becomes `inconclusive` (or a `status=open` finding at low severity), retained and routed via `recall gaps` — never silently dropped. Refuted hypotheses stay recorded too, documenting rigor.
 - When gaps are exhausted or all remaining cells are blocked, summarize the surface + open blockers rather than looping.
+
+## References
+- PTES — Intelligence Gathering (surface synthesis, target prioritization) — cite by name
+- OWASP WSTG — Information Gathering & Threat Modeling (map trust boundaries to test classes) — cite by name
+- OWASP API Security Top 10 — 2023 (clustering API surface by BOLA/BFLA/inventory) — https://owasp.org/API-Security/editions/2023/en/0x11-t10/
+- CWE — Common Weakness Enumeration (class → CWE mapping for seeded hypotheses) — https://cwe.mitre.org/

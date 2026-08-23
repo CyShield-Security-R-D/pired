@@ -127,6 +127,23 @@ move. This is strong evidence that the detection is *genuine capability, not rec
 of the public benchmark* — and it validates the whole comparison against a
 memorization confound. (Run audited clean: 0 answer-key/manifest references.)
 
+## 5c. Reproducibility (pired arm, run-to-run)
+
+The pired arm was run three times (two clean, one mutated). The headline is stable —
+**identical F1 and 100% critical recall every time**; recall and precision trade
+inversely within a fixed F1, which is expected sampling variance, not instability.
+
+| pired + qwen3.8-27b | Recall | Precision | F1 | Critical | Decoy FP | TP |
+|---|:--:|:--:|:--:|:--:|:--:|:--:|
+| Clean · run 1 | 0.736 | 0.629 | 0.678 | 100% | 0/6 | 39 |
+| Clean · run 2 | 0.698 | 0.661 | 0.679 | 100% | 0/6 | 37 |
+| Mutated | 0.736 | 0.661 | 0.696 | 100% | 0/6 | 39 |
+| **range** | 0.70–0.74 | 0.63–0.66 | **0.678–0.696** | **100%** | **0/6** | 37–39 |
+
+F1 varies by 0.001 between the two clean runs; **critical recall is 100% in all
+three**, and no run tripped a decoy. The single-run figures elsewhere in this report
+should be read against this ±0.02-F1 band.
+
 ## 6. Cost (exact token accounting)
 
 Per-token rates: `gpt-5.6-sol` costs **5× (input) / 3.3× (output)** what

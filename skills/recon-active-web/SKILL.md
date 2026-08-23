@@ -18,11 +18,11 @@ Tools run via `bash` and may be missing. If absent: try an alternative, else `re
 ```bash
 # resolve first so you only probe things that exist
 dnsx -l evidence/subs_all.txt -a -resp-only -silent -o evidence/resolved.txt
-# probe HTTP/HTTPS: status, title, tech, server, redirects, content-length
-httpx -l evidence/subs_all.txt -sc -title -td -server -location -ip -cl \
-  -o evidence/httpx.txt -json -o evidence/httpx.json
+# probe HTTP/HTTPS: status, title, tech, server, redirects, content-length (JSONL output)
+httpx -l evidence/subs_all.txt -sc -title -td -server -location -ip -cl -json -o evidence/httpx.json
+# drop -json for a quick human-readable table to evidence/httpx.txt instead
 ```
-`httpx` sends 1–2 requests per host — light, but it IS traffic; only run it against in-scope names. Filter to live: `jq -r 'select(.status_code)|.url' evidence/httpx.json | sort -u`.
+`httpx` sends 1–2 requests per host — light, but it IS traffic; only run it against in-scope names. Probe **every** in-scope name (don't sample) so no live host is missed. Filter to live: `jq -r 'select(.status_code)|.url' evidence/httpx.json | sort -u`.
 
 ## 2. Fingerprint the stack
 ```bash
@@ -67,6 +67,14 @@ record kind=host value=admin.TARGET ip=203.0.113.5 tech=["apache","php"]
 record kind=endpoint host=h1 method=GET path=/login auth=none
 record kind=finding kind_hint=info title="Staging panel exposed to internet" severity=info target=h2 class=secrets description="dev.TARGET serves an unauthenticated admin build" evidence=["evidence/shots/dev.png"]
 ```
-- Verify before recording: a 200 from `httpx` can be a soft-404 / WAF splash — open the screenshot or fetch once to confirm real content.
-- Treat `nuclei -l evidence/resolved.txt` output as leads only; confirm each hit by hand before it becomes a finding.
+- Calibrate, don't discard: a 200 from `httpx` can be a soft-404 / WAF splash — open the screenshot or fetch once to confirm real content. If you can't classify a host yet, keep it as a lead (`record kind=host` / note) for `recall gaps`, don't drop it.
+- Treat `nuclei -l evidence/resolved.txt` output as leads only; confirm each hit by hand before it becomes a finding — verification sets confidence, it doesn't delete the lead. An unconfirmed-but-plausible hit stays a `status=open` finding at low severity or an `inconclusive` hypothesis.
 - When the live set is mapped, run `recall coverage` / `recall gaps`, then move promising hosts into `web-recon` for content/param discovery and the vuln-class skills.
+
+## References
+- OWASP WSTG — Information Gathering: Fingerprint Web Server / Application, Enumerate Applications (cite by name)
+- httpx — HTTP toolkit (`-sc`/`-title`/`-td`/`-server`/`-location`/`-ip`/`-cl`/`-json`, `-ss` screenshot) — https://github.com/projectdiscovery/httpx
+- dnsx — DNS resolver (`-a`, `-resp-only`, `-silent`, `-l`) — https://github.com/projectdiscovery/dnsx
+- gowitness — headless screenshot utility (`scan file -f`, `--screenshot-path`, `--write-db`) — https://github.com/sensepost/gowitness
+- CWE-538: Insertion of Sensitive Information into Externally-Accessible File or Directory (`.git`/`.env` exposure) — https://cwe.mitre.org/data/definitions/538.html
+- CWE-540: Inclusion of Sensitive Information in Source Code — https://cwe.mitre.org/data/definitions/540.html
