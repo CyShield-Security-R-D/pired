@@ -51,6 +51,31 @@ describe("buildSystemPrompt", () => {
 		expect(p).toContain("enumerate a web app");
 	});
 
+	it("drives the explore-first method: diverge (creativity) before the checklist floor", () => {
+		const p = buildSystemPrompt({ profile: "review", scope });
+		// creativity must lead and not be capped by any list
+		expect(p).toMatch(/explore|diverge/i);
+		expect(p).toMatch(/domain invariant|no checklist|not let any list/i);
+		// floor + precise capture + critic
+		expect(p).toMatch(/floor/i);
+		expect(p).toMatch(/pin the sink|exact file|specific vulnerable line/i);
+		expect(p).toMatch(/did not get to|investigate with more time/i);
+	});
+
+	it("injects checklist classes as a coverage floor (generic to whatever is loaded)", () => {
+		const p = buildSystemPrompt({ profile: "review", scope, checklist: ["authz", "business-logic", "dependencies (SCA)"] });
+		expect(p).toMatch(/minimum floor, not the goal/i);
+		expect(p).toContain("authz");
+		expect(p).toContain("business-logic");
+		expect(p).toContain("dependencies (SCA)");
+	});
+
+	it("omits the class list cleanly when no checklist is provided", () => {
+		const p = buildSystemPrompt({ profile: "review", scope });
+		expect(p).not.toMatch(/Standard weakness classes to cover/);
+		expect(p).toMatch(/<methodology>/); // methodology still present
+	});
+
 	it("appends extra instructions", () => {
 		const p = buildSystemPrompt({ profile: "pentest", scope, extra: "Client contact: ops@acme.test" });
 		expect(p).toContain("ops@acme.test");

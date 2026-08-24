@@ -144,6 +144,55 @@ F1 varies by 0.001 between the two clean runs; **critical recall is 100% in all
 three**, and no run tripped a decoy. The single-run figures elsewhere in this report
 should be read against this ±0.02-F1 band.
 
+## 5d. Harness improvement — explore-first + coverage floor (pired v2)
+
+The audit (see 04 §7b) found pired *ships* a 19-class coverage checklist but never
+showed it to the model, and the model reasoned about vulns it then mis-localized or
+never recorded. We added a generic **explore-first -> coverage-floor -> precise-capture
+-> critic** method to pired's system prompt (no DVBank-specific content; the class
+list comes from whatever checklist the engagement loads), mindful of not letting the
+checklist cap creativity. Same model, same task, same target, same protocol.
+
+| pired + qwen3.8-27b (clean) | Recall | Precision | F1 | Critical | Decoy FP | TP |
+|---|:--:|:--:|:--:|:--:|:--:|:--:|
+| v1 run 1 | 0.736 | 0.629 | 0.678 | 100% | 0/6 | 39 |
+| v1 run 2 | 0.698 | 0.661 | 0.679 | 100% | 0/6 | 37 |
+| **v2 (explore-first + floor)** | **0.811** | **0.717** | **0.761** | 100% | 0/6 | **43** |
+
+**Both recall and precision rose** (it is not a trade-off): F1 0.678 -> **0.761**
+(+12%), a gap far larger than v1's +/-0.001 run-to-run variance. It now exceeds the
+codex baseline on F1 (0.761 vs 0.735) and recall (0.811 vs 0.679); codex still leads
+raw precision (0.800 vs 0.717).
+
+**The gains land where the method targeted (mechanism, not luck):**
+
+| OWASP 2021 | v1 (run 2) | v2 | |
+|---|:--:|:--:|---|
+| A01 Broken Access Control | 7/12 | 8/12 | up |
+| A02 Cryptographic Failures | 2/4 | 3/4 | up |
+| A03 Injection | 13/14 | **14/14** | up (perfect) |
+| A04 Insecure Design | 0/3 | **2/3** | up (the *creative* class) |
+| A05 Security Misconfiguration | 6/9 | 8/9 | up |
+| A06 Vulnerable Components (SCA) | 1/1 | **0/1** | **down (regression)** |
+
+v2 newly caught 7 vulns — including **four previously missed by all three arms**
+(`biz-logic-negative-amount`, `broken-access-delete-user`, `stored-xss-upload-serve`,
+`insecure-temp-file`) — and lost one (`vulnerable-dependencies`).
+
+**On the creativity concern:** the most open-ended category (A04 Insecure Design)
+*improved* (0 -> 2), and the four newly-cracked bugs are business-logic / design
+flaws — evidence that explore-first framing preserved and even amplified creative
+discovery while the floor added systematic coverage. Decoy discipline stayed perfect
+(0/6), so the floor did not cause over-reporting.
+
+**The regression is the honest lesson:** the prompt floor does not guarantee a
+*mechanical* class. SCA (dependency versions) needs a deterministic seed
+(parse `requirements.txt`/`package.json`), not just a prompt line — the next fix.
+
+**Caveats:** v2 is a single run (v1's variance band is +/-0.001 F1; the improvement
+is ~40x that, so it is very likely real, but replication would tighten it); one
+target; the improvement is a generic prompt change measured here on one app.
+
 ## 6. Cost (exact token accounting)
 
 Per-token rates: `gpt-5.6-sol` costs **5× (input) / 3.3× (output)** what

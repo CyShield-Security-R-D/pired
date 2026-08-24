@@ -22,6 +22,8 @@ export type PiredProfile = (typeof PIRED_PROFILES)[number];
 export interface BuildPromptOptions {
 	profile: PiredProfile;
 	scope?: EngagementScope;
+	/** Standard weakness-class labels to cover as a floor (from the engagement checklist). */
+	checklist?: string[];
 	skills?: Array<{ name: string; description: string }>;
 	/** Extra instructions appended verbatim (e.g. from --append-system-prompt or a context file). */
 	extra?: string;
@@ -85,10 +87,34 @@ function skillsBlock(skills: BuildPromptOptions["skills"]): string {
 	return `<skills>\nReference methodology you can pull in when useful — read the SKILL.md and adapt it to the target, don't just follow it step by step:\n${items}\n</skills>`;
 }
 
+/**
+ * The review method: explore-first (diverge) so creativity leads, then a checklist
+ * FLOOR (converge), precise capture, and a completeness critic. Generic to any
+ * target — the class list comes from whichever checklist the engagement loaded.
+ */
+function methodologyBlock(checklist: string[] | undefined): string {
+	const floor =
+		checklist && checklist.length > 0
+			? `\nStandard weakness classes to cover (a minimum floor, not the goal): ${checklist.join(", ")}.`
+			: "";
+	return `<methodology>
+Work in passes. Pass 1 is where your best findings come from — do not let any list narrow it.
+
+1. Explore (diverge). Understand the target on its own terms: what it does, its trust boundaries, where untrusted input enters and where it reaches dangerous sinks. Hunt for the high-value bugs that are on no checklist — violations of the application's own domain invariants (resources conserved, ownership/tenant boundaries, idempotency, ordering and race windows), missing or broken authorization on individual operations, and multi-step chains. Your judgment matters most here; follow what smells wrong.
+
+2. Cover the floor (converge). Enumerate the attack surface — every route/endpoint/input/sink — and make sure each standard weakness class has been considered against it. Record what you find, or note why a class does not apply; do not finish while a class is still unconsidered.${floor}
+
+3. Report precisely (capture). For each issue, cite the exact file and the specific vulnerable line — re-read and pin the sink line rather than approximating, and quote it when you can. Separate confirmed from suspected; never invent results.
+
+Before finishing, briefly note what you did not get to and would investigate with more time. Covering the floor is the minimum bar; the ceiling is the creative work in pass 1.
+</methodology>`;
+}
+
 export function buildSystemPrompt(opts: BuildPromptOptions): string {
 	const blocks = [
 		IDENTITY,
 		PROFILE_BLOCKS[opts.profile],
+		methodologyBlock(opts.checklist),
 		scopeBlock(opts.scope),
 		skillsBlock(opts.skills),
 		opts.extra?.trim() ? opts.extra.trim() : "",

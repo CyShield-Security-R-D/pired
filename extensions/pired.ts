@@ -88,6 +88,7 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	let scope: EngagementScope = defaultScope("review", "engagement");
 	let gate: Gate = createScopeGate(scope);
 	let workspace: Workspace | undefined;
+	let checklistClasses: string[] = [];
 
 	pi.registerFlag("pired-profile", { description: "pired profile: pentest | recon | review", type: "string", default: "review" });
 	registerPiredProviders(pi);
@@ -118,6 +119,8 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		const dir = scope.workspace ? expandHome(scope.workspace) : join(homedir(), ".pired", "engagements", scope.engagement);
 		workspace = await Workspace.open(dir, scope.engagement, services);
 		await seedChecklist(workspace, pickTargetType(profile, scope));
+		const checklist = await workspace.readChecklist();
+		checklistClasses = checklist?.classes.map((c) => c.title || c.id) ?? [];
 
 		for (const tool of createCoreTools({ workspace })) pi.registerTool(toPiTool(tool, () => services));
 		pi.setActiveTools([...new Set([...pi.getActiveTools(), "record", "recall"])]);
@@ -133,7 +136,7 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	// Skills are already advertised in the base prompt via resources_discover, so we
 	// do not re-list them here — the overlay stays small for local models.
 	pi.on("before_agent_start", (event) => ({
-		systemPrompt: `${event.systemPrompt}\n\n${buildSystemPrompt({ profile, scope })}`,
+		systemPrompt: `${event.systemPrompt}\n\n${buildSystemPrompt({ profile, scope, checklist: checklistClasses })}`,
 	}));
 
 	pi.on("tool_call", async (event) => {

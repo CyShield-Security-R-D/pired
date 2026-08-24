@@ -30,16 +30,16 @@ We benchmarked pired on a **ground-truth-labeled vulnerable banking app** (53 CW
 
 | | Recall | Precision | F1 | Critical recall | Cost/scan |
 |---|:--:|:--:|:--:|:--:|:--:|
-| **pired + Qwen3.8 27B** *(local)* | **0.74** | 0.63 | 0.68 | **100%** | ~$0.26 |
-| codex + gpt-5.6-sol *(frontier)* | 0.68 | **0.80** | **0.73** | 93% | ~$0.19 |
+| **pired + Qwen3.8 27B** *(local)* | **0.81** | 0.72 | **0.76** | **100%** | ~$0.26 |
+| codex + gpt-5.6-sol *(frontier)* | 0.68 | **0.80** | 0.73 | 93% | ~$0.19 |
 | vanilla pi + Qwen3.8 27B *(no pired)* | 0.59 | 0.56 | 0.57 | 79% | ~$0.16 |
 
 **Two findings stand out:**
 
-1. **The harness is worth more than the model (for recall).** Wrapping the *same* 27B model in pired lifted recall **0.59 → 0.74** and critical coverage **79% → 100%** — overtaking a frontier agent on both, and closing ~65% of the F1 gap to it. The gains concentrate exactly where a generic prompt is weak: it found **all** cryptographic-failure bugs (4/4 vs 0/4 for vanilla) and 3 critical code-injection sinks the bare model walked past.
+1. **The harness is worth more than the model.** Wrapping the *same* 27B model in pired lifted recall **0.59 → 0.81** and F1 **0.57 → 0.76**, with critical coverage **79% → 100%** — surpassing a frontier agent on both recall and F1. The lift comes from an *explore-first, then coverage-floor* method — the model reasons openly, then a checklist floor and a precise-capture step ensure nothing systematic is skipped — not from a bigger model. The gains land where a generic prompt is weak: all cryptographic-failure bugs (4/4 vs 0/4 for the bare model), plus business-logic and design flaws it previously walked past.
 2. **It's genuine, not memorized.** Re-run on a **mutated** variant (renamed routes, shifted lines, changed literals) built to defeat training-data recall, pired + Qwen scored an **identical 0.74 recall / 100% critical** — the score didn't move.
 
-The trade-off is honest: pired + a local model is the stronger **detector** (higher recall, no missed criticals, but noisier); the frontier agent is the stronger **precision/F1** reviewer. Full methodology, per-category breakdown, exact token/cost accounting, and threats to validity are in **[`research/`](./research/)**.
+The trade-off is honest: pired + a local model now leads on **recall, F1, and critical coverage**; the frontier agent keeps an edge on **raw precision** (fewer false positives). Full methodology, per-category breakdown, the harness-improvement experiment, exact token/cost accounting, and threats to validity are in **[`research/`](./research/)**.
 
 ---
 

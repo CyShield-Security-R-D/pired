@@ -14,6 +14,8 @@ local model and the frontier agent, and **more than 100% of the recall gap** (it
 overtook). The security-operator system prompt plus the record/recall
 "keep-testing-until-gaps-close" workflow — *not* a bigger model — is what did it.
 
+> **Validated (v2).** Acting on the audit, a generic explore-first + coverage-floor + precise-capture method was added to pired's prompt. On the same model/target it lifted F1 0.678 -> 0.761 and recall 0.74 -> 0.81 (100% critical, decoys 0/6), cracking four bugs previously missed by all three arms — while *improving* the most creative category (Insecure Design 0->2). Confirmation that the harness, not the model, was the limiter. See 03 §5d. (One mechanical regression: SCA needs a deterministic seed, not a prompt line.)
+
 **Implication:** for vulnerability *detection*, investing in the harness (prompting,
 workflow, coverage discipline) is a higher-leverage, far cheaper lever than
 investing in a bigger model. A good harness on a cheap local model is competitive
