@@ -29,6 +29,30 @@ const PIRED_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const SKILLS_DIR = join(PIRED_ROOT, "skills");
 const CHECKLISTS_DIR = join(PIRED_ROOT, "checklists");
 
+// --- sleek banner widget (pi's setWidget renders a persistent panel above the
+// editor — unlike a printed banner it is not scrolled away or cleared). -------
+const C = { red: "\x1b[1;38;5;203m", dim: "\x1b[2m", bold: "\x1b[1m", rst: "\x1b[0m" };
+
+interface BannerData {
+	engagement: string;
+	profile: PiredProfile;
+	targetType: string;
+	classes: number;
+	coveragePct?: number;
+	findings: number;
+	blockers: number;
+}
+
+function bannerLines(d: BannerData): string[] {
+	const cov = d.coveragePct !== undefined ? `${d.coveragePct}%` : "n/a";
+	const kv = (k: string, v: string | number) => `${C.dim}${k}${C.rst} ${v}`;
+	return [
+		`${C.red}╭─╴ p i r e d ╶─╮${C.rst}   ${C.dim}security operator · ${d.targetType}${C.rst}`,
+		`  ${kv("engagement", d.engagement)}   ${kv("profile", d.profile)}   ${kv("checklist", `${d.classes} classes`)}`,
+		`  ${kv("tools", "record · recall")}   ${kv("coverage", cov)}   ${kv("findings", d.findings)}${d.blockers > 0 ? `   ${kv("blockers", d.blockers)}` : ""}`,
+	];
+}
+
 function defaultScope(profile: PiredProfile, engagement: string): EngagementScope {
 	const review = profile === "review";
 	return { v: 1, engagement, authorized: review, mode: review ? "off" : "enforce", targets: {} };
@@ -108,6 +132,64 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		if (s.coveragePct !== undefined) parts.push(`cov ${s.coveragePct}%`);
 		if (s.blockers > 0) parts.push(`blockers ${s.blockers}`);
 		ctx.ui.setStatus("pired", parts.join(" · "));
+		// Live sleek banner above the editor (persistent; not scrolled/cleared away).
+		// TUI-only: terminal widgets must never run in print/rpc/json mode (they can
+		// block a headless run — e.g. the `-p` benchmark path).
+		if (ctx.mode !== "tui") return;
+		try {
+			ctx.ui.setWidget?.(
+				"pired",
+				bannerLines({
+					engagement: scope.engagement,
+					profile,
+					targetType: pickTargetType(profile, scope),
+					classes: checklistClasses.length,
+					coveragePct: s.coveragePct,
+					findings: s.findingsTotal,
+					blockers: s.blockers,
+				}),
+			);
+		} catch {
+			// setWidget is best-effort UI polish; never let it break the session.
+		}
+	};
+
+	// One-time fx-like UI polish. All guarded: a missing/older pi API must never
+	// break pired. The `pired` launcher additionally loads the fxred theme file.
+	const applyUiPolish = (ctx: ExtensionContext): void => {
+		if (ctx.mode !== "tui") return; // terminal-only; skip in print/rpc/json (headless) modes
+		try {
+			ctx.ui.setTheme?.("fxred"); // no-op unless the theme was loaded (e.g. by `pired run`)
+		} catch {}
+		try {
+			ctx.ui.setWorkingIndicator?.({ frames: [`${C.red}●${C.rst}`] });
+		} catch {}
+		try {
+			ctx.ui.setHiddenThinkingLabel?.("thinking");
+		} catch {}
+		// fx-style footer: a single minimal line — red ▌ bar + live engagement
+		// status on the left, model · branch · /help dim on the right.
+		try {
+			const strip = (s: string): string => s.replace(/\x1b\[[0-9;]*m/g, "");
+			ctx.ui.setFooter?.((_tui, theme, footerData) => ({
+				// render runs every frame; it must NEVER throw or the footer breaks.
+				render(width: number): string[] {
+					try {
+						const status = footerData.getExtensionStatuses().get("pired") ?? scope.engagement;
+						const branch = footerData.getGitBranch();
+						const model = (ctx.model as { id?: string } | undefined)?.id;
+						const sep = theme.fg("dim", " · ");
+						const left = theme.fg("accent", "▌ ") + theme.fg("text", status);
+						const right = [model, branch, "/help"].filter(Boolean).map((p) => theme.fg("dim", String(p))).join(sep);
+						const gap = Math.max(1, width - strip(left).length - strip(right).length);
+						return [left + " ".repeat(gap) + right];
+					} catch {
+						return [theme.fg("dim", " pired")]; // safe fallback — never crash the footer
+					}
+				},
+				invalidate() {},
+			}));
+		} catch {}
 	};
 
 	pi.on("session_start", async (_event, ctx) => {
@@ -125,6 +207,7 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		for (const tool of createCoreTools({ workspace })) pi.registerTool(toPiTool(tool, () => services));
 		pi.setActiveTools([...new Set([...pi.getActiveTools(), "record", "recall"])]);
 
+		applyUiPolish(ctx);
 		await refreshStatus(ctx);
 	});
 
