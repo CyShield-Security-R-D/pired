@@ -38,6 +38,11 @@ const C = { red: "\x1b[1;38;5;203m", dim: "\x1b[2m", bold: "\x1b[1m", rst: "\x1b
 const INK = { pi: "\x1b[38;2;150;150;150m", red: "\x1b[38;2;255;95;95m" };
 const WORDMARK = `${C.bold}${INK.pi}pi${INK.red}red${C.rst}`;
 
+// Animated "working" spinner — a smooth red braille cycle (frames are rendered
+// verbatim, so each carries its own color). intervalMs paces the animation.
+const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"].map((f) => `${INK.red}${f}${C.rst}`);
+const SPINNER_INTERVAL_MS = 80;
+
 function defaultScope(profile: PiredProfile, engagement: string): EngagementScope {
 	const review = profile === "review";
 	return { v: 1, engagement, authorized: review, mode: review ? "off" : "enforce", targets: {} };
@@ -127,7 +132,7 @@ export default function piredExtension(pi: ExtensionAPI): void {
 			ctx.ui.setTheme?.("fxred"); // no-op unless the theme was loaded (e.g. by `pired run`)
 		} catch {}
 		try {
-			ctx.ui.setWorkingIndicator?.({ frames: [`${C.red}●${C.rst}`] });
+			ctx.ui.setWorkingIndicator?.({ frames: SPINNER, intervalMs: SPINNER_INTERVAL_MS });
 		} catch {}
 		try {
 			ctx.ui.setHiddenThinkingLabel?.("thinking");
