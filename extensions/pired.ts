@@ -33,6 +33,13 @@ const CHECKLISTS_DIR = join(PIRED_ROOT, "checklists");
 // editor — unlike a printed banner it is not scrolled away or cleared). -------
 const C = { red: "\x1b[1;38;5;203m", dim: "\x1b[2m", bold: "\x1b[1m", rst: "\x1b[0m" };
 
+// Minimal ink: the name IS "pi + red" — render it two-tone, one hairline rule.
+const INK = {
+	pi: "\x1b[38;2;150;150;150m", // muted graphite
+	red: "\x1b[38;2;255;95;95m", // accent
+	hair: "\x1b[38;2;64;64;64m", // hairline rule
+};
+
 interface BannerData {
 	engagement: string;
 	profile: PiredProfile;
@@ -43,13 +50,29 @@ interface BannerData {
 	blockers: number;
 }
 
+/**
+ * Minimal, elegant pired brand: a lowercase two-tone wordmark (pi·muted +
+ * red·accent), a hairline rule, and one dim key/value line. No ASCII art, no
+ * gradients — just typography and restraint.
+ */
 function bannerLines(d: BannerData): string[] {
 	const cov = d.coveragePct !== undefined ? `${d.coveragePct}%` : "n/a";
+	const dot = `${C.dim}·${C.rst}`;
 	const kv = (k: string, v: string | number) => `${C.dim}${k}${C.rst} ${v}`;
+	const wordmark = `${C.bold}${INK.pi}pi${INK.red}red${C.rst}`;
+	const tag = `${C.dim}security operator${d.targetType ? ` · ${d.targetType}` : ""}${C.rst}`;
+	const info = [
+		kv("engagement", d.engagement),
+		kv("profile", d.profile),
+		kv("coverage", cov),
+		kv("findings", d.findings),
+		...(d.blockers > 0 ? [kv("blockers", d.blockers)] : []),
+	].join(` ${dot} `);
 	return [
-		`${C.red}╭─╴ p i r e d ╶─╮${C.rst}   ${C.dim}security operator · ${d.targetType}${C.rst}`,
-		`  ${kv("engagement", d.engagement)}   ${kv("profile", d.profile)}   ${kv("checklist", `${d.classes} classes`)}`,
-		`  ${kv("tools", "record · recall")}   ${kv("coverage", cov)}   ${kv("findings", d.findings)}${d.blockers > 0 ? `   ${kv("blockers", d.blockers)}` : ""}`,
+		"",
+		`  ${wordmark}    ${tag}`,
+		`  ${INK.hair}${"─".repeat(52)}${C.rst}`,
+		`  ${info}`,
 	];
 }
 
