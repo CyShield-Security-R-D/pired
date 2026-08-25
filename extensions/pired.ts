@@ -33,48 +33,10 @@ const CHECKLISTS_DIR = join(PIRED_ROOT, "checklists");
 // editor — unlike a printed banner it is not scrolled away or cleared). -------
 const C = { red: "\x1b[1;38;5;203m", dim: "\x1b[2m", bold: "\x1b[1m", rst: "\x1b[0m" };
 
-// Minimal ink: the name IS "pi + red" — render it two-tone, one hairline rule.
-const INK = {
-	pi: "\x1b[38;2;150;150;150m", // muted graphite
-	red: "\x1b[38;2;255;95;95m", // accent
-	hair: "\x1b[38;2;64;64;64m", // hairline rule
-};
-
-interface BannerData {
-	engagement: string;
-	profile: PiredProfile;
-	targetType: string;
-	classes: number;
-	coveragePct?: number;
-	findings: number;
-	blockers: number;
-}
-
-/**
- * Minimal, elegant pired brand: a lowercase two-tone wordmark (pi·muted +
- * red·accent), a hairline rule, and one dim key/value line. No ASCII art, no
- * gradients — just typography and restraint.
- */
-function bannerLines(d: BannerData): string[] {
-	const cov = d.coveragePct !== undefined ? `${d.coveragePct}%` : "n/a";
-	const dot = `${C.dim}·${C.rst}`;
-	const kv = (k: string, v: string | number) => `${C.dim}${k}${C.rst} ${v}`;
-	const wordmark = `${C.bold}${INK.pi}pi${INK.red}red${C.rst}`;
-	const tag = `${C.dim}security operator${d.targetType ? ` · ${d.targetType}` : ""}${C.rst}`;
-	const info = [
-		kv("engagement", d.engagement),
-		kv("profile", d.profile),
-		kv("coverage", cov),
-		kv("findings", d.findings),
-		...(d.blockers > 0 ? [kv("blockers", d.blockers)] : []),
-	].join(` ${dot} `);
-	return [
-		"",
-		`  ${wordmark}    ${tag}`,
-		`  ${INK.hair}${"─".repeat(52)}${C.rst}`,
-		`  ${info}`,
-	];
-}
+// The name IS "pi + red" — the footer renders it two-tone as the brand mark.
+// No separate banner widget: brand + live stats live in one elegant status line.
+const INK = { pi: "\x1b[38;2;150;150;150m", red: "\x1b[38;2;255;95;95m" };
+const WORDMARK = `${C.bold}${INK.pi}pi${INK.red}red${C.rst}`;
 
 function defaultScope(profile: PiredProfile, engagement: string): EngagementScope {
 	const review = profile === "review";
@@ -155,26 +117,6 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		if (s.coveragePct !== undefined) parts.push(`cov ${s.coveragePct}%`);
 		if (s.blockers > 0) parts.push(`blockers ${s.blockers}`);
 		ctx.ui.setStatus("pired", parts.join(" · "));
-		// Live sleek banner above the editor (persistent; not scrolled/cleared away).
-		// TUI-only: terminal widgets must never run in print/rpc/json mode (they can
-		// block a headless run — e.g. the `-p` benchmark path).
-		if (ctx.mode !== "tui") return;
-		try {
-			ctx.ui.setWidget?.(
-				"pired",
-				bannerLines({
-					engagement: scope.engagement,
-					profile,
-					targetType: pickTargetType(profile, scope),
-					classes: checklistClasses.length,
-					coveragePct: s.coveragePct,
-					findings: s.findingsTotal,
-					blockers: s.blockers,
-				}),
-			);
-		} catch {
-			// setWidget is best-effort UI polish; never let it break the session.
-		}
 	};
 
 	// One-time fx-like UI polish. All guarded: a missing/older pi API must never
@@ -191,7 +133,9 @@ export default function piredExtension(pi: ExtensionAPI): void {
 			ctx.ui.setHiddenThinkingLabel?.("thinking");
 		} catch {}
 		// fx-style footer: a single minimal line — red ▌ bar + live engagement
-		// status on the left, model · branch · /help dim on the right.
+		// The status line IS the brand: pired wordmark + live engagement stats on
+		// the left, model · branch · /help on the right. One elegant line, no
+		// separate banner (brand + stats + features merged here).
 		try {
 			const strip = (s: string): string => s.replace(/\x1b\[[0-9;]*m/g, "");
 			ctx.ui.setFooter?.((_tui, theme, footerData) => ({
@@ -202,12 +146,12 @@ export default function piredExtension(pi: ExtensionAPI): void {
 						const branch = footerData.getGitBranch();
 						const model = (ctx.model as { id?: string } | undefined)?.id;
 						const sep = theme.fg("dim", " · ");
-						const left = theme.fg("accent", "▌ ") + theme.fg("text", status);
+						const left = `${WORDMARK}  ${theme.fg("text", status)}`;
 						const right = [model, branch, "/help"].filter(Boolean).map((p) => theme.fg("dim", String(p))).join(sep);
 						const gap = Math.max(1, width - strip(left).length - strip(right).length);
 						return [left + " ".repeat(gap) + right];
 					} catch {
-						return [theme.fg("dim", " pired")]; // safe fallback — never crash the footer
+						return [`${WORDMARK}`]; // safe fallback — never crash the footer
 					}
 				},
 				invalidate() {},
