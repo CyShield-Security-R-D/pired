@@ -2,11 +2,11 @@
 
 # pi(red)
 
-**A security-testing harness for authorized pentesting, secure code review, and research — built to run on local, open-weight models.**
+**An engagement harness for security consultants — whitebox review and blackbox testing in one workspace, with coverage tracking that won't let an engagement end early.**
 
-*An AI agent, not a toolbox. It ships no scanners; it drives the ones you already have.*
+*Runs on your own hardware, so client code never leaves the box. An AI agent, not a toolbox: it ships no scanners; it drives the ones you already have.*
 
-`pentest` · `code-review` · `recon` — as a [pi](https://pi.dev) extension
+`review` · `recon` · `pentest` — as a [pi](https://pi.dev) extension
 
 </div>
 
@@ -14,12 +14,17 @@
 
 ## Why pired
 
-Most security "AI tools" bundle a pile of scanners and wrap a model around them. **pired takes the opposite bet:** the intelligence belongs in the *model and the workflow*, not in bundled tooling. pired adds a thin, durable **security layer** on top of the [pi coding agent](https://pi.dev) — an engagement workspace, a scope gate, a security-operator prompt, and two tools (`record`/`recall`) — and lets the agent drive the environment's own tools (`nmap`, `ffuf`, `curl`, `sqlmap`, `semgrep`, …) through `bash`.
+A consultant under NDA often *cannot* paste client source into a frontier API — that is a contract term, not a preference. And an engagement is rarely just one half: the same scope buys a code review *and* a test, delivered as one report. pired is built for that shape of work — a thin, durable **security layer** on top of the [pi coding agent](https://pi.dev) (an engagement workspace, a scope gate, a security-operator prompt, and two tools, `record`/`recall`) driving the environment's own tools (`nmap`, `ffuf`, `curl`, `sqlmap`, `semgrep`, …) through `bash`.
 
-Three principles shape it:
+Three claims:
 
-- **AI agent, not a testing tool.** No bundled scanners. Heavy tooling is opt-in; missing tools are *requested*, not carried.
-- **Local-model-first.** Tuned to run well on ~30B open-weight models (Qwen3.8 27B, Gemma 3 27B, DeepSeek) as well as frontier/subscription models.
+- **It runs on your hardware.** Tuned for ~30B open-weight models (Qwen3.8 27B, Gemma 3 27B, DeepSeek), so client code never leaves the engagement box — and it still beats a frontier agent on recall (below). Frontier and subscription models work too, where the engagement allows them.
+- **Coverage discipline, not vibes.** `checklist × inventory = coverage → hypotheses → findings`, with `recall gaps` keeping the agent testing while gaps remain. Per the benchmark, this — not a bigger model — is where the recall lift came from.
+- **One workspace, both halves of the engagement.** `review` for whitebox, `recon`/`pentest` for blackbox, over a single engagement ontology, so findings, evidence, and coverage correlate across the whole job instead of living in two disconnected tools.
+
+**What pired is not.** Not a scanner: it owns no detection engines and makes no claim to reproducible, rule-count-comparable output. Not the assessment: it drafts findings for an operator to verify, and the operator signs the report. Two principles keep it that way:
+
+- **An AI agent, not a toolbox.** No bundled scanners. Heavy tooling is opt-in; missing tools are *requested*, not carried.
 - **Built to last.** A harness-agnostic **ports & adapters** core with *zero* host imports, so the security engine outlives any single agent frontend.
 
 ---
@@ -65,7 +70,7 @@ pired rides pi's full frontend — TUI, `/model` switching, `/login`, themes, se
 pi -e ./extensions/pired.ts --pired-profile review -p "audit ./src for injection and auth bugs"
 ```
 
-- **Profiles** — `--pired-profile pentest | recon | review` (default `review`).
+- **Profiles** — `--pired-profile review | recon | pentest` (default `review`).
   - `review` — read-only code audit, no network gate; works with no config.
   - `recon` / `pentest` — network testing, **blocked until** an authorized scope is present.
 - **Scope** — drop a `pired.scope.json` (loaded only when the project is trusted):

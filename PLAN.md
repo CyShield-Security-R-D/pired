@@ -30,12 +30,19 @@
 
 ## 1. Goal
 
-A minimal, security-focused agent harness — "pi(red)" — for authorized
-penetration testing, code review, and security research, tuned to run on local
-models (~30B class: Qwen3-32B / Qwen3-30B-A3B, Gemma 3 27B, DeepSeek). It adds a
-rigor/anti-amnesia state layer, scope enforcement, and a small structured
-subagent layer. It is a **standalone binary** built on pi's libraries
-(`pi-agent-core` + `pi-ai`), not a fork and not a plugin inside pi's CLI (§2).
+An engagement harness — "pi(red)" — for **security consultants** doing authorized
+work: whitebox code review and blackbox testing in one workspace, tuned to run on
+local models (~30B class: Qwen3-32B / Qwen3-30B-A3B, Gemma 3 27B, DeepSeek) so
+client code never leaves the engagement box. It adds a rigor/anti-amnesia state
+layer, scope enforcement, and a small structured subagent layer.
+
+The audience is the operator who signs the report. pired is a force multiplier for
+their judgment — it drafts findings they verify — **not the assessment itself**, and
+**not a scanner**: detection engines stay the operator's, driven through `bash`.
+
+> **Superseded.** This section originally specified a **standalone binary** on
+> `pi-agent-core` + `pi-ai`, "not a fork and not a plugin inside pi's CLI (§2)".
+> pired shipped as a pi extension — see the architecture note at the top.
 
 Non-goals for v1: autonomous end-to-end operation, a rich TUI, scanner
 tool-wrappers, report generation. Those are staged (§13).

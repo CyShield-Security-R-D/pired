@@ -1,14 +1,15 @@
 # The Development of pired
 
-*pi(red) — a security-testing harness built on the pi coding agent*
+*pi(red) — an engagement harness for security consultants, built on the pi coding agent*
 
 ## 1. Goal and motivation
 
-**pired** is a security-focused agent harness for authorized penetration testing,
-secure code review, and security research. The design goal was a *handy, minimal*
-security layer that runs well on **local / open-weight models** (e.g. Qwen3.8 27B,
-Gemma 3 27B, DeepSeek) as well as subscription models (OpenAI Codex), rather than a
-heavyweight, model-hungry framework.
+**pired** is an engagement harness for security consultants doing authorized work —
+whitebox code review and blackbox testing in one workspace. The design goal was a
+*handy, minimal* security layer that runs well on **local / open-weight models**
+(e.g. Qwen3.8 27B, Gemma 3 27B, DeepSeek), so client code never leaves the
+engagement box, as well as on subscription models (OpenAI Codex) where the
+engagement allows them — rather than a heavyweight, model-hungry framework.
 
 The project was framed against existing tools such as **Strix**, but with a
 deliberately different stance:

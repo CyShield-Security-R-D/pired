@@ -1,7 +1,7 @@
 # pired — Research
 
-Documentation of the development of **pired** (a security-testing harness on the pi
-coding agent) and a controlled benchmark measuring whether pired + an open-weight
+Documentation of the development of **pired** (an engagement harness for security
+consultants, built on the pi coding agent) and a controlled benchmark measuring whether pired + an open-weight
 27B model competes with a frontier coding agent on real vulnerability detection.
 
 ## Documents

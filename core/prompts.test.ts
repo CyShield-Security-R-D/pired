@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { EngagementScope } from "./ontology.ts";
-import { buildSystemPrompt } from "./prompts.ts";
+import { buildSystemPrompt, PIRED_PROFILES } from "./prompts.ts";
 
 const scope: EngagementScope = {
 	v: 1,
@@ -129,7 +129,7 @@ describe("buildSystemPrompt", () => {
 	});
 
 	it("still gates offensive work when no scope is loaded (any profile)", () => {
-		for (const profile of ["pentest", "recon", "review"] as const) {
+		for (const profile of PIRED_PROFILES) {
 			const p = buildSystemPrompt({ profile });
 			expect(p).toMatch(/no engagement scope/i);
 			expect(p).toMatch(/blocked/i);

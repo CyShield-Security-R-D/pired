@@ -5,7 +5,7 @@
  * with the sleek UI applied.
  *
  * Usage:
- *   pired [--profile review|pentest|recon] [--provider NAME] [--model ID]
+ *   pired [--profile review|recon|pentest] [--provider NAME] [--model ID]
  *         [--target DIR] [--thinking off|low|medium|high|max] [--no-theme]
  *         [--prompt "one-shot"] [-- <extra pi args>]
  *
@@ -32,7 +32,7 @@ function has(name) {
 	return process.argv.includes(`--${name}`);
 }
 
-const profile = ["review", "pentest", "recon"].includes(arg("profile")) ? arg("profile") : "review";
+const profile = ["review", "recon", "pentest"].includes(arg("profile")) ? arg("profile") : "review";
 const provider = arg("provider");
 const model = arg("model");
 const thinking = arg("thinking", "high");

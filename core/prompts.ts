@@ -16,7 +16,7 @@
 import type { EngagementScope } from "./ontology.ts";
 import { summarizeScope } from "./scope.ts";
 
-export const PIRED_PROFILES = ["pentest", "recon", "review"] as const;
+export const PIRED_PROFILES = ["review", "recon", "pentest"] as const;
 export type PiredProfile = (typeof PIRED_PROFILES)[number];
 
 export interface BuildPromptOptions {
