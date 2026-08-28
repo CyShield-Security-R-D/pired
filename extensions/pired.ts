@@ -11,13 +11,22 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type {
+	ExtensionAPI,
+	ExtensionContext,
+	ReadonlyFooterDataProvider,
+	Theme,
+	ThemeColor,
+} from "@earendil-works/pi-coding-agent";
+import { truncateToWidth, type TUI, visibleWidth } from "@earendil-works/pi-tui";
 import { exportFindingsMarkdown } from "../core/export.ts";
-import type { Checklist, EngagementScope, TargetType } from "../core/ontology.ts";
+import type { Checklist, EngagementScope, Severity, TargetType } from "../core/ontology.ts";
 import type { Gate } from "../core/ports.ts";
 import { buildSystemPrompt, PIRED_PROFILES, type PiredProfile } from "../core/prompts.ts";
 import { createScopeGate } from "../core/scope.ts";
-import { computeEngagementStats } from "../core/stats.ts";
+import { renderCoveragePanel, type Tone } from "../core/coverage-panel.ts";
+import { computeCoverageView, computeEngagementStats, coveragePercent, type EngagementStats } from "../core/stats.ts";
+import { layoutStatusLine, type Segment } from "../core/statusline.ts";
 import { createCoreTools } from "../core/tools.ts";
 import { Workspace } from "../core/workspace.ts";
 import { makeHostServices } from "./lib/host.ts";
@@ -29,19 +38,60 @@ const PIRED_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const SKILLS_DIR = join(PIRED_ROOT, "skills");
 const CHECKLISTS_DIR = join(PIRED_ROOT, "checklists");
 
-// --- sleek banner widget (pi's setWidget renders a persistent panel above the
-// editor — unlike a printed banner it is not scrolled away or cleared). -------
-const C = { red: "\x1b[1;38;5;203m", dim: "\x1b[2m", bold: "\x1b[1m", rst: "\x1b[0m" };
+// Brand and spinner are drawn through the active theme rather than hardcoded
+// truecolor: that way they degrade correctly on 256-color terminals and stay
+// legible under whatever theme the operator picks. The two-tone wordmark still
+// reads as "pi" + "red" because `accent` is the theme's signal color.
+//
+// The name IS "pi + red" — the status line renders it as the brand mark, so
+// there is no separate banner widget: brand + live stats share one line.
+const wordmark = (theme: Theme): string => theme.bold(theme.fg("dim", "pi")) + theme.bold(theme.fg("accent", "red"));
 
-// The name IS "pi + red" — the footer renders it two-tone as the brand mark.
-// No separate banner widget: brand + live stats live in one elegant status line.
-const INK = { pi: "\x1b[38;2;150;150;150m", red: "\x1b[38;2;255;95;95m" };
-const WORDMARK = `${C.bold}${INK.pi}pi${INK.red}red${C.rst}`;
-
-// Animated "working" spinner — a smooth red braille cycle (frames are rendered
-// verbatim, so each carries its own color). intervalMs paces the animation.
-const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"].map((f) => `${INK.red}${f}${C.rst}`);
+// Animated "working" spinner — a smooth braille cycle. Frames are rendered
+// verbatim by pi, so each is colored at setup; intervalMs paces the animation.
+const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const SPINNER_INTERVAL_MS = 80;
+const spinnerFrames = (theme: Theme): string[] => SPINNER_FRAMES.map((f) => theme.fg("accent", f));
+
+/**
+ * Drop order for the status line as the terminal narrows: `/help` goes first,
+ * engagement identity last. Anything without a priority (the wordmark) is
+ * mandatory and always survives.
+ */
+const PRIORITY = {
+	help: 1,
+	branch: 2,
+	/** Only the unarmed ("review") scope label is droppable; an armed gate is mandatory. */
+	scope: 3,
+	model: 4,
+	coverage: 5,
+	context: 6,
+	findings: 7,
+	blockers: 8,
+	engagement: 9,
+};
+
+/** Coverage-panel tones mapped onto the active theme. */
+const TONE_COLOR: Record<Tone, ThemeColor> = {
+	clear: "success",
+	vulnerable: "error",
+	testing: "warning",
+	blocked: "muted",
+	"not-tested": "dim",
+	"n/a": "dim",
+	title: "accent",
+	label: "text",
+	muted: "dim",
+};
+
+/** Severity initial + the theme color that carries its weight. */
+const SEVERITY_INK: Array<[Severity, string, ThemeColor]> = [
+	["critical", "C", "error"],
+	["high", "H", "warning"],
+	["medium", "M", "text"],
+	["low", "L", "dim"],
+	["info", "I", "dim"],
+];
 
 function defaultScope(profile: PiredProfile, engagement: string): EngagementScope {
 	const review = profile === "review";
@@ -104,7 +154,7 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	let workspace: Workspace | undefined;
 	let checklistClasses: string[] = [];
 
-	pi.registerFlag("pired-profile", { description: "pired profile: pentest | recon | review", type: "string", default: "review" });
+	pi.registerFlag("pired-profile", { description: "pired profile: review | recon | pentest", type: "string", default: "review" });
 	registerPiredProviders(pi);
 
 	// Contribute pired's bundled methodology skills to pi's resource loader. pi
@@ -115,14 +165,143 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		skillPaths: existsSync(SKILLS_DIR) ? [SKILLS_DIR] : [],
 	}));
 
+	// Live engagement stats, refreshed each turn. Kept structured rather than
+	// parsed back out of the status string, so the footer can color each part.
+	let stats: EngagementStats | undefined;
+
 	const refreshStatus = async (ctx: ExtensionContext): Promise<void> => {
 		if (!workspace) return;
-		const s = await computeEngagementStats(workspace);
-		const parts = [`⌖ ${scope.engagement}`, `findings ${s.findingsTotal}`];
-		if (s.coveragePct !== undefined) parts.push(`cov ${s.coveragePct}%`);
-		if (s.blockers > 0) parts.push(`blockers ${s.blockers}`);
+		stats = await computeEngagementStats(workspace);
+		const parts = [`⦿ ${scope.engagement}`, `findings ${stats.findingsTotal}`];
+		if (stats.coveragePct !== undefined) parts.push(`cov ${stats.coveragePct}%`);
+		if (stats.blockers > 0) parts.push(`blockers ${stats.blockers}`);
+		// Still published through setStatus: it is what pi's own footer renders in
+		// non-TUI modes and when our custom footer is not installed.
 		ctx.ui.setStatus("pired", parts.join(" · "));
 	};
+
+	/**
+	 * The fx-style status line: pired wordmark + live engagement state on the
+	 * left, context/model/branch on the right, in one elegant line.
+	 *
+	 * pi's TUI contract is that render() must return lines no wider than `width`,
+	 * so the composition is delegated to `layoutStatusLine`, which sheds
+	 * segments by priority and hard-truncates. Width is measured with pi-tui's
+	 * ANSI- and wide-character-aware `visibleWidth` — a naive `.length` counts
+	 * escape codes and mis-measures CJK/emoji, which is what corrupts a footer.
+	 */
+	const makeFooter =
+		(ctx: ExtensionContext) =>
+		(tui: TUI, theme: Theme, footerData: ReadonlyFooterDataProvider) => {
+			const unsub = footerData.onBranchChange(() => tui.requestRender());
+			let cache: { key: string; lines: string[] } | undefined;
+
+			return {
+				dispose: unsub,
+				invalidate(): void {
+					cache = undefined; // theme changed: cached lines hold stale color codes
+					try {
+						// pi calls invalidate() on theme change, so this is also where the
+						// spinner gets re-inked - otherwise it keeps the old theme's accent.
+						ctx.ui.setWorkingIndicator?.({ frames: spinnerFrames(ctx.ui.theme), intervalMs: SPINNER_INTERVAL_MS });
+					} catch {}
+				},
+				render(width: number): string[] {
+					try {
+						const branch = footerData.getGitBranch();
+						const model = ctx.model?.id;
+						const pct = ctx.getContextUsage()?.percent ?? undefined;
+						// Replacing pi's footer must not swallow other extensions'
+						// statuses — carry them on a second line, as pi's own does.
+						const foreign = [...footerData.getExtensionStatuses()]
+							.filter(([k]) => k !== "pired")
+							.sort(([a], [b]) => a.localeCompare(b))
+							.map(([, text]) => text.replace(/[\r\n\t]+/g, " ").trim())
+							.filter(Boolean)
+							.join("  ");
+
+						// render() runs every frame (the spinner ticks at 80ms), so skip
+						// the work whenever nothing observable has changed.
+						const key = [width, theme.name, branch, model, pct, foreign, scope.engagement,
+							stats?.findingsTotal, stats?.coveragePct, stats?.blockers,
+							profile, scope.mode, scope.authorized,
+							...SEVERITY_INK.map(([sev]) => stats?.findings[sev])].join("\u0000");
+						if (cache?.key === key) return cache.lines;
+
+						const dim = (text: string): string => theme.fg("dim", text);
+						const left: Segment[] = [{ text: wordmark(theme) }];
+						left.push({
+							text: `${theme.fg("accent", "⦿")} ${theme.fg("text", scope.engagement)}`,
+							priority: PRIORITY.engagement,
+						});
+						if (stats) {
+							const st = stats; // local binding: the closure variable will not narrow
+							// The count an operator actually needs is "anything critical?",
+							// not "how many rows exist" — so lead with the severity spread
+							// and keep the bare total as the compact fallback.
+							const graded = SEVERITY_INK.filter(([sev]) => st.findings[sev] > 0)
+								.map(([sev, initial, color]) => theme.fg(color, `${initial}${st.findings[sev]}`))
+								.join(" ");
+							left.push({
+								text: graded || dim("⚑ 0"),
+								compact: dim(`⚑${st.findingsTotal}`),
+								priority: PRIORITY.findings,
+							});
+							if (st.coveragePct !== undefined) {
+								left.push({ text: dim(`cov ${st.coveragePct}%`), priority: PRIORITY.coverage });
+							}
+							if (st.blockers > 0) {
+								left.push({ text: theme.fg("warning", `blockers ${st.blockers}`), priority: PRIORITY.blockers });
+							}
+						}
+
+						// Whether the scope gate is live is the one piece of state that
+						// separates this from a coding agent: in an enforcing profile you
+						// are a command away from a real client system. Armed states are
+						// mandatory segments — they shrink, but they never get shed.
+						if (scope.mode === "off") {
+							left.push({ text: dim(profile), priority: PRIORITY.scope });
+						} else if (scope.mode === "enforce" && !scope.authorized) {
+							left.push({ text: theme.fg("error", `⛨ ${profile}·unauthorized`), compact: theme.fg("error", "⛨!") });
+						} else {
+							const color = scope.mode === "warn" ? "warning" : "accent";
+							const label = scope.mode === "warn" ? "warn" : "enforce";
+							left.push({
+								text: theme.fg(color, `⛨ ${profile}·${label}`),
+								compact: theme.fg(color, `⛨${label.slice(0, 3).toUpperCase()}`),
+							});
+						}
+
+						const right: Segment[] = [];
+						if (pct !== undefined) {
+							// Same thresholds as pi's built-in footer, so the warning that a
+							// long engagement is filling the context window reads identically.
+							const color = pct > 90 ? "error" : pct > 70 ? "warning" : "dim";
+							right.push({ text: theme.fg(color, `ctx ${pct.toFixed(0)}%`), priority: PRIORITY.context });
+						}
+						if (model) right.push({ text: dim(model), priority: PRIORITY.model });
+						if (branch) right.push({ text: dim(branch), priority: PRIORITY.branch });
+						right.push({ text: dim("/help"), priority: PRIORITY.help });
+
+						const lines = [
+							layoutStatusLine({
+								left,
+								right,
+								width,
+								measure: visibleWidth,
+								truncate: truncateToWidth,
+								separator: dim(" · "),
+							}),
+						];
+						if (foreign) lines.push(truncateToWidth(dim(foreign), width, dim("…")));
+						cache = { key, lines };
+						return lines;
+					} catch {
+						return [truncateToWidth(wordmark(theme), width)]; // never crash the frame
+					}
+				},
+			};
+		};
 
 	// One-time fx-like UI polish. All guarded: a missing/older pi API must never
 	// break pired. The `pired` launcher additionally loads the fxred theme file.
@@ -132,35 +311,16 @@ export default function piredExtension(pi: ExtensionAPI): void {
 			ctx.ui.setTheme?.("fxred"); // no-op unless the theme was loaded (e.g. by `pired run`)
 		} catch {}
 		try {
-			ctx.ui.setWorkingIndicator?.({ frames: SPINNER, intervalMs: SPINNER_INTERVAL_MS });
+			ctx.ui.setWorkingIndicator?.({ frames: spinnerFrames(ctx.ui.theme), intervalMs: SPINNER_INTERVAL_MS });
 		} catch {}
 		try {
 			ctx.ui.setHiddenThinkingLabel?.("thinking");
 		} catch {}
-		// fx-style footer: a single minimal line — red ▌ bar + live engagement
-		// The status line IS the brand: pired wordmark + live engagement stats on
-		// the left, model · branch · /help on the right. One elegant line, no
-		// separate banner (brand + stats + features merged here).
 		try {
-			const strip = (s: string): string => s.replace(/\x1b\[[0-9;]*m/g, "");
-			ctx.ui.setFooter?.((_tui, theme, footerData) => ({
-				// render runs every frame; it must NEVER throw or the footer breaks.
-				render(width: number): string[] {
-					try {
-						const status = footerData.getExtensionStatuses().get("pired") ?? scope.engagement;
-						const branch = footerData.getGitBranch();
-						const model = (ctx.model as { id?: string } | undefined)?.id;
-						const sep = theme.fg("dim", " · ");
-						const left = `${WORDMARK}  ${theme.fg("text", status)}`;
-						const right = [model, branch, "/help"].filter(Boolean).map((p) => theme.fg("dim", String(p))).join(sep);
-						const gap = Math.max(1, width - strip(left).length - strip(right).length);
-						return [left + " ".repeat(gap) + right];
-					} catch {
-						return [`${WORDMARK}`]; // safe fallback — never crash the footer
-					}
-				},
-				invalidate() {},
-			}));
+			ctx.ui.setTitle?.(`pired · ${scope.engagement}`);
+		} catch {}
+		try {
+			ctx.ui.setFooter?.(makeFooter(ctx));
 		} catch {}
 	};
 
@@ -200,8 +360,55 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		return undefined;
 	});
 
+	// Reflect a finding the moment it is recorded rather than at the end of the
+	// turn: `record` is the only tool that moves these numbers, so this stays
+	// cheap while making a long engagement's status line feel live.
+	pi.on("tool_execution_end", async (event, ctx) => {
+		if (event.toolName === "record" && !event.isError) await refreshStatus(ctx);
+	});
+
 	pi.on("turn_end", async (_event, ctx) => {
 		await refreshStatus(ctx);
+	});
+
+	pi.registerCommand("coverage", {
+		description: "Show the coverage matrix (checklist × surface) for this engagement",
+		handler: async (_args, ctx) => {
+			if (!workspace) {
+				ctx.ui.notify("pired: no engagement workspace yet", "warning");
+				return;
+			}
+			const view = await computeCoverageView(workspace);
+			if (!view) {
+				ctx.ui.notify("pired: no checklist seeded for this engagement", "warning");
+				return;
+			}
+			// ui.custom renders a terminal component; headless modes get the summary.
+			if (ctx.mode !== "tui") {
+				const gaps = view.matrix.counts["not-tested"] + view.matrix.counts.blocked;
+				const pct = coveragePercent(view.matrix);
+				ctx.ui.notify(`pired: coverage ${pct}% · ${view.matrix.cells.length} cells · ${gaps} gaps`, "info");
+				return;
+			}
+			await ctx.ui.custom<void>(
+				(_tui, theme, _keybindings, done) => ({
+					render: (width: number): string[] =>
+						renderCoveragePanel({
+							view,
+							engagement: scope.engagement,
+							width,
+							ink: (tone, text) => theme.fg(TONE_COLOR[tone], text),
+							measure: visibleWidth,
+							truncate: truncateToWidth,
+						}),
+					invalidate(): void {},
+					handleInput(data: string): void {
+						if (data === "\x1b" || data === "q" || data === "\r" || data === "\n") done();
+					},
+				}),
+				{ overlay: true, overlayOptions: { width: "80%", minWidth: 40, maxHeight: "80%", anchor: "center" } },
+			);
+		},
 	});
 
 	pi.registerCommand("findings", {

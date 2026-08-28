@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Security-focused harness as a pi package: engagement workspace, scope gate, security prompt, and record/recall tools, reusing a harness-agnostic core.",
+  "description": "Engagement harness for security consultants, as a pi package: engagement workspace, scope gate, security prompt, and record/recall tools, reusing a harness-agnostic core.",
   "license": "MIT",
   "keywords": ["pi-package"],
   "pi": {
@@ -20,10 +20,12 @@
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
     "typebox": "*"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "^0.84.2",
+    "@earendil-works/pi-tui": "^0.84.2",
     "@types/node": "^26.2.0",
     "typescript": "5.9.3",
     "vitest": "^4.1.11"
