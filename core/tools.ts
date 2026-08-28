@@ -122,6 +122,17 @@ function extractFields(kind: LedgerKind, a: Record<string, unknown>): Record<str
 	}
 }
 
+/**
+ * Structured detail handed to the host for rendering. Deliberately narrow: a
+ * loot record carries a plaintext secret and `details` is persisted into the
+ * session transcript, so this must never widen to the whole record.
+ */
+function recordDetails(record: LedgerRecord): Record<string, unknown> {
+	const base: Record<string, unknown> = { id: record.id, kind: record.kind };
+	if (record.kind === "finding") return { ...base, severity: record.severity, title: record.title };
+	return base;
+}
+
 function recordSummary(kind: string, record: LedgerRecord): string {
 	if (record.kind === "finding") return `Recorded finding ${record.id} [${record.severity}] ${record.title}`;
 	if (record.kind === "hypothesis") return `Recorded hypothesis ${record.id} (${record.outcome}) on ${record.target}`;
@@ -193,7 +204,7 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 			}
 
 			await deps.workspace.append(store, record);
-			return text(recordSummary(kind, record), { id: record.id, kind });
+			return text(recordSummary(kind, record), recordDetails(record));
 		},
 	};
 }

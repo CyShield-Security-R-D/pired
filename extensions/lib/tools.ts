@@ -7,8 +7,14 @@ import type { ToolDefinition as PiToolDefinition } from "@earendil-works/pi-codi
 import type { TSchema } from "typebox";
 import type { HostServices, ToolDefinition } from "../../core/ports.ts";
 
-export function toPiTool(tool: ToolDefinition, getServices: () => HostServices): PiToolDefinition {
+export function toPiTool(
+	tool: ToolDefinition,
+	getServices: () => HostServices,
+	/** Optional presentation overrides (e.g. a custom result renderer). */
+	presentation?: Pick<PiToolDefinition, "renderResult">,
+): PiToolDefinition {
 	return {
+		...presentation,
 		name: tool.name,
 		label: tool.label ?? tool.name,
 		description: tool.description,

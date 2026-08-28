@@ -12,13 +12,15 @@ import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type {
+	AgentToolResult,
 	ExtensionAPI,
 	ExtensionContext,
 	ReadonlyFooterDataProvider,
 	Theme,
 	ThemeColor,
+	ToolRenderResultOptions,
 } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, type TUI, visibleWidth } from "@earendil-works/pi-tui";
+import { type Component, truncateToWidth, type TUI, visibleWidth } from "@earendil-works/pi-tui";
 import { exportFindingsMarkdown } from "../core/export.ts";
 import type { Checklist, EngagementScope, Severity, TargetType } from "../core/ontology.ts";
 import type { Gate } from "../core/ports.ts";
@@ -92,6 +94,35 @@ const SEVERITY_INK: Array<[Severity, string, ThemeColor]> = [
 	["low", "L", "dim"],
 	["info", "I", "dim"],
 ];
+
+const SEVERITY_COLOR = Object.fromEntries(SEVERITY_INK.map(([sev, , color]) => [sev, color])) as Record<Severity, ThemeColor>;
+
+/**
+ * Render a `record` result as a security-native line. A recorded finding is the
+ * engagement's actual product, so its severity should be the first thing the
+ * operator sees in the transcript rather than generic tool output. Anything
+ * else falls back to the tool's own summary text.
+ */
+function renderRecordResult(result: AgentToolResult<unknown>, _options: ToolRenderResultOptions, theme: Theme): Component {
+	const summary = (): string => {
+		const first = result.content?.find((c: { type: string }) => c.type === "text");
+		return first && "text" in first ? String(first.text) : "";
+	};
+	let line: string;
+	try {
+		const d = (result.details ?? {}) as { kind?: string; severity?: Severity; title?: string };
+		line =
+			d.kind === "finding" && d.severity && d.title
+				? `${theme.fg(SEVERITY_COLOR[d.severity] ?? "text", `⦿ ${d.severity.toUpperCase()}`)}  ${theme.fg("text", d.title)}`
+				: theme.fg("dim", summary());
+	} catch {
+		line = summary(); // presentation must never break the transcript
+	}
+	return {
+		render: (width: number): string[] => [truncateToWidth(line, width)],
+		invalidate(): void {},
+	};
+}
 
 function defaultScope(profile: PiredProfile, engagement: string): EngagementScope {
 	const review = profile === "review";
@@ -336,7 +367,10 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		const checklist = await workspace.readChecklist();
 		checklistClasses = checklist?.classes.map((c) => c.title || c.id) ?? [];
 
-		for (const tool of createCoreTools({ workspace })) pi.registerTool(toPiTool(tool, () => services));
+		for (const tool of createCoreTools({ workspace })) {
+			const presentation = tool.name === "record" ? { renderResult: renderRecordResult } : undefined;
+			pi.registerTool(toPiTool(tool, () => services, presentation));
+		}
 		pi.setActiveTools([...new Set([...pi.getActiveTools(), "record", "recall"])]);
 
 		applyUiPolish(ctx);
@@ -354,10 +388,14 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		systemPrompt: `${event.systemPrompt}\n\n${buildSystemPrompt({ profile, scope, checklist: checklistClasses })}`,
 	}));
 
-	pi.on("tool_call", async (event) => {
+	pi.on("tool_call", async (event, ctx) => {
 		const decision = await gate({ name: event.toolName, args: event.input });
-		if (!decision.allow) return { block: true, reason: decision.reason, terminate: decision.terminate };
-		return undefined;
+		if (decision.allow) return undefined;
+		// The refusal reaches the model as a tool result, but the operator needs to
+		// see it too: an out-of-scope call that is silently blocked is
+		// indistinguishable from the agent simply choosing not to act.
+		ctx.ui.notify(`⛨ blocked: ${decision.reason ?? "out of authorized scope"}`, "warning");
+		return { block: true, reason: decision.reason, terminate: decision.terminate };
 	});
 
 	// Reflect a finding the moment it is recorded rather than at the end of the
