@@ -78,7 +78,15 @@ for (;;) {
 		const dir = join(ENGAGEMENTS, d);
 		const now = await snapshot(dir);
 		const prev = seen.get(d);
+		// A directory left over from an earlier run is not this run's business:
+		// warning that a workspace last written two hours ago has gone idle is
+		// technically true and completely useless. Only report what this run wrote.
+		const stale = !prev && now.mtime > 0 && now.mtime < started;
 		const changed = !prev || prev.inv !== now.inv || prev.hyp !== now.hyp || prev.find !== now.find || prev.evid !== now.evid;
+		if (stale) {
+			seen.set(d, now); // remember it, but say nothing until it moves
+			continue;
+		}
 
 		if (changed) {
 			const delta = prev
@@ -90,7 +98,12 @@ for (;;) {
 			);
 			seen.set(d, now);
 			idleAnnounced.delete(d);
-		} else if (prev && now.mtime > 0 && Date.now() - now.mtime > idleWarnMs && !idleAnnounced.has(d)) {
+		} else if (
+			prev &&
+			now.mtime > started && // only engagements this run has actually touched
+			Date.now() - now.mtime > idleWarnMs &&
+			!idleAnnounced.has(d)
+		) {
 			// Silence is ambiguous — a long think and a hang look identical from
 			// outside. Say so once rather than leaving the run looking healthy.
 			process.stdout.write(
