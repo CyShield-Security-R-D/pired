@@ -16,6 +16,7 @@ import {
 	BLOCKER_TYPES,
 	FINDING_STATUSES,
 	HYPOTHESIS_OUTCOMES,
+	type HypothesisRecord,
 	type InventoryKind,
 	type LedgerRecord,
 	LOOT_TYPES,
@@ -34,10 +35,10 @@ export interface ToolDeps {
 }
 
 const RECORD_KINDS = [
-	"note", "host", "service", "endpoint", "param", "tech", "hypothesis", "finding", "blocker", "loot",
+	"note", "evidence", "host", "service", "endpoint", "param", "tech", "hypothesis", "finding", "blocker", "loot",
 ] as const;
 type RecordKind = (typeof RECORD_KINDS)[number];
-type LedgerKind = Exclude<RecordKind, "note">;
+type LedgerKind = Exclude<RecordKind, "note" | "evidence">;
 
 const RECALL_QUERIES = [
 	"next", "coverage", "gaps", "inventory", "hypotheses", "findings", "loot", "blockers", "notes",
@@ -143,12 +144,19 @@ function recordSummary(kind: string, record: LedgerRecord): string {
 
 const RECORD_DESCRIPTION = `Record engagement state to the durable workspace. One tool for all state; pick 'kind':
 - note: text
+- evidence: name, content — saves raw output to the workspace and returns the path to cite (this is how you create the file that 'evidence' fields reference)
 - host: value (+ip, tech[]); service: host, port (+proto, name); endpoint: path (+host, method, params[], auth); param: name (+endpoint, location); tech: name (+host, version)
-- hypothesis: statement, target (surface id), class (checklist id) (+approach, outcome[proposed|testing|confirmed|refuted|inconclusive], evidence)
+- hypothesis: statement, target (surface id), class (checklist id) (+approach, outcome[proposed|testing|confirmed|refuted|inconclusive], evidence). 'target' and 'class' also accept lists, recording the cross product in one call — use it when one piece of reasoning settles several cells at once.
 - finding: title, severity[info|low|medium|high|critical], target (+class, cwe, cvss, description, repro, evidence[], status)
 - blocker: question (+blockerType, priority[low|medium|high], options[], blocks[] (work ids this gates))
 - loot: handle (e.g. cred:web-admin), secret (+lootType, username, target, source)
-Pass 'id' to update an existing record. Confirmed hypotheses should also be recorded as findings.`;
+Pass 'id' to update an existing record.
+
+How these connect (this is what makes coverage work, not ceremony):
+- Coverage is your checklist's classes x the surface *you have recorded*. A host or endpoint you never recorded has no cells at all, so it can never show as tested and 'recall gaps' cannot route you to it. Record the surface as you discover it.
+- A cell is settled by a hypothesis outcome, not by a finding: outcome 'confirmed' marks it vulnerable, 'refuted' marks it clear. Ruling a class out is real work and only counts if you record the refutation — otherwise the cell stays untested no matter how carefully you looked. Settling one cell per call would be hundreds of calls, so record refutations in the shape you reasoned in: one call with a list of classes (and/or targets) and the single reason they share.
+- A confirmed hypothesis should also be recorded as a finding, tagged with the same 'class' so the finding maps back to its cell.
+- 'evidence' is a workspace-relative PATH, not inline text. Create it with record kind=evidence (which returns the path), then cite that exact path. Never cite a path you did not get back from a record kind=evidence call — an unresolvable path is an unsupported claim, and inventing one is worse than omitting it.`;
 
 const RECORD_PARAMETERS: JsonSchema = {
 	type: "object",
@@ -159,10 +167,13 @@ const RECORD_PARAMETERS: JsonSchema = {
 		id: { type: "string", description: "Existing record id to update; omit to create." },
 		text: { type: "string" },
 		value: { type: "string" }, ip: { type: "string" }, tech: { type: "array", items: { type: "string" } },
-		host: { type: "string" }, port: { type: "integer" }, proto: { type: "string" }, name: { type: "string" }, version: { type: "string" },
+		host: { type: "string" }, port: { type: "integer" }, proto: { type: "string" }, name: { type: "string", description: "Name for param/tech; for kind=evidence, the filename to save under (e.g. \"sqli-login.txt\")." }, version: { type: "string" },
 		endpoint: { type: "string" }, method: { type: "string" }, path: { type: "string" }, params: { type: "array", items: { type: "string" } }, auth: { type: "string" }, location: { type: "string" },
-		statement: { type: "string" }, target: { type: "string" }, class: { type: "string" }, approach: { type: "string" }, outcome: { enum: HYPOTHESIS_OUTCOMES },
-		title: { type: "string" }, severity: { enum: SEVERITIES }, cwe: { type: "string" }, cvss: { type: "string" }, description: { type: "string" }, repro: { type: "string" }, status: { type: "string" }, evidence: { type: "array", items: { type: "string" } },
+		statement: { type: "string" },
+		target: { description: "Surface element id, or a list of ids to settle together." },
+		class: { description: "Checklist class id, or a list of class ids to settle together." }, approach: { type: "string" }, outcome: { enum: HYPOTHESIS_OUTCOMES },
+		content: { type: "string", description: "For kind=evidence: the raw output to save to the file." },
+		title: { type: "string" }, severity: { enum: SEVERITIES }, cwe: { type: "string" }, cvss: { type: "string" }, description: { type: "string" }, repro: { type: "string" }, status: { type: "string" }, evidence: { type: "array", items: { type: "string" }, description: "Workspace-relative paths to evidence files you wrote (e.g. [\"evidence/sqli-login.txt\"]). Not inline text." },
 		question: { type: "string" }, blockerType: { enum: BLOCKER_TYPES }, priority: { enum: PRIORITIES }, options: { type: "array", items: { type: "string" } }, blocks: { type: "array", items: { type: "string" } }, context: { type: "string" },
 		handle: { type: "string" }, lootType: { enum: LOOT_TYPES }, username: { type: "string" }, secret: { type: "string" }, source: { type: "string" }, notes: { type: "string" },
 	},
@@ -183,6 +194,46 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 				const body = required(str(a.text), "record note: 'text' is required");
 				await deps.workspace.appendNote(body);
 				return text("Noted.", { kind });
+			}
+
+			// Evidence is a file, not a ledger row. Without this the evidence contract
+			// is unfulfillable: findings are asked to cite a workspace path, and the
+			// model has no way to create one — so it invents plausible filenames it
+			// never wrote. Returning the path is the point; it is what gets cited.
+			if (kind === "evidence") {
+				const name = required(str(a.name), "record evidence: 'name' is required (e.g. \"sqli-login.txt\")");
+				const body = required(str(a.content) ?? str(a.text), "record evidence: 'content' is required (the raw output to save)");
+				const rel = await deps.workspace.writeEvidence(name, body);
+				return text(`Evidence saved to ${rel} — cite this exact path in the finding's evidence[].`, { kind, path: rel });
+			}
+
+			// Coverage is settled one cell at a time, which for a real engagement is
+			// O(elements x classes) tool calls — 19 classes over 20 endpoints is 380
+			// calls, and no model will make them. So a reviewer's actual unit of
+			// reasoning ("these five classes don't apply to this route, for one
+			// reason") is expressible in one call: class and target accept lists and
+			// the cross product is recorded. Without this, coverage stays at 0% on
+			// real runs no matter how thorough the review was.
+			if (kind === "hypothesis" && (Array.isArray(a.class) || Array.isArray(a.target))) {
+				const classes = Array.isArray(a.class) ? strArr(a.class) ?? [] : [required(str(a.class), "record hypothesis: 'class' is required")];
+				const targets = Array.isArray(a.target) ? strArr(a.target) ?? [] : [required(str(a.target), "record hypothesis: 'target' is required")];
+				if (classes.length === 0 || targets.length === 0) throw new Error("record hypothesis: 'class' and 'target' lists must be non-empty");
+				const statement = required(str(a.statement), "record hypothesis: 'statement' is required");
+				const outcome = oneOf(a.outcome, HYPOTHESIS_OUTCOMES) ?? "proposed";
+				const stamp = ctx.services.clock.nowIso();
+				const ids: string[] = [];
+				for (const t of targets) {
+					for (const c of classes) {
+						const id = ctx.services.ids.newId();
+						await deps.workspace.append("hypotheses", defined({
+							v: RECORD_VERSION, id, kind: "hypothesis", createdAt: stamp,
+							statement, target: t, class: c, outcome,
+							method: str(a.approach) ?? str(a.method), evidence: str(a.evidence),
+						}) as unknown as HypothesisRecord);
+						ids.push(id);
+					}
+				}
+				return text(`Recorded ${ids.length} hypotheses (${targets.length} target(s) x ${classes.length} class(es)), outcome=${outcome}.`, { kind, ids });
 			}
 
 			const store = STORE_FOR_KIND[kind];
@@ -231,7 +282,9 @@ export function createRecallTool(deps: ToolDeps): ToolDefinition {
 		const checklist = await deps.workspace.readChecklist();
 		if (!checklist) return undefined;
 		const inventory = await deps.workspace.read("inventory");
-		const elements = inventory.filter((r) => surfaceKinds.includes(r.kind as InventoryKind)).map((r) => ({ id: r.id }));
+		const elements = inventory
+			.filter((r) => surfaceKinds.includes(r.kind as InventoryKind))
+			.map((r) => ({ id: r.id, kind: r.kind as InventoryKind }));
 		const hypotheses = await deps.workspace.read("hypotheses");
 		const openBlockers = (await deps.workspace.read("blockers")).filter((b) => b.status === "open");
 		return computeCoverage({ classes: checklist.classes, elements, hypotheses, openBlockers });

@@ -117,3 +117,87 @@ describe("recall tool", () => {
 		expect(out).toMatch(/no checklist/i);
 	});
 });
+
+describe("record kind=evidence", () => {
+	it("writes the file and returns the path to cite", async () => {
+		const { ws, ctx, record } = await setup();
+		const res = await record.execute(
+			{ kind: "evidence", name: "sqli-login.txt", content: "HTTP/1.1 500\nSQL syntax error" },
+			ctx,
+		);
+		const rel = (res.details as { path: string }).path;
+		expect(rel).toBe("evidence/sqli-login.txt");
+		// The path a finding will cite must actually resolve — this is the whole
+		// point of the affordance: without it the model invents plausible filenames.
+		expect(await ws.readRelative(rel)).toContain("SQL syntax error");
+		expect(textOf(res)).toContain(rel);
+	});
+
+	it("requires both a name and content", async () => {
+		const { ctx, record } = await setup();
+		await expect(record.execute({ kind: "evidence", name: "a.txt" }, ctx)).rejects.toThrow(/content/);
+		await expect(record.execute({ kind: "evidence", content: "x" }, ctx)).rejects.toThrow(/name/);
+	});
+});
+
+describe("record hypothesis in bulk", () => {
+	it("records one hypothesis per class when class is a list", async () => {
+		const { ws, ctx, record } = await setup();
+		await record.execute(
+			{
+				kind: "hypothesis",
+				target: "e1",
+				class: ["xss", "ssti", "xxe"],
+				outcome: "refuted",
+				statement: "JSON-only route: no template rendering and no XML parsing on this path",
+			},
+			ctx,
+		);
+		const hyps = await ws.read("hypotheses");
+		expect(hyps).toHaveLength(3);
+		expect(hyps.map((h) => h.class).sort()).toEqual(["ssti", "xss", "xxe"]);
+		expect(hyps.every((h) => h.outcome === "refuted" && h.target === "e1")).toBe(true);
+	});
+
+	it("records the cross product when both target and class are lists", async () => {
+		const { ws, ctx, record } = await setup();
+		const res = await record.execute(
+			{
+				kind: "hypothesis",
+				target: ["e1", "e2"],
+				class: ["sqli", "cmdi"],
+				outcome: "refuted",
+				statement: "no shell or SQL sink reachable from either handler",
+			},
+			ctx,
+		);
+		expect(await ws.read("hypotheses")).toHaveLength(4);
+		expect((res.details as { ids: string[] }).ids).toHaveLength(4);
+	});
+
+	it("settles the matching coverage cells", async () => {
+		const { ws, ctx, record, recall } = await setup();
+		const ep = (id: string, path: string): EndpointRecord =>
+			({ v: 1, id, kind: "endpoint", createdAt: "t", host: "h1", method: "GET", path });
+		await ws.append("inventory", ep("e1", "/a"));
+		await ws.writeChecklist({
+			v: 1,
+			targetType: "web",
+			classes: [{ id: "xss", title: "XSS" }, { id: "ssti", title: "SSTI" }],
+		} satisfies Checklist);
+		await record.execute(
+			{ kind: "hypothesis", target: "e1", class: ["xss", "ssti"], outcome: "refuted", statement: "JSON only" },
+			ctx,
+		);
+		// One call, a whole row of the matrix settled — the ergonomics fix exists
+		// because doing this per-cell is hundreds of calls on a real engagement.
+		expect(textOf(await recall.execute({ query: "coverage" }, ctx))).toContain("clear: 2");
+	});
+
+	it("still requires a statement when recording in bulk", async () => {
+		const { ctx, record } = await setup();
+		await expect(
+			record.execute({ kind: "hypothesis", target: "e1", class: ["xss", "ssti"], outcome: "refuted" }, ctx),
+		).rejects.toThrow(/statement/);
+	});
+});

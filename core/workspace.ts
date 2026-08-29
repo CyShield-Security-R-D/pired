@@ -184,6 +184,20 @@ export class Workspace {
 		return this.writeUnder("artifacts", name, data);
 	}
 
+	/**
+	 * Read back a workspace-relative path a record claims (e.g. a finding's
+	 * `evidence`). Record content is agent-authored and therefore untrusted, so
+	 * anything that could escape the workspace — an absolute path, a `..`
+	 * segment, a backslash — is refused rather than resolved. Returns undefined
+	 * when the path is missing or refused, so an audit sees "does not resolve"
+	 * either way.
+	 */
+	async readRelative(relPath: string): Promise<string | undefined> {
+		if (relPath.startsWith("/") || relPath.includes("\\")) return undefined;
+		if (relPath.split("/").some((seg) => seg === "..")) return undefined;
+		return this.fs.readFileIfExists(joinPath(this.dir, relPath));
+	}
+
 	private async writeUnder(dir: string, name: string, data: string): Promise<string> {
 		const safe = name.replace(/[/\\]/g, "_");
 		await this.fs.writeFile(joinPath(this.dir, dir, safe), data);
