@@ -22,7 +22,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { type Component, truncateToWidth, type TUI, visibleWidth } from "@earendil-works/pi-tui";
 import { exportFindingsMarkdown } from "../core/export.ts";
-import type { Checklist, EngagementScope, Severity, TargetType } from "../core/ontology.ts";
+import type { BlockerRecord, Checklist, EngagementScope, Severity, TargetType } from "../core/ontology.ts";
 import type { Gate } from "../core/ports.ts";
 import { buildSystemPrompt, PIRED_PROFILES, type PiredProfile } from "../core/prompts.ts";
 import { createScopeGate } from "../core/scope.ts";
@@ -255,6 +255,61 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		// Still published through setStatus: it is what pi's own footer renders in
 		// non-TUI modes and when our custom footer is not installed.
 		ctx.ui.setStatus("pired", parts.join(" · "));
+	};
+
+	/**
+	 * Ask the operator about a blocker the moment it is recorded.
+	 *
+	 * The harness is built to never stall: the agent parks a blocker and routes
+	 * around it. That works only if the blocker reaches a human — and until now
+	 * it was a row in a ledger nobody was looking at, so "never stall" quietly
+	 * became "never finish". The dialog closes that loop at the moment the agent
+	 * needs the answer, which is also the moment the operator has the context.
+	 *
+	 * Answers are written back to the same record, so the ledger stays the single
+	 * source of truth and a resumed session sees the decision.
+	 */
+	const promptedBlockers = new Set<string>();
+	const promptForNewBlockers = async (ctx: ExtensionContext): Promise<void> => {
+		if (!workspace || ctx.mode !== "tui") return;
+		let open: BlockerRecord[];
+		try {
+			open = (await workspace.read("blockers")).filter((b) => b.status === "open");
+		} catch {
+			return;
+		}
+		for (const b of open) {
+			if (promptedBlockers.has(b.id)) continue;
+			promptedBlockers.add(b.id);
+			const title = `pired · ${b.type.replace(/-/g, " ")}`;
+			const detail = b.context ? `${b.question}\n\n${b.context}` : b.question;
+			try {
+				let answer: string | undefined;
+				if (b.type === "approval") {
+					// A yes/no gate — the destructive-action case, where the wrong
+					// default is the expensive one, so nothing is pre-selected.
+					answer = (await ctx.ui.confirm(title, detail)) ? "approved" : "denied";
+				} else if (b.options && b.options.length > 0) {
+					answer = await ctx.ui.select(title, [...b.options, "skip for now"]);
+					if (answer === "skip for now") answer = undefined;
+				} else {
+					answer = await ctx.ui.input(title, b.type === "credential-request" ? "value (stored in the workspace)" : "answer");
+				}
+				if (!answer) continue; // dismissed: the blocker stays open, as it should
+
+				await workspace.append("blockers", {
+					...b,
+					status: "answered",
+					answer,
+					answeredAt: new Date().toISOString(),
+					answeredBy: "operator",
+				});
+				await refreshStatus(ctx);
+				ctx.ui.notify(`pired: blocker answered — ${b.question.slice(0, 48)}`, "info");
+			} catch {
+				// A dialog that fails must never take the session with it.
+			}
+		}
 	};
 
 	/**
@@ -520,7 +575,10 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	// turn: `record` is the only tool that moves these numbers, so this stays
 	// cheap while making a long engagement's status line feel live.
 	pi.on("tool_execution_end", async (event, ctx) => {
-		if (event.toolName === "record" && !event.isError) await refreshStatus(ctx);
+		if (event.toolName === "record" && !event.isError) {
+			await refreshStatus(ctx);
+			await promptForNewBlockers(ctx);
+		}
 	});
 
 	pi.on("turn_end", async (_event, ctx) => {
@@ -538,9 +596,25 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	 * mode also opens the panel, so there is no state where naming a view leaves
 	 * it hidden.
 	 */
+	/**
+	 * A keypress for the panel, because a view you have to type a command for is
+	 * a view you check less often than you should. ctrl+g is unclaimed by pi's
+	 * own bindings and mnemonic enough (g for glance).
+	 */
+	pi.registerShortcut("ctrl+g", {
+		description: "pired: toggle the engagement panel",
+		handler: async (ctx) => {
+			await togglePanel("", ctx);
+		},
+	});
+
 	pi.registerCommand("panel", {
 		description: `Toggle the engagement panel (${PANEL_MODES.join(" | ")})`,
-		handler: async (args, ctx) => {
+		handler: async (args, ctx) => await togglePanel(args ?? "", ctx),
+	});
+
+	const togglePanel = async (args: string, ctx: ExtensionContext): Promise<void> => {
+		{
 			const arg = (args ?? "").trim().toLowerCase();
 			// Inside tmux the rail is the panel; the footer strip is the fallback.
 			const wantRail = inTmux() && arg !== "footer";
@@ -586,8 +660,8 @@ export default function piredExtension(pi: ExtensionAPI): void {
 				panelData = await collectPanelData(workspace, scope, stats);
 			}
 			ctx.ui.notify(panelOpen ? `pired: panel · ${panelMode}` : "pired: panel hidden", "info");
-		},
-	});
+		}
+	};
 
 	pi.registerCommand("coverage", {
 		description: "Show the coverage matrix (checklist × surface) for this engagement",
