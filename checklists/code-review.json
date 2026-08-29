@@ -7,6 +7,10 @@
       "title": "SQL injection (string-built queries)",
       "cwe": [
         "CWE-89"
+      ],
+      "appliesTo": [
+        "endpoint",
+        "param"
       ]
     },
     {
@@ -14,6 +18,10 @@
       "title": "OS command injection",
       "cwe": [
         "CWE-78"
+      ],
+      "appliesTo": [
+        "endpoint",
+        "param"
       ]
     },
     {
@@ -23,6 +31,10 @@
         "CWE-94",
         "CWE-95",
         "CWE-470"
+      ],
+      "appliesTo": [
+        "endpoint",
+        "param"
       ]
     },
     {
@@ -31,6 +43,10 @@
       "cwe": [
         "CWE-1336",
         "CWE-94"
+      ],
+      "appliesTo": [
+        "endpoint",
+        "param"
       ]
     },
     {
@@ -40,6 +56,9 @@
         "CWE-862",
         "CWE-285",
         "CWE-639"
+      ],
+      "appliesTo": [
+        "endpoint"
       ]
     },
     {
@@ -49,6 +68,9 @@
         "CWE-287",
         "CWE-384",
         "CWE-613"
+      ],
+      "appliesTo": [
+        "endpoint"
       ]
     },
     {
@@ -56,6 +78,10 @@
       "title": "Insecure deserialization",
       "cwe": [
         "CWE-502"
+      ],
+      "appliesTo": [
+        "endpoint",
+        "param"
       ]
     },
     {
@@ -63,6 +89,10 @@
       "title": "Server-side request forgery",
       "cwe": [
         "CWE-918"
+      ],
+      "appliesTo": [
+        "endpoint",
+        "param"
       ]
     },
     {
@@ -71,6 +101,10 @@
       "cwe": [
         "CWE-611",
         "CWE-776"
+      ],
+      "appliesTo": [
+        "endpoint",
+        "param"
       ]
     },
     {
@@ -79,6 +113,10 @@
       "cwe": [
         "CWE-22",
         "CWE-73"
+      ],
+      "appliesTo": [
+        "endpoint",
+        "param"
       ]
     },
     {
@@ -86,6 +124,10 @@
       "title": "Unrestricted / unsafe file upload",
       "cwe": [
         "CWE-434"
+      ],
+      "appliesTo": [
+        "endpoint",
+        "param"
       ]
     },
     {
@@ -94,6 +136,11 @@
       "cwe": [
         "CWE-798",
         "CWE-259"
+      ],
+      "appliesTo": [
+        "host",
+        "endpoint",
+        "tech"
       ]
     },
     {
@@ -103,6 +150,11 @@
         "CWE-327",
         "CWE-326",
         "CWE-311"
+      ],
+      "appliesTo": [
+        "host",
+        "endpoint",
+        "tech"
       ]
     },
     {
@@ -111,6 +163,10 @@
       "cwe": [
         "CWE-1395",
         "CWE-1104"
+      ],
+      "appliesTo": [
+        "host",
+        "tech"
       ]
     },
     {
@@ -119,6 +175,10 @@
       "cwe": [
         "CWE-732",
         "CWE-1188"
+      ],
+      "appliesTo": [
+        "host",
+        "tech"
       ]
     },
     {
@@ -128,6 +188,11 @@
         "CWE-532",
         "CWE-209",
         "CWE-778"
+      ],
+      "appliesTo": [
+        "host",
+        "endpoint",
+        "tech"
       ]
     },
     {
@@ -136,6 +201,10 @@
       "cwe": [
         "CWE-470",
         "CWE-94"
+      ],
+      "appliesTo": [
+        "endpoint",
+        "param"
       ]
     },
     {
@@ -144,6 +213,9 @@
       "cwe": [
         "CWE-840",
         "CWE-841"
+      ],
+      "appliesTo": [
+        "endpoint"
       ]
     },
     {
@@ -153,6 +225,11 @@
         "CWE-693",
         "CWE-489",
         "CWE-942"
+      ],
+      "appliesTo": [
+        "host",
+        "endpoint",
+        "tech"
       ]
     }
   ]

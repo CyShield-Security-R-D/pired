@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { EndpointRecord, FindingRecord } from "./ontology.ts";
-import { computeEngagementStats } from "./stats.ts";
+import { computeCoverageView, computeEngagementStats } from "./stats.ts";
 import { makeFakeServices } from "./testing/fakes.ts";
 import { Workspace } from "./workspace.ts";
 
@@ -34,5 +34,29 @@ describe("computeEngagementStats", () => {
 		const stats = await computeEngagementStats(ws);
 		expect(stats.surface).toBe(1);
 		expect(stats.coveragePct).toBe(100);
+	});
+});
+
+describe("computeCoverageView applicability", () => {
+	it("drops classes that do not apply to the recorded surface from coverage", async () => {
+		const svc = makeFakeServices();
+		const ws = await Workspace.open("/ws/s3", "s", svc);
+		const endpoint: EndpointRecord = { v: 1, id: "e1", kind: "endpoint", createdAt: "t", host: "h1", method: "GET", path: "/x" };
+		await ws.append("inventory", endpoint);
+		await ws.writeChecklist({
+			v: 1,
+			targetType: "web",
+			classes: [
+				{ id: "authz", title: "Access control", appliesTo: ["endpoint"] },
+				{ id: "tls", title: "TLS", appliesTo: ["host"] },
+			],
+		});
+		await ws.append("hypotheses", { v: 1, id: "y1", kind: "hypothesis", createdAt: "t", statement: "s", target: "e1", class: "authz", outcome: "confirmed" });
+
+		const view = await computeCoverageView(ws);
+		expect(view?.matrix.cells).toHaveLength(2);
+		expect(view?.matrix.applicable).toBe(1);
+		// tls is unanswerable against an endpoint, so it must not drag this to 50%.
+		expect((await computeEngagementStats(ws)).coveragePct).toBe(100);
 	});
 });

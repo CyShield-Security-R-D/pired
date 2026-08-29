@@ -425,7 +425,7 @@ export default function piredExtension(pi: ExtensionAPI): void {
 			if (ctx.mode !== "tui") {
 				const gaps = view.matrix.counts["not-tested"] + view.matrix.counts.blocked;
 				const pct = coveragePercent(view.matrix);
-				ctx.ui.notify(`pired: coverage ${pct}% · ${view.matrix.cells.length} cells · ${gaps} gaps`, "info");
+				ctx.ui.notify(`pired: coverage ${pct}% · ${view.matrix.applicable} cells · ${gaps} gaps`, "info");
 				return;
 			}
 			await ctx.ui.custom<void>(

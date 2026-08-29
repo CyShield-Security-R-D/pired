@@ -10,13 +10,21 @@
  */
 
 import { COVERAGE_STATUSES } from "./ontology.ts";
-import type { BlockerRecord, CoverageCell, CoverageGap, CoverageMatrix, CoverageStatus, HypothesisRecord } from "./ontology.ts";
+import type {
+	BlockerRecord,
+	CoverageCell,
+	CoverageGap,
+	CoverageMatrix,
+	CoverageStatus,
+	HypothesisRecord,
+	InventoryKind,
+} from "./ontology.ts";
 
 export interface CoverageInput {
-	/** Checklist classes to test (the "should"). */
-	classes: Array<{ id: string }>;
-	/** Surface elements to cover (inventory ids — the "exists"). */
-	elements: Array<{ id: string }>;
+	/** Checklist classes to test (the "should"), with their optional applicability. */
+	classes: Array<{ id: string; appliesTo?: InventoryKind[] }>;
+	/** Surface elements to cover (inventory ids — the "exists"), with their kind. */
+	elements: Array<{ id: string; kind?: InventoryKind }>;
 	hypotheses: HypothesisRecord[];
 	/** Blockers with status "open" only. */
 	openBlockers: BlockerRecord[];
@@ -24,6 +32,17 @@ export interface CoverageInput {
 
 function cellKey(element: string, cls: string): string {
 	return `${element}:${cls}`;
+}
+
+/**
+ * Is this class askable of this element kind? Unannotated classes apply to
+ * everything, and an element of unknown kind is always in — both fail open, so
+ * a missing annotation can never silently shrink the denominator.
+ */
+function applies(appliesTo: InventoryKind[] | undefined, kind: InventoryKind | undefined): boolean {
+	if (!appliesTo || appliesTo.length === 0) return true;
+	if (!kind) return true;
+	return appliesTo.includes(kind);
 }
 
 function pushInto(map: Map<string, string[]>, key: string, value: string): void {
@@ -71,7 +90,12 @@ export function computeCoverage(input: CoverageInput): CoverageMatrix {
 
 			let status: CoverageStatus;
 			if (hyps.some((h) => h.outcome === "confirmed")) {
+				// Evidence outranks taxonomy: a confirmed hypothesis stays visible even
+				// on a cell the checklist calls inapplicable. If someone landed SQLi on
+				// a "host", the annotation is wrong — never hide a finding behind it.
 				status = "vulnerable";
+			} else if (!applies(cls.appliesTo, el.kind)) {
+				status = "n/a";
 			} else if (blockerIds.length > 0) {
 				status = "blocked";
 			} else if (hyps.some((h) => h.outcome === "proposed" || h.outcome === "testing" || h.outcome === "inconclusive")) {
@@ -90,7 +114,17 @@ export function computeCoverage(input: CoverageInput): CoverageMatrix {
 		}
 	}
 
-	return { cells, counts };
+	return { cells, counts, applicable: cells.length - counts["n/a"] };
+}
+
+/**
+ * Share of askable cells that are settled (clear or vulnerable), as a whole
+ * percent. Lives here rather than in stats.ts so the panel can measure without
+ * importing the workspace-facing module.
+ */
+export function coveragePercent(matrix: CoverageMatrix): number {
+	const total = matrix.applicable;
+	return total > 0 ? Math.round(((matrix.counts.clear + matrix.counts.vulnerable) / total) * 100) : 0;
 }
 
 /** Cells that still need work: not yet tested, or blocked pending the operator. */

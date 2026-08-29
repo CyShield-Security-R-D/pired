@@ -152,6 +152,13 @@ export interface ChecklistClass {
 	title: string;
 	/** Related CWE identifiers, e.g. ["CWE-89"]. */
 	cwe?: string[];
+	/**
+	 * Inventory kinds this class is testable against. Omitted means "every kind"
+	 * — the pre-appliesTo behaviour, so an unannotated checklist is unchanged.
+	 * Cells pairing this class with any other kind are `n/a` and drop out of the
+	 * coverage denominator: TLS is not a question you ask of a query parameter.
+	 */
+	appliesTo?: InventoryKind[];
 }
 
 export interface Checklist {
@@ -328,6 +335,12 @@ export interface CoverageCell {
 export interface CoverageMatrix {
 	cells: CoverageCell[];
 	counts: Record<CoverageStatus, number>;
+	/**
+	 * Cells that are actually askable (`cells.length` minus the `n/a` ones). The
+	 * denominator for every coverage percentage — `cells.length` is the grid's
+	 * shape, not the work.
+	 */
+	applicable: number;
 }
 
 export interface CoverageGap {

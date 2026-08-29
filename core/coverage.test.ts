@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { computeCoverage, findGaps, selectNext } from "./coverage.ts";
-import type { BlockerRecord, CoverageMatrix, HypothesisRecord } from "./ontology.ts";
+import { computeCoverage, coveragePercent, findGaps, selectNext } from "./coverage.ts";
+import type { BlockerRecord, CoverageMatrix, HypothesisRecord, InventoryKind } from "./ontology.ts";
 
 const classes = [{ id: "authz" }, { id: "sqli" }];
 const elements = [{ id: "e1" }, { id: "e2" }];
@@ -107,5 +107,89 @@ describe("selectNext", () => {
 			openBlockers: [],
 		});
 		expect(selectNext(m)).toBeUndefined();
+	});
+});
+
+describe("appliesTo / n-a cells", () => {
+	// tls is a question you ask of a host; sqli is one you ask of an endpoint or a
+	// param. The cross product still forms every cell — the mismatched ones just
+	// stop counting as work.
+	const scoped = [
+		{ id: "tls", appliesTo: ["host"] as const },
+		{ id: "sqli", appliesTo: ["endpoint", "param"] as const },
+	].map((c) => ({ id: c.id, appliesTo: [...c.appliesTo] as InventoryKind[] }));
+	const mixed: Array<{ id: string; kind: InventoryKind }> = [
+		{ id: "h1", kind: "host" },
+		{ id: "e1", kind: "endpoint" },
+	];
+
+	it("marks the mismatched cells n/a and keeps the grid shape", () => {
+		const m = computeCoverage({ classes: scoped, elements: mixed, hypotheses: [], openBlockers: [] });
+		expect(m.cells).toHaveLength(4);
+		expect(cell(m, "h1", "sqli").status).toBe("n/a");
+		expect(cell(m, "e1", "tls").status).toBe("n/a");
+		expect(cell(m, "h1", "tls").status).toBe("not-tested");
+		expect(cell(m, "e1", "sqli").status).toBe("not-tested");
+		expect(m.counts["n/a"]).toBe(2);
+		expect(m.applicable).toBe(2);
+	});
+
+	it("divides the percentage by applicable cells, not the whole grid", () => {
+		const m = computeCoverage({
+			classes: scoped,
+			elements: mixed,
+			hypotheses: [hyp("y1", "e1", "sqli", "refuted")],
+			openBlockers: [],
+		});
+		// 1 settled of 2 askable — not 1 of 4, which is what the raw grid would say.
+		expect(coveragePercent(m)).toBe(50);
+	});
+
+	it("applies every class when appliesTo is omitted or empty", () => {
+		const m = computeCoverage({
+			classes: [{ id: "tls" }, { id: "sqli", appliesTo: [] }],
+			elements: mixed,
+			hypotheses: [],
+			openBlockers: [],
+		});
+		expect(m.counts["n/a"]).toBe(0);
+		expect(m.applicable).toBe(m.cells.length);
+	});
+
+	it("fails open on an element of unknown kind", () => {
+		const m = computeCoverage({ classes: scoped, elements: [{ id: "raw" }], hypotheses: [], openBlockers: [] });
+		expect(m.counts["n/a"]).toBe(0);
+		expect(m.applicable).toBe(2);
+	});
+
+	it("keeps a confirmed hypothesis visible on an otherwise inapplicable cell", () => {
+		// The annotation is wrong, not the finding: evidence outranks taxonomy.
+		const m = computeCoverage({
+			classes: scoped,
+			elements: mixed,
+			hypotheses: [hyp("y1", "h1", "sqli", "confirmed")],
+			openBlockers: [],
+		});
+		expect(cell(m, "h1", "sqli").status).toBe("vulnerable");
+		expect(m.applicable).toBe(3);
+	});
+
+	it("does not report n/a cells as gaps or hand them to the router", () => {
+		const m = computeCoverage({ classes: scoped, elements: mixed, hypotheses: [], openBlockers: [] });
+		const gaps = findGaps(m);
+		// Only the two askable cells are gaps; h1:sqli and e1:tls are not work.
+		expect(gaps.map((g) => `${g.element}:${g.class}`).sort()).toEqual(["e1:sqli", "h1:tls"]);
+		expect(selectNext(m)?.status).not.toBe("n/a");
+	});
+
+	it("reports 0% rather than NaN when nothing is applicable", () => {
+		const m = computeCoverage({
+			classes: [{ id: "tls", appliesTo: ["host"] }],
+			elements: [{ id: "e1", kind: "endpoint" }],
+			hypotheses: [],
+			openBlockers: [],
+		});
+		expect(m.applicable).toBe(0);
+		expect(coveragePercent(m)).toBe(0);
 	});
 });

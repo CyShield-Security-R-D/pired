@@ -8,6 +8,10 @@
       "cwe": [
         "CWE-639",
         "CWE-284"
+      ],
+      "appliesTo": [
+        "endpoint",
+        "param"
       ]
     },
     {
@@ -16,6 +20,9 @@
       "cwe": [
         "CWE-287",
         "CWE-345"
+      ],
+      "appliesTo": [
+        "endpoint"
       ]
     },
     {
@@ -24,6 +31,9 @@
       "cwe": [
         "CWE-285",
         "CWE-862"
+      ],
+      "appliesTo": [
+        "endpoint"
       ]
     },
     {
@@ -32,6 +42,9 @@
       "cwe": [
         "CWE-213",
         "CWE-200"
+      ],
+      "appliesTo": [
+        "endpoint"
       ]
     },
     {
@@ -39,6 +52,10 @@
       "title": "Mass assignment / over-posting",
       "cwe": [
         "CWE-915"
+      ],
+      "appliesTo": [
+        "endpoint",
+        "param"
       ]
     },
     {
@@ -47,6 +64,9 @@
       "cwe": [
         "CWE-770",
         "CWE-799"
+      ],
+      "appliesTo": [
+        "endpoint"
       ]
     },
     {
@@ -55,6 +75,9 @@
       "cwe": [
         "CWE-840",
         "CWE-841"
+      ],
+      "appliesTo": [
+        "endpoint"
       ]
     },
     {
@@ -62,6 +85,10 @@
       "title": "Server-side request forgery",
       "cwe": [
         "CWE-918"
+      ],
+      "appliesTo": [
+        "endpoint",
+        "param"
       ]
     },
     {
@@ -71,6 +98,10 @@
         "CWE-89",
         "CWE-943",
         "CWE-78"
+      ],
+      "appliesTo": [
+        "endpoint",
+        "param"
       ]
     },
     {
@@ -80,6 +111,11 @@
         "CWE-693",
         "CWE-942",
         "CWE-611"
+      ],
+      "appliesTo": [
+        "host",
+        "endpoint",
+        "tech"
       ]
     },
     {
@@ -88,6 +124,11 @@
       "cwe": [
         "CWE-1059",
         "CWE-668"
+      ],
+      "appliesTo": [
+        "host",
+        "endpoint",
+        "tech"
       ]
     },
     {
@@ -96,6 +137,10 @@
       "cwe": [
         "CWE-20",
         "CWE-345"
+      ],
+      "appliesTo": [
+        "endpoint",
+        "tech"
       ]
     },
     {
@@ -104,6 +149,11 @@
       "cwe": [
         "CWE-798",
         "CWE-200"
+      ],
+      "appliesTo": [
+        "host",
+        "endpoint",
+        "tech"
       ]
     }
   ]

@@ -82,3 +82,54 @@ describe("renderCoveragePanel", () => {
 		expect(lines).toContain("no checklist");
 	});
 });
+
+describe("renderCoveragePanel with n/a cells", () => {
+	// tls applies to hosts only, sqli to endpoints only: each row has one askable
+	// cell and one that is not a question at all.
+	const scoped: CoverageView = {
+		matrix: computeCoverage({
+			classes: [
+				{ id: "tls", appliesTo: ["host"] },
+				{ id: "sqli", appliesTo: ["endpoint"] },
+			],
+			elements: [
+				{ id: "h1", kind: "host" },
+				{ id: "e1", kind: "endpoint" },
+			],
+			hypotheses: [hyp("h1y", "e1", "sqli", "refuted")],
+			openBlockers: [],
+		}),
+		classes: [
+			{ id: "tls", title: "tls" },
+			{ id: "sqli", title: "sqli" },
+		],
+		elementIds: ["h1", "e1"],
+	};
+
+	it("counts each row over its askable cells only", () => {
+		const lines = render(scoped, 60).map(strip);
+		expect(lines.find((l) => l.startsWith("tls"))).toMatch(/0\/1$/);
+		expect(lines.find((l) => l.startsWith("sqli"))).toMatch(/1\/1$/);
+	});
+
+	it("still paints an n/a glyph in the bar so columns stay aligned", () => {
+		const lines = render(scoped, 60).map(strip);
+		const tls = lines.find((l) => l.startsWith("tls")) ?? "";
+		const sqli = lines.find((l) => l.startsWith("sqli")) ?? "";
+		expect(tls).toContain("–");
+		expect(sqli).toContain("–");
+		expect(tls.length).toBe(sqli.length);
+	});
+
+	it("summarises and grades over applicable cells, not the whole grid", () => {
+		const lines = render(scoped, 60).map(strip);
+		// 1 settled of 2 askable; the raw 4-cell grid would read 25% / "4 cells".
+		expect(lines[0]).toContain("50%");
+		expect(lines.at(-1)).toContain("2 cells");
+	});
+
+	it("shows the n/a key in the legend only when one exists", () => {
+		expect(render(scoped, 80).map(strip).join("\n")).toContain("n/a");
+		expect(render(view(["e1"], ["sqli"]), 80).map(strip).join("\n")).not.toContain("n/a");
+	});
+});

@@ -8,6 +8,10 @@
       "cwe": [
         "CWE-306",
         "CWE-668"
+      ],
+      "appliesTo": [
+        "host",
+        "service"
       ]
     },
     {
@@ -16,6 +20,10 @@
       "cwe": [
         "CWE-1392",
         "CWE-521"
+      ],
+      "appliesTo": [
+        "host",
+        "service"
       ]
     },
     {
@@ -24,6 +32,10 @@
       "cwe": [
         "CWE-1395",
         "CWE-1104"
+      ],
+      "appliesTo": [
+        "host",
+        "service"
       ]
     },
     {
@@ -32,6 +44,10 @@
       "cwe": [
         "CWE-306",
         "CWE-200"
+      ],
+      "appliesTo": [
+        "host",
+        "service"
       ]
     },
     {
@@ -40,6 +56,10 @@
       "cwe": [
         "CWE-1392",
         "CWE-200"
+      ],
+      "appliesTo": [
+        "host",
+        "service"
       ]
     },
     {
@@ -47,6 +67,10 @@
       "title": "DNS zone transfer / misconfiguration",
       "cwe": [
         "CWE-200"
+      ],
+      "appliesTo": [
+        "host",
+        "service"
       ]
     },
     {
@@ -56,6 +80,10 @@
         "CWE-326",
         "CWE-327",
         "CWE-295"
+      ],
+      "appliesTo": [
+        "host",
+        "service"
       ]
     },
     {
@@ -64,6 +92,10 @@
       "cwe": [
         "CWE-306",
         "CWE-668"
+      ],
+      "appliesTo": [
+        "host",
+        "service"
       ]
     },
     {
@@ -72,6 +104,11 @@
       "cwe": [
         "CWE-284",
         "CWE-668"
+      ],
+      "appliesTo": [
+        "host",
+        "service",
+        "endpoint"
       ]
     },
     {
@@ -80,6 +117,10 @@
       "cwe": [
         "CWE-284",
         "CWE-306"
+      ],
+      "appliesTo": [
+        "host",
+        "service"
       ]
     },
     {
@@ -88,6 +129,10 @@
       "cwe": [
         "CWE-693",
         "CWE-306"
+      ],
+      "appliesTo": [
+        "host",
+        "service"
       ]
     },
     {
@@ -95,6 +140,10 @@
       "title": "Information disclosure / service banners",
       "cwe": [
         "CWE-200"
+      ],
+      "appliesTo": [
+        "host",
+        "service"
       ]
     },
     {
@@ -102,6 +151,9 @@
       "title": "Missing network segmentation",
       "cwe": [
         "CWE-923"
+      ],
+      "appliesTo": [
+        "host"
       ]
     }
   ]

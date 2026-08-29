@@ -3,7 +3,7 @@
  * surface size, open blockers. Pure data (no UI); adapters render it.
  */
 
-import { computeCoverage } from "./coverage.ts";
+import { computeCoverage, coveragePercent } from "./coverage.ts";
 import type { CoverageMatrix, InventoryKind, Severity } from "./ontology.ts";
 import type { Workspace } from "./workspace.ts";
 
@@ -28,21 +28,24 @@ export async function computeCoverageView(
 	const checklist = await ws.readChecklist();
 	if (!checklist) return undefined;
 	const inventory = await ws.read("inventory");
-	const elementIds = inventory.filter((r) => surfaceKinds.includes(r.kind as InventoryKind)).map((r) => r.id);
+	// Kind travels with the element: computeCoverage needs it to apply each
+	// class's `appliesTo` and mark the cells that are not questions at all.
+	const elements = inventory
+		.filter((r) => surfaceKinds.includes(r.kind as InventoryKind))
+		.map((r) => ({ id: r.id, kind: r.kind as InventoryKind }));
+	const elementIds = elements.map((e) => e.id);
 	const matrix = computeCoverage({
 		classes: checklist.classes,
-		elements: elementIds.map((id) => ({ id })),
+		elements,
 		hypotheses: await ws.read("hypotheses"),
 		openBlockers: (await ws.read("blockers")).filter((b) => b.status === "open"),
 	});
 	return { matrix, classes: checklist.classes.map((c) => ({ id: c.id, title: c.title || c.id })), elementIds };
 }
 
-/** Share of cells that are settled (clear or vulnerable), as a whole percent. */
-export function coveragePercent(matrix: CoverageMatrix): number {
-	const total = matrix.cells.length;
-	return total > 0 ? Math.round(((matrix.counts.clear + matrix.counts.vulnerable) / total) * 100) : 0;
-}
+// Re-exported so existing importers keep their one import site; the definition
+// lives in coverage.ts beside the matrix it measures.
+export { coveragePercent };
 
 export interface EngagementStats {
 	findings: Record<Severity, number>;

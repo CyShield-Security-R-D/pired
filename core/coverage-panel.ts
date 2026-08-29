@@ -11,6 +11,7 @@
  * imports and is tested against a plain ASCII stand-in.
  */
 
+import { coveragePercent } from "./coverage.ts";
 import type { CoverageStatus } from "./ontology.ts";
 import type { CoverageView } from "./stats.ts";
 
@@ -24,8 +25,8 @@ export const CELL_GLYPH: Record<CoverageStatus, string> = {
 	testing: "◐",
 	blocked: "⊘",
 	"not-tested": "·",
-	// Not produced by computeCoverage today, but part of the status union: a cell
-	// a class does not apply to. Shown only when one actually exists.
+	// A cell the class does not apply to (per its `appliesTo`). It holds its slot
+	// in the bar to keep columns aligned, but is not counted as work.
 	"n/a": "–",
 };
 
@@ -52,14 +53,24 @@ export interface CoveragePanelOptions {
 	truncate: (s: string, width: number) => string;
 }
 
+/**
+ * A row's settled-over-askable count. `n/a` cells still occupy a slot in the bar
+ * so columns stay aligned across rows, but they are not work, so they are out of
+ * the denominator here exactly as they are out of `matrix.applicable`.
+ */
+function rowCount(statuses: CoverageStatus[]): string {
+	const done = statuses.filter((st) => st === "clear" || st === "vulnerable").length;
+	const askable = statuses.filter((st) => st !== "n/a").length;
+	return `${done}/${askable}`;
+}
+
 /** Lay the matrix out as lines, none wider than `width`. */
 export function renderCoveragePanel(opts: CoveragePanelOptions): string[] {
 	const { view, engagement, width, ink, measure, truncate } = opts;
 	if (width <= 0) return [];
 	const { matrix, classes, elementIds } = view;
 
-	const settled = matrix.counts.clear + matrix.counts.vulnerable;
-	const pct = matrix.cells.length > 0 ? Math.round((settled / matrix.cells.length) * 100) : 0;
+	const pct = coveragePercent(matrix);
 	const head = (): string[] => {
 		const title = ink("title", `⦿ coverage · ${engagement}`);
 		const right = ink("muted", `${pct}%`);
@@ -88,8 +99,7 @@ export function renderCoveragePanel(opts: CoveragePanelOptions): string[] {
 		// Too narrow for bars: fall back to per-class counts alone.
 		for (const cls of classes) {
 			const statuses = byClass.get(cls.id) ?? [];
-			const done = statuses.filter((st) => st === "clear" || st === "vulnerable").length;
-			lines.push(truncate(`${ink("label", cls.title)} ${ink("muted", `${done}/${statuses.length}`)}`, width));
+			lines.push(truncate(`${ink("label", cls.title)} ${ink("muted", rowCount(statuses))}`, width));
 		}
 		return lines;
 	}
@@ -104,11 +114,10 @@ export function renderCoveragePanel(opts: CoveragePanelOptions): string[] {
 			.map((st) => ink(st, CELL_GLYPH[st]))
 			.join("");
 		const bar = cells + (marker ? ink("muted", marker) : "");
-		const done = statuses.filter((st) => st === "clear" || st === "vulnerable").length;
 
 		const label = truncate(cls.title, labelWidth);
 		const pad = " ".repeat(Math.max(0, labelWidth - measure(label)));
-		const counts = `${done}/${statuses.length}`;
+		const counts = rowCount(statuses);
 		const countPad = " ".repeat(Math.max(0, countWidth - counts.length));
 		const barPad = " ".repeat(Math.max(0, barWidth - measure(bar)));
 		lines.push(truncate(`${ink("label", label)}${pad}  ${bar}${barPad}  ${countPad}${ink("muted", counts)}`, width));
@@ -120,7 +129,7 @@ export function renderCoveragePanel(opts: CoveragePanelOptions): string[] {
 	lines.push(truncate(legend, width));
 
 	const gaps = matrix.counts["not-tested"] + matrix.counts.blocked;
-	const summary = ink("muted", `${matrix.cells.length} cells · ${gaps} gaps`);
+	const summary = ink("muted", `${matrix.applicable} cells · ${gaps} gaps`);
 	const hint = ink("muted", "esc to close");
 	const gap = width - measure(summary) - measure(hint);
 	lines.push(gap >= 1 ? summary + " ".repeat(gap) + hint : truncate(summary, width));

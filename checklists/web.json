@@ -9,6 +9,9 @@
         "CWE-284",
         "CWE-862",
         "CWE-863"
+      ],
+      "appliesTo": [
+        "endpoint"
       ]
     },
     {
@@ -17,6 +20,10 @@
       "cwe": [
         "CWE-639",
         "CWE-566"
+      ],
+      "appliesTo": [
+        "endpoint",
+        "param"
       ]
     },
     {
@@ -25,6 +32,10 @@
       "cwe": [
         "CWE-915",
         "CWE-913"
+      ],
+      "appliesTo": [
+        "endpoint",
+        "param"
       ]
     },
     {
@@ -34,6 +45,9 @@
         "CWE-287",
         "CWE-384",
         "CWE-613"
+      ],
+      "appliesTo": [
+        "endpoint"
       ]
     },
     {
@@ -41,6 +55,10 @@
       "title": "SQL injection",
       "cwe": [
         "CWE-89"
+      ],
+      "appliesTo": [
+        "endpoint",
+        "param"
       ]
     },
     {
@@ -48,6 +66,10 @@
       "title": "NoSQL injection",
       "cwe": [
         "CWE-943"
+      ],
+      "appliesTo": [
+        "endpoint",
+        "param"
       ]
     },
     {
@@ -55,6 +77,10 @@
       "title": "OS command injection",
       "cwe": [
         "CWE-78"
+      ],
+      "appliesTo": [
+        "endpoint",
+        "param"
       ]
     },
     {
@@ -64,6 +90,10 @@
         "CWE-90",
         "CWE-643",
         "CWE-91"
+      ],
+      "appliesTo": [
+        "endpoint",
+        "param"
       ]
     },
     {
@@ -71,6 +101,10 @@
       "title": "Cross-site scripting",
       "cwe": [
         "CWE-79"
+      ],
+      "appliesTo": [
+        "endpoint",
+        "param"
       ]
     },
     {
@@ -79,6 +113,10 @@
       "cwe": [
         "CWE-1336",
         "CWE-94"
+      ],
+      "appliesTo": [
+        "endpoint",
+        "param"
       ]
     },
     {
@@ -86,6 +124,10 @@
       "title": "Server-side request forgery",
       "cwe": [
         "CWE-918"
+      ],
+      "appliesTo": [
+        "endpoint",
+        "param"
       ]
     },
     {
@@ -93,6 +135,10 @@
       "title": "XML external entity injection",
       "cwe": [
         "CWE-611"
+      ],
+      "appliesTo": [
+        "endpoint",
+        "param"
       ]
     },
     {
@@ -100,6 +146,10 @@
       "title": "Insecure deserialization",
       "cwe": [
         "CWE-502"
+      ],
+      "appliesTo": [
+        "endpoint",
+        "param"
       ]
     },
     {
@@ -108,6 +158,10 @@
       "cwe": [
         "CWE-22",
         "CWE-98"
+      ],
+      "appliesTo": [
+        "endpoint",
+        "param"
       ]
     },
     {
@@ -115,6 +169,10 @@
       "title": "Unrestricted file upload",
       "cwe": [
         "CWE-434"
+      ],
+      "appliesTo": [
+        "endpoint",
+        "param"
       ]
     },
     {
@@ -122,6 +180,9 @@
       "title": "Cross-site request forgery",
       "cwe": [
         "CWE-352"
+      ],
+      "appliesTo": [
+        "endpoint"
       ]
     },
     {
@@ -129,6 +190,10 @@
       "title": "Open redirect",
       "cwe": [
         "CWE-601"
+      ],
+      "appliesTo": [
+        "endpoint",
+        "param"
       ]
     },
     {
@@ -137,6 +202,11 @@
       "cwe": [
         "CWE-200",
         "CWE-798"
+      ],
+      "appliesTo": [
+        "host",
+        "endpoint",
+        "tech"
       ]
     },
     {
@@ -146,6 +216,11 @@
         "CWE-693",
         "CWE-1004",
         "CWE-614"
+      ],
+      "appliesTo": [
+        "host",
+        "endpoint",
+        "tech"
       ]
     },
     {
@@ -154,6 +229,9 @@
       "cwe": [
         "CWE-307",
         "CWE-799"
+      ],
+      "appliesTo": [
+        "endpoint"
       ]
     },
     {
@@ -162,6 +240,9 @@
       "cwe": [
         "CWE-840",
         "CWE-841"
+      ],
+      "appliesTo": [
+        "endpoint"
       ]
     }
   ]
