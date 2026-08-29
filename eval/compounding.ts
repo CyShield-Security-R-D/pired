@@ -74,6 +74,14 @@ interface SessionScore extends Score {
 	ledgerFindings: number;
 	hypotheses: number;
 	durationMs: number;
+	/**
+	 * False when the session did not actually run. A measurement harness must
+	 * never let a failure look like a result: eighteen runs once returned recall
+	 * 0.000 across both arms, which read as a clean null finding and was in fact
+	 * an HTTP 402 on the first request of every one of them.
+	 */
+	ok: boolean;
+	error?: string;
 }
 
 async function rollout(arm: "persisted" | "wiped", index: number, sessions: number, workDir: string): Promise<{ arm: string; rollout: number; scores: SessionScore[] }> {
@@ -89,6 +97,8 @@ async function rollout(arm: "persisted" | "wiped", index: number, sessions: numb
 		// The ablation: wiping removes durable memory and nothing else.
 		if (s > 0 && arm === "wiped") await rm(engagementDir, { recursive: true, force: true });
 		const started = Date.now();
+		let ok = true;
+		let error: string | undefined;
 		try {
 			const pending = run(process.execPath, [
 				PIRED, "--profile", "review", "--provider", arg("provider", "openrouter"),
@@ -97,7 +107,17 @@ async function rollout(arm: "persisted" | "wiped", index: number, sessions: numb
 			], { timeout: Number(arg("timeout", "1200000")), maxBuffer: 1 << 26, cwd: dir });
 			pending.child.stdin?.end();
 			await pending;
-		} catch { /* partial output is still scoreable */ }
+		} catch (err) {
+			// Partial output is still scoreable, but the failure has to survive to
+			// the summary or a broken run is reported as a measured zero.
+			ok = false;
+			const e = err as { stderr?: string; message?: string; killed?: boolean };
+			// Prefer the child's stderr — the cause. The exec error's own message is
+			// just the command line, which says nothing about why it failed.
+			const stderr = String(e.stderr ?? "").trim();
+			const why = stderr || String(e.message ?? "").replace(/^Command failed:.*?(\n|$)/s, "").trim() || "unknown";
+			error = (e.killed ? `timeout after ${arg("timeout", "1200000")}ms: ` : "") + why.slice(0, 220).replace(/\s+/g, " ");
+		}
 
 		const findings = dedupe(await fromLedger(engagementDir));
 		const score = await scoreFindings(findings, join(workDir, `${name}-s${s}.report.json`));
@@ -105,8 +125,12 @@ async function rollout(arm: "persisted" | "wiped", index: number, sessions: numb
 		try {
 			hypotheses = (await readFile(join(engagementDir, "hypotheses.jsonl"), "utf8")).trim().split("\n").filter(Boolean).length;
 		} catch { /* none recorded */ }
-		scores.push({ ...score, session: s, ledgerFindings: findings.length, hypotheses, durationMs: Date.now() - started });
-		process.stderr.write(`  ${arm} r${index} s${s}: recall ${score.recall?.toFixed(3)} precision ${score.precision?.toFixed(3)} (${findings.length} findings, ${hypotheses} hyps)\n`);
+		scores.push({ ...score, session: s, ledgerFindings: findings.length, hypotheses, durationMs: Date.now() - started, ok, error });
+		process.stderr.write(
+			ok
+				? `  ${arm} r${index} s${s}: recall ${score.recall?.toFixed(3)} precision ${score.precision?.toFixed(3)} (${findings.length} findings, ${hypotheses} hyps)\n`
+				: `  ${arm} r${index} s${s}: FAILED — ${error}\n`,
+		);
 	}
 	return { arm, rollout: index, scores };
 }
@@ -144,7 +168,26 @@ const series = (arm: string, key: keyof SessionScore): number[] =>
 		mean(results.filter((r) => r.arm === arm).map((r) => Number(r.scores[s]?.[key] ?? 0))),
 	);
 
+const allSessions = results.flatMap((r) => r.scores);
+const failed = allSessions.filter((s) => !s.ok);
+
 process.stdout.write(`\n⦿ compounding · DVBank · n=${rollouts} per arm · k=${sessions}\n\n`);
+
+if (failed.length > 0) {
+	process.stdout.write(`⚠ ${failed.length}/${allSessions.length} sessions FAILED — these are not measurements.\n`);
+	const reasons = new Map<string, number>();
+	for (const f of failed) reasons.set(f.error ?? "unknown", (reasons.get(f.error ?? "unknown") ?? 0) + 1);
+	for (const [reason, n] of reasons) process.stdout.write(`   ${n}x  ${reason}\n`);
+	process.stdout.write("\n");
+}
+
+// A summary computed over failed sessions is worse than no summary: it looks
+// like a null result and reads as evidence.
+if (failed.length === allSessions.length) {
+	process.stdout.write("Every session failed. No result — fix the cause above and re-run.\n");
+	await writeFile(join(workDir, `summary-${RUN_ID}.json`), `${JSON.stringify(results, null, 2)}\n`);
+	process.exit(1);
+}
 for (const key of ["recall", "precision", "ledgerFindings", "hypotheses"] as const) {
 	process.stdout.write(`${key}\n`);
 	for (const arm of ["persisted", "wiped"]) {
