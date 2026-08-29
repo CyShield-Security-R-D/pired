@@ -27,6 +27,7 @@ import type { Gate } from "../core/ports.ts";
 import { buildSystemPrompt, PIRED_PROFILES, type PiredProfile } from "../core/prompts.ts";
 import { createScopeGate } from "../core/scope.ts";
 import { renderCoveragePanel, type Tone } from "../core/coverage-panel.ts";
+import { PANEL_MODES, renderPanel, type PanelData, type PanelMode, type PanelTone } from "../core/panel.ts";
 import { computeCoverageView, computeEngagementStats, coveragePercent, type EngagementStats } from "../core/stats.ts";
 import { layoutStatusLine, type Segment } from "../core/statusline.ts";
 import { createCoreTools } from "../core/tools.ts";
@@ -200,15 +201,69 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	// parsed back out of the status string, so the footer can color each part.
 	let stats: EngagementStats | undefined;
 
+	// The panel rides in the footer, so showing and hiding it is a boolean and a
+	// re-render — no window management, no modal to dismiss. Off by default: the
+	// transcript is where trust is built, and a panel nobody asked for competes
+	// with it. `/panel` toggles, `/panel <mode>` switches view.
+	let panelOpen = false;
+	let panelMode: PanelMode = "state";
+	let panelData: PanelData | undefined;
+
 	const refreshStatus = async (ctx: ExtensionContext): Promise<void> => {
 		if (!workspace) return;
 		stats = await computeEngagementStats(workspace);
+		panelData = await collectPanelData(workspace, scope, stats);
 		const parts = [`⦿ ${scope.engagement}`, `findings ${stats.findingsTotal}`];
 		if (stats.coveragePct !== undefined) parts.push(`cov ${stats.coveragePct}%`);
 		if (stats.blockers > 0) parts.push(`blockers ${stats.blockers}`);
 		// Still published through setStatus: it is what pi's own footer renders in
 		// non-TUI modes and when our custom footer is not installed.
 		ctx.ui.setStatus("pired", parts.join(" · "));
+	};
+
+	/**
+	 * Gather what the panel shows. Read from the ledger rather than threaded
+	 * through the agent: the operator's view of the engagement should not depend
+	 * on the agent choosing to report it.
+	 */
+	const collectPanelData = async (
+		ws: Workspace,
+		sc: EngagementScope,
+		st: EngagementStats,
+	): Promise<PanelData> => {
+		const inv = await ws.read("inventory");
+		const hyps = await ws.read("hypotheses");
+		const finds = await ws.read("findings");
+		const blockers = (await ws.read("blockers")).filter((b) => b.status === "open");
+		const view = await computeCoverageView(ws);
+		const settled = view ? view.matrix.counts.clear + view.matrix.counts.vulnerable : 0;
+		const tally = <T extends string>(xs: T[]): Record<string, number> => {
+			const m: Record<string, number> = {};
+			for (const x of xs) m[x] = (m[x] ?? 0) + 1;
+			return m;
+		};
+		const checklist = await ws.readChecklist();
+		const TYPE: Record<string, string> = {
+			"code-review": "review · source audit",
+			web: "pentest · web application",
+			api: "pentest · API",
+			network: "pentest · network",
+		};
+		return {
+			engagement: sc.engagement,
+			engagementType: checklist ? (TYPE[checklist.targetType] ?? checklist.targetType) : undefined,
+			scope: { mode: sc.mode, authorized: sc.authorized === true, targets: (sc.targets ?? {}) as Record<string, string[] | undefined> },
+			coveragePct: st.coveragePct,
+			cells: view?.matrix.applicable,
+			settled,
+			gaps: view ? view.matrix.counts["not-tested"] + view.matrix.counts.blocked : undefined,
+			surface: tally(inv.map((r) => r.kind)),
+			hypotheses: tally(hyps.map((h) => h.outcome)),
+			findings: st.findings,
+			recentFindings: finds.slice(-4).reverse().map((f) => ({ severity: f.severity, title: f.title })),
+			openBlockers: blockers.map((b) => ({ question: b.question, priority: b.priority })),
+			evidence: 0,
+		};
 	};
 
 	/**
@@ -257,7 +312,10 @@ export default function piredExtension(pi: ExtensionAPI): void {
 							stats?.findingsTotal, stats?.coveragePct, stats?.blockers,
 							profile, scope.mode, scope.authorized,
 							...SEVERITY_INK.map(([sev]) => stats?.findings[sev])].join("\u0000");
-						if (cache?.key === key) return cache.lines;
+						// Panel visibility and mode belong in the cache key: without them a
+						// toggle would not repaint until something else happened to change.
+						const fullKey = `${key}\u0000${panelOpen ? panelMode : "off"}`;
+						if (cache?.key === fullKey) return cache.lines;
 
 						const dim = (text: string): string => theme.fg("dim", text);
 						const left: Segment[] = [{ text: wordmark(theme) }];
@@ -314,7 +372,31 @@ export default function piredExtension(pi: ExtensionAPI): void {
 						if (branch) right.push({ text: dim(branch), priority: PRIORITY.branch });
 						right.push({ text: dim("/help"), priority: PRIORITY.help });
 
-						const lines = [
+						const lines: string[] = [];
+
+						// The panel sits above the status line and is strictly budgeted:
+						// the footer shares the terminal with the transcript, and a panel
+						// that grows without limit silently eats the conversation it is
+						// meant to accompany.
+						if (panelOpen && panelData) {
+							const tone = (t: PanelTone): string => (
+								{ title: "text", label: "dim", muted: "dim", accent: "accent", good: "success", warn: "warning", bad: "error" } as Record<PanelTone, string>
+							)[t];
+							lines.push(
+								...renderPanel({
+									mode: panelMode,
+									data: panelData,
+									width,
+									maxLines: 8,
+									ink: (t, text) => theme.fg(tone(t) as Parameters<typeof theme.fg>[0], text),
+									measure: visibleWidth,
+									truncate: (x, w) => truncateToWidth(x, w, dim("…")),
+								}),
+								dim("─".repeat(Math.max(0, Math.min(width, 40)))),
+							);
+						}
+
+						lines.push(
 							layoutStatusLine({
 								left,
 								right,
@@ -323,9 +405,9 @@ export default function piredExtension(pi: ExtensionAPI): void {
 								truncate: truncateToWidth,
 								separator: dim(" · "),
 							}),
-						];
+						);
 						if (foreign) lines.push(truncateToWidth(dim(foreign), width, dim("…")));
-						cache = { key, lines };
+						cache = { key: fullKey, lines };
 						return lines;
 					} catch {
 						return [truncateToWidth(wordmark(theme), width)]; // never crash the frame
@@ -407,6 +489,44 @@ export default function piredExtension(pi: ExtensionAPI): void {
 
 	pi.on("turn_end", async (_event, ctx) => {
 		await refreshStatus(ctx);
+	});
+
+	/**
+	 * Show and hide the panel. Deliberately one command with no required
+	 * argument: `/panel` toggles, and that is the whole interaction. A view you
+	 * have to think about is a view you stop using, and a modal you must dismiss
+	 * is worse than no panel at all — which is why this lives in the footer
+	 * rather than as an overlay like /coverage.
+	 *
+	 * `/panel <mode>` jumps straight to a view; `/panel next` cycles. Passing a
+	 * mode also opens the panel, so there is no state where naming a view leaves
+	 * it hidden.
+	 */
+	pi.registerCommand("panel", {
+		description: `Toggle the engagement panel (${PANEL_MODES.join(" | ")})`,
+		handler: async (args, ctx) => {
+			const arg = (args ?? "").trim().toLowerCase();
+			if (arg === "off") {
+				panelOpen = false;
+			} else if (arg === "next") {
+				panelOpen = true;
+				panelMode = PANEL_MODES[(PANEL_MODES.indexOf(panelMode) + 1) % PANEL_MODES.length] as PanelMode;
+			} else if ((PANEL_MODES as readonly string[]).includes(arg)) {
+				panelOpen = true;
+				panelMode = arg as PanelMode;
+			} else if (arg) {
+				ctx.ui.notify(`pired: unknown panel mode '${arg}' — try ${PANEL_MODES.join(", ")}, next, off`, "warning");
+				return;
+			} else {
+				panelOpen = !panelOpen;
+			}
+			if (panelOpen && workspace && stats) {
+				// Refresh on open: the panel should never show state from the last
+				// turn just because nothing has happened since.
+				panelData = await collectPanelData(workspace, scope, stats);
+			}
+			ctx.ui.notify(panelOpen ? `pired: panel · ${panelMode}` : "pired: panel hidden", "info");
+		},
 	});
 
 	pi.registerCommand("coverage", {
