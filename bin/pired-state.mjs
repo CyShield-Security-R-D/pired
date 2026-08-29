@@ -102,6 +102,7 @@ async function main() {
     ink: (tone, text) => `${C[tone] ?? ""}${text}\x1b[0m`,
     measure: (s) => strip(s).length,
     truncate: (s, w) => (strip(s).length <= w ? s : strip(s).slice(0, w)),
+    frame: !has("no-frame"),
   });
   process.stdout.write(`${lines.join("\n")}\n`);
 }

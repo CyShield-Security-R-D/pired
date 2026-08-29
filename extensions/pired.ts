@@ -255,6 +255,7 @@ export default function piredExtension(pi: ExtensionAPI): void {
 							data: panelData,
 							width: w,
 							maxLines: 60,
+							frame: true,
 							ink: (tone, text) => theme.fg(PANEL_TONE_COLOR[tone], text),
 							measure: visibleWidth,
 							truncate: (x, ww) => truncateToWidth(x, ww, theme.fg("dim", "…")),

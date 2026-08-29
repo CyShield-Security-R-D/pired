@@ -47,13 +47,14 @@ describe("engagement panel", () => {
 	});
 
 	it("shows the engagement type, which the manifest does not persist", () => {
-		expect(render("state")[0]).toContain("review · source audit");
+		// Its own line under the name, so a long type cannot crowd the engagement.
+		expect(render("state").join("\n")).toContain("review · source audit");
 	});
 
 	it("reports coverage against askable cells with a proportional bar", () => {
-		const line = render("state").find((l) => l.includes("42%")) ?? "";
-		expect(line).toContain("42/100 cells");
-		expect(line).toContain("58 gaps");
+		expect(render("state").find((l) => l.includes("42%"))).toBeDefined();
+		expect(render("state").join("\n")).toContain("42 of 100 cells");
+		expect(render("state").join("\n")).toContain("58 gaps");
 	});
 
 	it("says so plainly when nothing is blocked", () => {
@@ -65,5 +66,45 @@ describe("engagement panel", () => {
 	it("degrades to the header alone rather than dropping the engagement name", () => {
 		expect(render("state", 100, 1)).toHaveLength(1);
 		expect(render("state", 100, 1)[0]).toContain("acme");
+	});
+});
+
+describe("framed panel", () => {
+	const framed = (w = 54, max = 40): string[] =>
+		renderPanel({ mode: "state", data, width: w, maxLines: max, ink, measure, truncate, frame: true });
+
+	it("draws a closed box", () => {
+		const l = framed();
+		expect(l[0]?.startsWith("╭")).toBe(true);
+		expect(l[0]?.endsWith("╮")).toBe(true);
+		expect(l.at(-1)?.startsWith("╰")).toBe(true);
+		expect(l.at(-1)?.endsWith("╯")).toBe(true);
+	});
+
+	it("makes every line exactly the panel width — a ragged edge reads as a bug", () => {
+		for (const w of [30, 40, 54, 80]) {
+			for (const line of framed(w)) expect(line.length).toBe(w);
+		}
+	});
+
+	it("joins section rules to the border instead of notching them", () => {
+		const rule = framed().find((l) => l.includes("coverage"));
+		expect(rule?.startsWith("├")).toBe(true);
+		expect(rule?.endsWith("┤")).toBe(true);
+	});
+
+	it("puts the engagement name in the top edge and does not repeat it inside", () => {
+		const l = framed();
+		expect(l[0]).toContain("acme");
+		expect(l.slice(1, -1).filter((x) => x.includes("acme"))).toHaveLength(0);
+	});
+
+	it("respects the line budget including the border", () => {
+		for (const max of [4, 8, 16, 40]) expect(framed(54, max).length).toBeLessThanOrEqual(max);
+	});
+
+	it("drops the frame rather than mangling it when too narrow", () => {
+		const l = renderPanel({ mode: "state", data, width: 20, maxLines: 20, ink, measure, truncate, frame: true });
+		expect(l.every((x) => !x.startsWith("╭"))).toBe(true);
 	});
 });
