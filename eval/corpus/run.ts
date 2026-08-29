@@ -102,7 +102,7 @@ const jobs = targets.map((m) => async (): Promise<void> => {
 		// so the child's stderr comes first; `killed` covers both a timeout and a
 		// maxBuffer overrun, which are different problems and must not read alike.
 		ok = false;
-		const e = err as { stderr?: string; message?: string; killed?: boolean; code?: string };
+		const e = err as { stderr?: string; message?: string; killed?: boolean; code?: string; signal?: string };
 		const stderr = String(e.stderr ?? "").trim();
 		const msg = String(e.message ?? "").replace(/^Command failed:.*?(\n|$)/s, "").trim();
 		const why = stderr || msg || String(e.code ?? "unknown");
@@ -111,7 +111,11 @@ const jobs = targets.map((m) => async (): Promise<void> => {
 			: e.killed
 				? `killed (timeout ${Number(arg("timeout", "1800000")) / 1000}s or buffer limit)`
 				: "exited non-zero";
-		error = `${kind}: ${why.slice(0, 260).replace(/\s+/g, " ")}`;
+		// The signal is the whole story when a child dies silently: SIGTERM is
+		// someone killing it, SIGKILL is usually the OOM killer, SIGSEGV is a crash.
+		// Without it "killed: unknown" sends you looking at timeouts for no reason.
+		const sig = e.signal ? ` signal=${e.signal}` : "";
+		error = `${kind}${sig}: ${why.slice(0, 260).replace(/\s+/g, " ")}`;
 	}
 	const findings = dedupe(await fromLedger(engagementDir));
 	const score = await scoreFindings(findings, join(corpusDir, `${name}-${RUN_ID}.report.json`), m.truth);
