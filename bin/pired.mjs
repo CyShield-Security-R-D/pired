@@ -7,7 +7,7 @@
  * Usage:
  *   pired [--profile review|recon|pentest] [--provider NAME] [--model ID]
  *         [--target DIR] [--thinking off|low|medium|high|max] [--no-theme]
- *         [--prompt "one-shot"] [-- <extra pi args>]
+ *         [--no-panel] [--prompt "one-shot"] [-- <extra pi args>]
  *
  * Models come from ~/.pired/models.json (pired registers them into pi):
  *   --provider lmstudio  --model qwen3.8-27b            (local)
@@ -52,6 +52,7 @@ const piArgs = ["-e", EXT, "--pired-profile", profile, "--thinking", thinking, "
 if (provider) piArgs.push("--provider", provider);
 if (model) piArgs.push("--model", model);
 if (!has("no-theme") && existsSync(THEME)) piArgs.push("--theme", THEME, "--use-theme", "pired");
+if (has("no-panel")) piArgs.push("--pired-panel", "off");
 if (promptText) piArgs.push("-p", promptText);
 piArgs.push(...passthrough);
 

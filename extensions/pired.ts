@@ -27,7 +27,7 @@ import type { Gate } from "../core/ports.ts";
 import { buildSystemPrompt, PIRED_PROFILES, type PiredProfile } from "../core/prompts.ts";
 import { createScopeGate } from "../core/scope.ts";
 import { renderCoveragePanel, type Tone } from "../core/coverage-panel.ts";
-import { PANEL_MODES, renderPanel, type PanelData, type PanelMode, type PanelTone } from "../core/panel.ts";
+import { dismissHint, PANEL_MODES, renderPanel, type PanelData, type PanelMode, type PanelTone } from "../core/panel.ts";
 import { computeCoverageView, computeEngagementStats, coveragePercent, type EngagementStats } from "../core/stats.ts";
 import { layoutStatusLine, type Segment } from "../core/statusline.ts";
 import { createCoreTools } from "../core/tools.ts";
@@ -188,6 +188,11 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	let checklistClasses: string[] = [];
 
 	pi.registerFlag("pired-profile", { description: "pired profile: review | recon | pentest", type: "string", default: "review" });
+	// The panel is the operator's view of the ledger, so it is on by default:
+	// state you have to summon is state you check less often than you should.
+	// `--pired-panel off` (or `pired --no-panel`) starts without it, and `/panel`
+	// still toggles it either way.
+	pi.registerFlag("pired-panel", { description: "show the engagement panel on start: on | off", type: "string", default: "on" });
 	registerPiredProviders(pi);
 
 	// Contribute pired's bundled methodology skills to pi's resource loader. pi
@@ -270,10 +275,10 @@ export default function piredExtension(pi: ExtensionAPI): void {
 							width: w,
 							maxLines: 60,
 							frame: true,
-							// The panel opens over the transcript, so it owes the operator an
-							// exit. The shortcut, not the command, because it is the one that
-							// works without leaving the editor.
-							hint: "alt+p to hide",
+							// The panel opens over the transcript — and now does so without
+							// being asked — so it owes the operator an exit that works on the
+							// machine they are reading it on. See dismissHint.
+							hint: dismissHint(process.platform),
 							ink: (tone, text) => theme.fg(PANEL_TONE_COLOR[tone], text),
 							measure: visibleWidth,
 							truncate: (x, ww) => truncateToWidth(x, ww, theme.fg("dim", "…")),
@@ -658,6 +663,16 @@ export default function piredExtension(pi: ExtensionAPI): void {
 
 		applyUiPolish(ctx);
 		await refreshStatus(ctx);
+
+		// Open the panel unless asked not to. It goes up after refreshStatus so it
+		// has real numbers on its first frame rather than flashing an empty shell,
+		// and it is guarded like every other UI call: a host without ui.custom
+		// simply starts without a panel.
+		if (ctx.mode === "tui" && String(pi.getFlag("pired-panel") ?? "on").toLowerCase() !== "off") {
+			try {
+				await openInlineRail(ctx);
+			} catch {}
+		}
 	});
 
 	// Chain politely: pi hands us the fully-assembled base prompt (its own agent

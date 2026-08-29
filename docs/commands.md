@@ -6,7 +6,7 @@ Everything pired adds to pi. pi's own commands (`/model`, `/login`, `/reload`, s
 
 | Command | Does |
 |---|---|
-| `/panel` | Toggle the [engagement panel](panel.md). |
+| `/panel` | Toggle the [engagement panel](panel.md). It is shown by default. |
 | `/panel <mode>` | Open it on a view: `state`, `coverage`, `findings`, `blockers`. |
 | `/panel next` | Cycle views. |
 | `/panel off` | Close it. |
@@ -23,7 +23,20 @@ Everything pired adds to pi. pi's own commands (`/model`, `/login`, `/reload`, s
 
 `alt+p` rather than a `ctrl+` chord because every `ctrl+letter` is already taken by pi or readline — `ctrl+g` was registered and silently skipped as a conflict.
 
-Rebind it like any pi keybinding, in `~/.pi/agent/keybindings.json`, then `/reload`.
+### On macOS, `alt+p` may not reach pired
+
+Terminal.app and iTerm2 send **Option+P as `π`** by default, not as Meta. The keypress never becomes `alt+p`, so the shortcut does nothing and a `π` lands in your prompt.
+
+Two ways out, and you do not need either:
+
+- **`/panel`** works on every platform and every terminal. That is why the panel's own hint reads `/panel to hide` on macOS and `alt+p to hide` elsewhere — the instruction on screen is always one that works on the machine reading it.
+- **Enable Option as Meta**, if you want the shortcut:
+  - *Terminal.app* — Settings → Profiles → Keyboard → **Use Option as Meta Key**.
+  - *iTerm2* — Settings → Profiles → Keys → Left Option key → **Esc+**.
+  - *Ghostty* — `macos-option-as-alt = true`.
+  - *WezTerm* — `send_composed_key_when_left_alt_is_pressed = false`.
+
+Extension shortcuts are registered by literal key, not as named keybinding actions, so `alt+p` is **not** rebindable through `~/.pi/agent/keybindings.json`. Use `/panel` where the shortcut does not reach you.
 
 ## The `pired` launcher
 
@@ -32,7 +45,7 @@ Rebind it like any pi keybinding, in `~/.pi/agent/keybindings.json`, then `/relo
 ```bash
 pired [--profile review|recon|pentest] [--provider NAME] [--model ID]
       [--target DIR] [--thinking off|low|medium|high|max] [--no-theme]
-      [--prompt "one-shot"] [-- <extra pi args>]
+      [--no-panel] [--prompt "one-shot"] [-- <extra pi args>]
 ```
 
 | Flag | Default | Meaning |
@@ -43,6 +56,7 @@ pired [--profile review|recon|pentest] [--provider NAME] [--model ID]
 | `--target` | `.` | Directory to run in — the engagement's working directory. |
 | `--thinking` | `high` | Reasoning depth. |
 | `--no-theme` | — | Keep your own pi theme instead of pired's. |
+| `--no-panel` | — | Start without the engagement panel (it is shown by default). |
 | `--prompt` | — | One-shot prompt (pi's `-p`), for scripted runs. |
 | `-- …` | — | Everything after `--` is passed to pi verbatim. |
 
@@ -50,6 +64,7 @@ The launcher always passes `--approve`. To run pired without it, invoke pi direc
 
 ```bash
 pi -e /path/to/pired/extensions/pired.ts --pired-profile pentest
+pi -e /path/to/pired/extensions/pired.ts --pired-panel off   # what --no-panel maps to
 ```
 
 ## `pired-state`
@@ -72,6 +87,8 @@ Defaults to the most recently modified engagement under `~/.pired/engagements/`.
 | `PIRED_RAIL_HEIGHT` | `50%` | Inline rail height: `N` rows or `N%`. Invalid values fall back to `50%`. |
 | `PI_BIN` | `pi` | The pi binary the `pired` launcher spawns. |
 | `TMUX` | — | Set by tmux; `/panel tmux` requires it. |
+
+The panel's start-up visibility is a flag rather than an environment variable: `--pired-panel on|off`, or `pired --no-panel`.
 
 Installer variables are in [Quickstart](quickstart.md#install).
 

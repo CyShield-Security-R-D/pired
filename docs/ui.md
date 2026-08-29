@@ -65,7 +65,7 @@ Other extensions' statuses are not swallowed: they are carried on a second line,
 
 ## The engagement panel
 
-`/panel`, or `alt+p`, opens a side rail showing the whole ledger: coverage, scope, surface, hypotheses, findings, and anything blocked.
+**Shown by default.** A side rail with the whole ledger: coverage, scope, surface, hypotheses, findings, and anything blocked. State you have to summon is state you check less often than you should, so it is up from the first frame. `/panel` toggles it, `alt+p` does the same without leaving the editor, and `pired --no-panel` starts without it.
 
 ```
 ╭─ ⦿ acme-webapp ──────────────────────────────────────╮
@@ -102,7 +102,9 @@ Other extensions' statuses are not swallowed: they are carried on a second line,
 ╰──────────────────────────────────────────────────────╯
 ```
 
-It is anchored top-right and capped at half the screen height, so it covers older, already-read transcript rather than the live region you are actually reading. It never takes the keyboard. The dim `alt+p to hide` line is reserved before the sections are laid out, so it survives even when the panel is full — the moment you most want to dismiss a panel is the moment it is most in the way.
+It is anchored top-right and capped at half the screen height, so it covers older, already-read transcript rather than the live region you are actually reading. It never takes the keyboard.
+
+The dim hint on the last row is reserved before the sections are laid out, so it survives even when the panel is full — the moment you most want to dismiss a panel is the moment it is most in the way. It is also **platform-aware**: `alt+p to hide` where the terminal sends Meta, and `/panel to hide` on macOS, where Option+P types `π` instead unless the profile is configured otherwise. A panel shown without being asked for must name an exit that works on the machine reading it. See [On macOS, `alt+p` may not reach pired](commands.md#on-macos-altp-may-not-reach-pired).
 
 Full reference, including the other two placements and rendering it outside the TUI: **[The engagement panel](panel.md)**.
 

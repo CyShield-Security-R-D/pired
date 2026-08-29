@@ -24,6 +24,20 @@
 import type { Severity } from "./ontology.ts";
 
 export const PANEL_MODES = ["state", "coverage", "findings", "blockers"] as const;
+
+/**
+ * How to tell the operator to dismiss the panel, for a given `process.platform`.
+ *
+ * A panel shown without being asked for must name a way out that actually works
+ * on the machine reading it. On macOS it usually is not the shortcut: Terminal
+ * and iTerm send Option+P as `π` unless the profile is set to treat Option as
+ * Meta, so `alt+p` is advice that silently types a character instead. The slash
+ * command works on every platform and every terminal, so that is what a Mac is
+ * told. The shortcut still fires wherever the terminal does send Meta.
+ */
+export function dismissHint(platform: string): string {
+	return platform === "darwin" ? "/panel to hide" : "alt+p to hide";
+}
 export type PanelMode = (typeof PANEL_MODES)[number];
 
 export type PanelTone = "title" | "label" | "muted" | "accent" | "good" | "warn" | "bad";

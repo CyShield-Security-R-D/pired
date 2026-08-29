@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { renderPanel, type PanelData, type PanelMode, type PanelTone } from "./panel.ts";
+import { dismissHint, renderPanel, type PanelData, type PanelMode, type PanelTone } from "./panel.ts";
 
 const ink = (_t: PanelTone, s: string): string => s; // colourless stand-in
 const measure = (s: string): number => s.length;
@@ -138,5 +138,24 @@ describe("dismiss hint", () => {
 
 	it("is dropped, not squeezed, when there is no room for content beside it", () => {
 		expect(hinted(54, 4).some((l) => l.includes("alt+p"))).toBe(false);
+	});
+});
+
+describe("dismissHint", () => {
+	it("names the shortcut where the terminal sends Meta", () => {
+		expect(dismissHint("linux")).toBe("alt+p to hide");
+		expect(dismissHint("win32")).toBe("alt+p to hide");
+	});
+
+	it("names the command on macOS, where Option+P types π instead", () => {
+		expect(dismissHint("darwin")).toBe("/panel to hide");
+	});
+
+	it("never suggests a key the reader cannot press", () => {
+		// The panel is shown by default, so this string is the only exit most
+		// operators will ever read. It must be actionable on every platform.
+		for (const p of ["darwin", "linux", "win32", "freebsd"]) {
+			expect(dismissHint(p)).toMatch(/^(alt\+p|\/panel) to hide$/);
+		}
 	});
 });

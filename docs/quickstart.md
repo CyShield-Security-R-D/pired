@@ -81,9 +81,11 @@ audit ./src for injection and auth bugs
 
 While it works, three things are worth watching:
 
+- The **[engagement panel](panel.md)**, top-right and up by default — the whole ledger, read from disk rather than from anything the model says. `/panel` (or `alt+p`) toggles it; `pired --no-panel` starts without it.
 - The **status line** carries findings by severity, coverage, and open blockers, live.
-- **`alt+p`** opens the [engagement panel](panel.md) — the whole ledger, from disk.
 - **`/coverage`** opens the matrix: which vulnerability class has been settled against which piece of surface.
+
+> On macOS, Option+P types `π` rather than reaching pired, so the panel tells you `/panel to hide` there instead of naming the shortcut. Both do the same thing. [Details](commands.md#on-macos-altp-may-not-reach-pired).
 
 When you want the report:
 

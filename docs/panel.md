@@ -4,22 +4,35 @@ The panel is pired's view of the ledger — coverage, scope, surface, hypotheses
 
 It exists because the alternative is worse. Without it, the only way to see coverage is to ask the model to run `recall gaps` and to believe the answer. The ledger is the operator's artifact; it should not be reachable only through the thing it is meant to keep honest.
 
+**It is shown by default** — state you have to summon is state you check less often than you should.
+
 ```
 /panel          toggle it
-alt+p           the same, without leaving the editor
+alt+p           the same, without leaving the editor (see the macOS note below)
 /panel coverage jump straight to a view
 /panel next     cycle views
 /panel off      close it
+pired --no-panel  start without it
 ```
 
 ## Contents
 
+- [Turning it off](#turning-it-off)
 - [Placements](#placements)
 - [Modes](#modes)
 - [Sections](#sections)
 - [Sizing](#sizing)
 - [Outside the TUI: `pired-state`](#outside-the-tui-pired-state)
 - [Where the data comes from](#where-the-data-comes-from)
+
+## Turning it off
+
+```bash
+pired --no-panel                      # this session
+pi -e …/pired.ts --pired-panel off    # invoking pi directly
+```
+
+`/panel` closes it for the session too, and it stays closed until you ask for it again.
 
 ## Placements
 
@@ -33,7 +46,16 @@ It floats over the transcript rather than reflowing it — pi's layout root belo
 
 It is a view, not a prompt: it is created non-capturing and immediately unfocused, so it never takes a keystroke meant for the agent.
 
-The frame carries the engagement name in its top edge, tmux-style, and a dim `alt+p to hide` on the last row. That hint's row is reserved *before* the sections are laid out, so it cannot be squeezed out by a full panel — which is exactly when you would want it.
+The frame carries the engagement name in its top edge, tmux-style, and a dim dismiss hint on the last row. That hint's row is reserved *before* the sections are laid out, so it cannot be squeezed out by a full panel — which is exactly when you would want it.
+
+### The hint is platform-aware
+
+| Platform | Hint |
+|---|---|
+| macOS | `/panel to hide` |
+| everything else | `alt+p to hide` |
+
+Terminal.app and iTerm2 send **Option+P as `π`**, not as Meta, so on a default Mac the shortcut never arrives and pressing it types a character into your prompt. A panel that appears without being asked for must name an exit that actually works on the machine reading it, so a Mac is told the command instead. The shortcut still fires wherever the terminal does send Meta — including on a Mac configured for it. See [Commands and keys](commands.md#on-macos-altp-may-not-reach-pired).
 
 ### The tmux pane
 
