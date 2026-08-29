@@ -18,7 +18,7 @@
 
 import { execFile } from "node:child_process";
 import { readFile, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { promisify } from "node:util";
 import { dedupe, fromLedger, scoreFindings } from "../dvbank/score.ts";
 
@@ -76,7 +76,12 @@ const rows: Row[] = [];
 process.stderr.write(`⦿ corpus scan · ${targets.length} target(s) · ${RUN_ID}\n\n`);
 
 const jobs = targets.map((m) => async (): Promise<void> => {
-	const name = `corpus-${RUN_ID}-${m.id}`.replace(/[^\w.-]/g, "_");
+	// pired derives the engagement name from the TARGET DIRECTORY'S BASENAME, not
+	// from anything the caller passes. Inventing a name here meant the runner
+	// cleared one directory, pired wrote to another, and every scan read findings
+	// from a path that never existed — reporting 0 found for runs that had
+	// actually worked. Follow pired's own rule instead of assuming.
+	const name = basename(m.target);
 	const engagementDir = join(process.env.HOME ?? "", ".pired", "engagements", name);
 	await rm(engagementDir, { recursive: true, force: true });
 	await pretrust(m.target);
@@ -88,17 +93,28 @@ const jobs = targets.map((m) => async (): Promise<void> => {
 			PIRED, "--profile", "review", "--provider", arg("provider", "openrouter"),
 			"--model", arg("model", "qwen/qwen3.8-27b"),
 			"--no-theme", "--target", m.target, "--prompt", PROMPT,
-		], { timeout: Number(arg("timeout", "1800000")), maxBuffer: 1 << 26, cwd: m.target });
+		], { timeout: Number(arg("timeout", "1800000")), maxBuffer: 512 * 1024 * 1024, cwd: m.target });
 		pending.child.stdin?.end();
 		await pending;
 	} catch (err) {
-		// A failure must never be reported as a measured zero.
+		// A failure must never be reported as a measured zero — and the message has
+		// to name the cause. An exec error's own message is just the command line,
+		// so the child's stderr comes first; `killed` covers both a timeout and a
+		// maxBuffer overrun, which are different problems and must not read alike.
 		ok = false;
-		const e = err as { stderr?: string; message?: string; killed?: boolean };
-		error = (e.killed ? "timeout: " : "") + String(e.stderr || e.message || "").slice(0, 140).replace(/\s+/g, " ");
+		const e = err as { stderr?: string; message?: string; killed?: boolean; code?: string };
+		const stderr = String(e.stderr ?? "").trim();
+		const msg = String(e.message ?? "").replace(/^Command failed:.*?(\n|$)/s, "").trim();
+		const why = stderr || msg || String(e.code ?? "unknown");
+		const kind = e.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER"
+			? "output exceeded maxBuffer"
+			: e.killed
+				? `killed (timeout ${Number(arg("timeout", "1800000")) / 1000}s or buffer limit)`
+				: "exited non-zero";
+		error = `${kind}: ${why.slice(0, 260).replace(/\s+/g, " ")}`;
 	}
 	const findings = dedupe(await fromLedger(engagementDir));
-	const score = await scoreFindings(findings, join(corpusDir, `${name}.report.json`), m.truth);
+	const score = await scoreFindings(findings, join(corpusDir, `${name}-${RUN_ID}.report.json`), m.truth);
 	rows.push({
 		...m, recall: score.recall ?? 0, precision: score.precision ?? 0,
 		found: score.true_positives ?? 0, reported: findings.length,
