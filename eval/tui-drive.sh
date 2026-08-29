@@ -18,6 +18,7 @@ SESSION="${2:-pired}"
 REPO=/home/mamgad/pired
 RESULTS=/tmp/pired-tui-results.txt
 QUIET_S="${QUIET_S:-600}"     # 10 min of no ledger writes = turn finished
+GRACE_S="${GRACE_S:-3600}"    # a run that writes nothing at all in an hour never got going
 MAXWAIT_S="${MAXWAIT_S:-14400}"
 
 PROMPT='Perform a security review of this codebase. Record the surface you find, record hypotheses and their outcomes as you settle them, and record confirmed issues as findings with cwe, severity and the exact file:line of the vulnerable sink.'
@@ -85,12 +86,23 @@ for T in "${TARGETS[@]}"; do
   fi
 
   # Wait for the ledger to go quiet — that is the turn finishing.
-  start=$(date +%s); last_change=$start; sig=""
+  #
+  # The quiet timer must not start until the ledger has been written at least
+  # once. Started at launch, it expires while the agent is still reading and the
+  # workspace gets graded empty: two targets scored 0/N here while pired was
+  # visibly still working on them. A run that never writes anything is not a
+  # review that found nothing, and must not be recorded as one.
+  start=$(date +%s); last_change=""; sig=""
   while true; do
     now=$(date +%s)
     cur="$(cat "$d"/*.jsonl 2>/dev/null | wc -l)"
-    [ "$cur" != "$sig" ] && { sig="$cur"; last_change=$now; }
-    [ $(( now - last_change )) -ge "$QUIET_S" ] && break
+    if [ "$cur" != "$sig" ]; then sig="$cur"; last_change=$now; fi
+    if [ -n "$last_change" ] && [ "$cur" != "0" ] && [ $(( now - last_change )) -ge "$QUIET_S" ]; then break; fi
+    if [ $(( now - start )) -ge "$GRACE_S" ] && [ "$cur" = "0" ]; then
+      echo "$(basename "$T")  FAILED — no ledger write in $((GRACE_S/60))m" >> "$RESULTS"
+      pgrep -x pi 2>/dev/null | while read -r q; do case "$(readlink /proc/$q/cwd 2>/dev/null)" in /tmp/corpus*) kill -9 "$q" 2>/dev/null;; esac; done
+      continue 2
+    fi
     [ $(( now - start )) -ge "$MAXWAIT_S" ] && break
     pgrep -x pi >/dev/null 2>&1 || break
     sleep 20

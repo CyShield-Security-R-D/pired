@@ -32,6 +32,7 @@ import { computeCoverageView, computeEngagementStats, coveragePercent, type Enga
 import { layoutStatusLine, type Segment } from "../core/statusline.ts";
 import { createCoreTools } from "../core/tools.ts";
 import { Workspace } from "../core/workspace.ts";
+import { execFile } from "node:child_process";
 import { makeHostServices } from "./lib/host.ts";
 import { registerPiredProviders } from "./lib/providers.ts";
 import { toPiTool } from "./lib/tools.ts";
@@ -208,6 +209,41 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	let panelOpen = false;
 	let panelMode: PanelMode = "state";
 	let panelData: PanelData | undefined;
+
+	/**
+	 * When pired runs inside tmux, `/panel` opens a real full-height side rail
+	 * rather than the footer strip. pi exposes only setHeader/setFooter, so a
+	 * side panel cannot live inside the TUI — but the terminal multiplexer can
+	 * provide one, and the rail renders the same panel from the same state via
+	 * bin/pired-state.mjs. Outside tmux the footer variant is the fallback.
+	 */
+	let railPane: string | undefined;
+	const inTmux = (): boolean => Boolean(process.env.TMUX);
+
+	const tmuxCmd = (args: string[]): Promise<string> =>
+		new Promise((resolve) => {
+			execFile("tmux", args, { timeout: 5000 }, (err, stdout) => resolve(err ? "" : String(stdout).trim()));
+		});
+
+	const openRail = async (mode: PanelMode): Promise<boolean> => {
+		const script = new URL("../bin/pired-state.mjs", import.meta.url).pathname;
+		const width = Number(process.env.PIRED_RAIL_WIDTH ?? 64);
+		// -d keeps focus in the TUI; -P -F prints the new pane id so it can be
+		// closed again on toggle.
+		const id = await tmuxCmd([
+			"split-window", "-h", "-d", "-P", "-F", "#{pane_id}", "-l", String(width),
+			`node --experimental-strip-types ${script} --watch --every 5 --mode ${mode} --width ${width - 2} --lines 60`,
+		]);
+		if (!id) return false;
+		railPane = id;
+		return true;
+	};
+
+	const closeRail = async (): Promise<void> => {
+		if (!railPane) return;
+		await tmuxCmd(["kill-pane", "-t", railPane]);
+		railPane = undefined;
+	};
 
 	const refreshStatus = async (ctx: ExtensionContext): Promise<void> => {
 		if (!workspace) return;
@@ -506,6 +542,30 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		description: `Toggle the engagement panel (${PANEL_MODES.join(" | ")})`,
 		handler: async (args, ctx) => {
 			const arg = (args ?? "").trim().toLowerCase();
+			// Inside tmux the rail is the panel; the footer strip is the fallback.
+			const wantRail = inTmux() && arg !== "footer";
+			if (wantRail) {
+				if (arg === "off" || (!arg && railPane)) {
+					await closeRail();
+					ctx.ui.notify("pired: panel hidden", "info");
+					return;
+				}
+				const mode: PanelMode = (PANEL_MODES as readonly string[]).includes(arg)
+					? (arg as PanelMode)
+					: arg === "next"
+						? (PANEL_MODES[(PANEL_MODES.indexOf(panelMode) + 1) % PANEL_MODES.length] as PanelMode)
+						: panelMode;
+				panelMode = mode;
+				await closeRail();
+				if (await openRail(mode)) {
+					ctx.ui.notify(`pired: side panel · ${mode}`, "info");
+				} else {
+					ctx.ui.notify("pired: could not open a tmux pane — showing the footer panel instead", "warning");
+					panelOpen = true;
+				}
+				return;
+			}
+
 			if (arg === "off") {
 				panelOpen = false;
 			} else if (arg === "next") {
