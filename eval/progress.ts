@@ -68,7 +68,10 @@ let idleAnnounced = new Set<string>();
 for (;;) {
 	let dirs: string[] = [];
 	try {
-		dirs = (await readdir(ENGAGEMENTS)).filter((d) => (match ? d.includes(match) : true));
+		// Regex, not substring: a corpus spans several advisory prefixes and an
+		// unfiltered watch drowns the channel in every historical engagement.
+		const re = match ? new RegExp(match) : undefined;
+		dirs = (await readdir(ENGAGEMENTS)).filter((d) => (re ? re.test(d) : true));
 	} catch { /* no engagements yet */ }
 
 	for (const d of dirs) {
