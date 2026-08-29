@@ -68,7 +68,9 @@ Measured against **real CVEs in real software** — 17 targets built from mainta
 
 **Any claim built on the teaching-app number overstates real-world capability by about 2×**, for both harnesses equally. That gap is the single most important calibration in this project.
 
-The ranges are not decoration. Two pired runs over the *same* targets with the *same* harness scored 0.304 and 0.250, agreeing on only 3 of 8 ever-hit targets — **run-to-run variance exceeds the gap between harnesses**, so this corpus cannot say which is better at one pass per target, and we do not claim it does. Pooling all passes reaches 10 of 17 targets, which says more passes beat picking a winner. See [`research/07`](./research/07-corpus-2026-08.md).
+The ranges are not decoration. Run pired three times over the same targets and it changes its answer on **half of them**; run codex three times and it reproduces on **5 of 6**. Recall differences of a few points sit inside pired's own run-to-run spread, so we do not claim a ranking.
+
+What three passes each *did* settle is more useful: the two harnesses have **reproducible blind spots in opposite directions** — one jinja sandbox breakout that pired finds 3/3 and codex never finds, and another that codex finds 3/3 and pired found once. They are complements, not substitutes. And pired's consistency gap is now a measured defect rather than a suspicion. See [`research/07`](./research/07-corpus-2026-08.md).
 
 Full methodology, per-category breakdown, exact token/cost accounting, and threats to validity: **[`research/`](./research/)**.
 

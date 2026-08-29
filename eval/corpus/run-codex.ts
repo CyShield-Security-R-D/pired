@@ -73,7 +73,10 @@ const SCHEMA = {
 const corpusDir = arg("corpus", "/tmp/corpus");
 const manifest = JSON.parse(await readFile(join(corpusDir, "manifest.json"), "utf8")) as Entry[];
 const only = arg("only");
-const targets = only ? manifest.filter((m) => m.id.includes(only) || m.package.includes(only)) : manifest;
+// Comma-separated, matching corpus/run.ts, so both arms can be pinned to the
+// same subset across repeated passes.
+const wanted = only.split(",").map((x) => x.trim()).filter(Boolean);
+const targets = wanted.length ? manifest.filter((m) => wanted.some((w) => m.id.includes(w) || m.package.includes(w))) : manifest;
 
 const workDir = arg("work", "/tmp/corpus-codex");
 await mkdir(workDir, { recursive: true });

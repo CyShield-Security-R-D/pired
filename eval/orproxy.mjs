@@ -118,7 +118,7 @@ const server = createServer((req, res) => {
 		// that into an error the runner can see and report as a failure.
 		const upstream = await fetch("https://openrouter.ai/api/v1/chat/completions", {
 			method: "POST",
-			signal: AbortSignal.timeout(Number(arg("upstream-timeout", "300")) * 1000),
+			signal: AbortSignal.timeout(Number(arg("upstream-timeout", "900")) * 1000),
 			headers: {
 				authorization: `Bearer ${KEY}`,
 				"content-type": "application/json",
@@ -159,11 +159,19 @@ const server = createServer((req, res) => {
 		const reader = upstream.body.getReader();
 		const dec = new TextDecoder();
 		let tail = "";
-		for (;;) {
-			const { done, value } = await reader.read();
-			if (done) break;
-			res.write(value);
-			tail = (tail + dec.decode(value, { stream: true })).slice(-16384);
+		try {
+			for (;;) {
+				const { done, value } = await reader.read();
+				if (done) break;
+				res.write(value);
+				tail = (tail + dec.decode(value, { stream: true })).slice(-16384);
+			}
+		} catch (e) {
+			// AbortSignal.timeout aborts the whole fetch, body included, so a long
+			// stream trips it mid-read. Unhandled, that rejection is an uncaught
+			// exception that kills the proxy and every agent behind it — which is
+			// how a guard against hangs became a worse outage than the hang.
+			process.stderr.write(`orproxy: stream ended early (${e?.name ?? e}) — partial response forwarded\n`);
 		}
 		res.end();
 
@@ -188,6 +196,15 @@ const server = createServer((req, res) => {
 			}
 		}
 	});
+});
+
+// Last line of defence: a metering proxy that dies takes the whole run with it,
+// so no single request may ever be fatal.
+process.on("unhandledRejection", (e) => {
+	process.stderr.write(`orproxy: unhandled rejection (${e?.name ?? e}) — continuing\n`);
+});
+process.on("uncaughtException", (e) => {
+	process.stderr.write(`orproxy: uncaught (${e?.name ?? e}) — continuing\n`);
 });
 
 server.listen(PORT, "127.0.0.1", () => {
