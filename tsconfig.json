@@ -17,6 +17,7 @@
   },
   "include": [
     "core/**/*.ts",
-    "extensions/**/*.ts"
+    "extensions/**/*.ts",
+    "eval/**/*.ts"
   ]
 }
