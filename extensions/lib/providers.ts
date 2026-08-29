@@ -3,9 +3,9 @@
  * ~/.pired/models.json into pi, so they appear in pi's own /model picker.
  */
 
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 interface LocalModelDef {
@@ -51,6 +51,10 @@ export function registerPiredProviders(pi: ExtensionAPI, path = join(homedir(), 
 		return;
 	}
 
+	// Make the same providers resolvable to processes that never load this
+	// extension — notably pi-subagents' async children. See mirrorProvidersToPi.
+	mirrorProvidersToPi(configs);
+
 	for (const cfg of configs) {
 		if (!cfg.id || !cfg.baseUrl) continue;
 		pi.registerProvider(cfg.id, {
@@ -73,5 +77,65 @@ export function registerPiredProviders(pi: ExtensionAPI, path = join(homedir(), 
 				...(m.compat ?? cfg.compat ? { compat: m.compat ?? cfg.compat } : {}),
 			})),
 		});
+	}
+}
+
+/**
+ * Mirror pired's providers into pi's own `~/.pi/agent/models.json`.
+ *
+ * `registerProvider` only exists inside the process that loaded this extension.
+ * pi-subagents spawns async children with extension bindings deliberately
+ * stripped (`omitExtensionBindingsEnv`), so a child never loads pired and never
+ * sees a provider pired registered. The child then cannot resolve its model,
+ * reports `0 turns | 0 tokens | 0 tools`, and a parent that was told to delegate
+ * and then block on the fleet waits on it forever — a silent deadlock at ~0% CPU
+ * that only an external timeout ends. Two full mlflow scans died this way.
+ *
+ * pi reads `~/.pi/agent/models.json` natively in *every* process, extension or
+ * not, so writing the same providers there makes them resolvable to children.
+ *
+ * Merges by provider id and preserves everything else in the file: a user's own
+ * entries are never touched, and a no-op change never rewrites the file.
+ */
+export function mirrorProvidersToPi(
+	configs: LocalProviderConfig[],
+	piModelsPath = join(homedir(), ".pi", "agent", "models.json"),
+): void {
+	if (configs.length === 0) return;
+	try {
+		let doc: { providers?: Record<string, unknown> } = {};
+		try {
+			doc = JSON.parse(readFileSync(piModelsPath, "utf8")) as typeof doc;
+		} catch {
+			// no file yet, or unreadable — start from empty rather than failing
+		}
+		const providers = { ...(doc.providers ?? {}) };
+		let changed = false;
+		for (const cfg of configs) {
+			if (!cfg.id || !cfg.baseUrl) continue;
+			const entry = {
+				baseUrl: cfg.baseUrl,
+				api: cfg.api ?? "openai-completions",
+				apiKey: cfg.apiKey ?? "local",
+				...(cfg.compat ? { compat: cfg.compat } : {}),
+				models: cfg.models.map((m) => ({
+					id: m.id,
+					...(m.reasoning !== undefined ? { reasoning: m.reasoning } : {}),
+					...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
+					...(m.maxTokens !== undefined ? { maxTokens: m.maxTokens } : {}),
+					...(m.compat ? { compat: m.compat } : {}),
+				})),
+			};
+			if (JSON.stringify(providers[cfg.id]) !== JSON.stringify(entry)) {
+				providers[cfg.id] = entry;
+				changed = true;
+			}
+		}
+		if (!changed) return;
+		mkdirSync(dirname(piModelsPath), { recursive: true });
+		writeFileSync(piModelsPath, `${JSON.stringify({ ...doc, providers }, null, 2)}\n`, { mode: 0o600 });
+	} catch {
+		// Best effort. A harness that cannot write this file still works in-process;
+		// only subagent delegation degrades, and never fatally.
 	}
 }
