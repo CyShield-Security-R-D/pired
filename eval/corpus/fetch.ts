@@ -185,28 +185,37 @@ async function stripLeakage(dir: string, adv: Advisory): Promise<number> {
 
 // --- main -------------------------------------------------------------------
 
-const pkg = arg("package");
+const packages = (arg("packages") ?? arg("package") ?? "").split(",").map((x) => x.trim()).filter(Boolean);
 const ecosystem = arg("ecosystem", "PyPI") as string;
 const since = arg("since", "2025-01-01") as string;
 const outRoot = arg("out", "/tmp/corpus") as string;
 const limit = Number(arg("limit", "3"));
 
-if (!pkg) {
+if (packages.length === 0) {
 	process.stderr.write(
-		"usage: fetch.ts --package <name> [--ecosystem PyPI|npm|Go] [--since YYYY-MM-DD] [--limit N] [--out DIR]\n",
+		"usage: fetch.ts --packages <a,b,c> [--ecosystem PyPI|npm|Go] [--since YYYY-MM-DD] [--limit N per package] [--out DIR]\n",
 	);
 	process.exit(2);
 }
 
-const advisories = (await osvQuery(pkg, ecosystem))
-	.filter((a) => (a.published ?? "") >= since)
-	.filter((a) => (a.references ?? []).some((r) => COMMIT_RE.test(r.url)))
-	.sort((a, b) => (b.published ?? "").localeCompare(a.published ?? ""));
-
-process.stdout.write(`⦿ corpus · ${ecosystem}/${pkg} · ${advisories.length} advisories since ${since} with a fix commit\n\n`);
-
 await mkdir(outRoot, { recursive: true });
 let built = 0;
+const manifest: Array<{ id: string; package: string; ecosystem: string; published?: string; repo: string; sha: string; target: string; truth: string; entries: number }> = [];
+
+process.stdout.write(`⦿ corpus · ${ecosystem} · ${packages.length} package(s) · advisories since ${since}\n\n`);
+
+for (const pkg of packages) {
+let advisories: Advisory[] = [];
+try {
+	advisories = (await osvQuery(pkg, ecosystem))
+		.filter((a) => (a.published ?? "") >= since)
+		.filter((a) => (a.references ?? []).some((r) => COMMIT_RE.test(r.url)))
+		.sort((a, b) => (b.published ?? "").localeCompare(a.published ?? ""));
+} catch (err) {
+	process.stdout.write(`${pkg}: OSV query failed — ${String((err as Error).message).slice(0, 80)}\n`);
+	continue;
+}
+process.stdout.write(`${pkg} — ${advisories.length} candidate(s)\n`);
 
 for (const adv of advisories.slice(0, limit)) {
 	const ref = (adv.references ?? []).map((r) => COMMIT_RE.exec(r.url)).find(Boolean);
@@ -237,6 +246,10 @@ for (const adv of advisories.slice(0, limit)) {
 		await rm(workRepo, { recursive: true, force: true });
 
 		await writeFile(join(outRoot, `${slug}.truth.json`), `${JSON.stringify(key, null, 2)}\n`);
+		manifest.push({
+			id: adv.id, package: pkg, ecosystem, published: adv.published?.slice(0, 10),
+			repo: `${owner}/${repo}`, sha, target, truth: join(outRoot, `${slug}.truth.json`), entries: key.length,
+		});
 		built += 1;
 		process.stdout.write(
 			`  ${adv.id}  ${adv.published?.slice(0, 10)}  ${owner}/${repo}@${sha.slice(0, 8)}  →  ${key.length} truth entr${key.length === 1 ? "y" : "ies"} in ${new Set(key.map((k) => k.file)).size} file(s), ${removed} leak file(s) stripped\n`,
@@ -247,4 +260,7 @@ for (const adv of advisories.slice(0, limit)) {
 	}
 }
 
-process.stdout.write(`\n${built} target(s) under ${outRoot}\n`);
+}
+
+await writeFile(join(outRoot, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
+process.stdout.write(`\n${built} target(s) under ${outRoot} · manifest.json lists them\n`);

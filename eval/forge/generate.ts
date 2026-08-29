@@ -171,7 +171,12 @@ export function generate(spec: ForgeSpec): ForgeTarget {
 
 	for (const route of routes) {
 		const available = pack.filter((t) => !(t.class === "xss" && route.jsonOnly));
-		const activeCount = rng() < 0.5 ? 1 : 2;
+		// One site per handler. Two site bodies concatenated put the second after
+		// the first's `return`, planting a "vulnerable" cell in unreachable code —
+		// a key that is confidently wrong, which is the exact failure mode that
+		// makes generated corpora untrustworthy. A route doing one thing is also
+		// what real handlers look like.
+		const activeCount = 1;
 		const active: VulnTemplate[] = [];
 		while (active.length < Math.min(activeCount, available.length)) {
 			const t = pick(rng, available);

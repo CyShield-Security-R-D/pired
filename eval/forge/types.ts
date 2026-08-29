@@ -1,6 +1,26 @@
 /**
  * Forge — contamination-free targets, generated at evaluation time.
  *
+ * SCOPE — read this before using a Forge number for anything.
+ *
+ * Forge is a **plumbing fixture, not a capability benchmark**. Use it where
+ * exact, cheap, controllable ground truth is what matters: does the grader
+ * classify each outcome correctly, does coverage populate, does the router
+ * route, does a metric survive a refactor. Never use it to say how good a
+ * harness is at finding real bugs.
+ *
+ * The reason is not squeamishness about synthetic data, it is a defect this
+ * generator actually shipped: two sites rendered into one handler placed the
+ * second after the first's `return`, so a cell marked "vulnerable" sat in
+ * unreachable code. The key was wrong, and nothing downstream could tell. That
+ * is the failure mode of every generated corpus — the answers are only as good
+ * as the generator, and the generator is not reviewed the way a real advisory
+ * is.
+ *
+ * For capability numbers use eval/corpus (real projects at their vulnerable
+ * commit, keyed from the security patch) or DVBank. Both have ground truth a
+ * human wrote or a maintainer shipped.
+ *
  * Every run produces a tree that has never existed before, so contamination is
  * structurally impossible rather than merely audited. Ground truth is emitted by
  * construction, which makes the key exact and free.
