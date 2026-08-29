@@ -253,7 +253,19 @@ for (const adv of advisories.slice(0, limit)) {
 	const ref = (adv.references ?? []).map((r) => COMMIT_RE.exec(r.url)).find(Boolean);
 	if (!ref) continue;
 	const [, owner, repo, sha] = ref as unknown as [string, string, string, string];
-	const slug = `${pkg}-${adv.id}`.replace(/[^\w.-]/g, "_");
+	// The directory name is visible to the agent — pired derives the engagement
+	// name from it and renders it in the status line on every frame. Leaving the
+	// advisory id there told the agent a known vulnerability exists, gave it the
+	// identifier, and announced that this was an evaluation; one run reasoned
+	// exactly that out loud and switched from reviewing the code to recalling
+	// CVEs. Contents were stripped of the id from the start; the path was not.
+	//
+	// The package name stays. It cannot be hidden without mangling pyproject.toml
+	// and the source tree, and it should not be: a reviewer handed sqlparse knows
+	// it is sqlparse. That is domain knowledge, not leakage. What must not leak is
+	// that a specific bug is known to be present.
+	const tag = [...adv.id].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7).toString(36).slice(0, 6);
+	const slug = `${pkg}-${tag}`.replace(/[^\w.-]/g, "_");
 	const workRepo = join(outRoot, `${slug}.repo`);
 	const target = join(outRoot, slug);
 
