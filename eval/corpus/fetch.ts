@@ -152,7 +152,23 @@ function refineKey(entries: TruthEntry[]): TruthEntry[] {
 	return out;
 }
 
-const LEAK_NAMES = [/^\.git$/, /^CHANGELOG/i, /^CHANGES/i, /^SECURITY/i, /^NEWS/i, /^HISTORY/i];
+/**
+ * Documentation and history that would hand over the answer. Every pattern is
+ * anchored to a documentation extension (or no extension) on purpose: an
+ * earlier version matched /^SECURITY/i and deleted `src/werkzeug/security.py`
+ * — the source file holding the vulnerability the key pointed at. The target
+ * then had an unfindable truth entry and would have scored 0 recall for a
+ * reason that had nothing to do with the harness.
+ */
+const DOC_EXT = "(\\.(md|rst|txt|adoc|rdoc))?$";
+const LEAK_NAMES = [
+	/^\.git$/,
+	new RegExp(`^CHANGELOG${DOC_EXT}`, "i"),
+	new RegExp(`^CHANGES${DOC_EXT}`, "i"),
+	new RegExp(`^SECURITY${DOC_EXT}`, "i"),
+	new RegExp(`^NEWS${DOC_EXT}`, "i"),
+	new RegExp(`^HISTORY${DOC_EXT}`, "i"),
+];
 
 /** Remove the history, the changelog, and anything that names the advisory. */
 async function stripLeakage(dir: string, adv: Advisory): Promise<number> {
@@ -227,8 +243,14 @@ for (const adv of advisories.slice(0, limit)) {
 
 	try {
 		await rm(workRepo, { recursive: true, force: true });
-		await run("git", ["clone", "--quiet", `https://github.com/${owner}/${repo}.git`, workRepo], { timeout: 300_000 });
-		// The parent of the fix is the vulnerable state.
+		await mkdir(workRepo, { recursive: true });
+		// Fetch the fix commit and its parents only. A full clone of a large project
+		// is minutes and gigabytes for two commits' worth of information — mlflow
+		// timed out at 300s twice — and depth 2 is everything the key and the
+		// checkout need.
+		await run("git", ["-C", workRepo, "init", "--quiet"], { timeout: 60_000 });
+		await run("git", ["-C", workRepo, "remote", "add", "origin", `https://github.com/${owner}/${repo}.git`], { timeout: 60_000 });
+		await run("git", ["-C", workRepo, "fetch", "--quiet", "--depth", "2", "origin", sha], { timeout: 300_000 });
 		// First parent: the pre-fix mainline state, correct for merges and ordinary
 		// commits alike.
 		await run("git", ["-C", workRepo, "checkout", "--quiet", `${sha}^1`], { timeout: 120_000 });
@@ -244,6 +266,23 @@ for (const adv of advisories.slice(0, limit)) {
 		await run("cp", ["-r", workRepo, target]);
 		const removed = await stripLeakage(target, adv);
 		await rm(workRepo, { recursive: true, force: true });
+
+		// A target whose key points at a file the target does not contain is
+		// unscoreable: the entry is a guaranteed false negative and the number it
+		// produces says nothing about the harness. This caught the leak filter
+		// deleting src/werkzeug/security.py — the very file holding the bug — and
+		// it exists so that class of mistake can never enter the corpus silently.
+		const unresolved: string[] = [];
+		for (const e of key) {
+			const abs = join(target, e.file);
+			const st = await stat(abs).catch(() => undefined);
+			if (!st) unresolved.push(e.file);
+		}
+		if (unresolved.length > 0) {
+			process.stdout.write(`  ${adv.id}: REJECTED — key points at missing file(s): ${unresolved.join(", ")}\n`);
+			await rm(target, { recursive: true, force: true });
+			continue;
+		}
 
 		await writeFile(join(outRoot, `${slug}.truth.json`), `${JSON.stringify(key, null, 2)}\n`);
 		manifest.push({
