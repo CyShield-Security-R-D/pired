@@ -216,7 +216,23 @@ if (packages.length === 0) {
 
 await mkdir(outRoot, { recursive: true });
 let built = 0;
-const manifest: Array<{ id: string; package: string; ecosystem: string; published?: string; repo: string; sha: string; target: string; truth: string; entries: number }> = [];
+type ManifestEntry = { id: string; package: string; ecosystem: string; published?: string; repo: string; sha: string; target: string; truth: string; entries: number };
+
+// Merge with what is already there. Writing a fresh manifest per invocation
+// meant fetching one package silently discarded every other target's entry —
+// the corpus was still on disk, but nothing downstream could find it.
+const manifest: ManifestEntry[] = await (async () => {
+	try {
+		return JSON.parse(await readFile(join(outRoot, "manifest.json"), "utf8")) as ManifestEntry[];
+	} catch {
+		return [];
+	}
+})();
+const upsert = (e: ManifestEntry): void => {
+	const i = manifest.findIndex((m) => m.id === e.id && m.package === e.package);
+	if (i >= 0) manifest[i] = e;
+	else manifest.push(e);
+};
 
 process.stdout.write(`⦿ corpus · ${ecosystem} · ${packages.length} package(s) · advisories since ${since}\n\n`);
 
@@ -285,7 +301,7 @@ for (const adv of advisories.slice(0, limit)) {
 		}
 
 		await writeFile(join(outRoot, `${slug}.truth.json`), `${JSON.stringify(key, null, 2)}\n`);
-		manifest.push({
+		upsert({
 			id: adv.id, package: pkg, ecosystem, published: adv.published?.slice(0, 10),
 			repo: `${owner}/${repo}`, sha, target, truth: join(outRoot, `${slug}.truth.json`), entries: key.length,
 		});
