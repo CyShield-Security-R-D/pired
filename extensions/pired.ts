@@ -242,6 +242,20 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	let railHandle: { hide(): void; setHidden(h: boolean): void } | undefined;
 	let railDone: (() => void) | undefined;
 
+	/**
+	 * Overlay heights are `number | "<n>%"`, and an env var is neither until it is
+	 * checked — an unvalidated string here would be a runtime surprise in a
+	 * position where a wrong value silently mis-sizes the panel.
+	 */
+	const railHeight = (): number | `${number}%` => {
+		const raw = process.env.PIRED_RAIL_HEIGHT;
+		if (!raw) return "50%";
+		const pct = /^(\d{1,3})%$/.exec(raw);
+		if (pct) return `${Number(pct[1])}%`;
+		const rows = Number(raw);
+		return Number.isFinite(rows) && rows > 0 ? rows : "50%";
+	};
+
 	const openInlineRail = async (ctx: ExtensionContext): Promise<void> => {
 		const width = Number(process.env.PIRED_RAIL_WIDTH ?? 56);
 		void ctx.ui.custom<void>(
@@ -271,11 +285,27 @@ export default function piredExtension(pi: ExtensionAPI): void {
 			},
 			{
 				overlay: true,
+				// Top-right, not full height. The overlay paints over the transcript
+				// rather than reflowing it, so where it sits decides how much it costs
+				// you: the newest output and the editor are at the bottom, which is
+				// exactly the part you are reading. Anchoring to the top covers older,
+				// already-read lines instead.
+				//
+				// maxHeight caps it at half the screen so a long panel cannot creep
+				// down into the live region, and offsetY leaves a row of breathing
+				// space at the very top.
+				//
 				// nonCapturing is load-bearing: ui.custom shows a component WITH
 				// keyboard focus by default, so without it the rail silently swallows
 				// every keystroke and the app looks frozen. The panel is a view, not
 				// a prompt — it must never take the keyboard from the operator.
-				overlayOptions: () => ({ anchor: "right-center", width, maxHeight: "100%", nonCapturing: true }),
+				overlayOptions: () => ({
+					anchor: "top-right",
+					width,
+					maxHeight: railHeight(),
+					offsetY: 1,
+					nonCapturing: true,
+				}),
 				onHandle: (h) => {
 					railHandle = h;
 					// If the host focuses it anyway, hand the keyboard straight back.
