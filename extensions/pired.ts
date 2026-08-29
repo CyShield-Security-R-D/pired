@@ -271,9 +271,17 @@ export default function piredExtension(pi: ExtensionAPI): void {
 			},
 			{
 				overlay: true,
-				overlayOptions: () => ({ anchor: "right-center", width, maxHeight: "100%" }),
+				// nonCapturing is load-bearing: ui.custom shows a component WITH
+				// keyboard focus by default, so without it the rail silently swallows
+				// every keystroke and the app looks frozen. The panel is a view, not
+				// a prompt — it must never take the keyboard from the operator.
+				overlayOptions: () => ({ anchor: "right-center", width, maxHeight: "100%", nonCapturing: true }),
 				onHandle: (h) => {
 					railHandle = h;
+					// If the host focuses it anyway, hand the keyboard straight back.
+					try {
+						(h as { unfocus?: (o?: unknown) => void }).unfocus?.();
+					} catch {}
 				},
 			},
 		);
@@ -666,10 +674,11 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	 */
 	/**
 	 * A keypress for the panel, because a view you have to type a command for is
-	 * a view you check less often than you should. ctrl+g is unclaimed by pi's
-	 * own bindings and mnemonic enough (g for glance).
+	 * a view you check less often than you should. Every ctrl+letter is taken by
+	 * pi or readline — ctrl+g was registered and silently skipped as a conflict —
+	 * so alt+p it is, which is at least mnemonic.
 	 */
-	pi.registerShortcut("ctrl+g", {
+	pi.registerShortcut("alt+p", {
 		description: "pired: toggle the engagement panel",
 		handler: async (ctx) => {
 			await togglePanel("", ctx);

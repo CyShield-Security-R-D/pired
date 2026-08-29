@@ -35,7 +35,7 @@ describe("pired extension registration", () => {
 	it("binds a key for the panel — a view behind a typed command gets checked less", () => {
 		const { api, seen } = stubApi();
 		piredExtension(api as never);
-		expect(seen.shortcuts).toContain("ctrl+g");
+		expect(seen.shortcuts).toContain("alt+p");
 	});
 
 	it("hooks tool_execution_end, which is where blockers are noticed", () => {
