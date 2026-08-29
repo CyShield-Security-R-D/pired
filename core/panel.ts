@@ -60,6 +60,14 @@ export interface PanelOptions {
 	 * two-line strip is better off spending that space on content.
 	 */
 	frame?: boolean;
+	/**
+	 * A dim, right-aligned line at the foot of the panel telling the operator how
+	 * to dismiss it — a panel that appears uninvited should always say how to make
+	 * it go away. Its row is reserved before the sections are laid out, because
+	 * the moment you most want the hint is when the panel is full enough to be in
+	 * the way, which is exactly when a bottom-dropped line would be gone.
+	 */
+	hint?: string;
 }
 
 const BORDER = { tl: "╭", tr: "╮", bl: "╰", br: "╯", h: "─", v: "│", ml: "├", mr: "┤" } as const;
@@ -129,7 +137,10 @@ export function renderPanel(opts: PanelOptions): string[] {
 	// The border costs two columns and two rows; content is laid out inside them.
 	const framed = opts.frame === true && opts.width >= 24 && opts.maxLines >= 4;
 	const width = framed ? opts.width - 2 : opts.width;
-	const maxLines = framed ? opts.maxLines - 2 : opts.maxLines;
+	const outerLines = framed ? opts.maxLines - 2 : opts.maxLines;
+	// The hint is only worth a row if content also fits beside it.
+	const hint = opts.hint && outerLines >= 3 ? opts.hint : undefined;
+	const maxLines = outerLines - (hint ? 1 : 0);
 	if (maxLines <= 0 || width < 12) return [];
 
 	const out: string[] = [];
@@ -246,6 +257,11 @@ export function renderPanel(opts: PanelOptions): string[] {
 	if (room() > 1 && d.evidence > 0) {
 		line("");
 		line(ink("muted", `  ${d.evidence} evidence file${d.evidence === 1 ? "" : "s"}`));
+	}
+
+	if (hint) {
+		const clipped = truncate(hint, width - 2);
+		out.push(" ".repeat(Math.max(0, width - measure(clipped) - 1)) + ink("muted", clipped));
 	}
 
 	if (!framed) return out.map((l) => (l.startsWith(RULE) ? l.slice(RULE.length) : l));

@@ -50,16 +50,32 @@ The trade-off is honest: pired + a local model now leads on **recall, F1, and cr
 
 ## Install
 
-Requires [pi](https://pi.dev) (`@earendil-works/pi-coding-agent`).
+```bash
+curl -fsSL https://raw.githubusercontent.com/mamgad/pired/main/install.sh | sh
+```
+
+Installs [pi](https://pi.dev) if it is missing, installs pired, and registers the extension so a bare `pi` loads the security layer too. Needs Node.js >= 22.19. No sudo, no daemon, no state outside `~/.pi` and `~/.pired`.
 
 ```bash
-# try it in one session, no install:
-pi -e ./extensions/pired.ts --pired-profile review
-
-# install so it auto-loads everywhere:
-pi install git:github.com/mamgad/pired
-pi            # then pick a model with /model
+pired          # review the current directory
 ```
+
+<details>
+<summary>Other ways to install</summary>
+
+```bash
+# npm, directly
+npm install -g --ignore-scripts github:mamgad/pired
+pi install "$(npm root -g)/pired"        # optional: auto-load in plain `pi`
+
+# as a pi package only (no `pired` launcher)
+pi install git:github.com/mamgad/pired
+
+# one session, from a clone, installing nothing
+pi -e ./extensions/pired.ts --pired-profile review
+```
+
+</details>
 
 pired rides pi's full frontend — TUI, `/model` switching, `/login`, themes, sessions, autocomplete, MCP — and adds the security layer on top.
 
@@ -86,6 +102,42 @@ pi -e ./extensions/pired.ts --pired-profile review -p "audit ./src for injection
   ```
 
 - **Findings** — `/findings` exports a Markdown report; engagement state lives in `~/.pired/engagements/<name>/` (see [`FORMAT.md`](./FORMAT.md)).
+
+## The interface
+
+The transcript is the conversation; the ledger is the artifact. Coverage you can only learn by asking the model to `recall gaps` is coverage you will not check — so pired renders it itself, from disk. **`alt+p`** (or `/panel`) opens the engagement panel:
+
+```
+╭─ ⦿ acme-webapp ──────────────────────────────────────╮
+│  pentest · web application                           │
+│                                                      │
+├─ needs you ──────────────────────────────────────────┤
+│  ! Test the password-reset flow against live email?  │
+│                                                      │
+├─ coverage ───────────────────────────────────────────┤
+│  ███████████████░░░░░░░░░ 62%                        │
+│  105 of 170 cells · 65 gaps                          │
+│  ▲ 7  ● 98  ◐ 3  ⊘ 2                                 │
+│                                                      │
+├─ scope ──────────────────────────────────────────────┤
+│  ● authorized enforce                                │
+│  domains 1 · cidrs 1                                 │
+│                                                      │
+├─ findings ───────────────────────────────────────────┤
+│  ⬤ crit 1  ⬤ high 2  ⬤ med 3                         │
+│  ▸ SQLi in /api/transfer amount                      │
+│                                                      │
+│                                        alt+p to hide │
+╰──────────────────────────────────────────────────────╯
+```
+
+Alongside it: a status line carrying findings-by-severity, coverage and the **armed state of the scope gate**; `/coverage` for the full checklist × surface matrix; and blocker dialogs that put the agent's parked questions in front of you the moment they are recorded, so "never stall" doesn't quietly become "never finish".
+
+The panel also renders outside the TUI — `pired-state --watch` for a tmux pane, `--json` for your own status bar. Full tour: **[docs/ui.md](./docs/ui.md)**.
+
+## Documentation
+
+**[docs/](./docs/)** — [quickstart](./docs/quickstart.md) · [the interface](./docs/ui.md) · [the panel](./docs/panel.md) · [coverage](./docs/coverage.md) · [scope](./docs/scope.md) · [profiles](./docs/profiles.md) · [tools](./docs/tools.md) · [workspace](./docs/workspace.md) · [skills](./docs/skills.md) · [models](./docs/models.md) · [theme](./docs/theme.md) · [commands](./docs/commands.md) · [architecture](./docs/architecture.md) · [evaluation](./docs/evaluation.md)
 
 ## Models
 
@@ -116,12 +168,17 @@ checklist × inventory = coverage → hypotheses → findings
 A harness-agnostic **`core/`** (zero pi imports, fully unit-tested) behind a thin pi adapter, so the security logic survives a change of host.
 
 ```
-core/          security engine — no host imports, test-first (89 tests)
-  ontology · workspace · scope · redaction · coverage · tools · prompts · stats · export
+core/          security engine — no host imports, test-first (162 tests)
+  ontology · workspace · scope · redaction · coverage · tools · prompts · stats
+  export · panel · coverage-panel · statusline   (renderers are pure too)
 extensions/
-  pired.ts     the pi extension (tools, scope gate, prompt, /findings, providers)
+  pired.ts     the pi extension (tools, scope gate, prompt, UI, commands, providers)
   lib/         node host services · core->pi tool bridge · provider registration
+bin/           pired (launcher) · pired-state (the panel, outside the TUI)
 skills/  checklists/   opt-in methodology (web, api, network, code-review)
+themes/        the pired theme
+docs/          the documentation
+eval/          assay — the harness's own test instrument
 research/      the benchmark: methodology, results, data
 FORMAT.md  PLAN.md
 ```
@@ -141,7 +198,8 @@ pi install npm:pi-subagents
 Built **test-first** with vitest and fake ports (in-memory `Fs`, controllable `Clock`, deterministic `Ids`) — the entire core is exercised with no real I/O.
 
 ```bash
-npm run check      # tsc --noEmit && vitest run   (89 tests)
+npm run check      # tsc --noEmit && vitest run && assay   (162 tests, 87 probes)
+npm run assay      # the harness's own probes — see docs/evaluation.md
 ```
 
 ## Security & authorized use

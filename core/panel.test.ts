@@ -108,3 +108,35 @@ describe("framed panel", () => {
 		expect(l.every((x) => !x.startsWith("╭"))).toBe(true);
 	});
 });
+
+describe("dismiss hint", () => {
+	const hinted = (w = 54, max = 40, frame = true): string[] =>
+		renderPanel({ mode: "state", data, width: w, maxLines: max, ink, measure, truncate, frame, hint: "alt+p to hide" });
+
+	it("shows how to dismiss a panel the operator did not ask for", () => {
+		expect(hinted().some((l) => l.includes("alt+p to hide"))).toBe(true);
+	});
+
+	it("sits on the last content row, right-aligned", () => {
+		const l = hinted();
+		expect(l.at(-2)).toContain("alt+p to hide");
+		expect(l.at(-2)?.trimEnd().endsWith("│")).toBe(true);
+	});
+
+	it("survives a full panel — the hint matters most when the panel is in the way", () => {
+		for (const max of [6, 8, 12]) {
+			expect(hinted(54, max).some((l) => l.includes("alt+p to hide"))).toBe(true);
+		}
+	});
+
+	it("still fits the width and the line budget", () => {
+		for (const w of [30, 40, 54, 80]) {
+			for (const line of hinted(w)) expect(line.length).toBe(w);
+		}
+		for (const max of [6, 8, 16, 40]) expect(hinted(54, max).length).toBeLessThanOrEqual(max);
+	});
+
+	it("is dropped, not squeezed, when there is no room for content beside it", () => {
+		expect(hinted(54, 4).some((l) => l.includes("alt+p"))).toBe(false);
+	});
+});

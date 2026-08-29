@@ -270,6 +270,10 @@ export default function piredExtension(pi: ExtensionAPI): void {
 							width: w,
 							maxLines: 60,
 							frame: true,
+							// The panel opens over the transcript, so it owes the operator an
+							// exit. The shortcut, not the command, because it is the one that
+							// works without leaving the editor.
+							hint: "alt+p to hide",
 							ink: (tone, text) => theme.fg(PANEL_TONE_COLOR[tone], text),
 							measure: visibleWidth,
 							truncate: (x, ww) => truncateToWidth(x, ww, theme.fg("dim", "…")),
