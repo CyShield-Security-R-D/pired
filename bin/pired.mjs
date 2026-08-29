@@ -22,7 +22,7 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const EXT = join(ROOT, "extensions", "pired.ts");
-const THEME = join(ROOT, "themes", "fxred.json");
+const THEME = join(ROOT, "themes", "pired.json");
 
 function arg(name, def) {
 	const i = process.argv.indexOf(`--${name}`);
@@ -51,7 +51,7 @@ const piBin = process.env.PI_BIN || "pi";
 const piArgs = ["-e", EXT, "--pired-profile", profile, "--thinking", thinking, "--approve"];
 if (provider) piArgs.push("--provider", provider);
 if (model) piArgs.push("--model", model);
-if (!has("no-theme") && existsSync(THEME)) piArgs.push("--theme", THEME, "--use-theme", "fxred");
+if (!has("no-theme") && existsSync(THEME)) piArgs.push("--theme", THEME, "--use-theme", "pired");
 if (promptText) piArgs.push("-p", promptText);
 piArgs.push(...passthrough);
 

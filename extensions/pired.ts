@@ -614,11 +614,11 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		};
 
 	// One-time fx-like UI polish. All guarded: a missing/older pi API must never
-	// break pired. The `pired` launcher additionally loads the fxred theme file.
+	// break pired. The `pired` launcher additionally loads pired's own theme file.
 	const applyUiPolish = (ctx: ExtensionContext): void => {
 		if (ctx.mode !== "tui") return; // terminal-only; skip in print/rpc/json (headless) modes
 		try {
-			ctx.ui.setTheme?.("fxred"); // no-op unless the theme was loaded (e.g. by `pired run`)
+			ctx.ui.setTheme?.("pired"); // no-op unless the theme was loaded (e.g. by `pired run`)
 		} catch {}
 		try {
 			ctx.ui.setWorkingIndicator?.({ frames: spinnerFrames(ctx.ui.theme), intervalMs: SPINNER_INTERVAL_MS });
