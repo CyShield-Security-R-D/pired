@@ -217,8 +217,75 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	 * provide one, and the rail renders the same panel from the same state via
 	 * bin/pired-state.mjs. Outside tmux the footer variant is the fallback.
 	 */
+	/** Panel tones mapped onto the active theme's colour roles. */
+	const PANEL_TONE_COLOR: Record<PanelTone, Parameters<Theme["fg"]>[0]> = {
+		title: "text", label: "dim", muted: "dim", accent: "accent",
+		good: "success", warn: "warning", bad: "error",
+	};
+
 	let railPane: string | undefined;
 	const inTmux = (): boolean => Boolean(process.env.TMUX);
+
+	/**
+	 * The in-TUI side rail.
+	 *
+	 * I concluded three times that pi could not do this — first from setFooter
+	 * alone, then from WidgetPlacement being aboveEditor|belowEditor. Both were
+	 * true and neither was the whole API: ui.custom takes overlayOptions, and
+	 * OverlayAnchor includes right-center, so an overlay can be pinned to the
+	 * right edge at a fixed width for the life of the session.
+	 *
+	 * It floats over the transcript rather than reflowing it — pi's layout root
+	 * belongs to pi — but it is a real side panel, present without a multiplexer.
+	 * onHandle gives the handle used to close it again.
+	 */
+	let railHandle: { hide(): void; setHidden(h: boolean): void } | undefined;
+	let railDone: (() => void) | undefined;
+
+	const openInlineRail = async (ctx: ExtensionContext): Promise<void> => {
+		const width = Number(process.env.PIRED_RAIL_WIDTH ?? 56);
+		void ctx.ui.custom<void>(
+			(_tui, theme, _keybindings, done) => {
+				railDone = () => done();
+				return {
+					render: (w: number): string[] => {
+						if (!panelData) return [theme.fg("dim", "pired: no engagement state yet")];
+						return renderPanel({
+							mode: panelMode,
+							data: panelData,
+							width: w,
+							maxLines: 60,
+							ink: (tone, text) => theme.fg(PANEL_TONE_COLOR[tone], text),
+							measure: visibleWidth,
+							truncate: (x, ww) => truncateToWidth(x, ww, theme.fg("dim", "…")),
+						});
+					},
+					invalidate(): void {},
+					// The rail is a view, not a prompt: it must not capture the keys
+					// the operator is using to talk to the agent.
+					handleInput(): boolean {
+						return false;
+					},
+				};
+			},
+			{
+				overlay: true,
+				overlayOptions: () => ({ anchor: "right-center", width, maxHeight: "100%" }),
+				onHandle: (h) => {
+					railHandle = h;
+				},
+			},
+		);
+	};
+
+	const closeInlineRail = (): void => {
+		try {
+			railHandle?.hide();
+		} catch {}
+		railDone?.();
+		railHandle = undefined;
+		railDone = undefined;
+	};
 
 	const tmuxCmd = (args: string[]): Promise<string> =>
 		new Promise((resolve) => {
@@ -616,47 +683,48 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	const togglePanel = async (args: string, ctx: ExtensionContext): Promise<void> => {
 		{
 			const arg = (args ?? "").trim().toLowerCase();
-			// Inside tmux the rail is the panel; the footer strip is the fallback.
-			const wantRail = inTmux() && arg !== "footer";
-			if (wantRail) {
-				if (arg === "off" || (!arg && railPane)) {
-					await closeRail();
+			// Preference order: the in-TUI rail (works everywhere, no multiplexer),
+			// then a tmux pane if explicitly asked for, then the footer strip.
+			if (arg !== "footer" && arg !== "tmux") {
+				if (railHandle && (!arg || arg === "off")) {
+					closeInlineRail();
 					ctx.ui.notify("pired: panel hidden", "info");
 					return;
 				}
-				const mode: PanelMode = (PANEL_MODES as readonly string[]).includes(arg)
-					? (arg as PanelMode)
-					: arg === "next"
-						? (PANEL_MODES[(PANEL_MODES.indexOf(panelMode) + 1) % PANEL_MODES.length] as PanelMode)
-						: panelMode;
-				panelMode = mode;
-				await closeRail();
-				if (await openRail(mode)) {
-					ctx.ui.notify(`pired: side panel · ${mode}`, "info");
-				} else {
-					ctx.ui.notify("pired: could not open a tmux pane — showing the footer panel instead", "warning");
-					panelOpen = true;
+				if (arg === "next") {
+					panelMode = PANEL_MODES[(PANEL_MODES.indexOf(panelMode) + 1) % PANEL_MODES.length] as PanelMode;
+				} else if ((PANEL_MODES as readonly string[]).includes(arg)) {
+					panelMode = arg as PanelMode;
+				}
+				if (workspace && stats) panelData = await collectPanelData(workspace, scope, stats);
+				if (railHandle) closeInlineRail();
+				if (arg !== "off") {
+					await openInlineRail(ctx);
+					ctx.ui.notify(`pired: side panel · ${panelMode}`, "info");
 				}
 				return;
 			}
 
-			if (arg === "off") {
-				panelOpen = false;
-			} else if (arg === "next") {
-				panelOpen = true;
-				panelMode = PANEL_MODES[(PANEL_MODES.indexOf(panelMode) + 1) % PANEL_MODES.length] as PanelMode;
-			} else if ((PANEL_MODES as readonly string[]).includes(arg)) {
-				panelOpen = true;
-				panelMode = arg as PanelMode;
-			} else if (arg) {
-				ctx.ui.notify(`pired: unknown panel mode '${arg}' — try ${PANEL_MODES.join(", ")}, next, off`, "warning");
+			// `/panel tmux` puts the rail in a multiplexer pane instead — useful when
+			// you want it beside the TUI rather than floating over it.
+			if (arg === "tmux") {
+				if (railPane) {
+					await closeRail();
+					ctx.ui.notify("pired: tmux panel closed", "info");
+				} else if (!inTmux()) {
+					ctx.ui.notify("pired: not running inside tmux", "warning");
+				} else if (await openRail(panelMode)) {
+					ctx.ui.notify(`pired: tmux panel · ${panelMode}`, "info");
+				} else {
+					ctx.ui.notify("pired: could not open a tmux pane", "warning");
+				}
 				return;
-			} else {
-				panelOpen = !panelOpen;
 			}
+
+			// `/panel footer` is the strip — kept because it survives without a
+			// multiplexer and without stealing width from the transcript.
+			panelOpen = !panelOpen;
 			if (panelOpen && workspace && stats) {
-				// Refresh on open: the panel should never show state from the last
-				// turn just because nothing has happened since.
 				panelData = await collectPanelData(workspace, scope, stats);
 			}
 			ctx.ui.notify(panelOpen ? `pired: panel · ${panelMode}` : "pired: panel hidden", "info");
