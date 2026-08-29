@@ -41,7 +41,15 @@ function arg(name: string, def?: string): string | undefined {
 async function buildTarget(dir: string): Promise<string[]> {
 	await rm(dir, { recursive: true, force: true });
 	await mkdir(dir, { recursive: true });
-	await cp(join(DVBANK, "eval/variants/clean"), dir, { recursive: true });
+	// The mutated variant renames symbols and moves code while preserving the
+	// key's locations. Running both and differencing measures memorization
+	// directly instead of assuming it — research/04 flagged doing this for only
+	// one arm as the single most important methodological fix.
+	await cp(join(DVBANK, `eval/variants/${arg("variant", "clean")}`), dir, { recursive: true });
+	// The mutated variant ships its location manifest inside the tree. It must
+	// reach the grader, never the agent: it maps every truth entry to its new
+	// line, which is an answer key by another name.
+	await rm(join(dir, "manifest.json"), { force: true });
 	await mkdir(join(dir, "decoys"), { recursive: true });
 	for (const f of await readdir(join(DVBANK, "eval/decoys"))) {
 		if (f.endsWith(".py")) await cp(join(DVBANK, "eval/decoys", f), join(dir, "decoys", f));
@@ -106,11 +114,14 @@ async function fromLedger(engagementDir: string): Promise<Finding[]> {
 async function grade(findings: Finding[], out: string): Promise<Record<string, number>> {
 	const tmp = `${out}.findings.json`;
 	await writeFile(tmp, JSON.stringify(findings, null, 2));
+	const variant = arg("variant", "clean") as string;
+	const manifest = join(DVBANK, `eval/variants/${variant}/manifest.json`);
 	try {
 		await run("python3", [
 			join(DVBANK, "eval/graders/detection_grader.py"),
 			"--truth", join(DVBANK, "eval/ground_truth.json"),
 			"--findings", tmp, "--decoys", join(DVBANK, "eval/decoys/manifest.json"),
+			...(variant !== "clean" && existsSync(manifest) ? ["--manifest", manifest] : []),
 			"--window", "3", "--out", out,
 		], { maxBuffer: 1 << 26 });
 	} catch { /* grader prints to stdout on some paths */ }
