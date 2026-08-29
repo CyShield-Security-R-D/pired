@@ -45,7 +45,12 @@ tmux split-window -t "$SESSION:review" -h -l 62 \
 # Optional third pane: live engagement state — scope, type, coverage, surface,
 # hypotheses by outcome, findings by severity. Set PANEL=0 to omit it.
 if [ "${PANEL:-1}" = "1" ]; then
-  tmux split-window -t "$SESSION:review.1" -v -l 60% "REFRESH=5 bash $REPO/eval/panel.sh"
+  # A genuine full-height side rail: pi exposes only setHeader/setFooter, so the
+  # side panel lives at the terminal level rather than inside the TUI. It reads
+  # pired's own derivation via bin/pired-state.mjs instead of scraping the
+  # ledgers, so the panel and the TUI can never disagree.
+  tmux split-window -t "$SESSION:review.1" -v -l 62% \
+    "node --experimental-strip-types $REPO/bin/pired-state.mjs --watch --every 5 --width 60 --lines 30"
 fi
 
 for T in "${TARGETS[@]}"; do
