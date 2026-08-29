@@ -10,6 +10,21 @@ That installs [pi](https://pi.dev) if it is missing, installs pired, and registe
 
 Requires **Node.js ≥ 22.19** — pired's extension is TypeScript that pi type-strips at load.
 
+### Beta access
+
+The repository is private for now, so `curl` cannot fetch the script anonymously — the one-liner above starts working when the repo goes public. **If you have been granted repository access**, both of these work today over your GitHub SSH key:
+
+```bash
+# one command, if you already have pi
+npm install -g --ignore-scripts github:mamgad/pired
+pi install "$(npm root -g)/pired"        # so a bare `pi` loads it too
+
+# or clone — ./install.sh installs the checkout it is sitting in
+git clone git@github.com:mamgad/pired.git && cd pired && ./install.sh
+```
+
+Both authenticate with your GitHub SSH key; check it with `ssh -T git@github.com`. Over HTTPS instead, use `npm install -g git+https://github.com/mamgad/pired.git` with a credential helper or token.
+
 <details>
 <summary>Other ways to install</summary>
 

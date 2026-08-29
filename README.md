@@ -60,6 +60,21 @@ Installs [pi](https://pi.dev) if it is missing, installs pired, and registers th
 pired          # review the current directory
 ```
 
+### Beta access
+
+The repository is private for now, so the `curl` line above cannot fetch anonymously — it starts working when the repo goes public. **If you have been granted repository access**, both of these work today over your GitHub SSH key:
+
+```bash
+# one command, if you already have pi
+npm install -g --ignore-scripts github:mamgad/pired
+pi install "$(npm root -g)/pired"        # so a bare `pi` loads it too
+
+# or clone — ./install.sh installs the checkout it is sitting in
+git clone git@github.com:mamgad/pired.git && cd pired && ./install.sh
+```
+
+Both need `ssh -T git@github.com` to authenticate. Over HTTPS instead, use `npm install -g git+https://github.com/mamgad/pired.git` with a credential helper or token.
+
 <details>
 <summary>Other ways to install</summary>
 

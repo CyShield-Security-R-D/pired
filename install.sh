@@ -37,7 +37,20 @@ if [ "$NODE_MAJOR" -lt 22 ] || { [ "$NODE_MAJOR" -eq 22 ] && [ "$NODE_MINOR" -lt
 	die "node $(node -v) is too old. pired needs >= 22.19."
 fi
 
-SOURCE=${PIRED_SOURCE:-github:mamgad/pired}
+# Prefer a checkout we are sitting inside: running ./install.sh from a clone
+# should install *that* clone, not re-download one. When the script is piped from
+# curl there is no directory to find, so it falls back to the published repo.
+SELF_DIR=""
+case "${0:-}" in
+	*/*) SELF_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd) ;;
+esac
+DEFAULT_SOURCE="github:mamgad/pired"
+if [ -n "$SELF_DIR" ] && [ -f "$SELF_DIR/package.json" ] &&
+	grep -q '"name": *"pired"' "$SELF_DIR/package.json" 2>/dev/null; then
+	DEFAULT_SOURCE="$SELF_DIR"
+fi
+
+SOURCE=${PIRED_SOURCE:-$DEFAULT_SOURCE}
 NPM_ARGS="--global --ignore-scripts"
 [ -n "${NPM_PREFIX:-}" ] && NPM_ARGS="$NPM_ARGS --prefix $NPM_PREFIX"
 
@@ -51,7 +64,18 @@ fi
 # --- pired ------------------------------------------------------------------
 step "installing pired ${DIM}(${SOURCE})${OFF}"
 # shellcheck disable=SC2086
-npm install $NPM_ARGS "$SOURCE" >/dev/null || die "could not install pired from $SOURCE"
+if ! npm install $NPM_ARGS "$SOURCE" >/dev/null 2>&1; then
+	printf '%b\n' "${RED}pired:${OFF} could not install from $SOURCE" >&2
+	case "$SOURCE" in
+		github:*)
+			# A private repo 404s for an unauthenticated fetch, which npm reports as
+			# a missing package. Name the likely cause rather than the symptom.
+			say "  ${DIM}If the repository is private, clone it and run the installer from there:${OFF}"
+			say "    git clone git@github.com:mamgad/pired.git && cd pired && ./install.sh"
+			;;
+	esac
+	exit 1
+fi
 
 # --- register the extension with pi ----------------------------------------
 # Installing the binary gives you `pired`; this is what makes a bare `pi` load
