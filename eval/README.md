@@ -121,6 +121,65 @@ is an alignment problem, and must never masquerade as a capability gap. Cells ma
 carry `aliases` for honest naming differences, and `strata` labels for
 per-stratum recall, the worst-stratum floor and the spread.
 
+## Worked example: diagnosing a bimodal result
+
+The first n=5 run reported coverage with a 95% interval of [4, 80] — a mean of
+42% that described no actual run. The per-rollout values were `{0, 5, 10, 96,
+100}`: two clean clusters, nothing between.
+
+The obvious reading was a behavioural fork — some runs sweep exhaustively, some
+summarise and stop. The ledgers said otherwise. Every low run had used the
+**list form** of `record kind=hypothesis`, and every one of those had arrived as
+a JSON array *serialized into a string*:
+
+```
+[refuted] class=["xss","ssrf","ssti","deser",…] target=["319209","e5ec9d"]  ⚠ORPHAN
+          "/search and /export: no other weakness classes apply — no templating/
+           eval/deserializer/XML parsing/URL fetching…"
+```
+
+That is correct, complete reasoning covering every class on two endpoints,
+recorded in one call exactly as intended — and thrown away, because the bulk
+branch tested `Array.isArray` and stored the whole literal as one target id. The
+high runs had recorded one hypothesis per cell with scalar fields, so theirs
+landed.
+
+So the bimodality was not thoroughness versus laziness. It was one representation
+silently discarded and another accepted, with no middle ground possible. Both
+strategies reasoned correctly; only one was measurable.
+
+### Confirmed
+
+The fix was predicted to collapse the low cluster, and did:
+
+```
+coverage%  before (n=5):  [0, 5, 10, 96, 100]          mean 42.2  CI [4, 80]
+coverage%  after  (n=6):  [6, 63, 98, 100, 100, 100]   mean 77.8  CI [47, 100]
+orphaned hypotheses:      5-66% of records  ->  0 in all six rollouts
+```
+
+One outlier survives at 6%, and it is a *different* mechanism: three hypotheses,
+all `confirmed`, all with valid targets, and not one refutation recorded. That
+run reported what it found and never swept the checklist to rule anything out,
+so coverage is simply bugs-over-cells. Recording refutations is the behaviour the
+prompt asks for and cannot guarantee — worth watching, but it is now 1 in 6
+rather than 3 in 5.
+
+Evidence backing remains unreliable (mean 0.49, CI [0.25, 0.74]): findings still
+cite files that were never written. Detection is reliable; instrumentation is
+the part that is not.
+
+Three things came out of it, and all three are now permanent:
+
+- `asList` coercion, so a list arrives whether it is an array, a JSON string, or
+  comma-separated.
+- **Orphaned hypotheses** as an audit category with a planted positive control —
+  an engagement could carry 117 hypotheses and report 0% coverage with nothing
+  saying why.
+- **Trajectory capture** in the experiment runner. pired persists work products
+  but no process record, so this was only diagnosable because the ledger happened
+  to retain the malformed targets. It should not have depended on luck.
+
 ## Not yet built
 
 T0 is one tier of three. Still open: the Forge generator (stage 3), the
