@@ -201,3 +201,38 @@ describe("record hypothesis in bulk", () => {
 		).rejects.toThrow(/statement/);
 	});
 });
+
+describe("list coercion on hypothesis fields", () => {
+	it("accepts a JSON array serialized as a string", async () => {
+		const { ws, ctx, record } = await setup();
+		// Smaller models emit this shape constantly; strict Array.isArray stored the
+		// whole literal as one target id, orphaning every hypothesis it produced.
+		await record.execute(
+			{ kind: "hypothesis", target: '["e1","e2"]', class: "sqli", outcome: "refuted", statement: "parameterized on both" },
+			ctx,
+		);
+		const hyps = await ws.read("hypotheses");
+		expect(hyps).toHaveLength(2);
+		expect(hyps.map((h) => h.target).sort()).toEqual(["e1", "e2"]);
+	});
+
+	it("accepts a comma-separated list", async () => {
+		const { ws, ctx, record } = await setup();
+		await record.execute(
+			{ kind: "hypothesis", target: "e1", class: "xss, ssti, xxe", outcome: "refuted", statement: "JSON only" },
+			ctx,
+		);
+		expect((await ws.read("hypotheses")).map((h) => h.class).sort()).toEqual(["ssti", "xss", "xxe"]);
+	});
+
+	it("leaves a single plain value alone", async () => {
+		const { ws, ctx, record } = await setup();
+		await record.execute(
+			{ kind: "hypothesis", target: "e1", class: "sqli", outcome: "refuted", statement: "bound parameter" },
+			ctx,
+		);
+		const hyps = await ws.read("hypotheses");
+		expect(hyps).toHaveLength(1);
+		expect(hyps[0]).toMatchObject({ target: "e1", class: "sqli" });
+	});
+});

@@ -48,6 +48,8 @@ export interface ExperimentSpec {
 
 /** Everything measurable from one session's ledger, with no model in the loop. */
 export interface SessionMetrics {
+	/** Where the session's stdout was captured. The only trajectory record there is. */
+	log?: string;
 	inventory: number;
 	hypotheses: number;
 	findings: number;
@@ -70,6 +72,9 @@ export interface RolloutResult {
 }
 
 const PIRED = new URL("../bin/pired.mjs", import.meta.url).pathname;
+
+/** Unique per invocation, so engagement directories never collide across runs. */
+const RUN_ID = Math.random().toString(36).slice(2, 8);
 
 /**
  * pi prompts to trust an unknown directory and, with stdin open, blocks
@@ -120,7 +125,11 @@ async function oneRollout(spec: ExperimentSpec, arm: Arm, index: number): Promis
 	// A fresh target directory per rollout gives a fresh engagement workspace,
 	// since pired derives the engagement name from the target's basename.
 	const root = await mkdtemp(join(tmpdir(), "assay-"));
-	const name = `${basename(spec.target)}-${arm.label.replace(/[^a-z0-9]+/gi, "")}-r${index}`;
+	// A run id in the name: without it two invocations share engagement
+	// directories, and a straggler from an earlier run appends into a later run's
+	// workspace. That happened — one rollout's ledger grew by 62 records after it
+	// had been measured.
+	const name = `${basename(spec.target)}-${arm.label.replace(/[^a-z0-9]+/gi, "")}-${RUN_ID}-r${index}`;
 	const dir = join(root, name);
 	await cp(spec.target, dir, { recursive: true });
 	await pretrust(dir);
@@ -132,6 +141,7 @@ async function oneRollout(spec: ExperimentSpec, arm: Arm, index: number): Promis
 		if (s > 0 && arm.wipeBetweenSessions) await rm(engagementDir, { recursive: true, force: true });
 		const started = Date.now();
 		let ok = true;
+		let transcript = "";
 		try {
 			const pending = run(
 				process.execPath,
@@ -145,11 +155,23 @@ async function oneRollout(spec: ExperimentSpec, arm: Arm, index: number): Promis
 			// Close the child's stdin immediately. execFile has no `stdio` option,
 			// and with stdin left open pi waits on its trust prompt forever.
 			pending.child.stdin?.end();
-			await pending;
-		} catch {
+			const done = await pending;
+			transcript = String(done.stdout ?? "");
+		} catch (err) {
 			ok = false; // a timeout or non-zero exit still leaves a gradeable ledger
+			transcript = String((err as { stdout?: string }).stdout ?? "");
 		}
-		sessions.push(await measure(engagementDir, Date.now() - started, ok));
+		// Capture the session's output. pired persists work products but no
+		// trajectory, so without this a bimodal result cannot be diagnosed at all —
+		// there is nothing to read to find out what the run actually did.
+		const logPath = join(engagementDir, `session-${s}.log`);
+		try {
+			await writeFile(logPath, transcript);
+		} catch {
+			// engagement dir may not exist if the run died before creating it
+		}
+		const m = await measure(engagementDir, Date.now() - started, ok);
+		sessions.push({ ...m, log: logPath });
 	}
 	await rm(root, { recursive: true, force: true });
 	return { arm: arm.label, rollout: index, sessions };

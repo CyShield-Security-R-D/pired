@@ -26,6 +26,12 @@ export interface IntegrityReport {
 	unevidenced: string[];
 	/** Hypotheses marked confirmed with no finding promoted from them. */
 	unpromoted: string[];
+	/**
+	 * Hypotheses whose `target` matches no recorded inventory element. They are
+	 * recorded, they look like work, and they settle no cell — so an engagement
+	 * can carry a hundred of them and still report 0% coverage.
+	 */
+	orphaned: string[];
 }
 
 /**
@@ -36,7 +42,8 @@ export interface IntegrityReport {
 export async function auditLedger(ws: Workspace): Promise<IntegrityReport> {
 	const findings = await ws.read("findings");
 	const hypotheses = await ws.read("hypotheses");
-	const report: IntegrityReport = { backed: [], dangling: [], unevidenced: [], unpromoted: [] };
+	const report: IntegrityReport = { backed: [], dangling: [], unevidenced: [], unpromoted: [], orphaned: [] };
+	const elementIds = new Set((await ws.read("inventory")).map((r) => r.id));
 
 	for (const f of findings) {
 		const paths = f.evidence ?? [];
@@ -49,6 +56,10 @@ export async function auditLedger(ws: Workspace): Promise<IntegrityReport> {
 		const resolved = await Promise.all(paths.map((rel) => ws.readRelative(rel)));
 		if (resolved.some((r) => r === undefined)) report.dangling.push(f.id);
 		else report.backed.push(f.id);
+	}
+
+	for (const h of hypotheses) {
+		if (elementIds.size > 0 && !elementIds.has(h.target)) report.orphaned.push(h.id);
 	}
 
 	for (const h of hypotheses) {
@@ -95,6 +106,16 @@ export const ledgerProbe: Probe = {
 		await ws.append("hypotheses", hyp("y-promoted", "confirmed", "f-backed"));
 		await ws.append("hypotheses", hyp("y-orphan", "confirmed")); // planted
 		await ws.append("hypotheses", hyp("y-refuted", "refuted"));
+		// Planted orphan: a hypothesis whose target is not a recorded element.
+		// It looks like work and settles nothing — the failure that let a run
+		// record 117 hypotheses and still report low coverage.
+		await ws.append("inventory", {
+			v: 1, id: "e1", kind: "endpoint", createdAt: "t", host: "h", method: "GET", path: "/a",
+		} as never);
+		await ws.append("hypotheses", {
+			v: 1, id: "y-orphan-target", kind: "hypothesis", createdAt: "t", statement: "s",
+			target: '["e1","e2"]', class: "sqli", outcome: "refuted",
+		} as HypothesisRecord);
 
 		const r = await auditLedger(ws);
 		const cases: CaseResult[] = [];
@@ -119,6 +140,9 @@ export const ledgerProbe: Probe = {
 		check("refuses/partially-backed", r.dangling.includes("f-partial") && !r.backed.includes("f-partial"),
 			"f-partial refused", r.backed.includes("f-partial") ? "counted as backed" : "refused",
 			"a finding citing several files is not partly true when one is missing — every cited path must resolve");
+		check("detects/orphaned-hypothesis", r.orphaned.includes("y-orphan-target"),
+			"y-orphan-target flagged", r.orphaned.join(",") || "none",
+			"positive control — a hypothesis pointing at no recorded element settles no cell");
 		check("accepts/genuinely-backed", r.backed.length === 1 && r.backed[0] === "f-backed",
 			"exactly f-backed", r.backed.join(",") || "none",
 			"negative control — a well-formed finding must not be flagged");

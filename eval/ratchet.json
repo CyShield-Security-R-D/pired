@@ -28,7 +28,7 @@
     "why": "A cold restart must recover everything persisted. Anything less means the agent redoes settled work."
   },
   "ledger.detector_cases_passed": {
-    "min": 8,
+    "min": 9,
     "why": "The integrity detector must keep catching every planted defect. A detector that stops detecting passes silently otherwise."
   }
 }

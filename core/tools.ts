@@ -76,6 +76,38 @@ function str(v: unknown): string | undefined {
 function num(v: unknown): number | undefined {
 	return typeof v === "number" && Number.isFinite(v) ? v : undefined;
 }
+/**
+ * Coerce a "one or many" field to a list, however the model serialized it.
+ *
+ * Tool schemas cannot express string-or-array in the JsonSchema subset core
+ * carries, so models pick a representation — and smaller ones frequently emit a
+ * JSON array *as a string*: target='["id1","id2"]'. Strict Array.isArray missed
+ * that and stored the whole literal as one target id, producing a hypothesis
+ * attached to an element that does not exist. Measured on live runs, 5-66% of
+ * recorded hypotheses were orphaned this way: recorded, counted, settling
+ * nothing. Be liberal here — the cost of guessing wrong is a rejected call, the
+ * cost of not guessing is a silently unmeasurable engagement.
+ */
+function asList(v: unknown): string[] {
+	if (Array.isArray(v)) return strArr(v) ?? [];
+	const raw = str(v);
+	if (raw === undefined) return [];
+	const trimmed = raw.trim();
+	if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+		try {
+			const parsed: unknown = JSON.parse(trimmed);
+			if (Array.isArray(parsed)) return strArr(parsed) ?? [];
+		} catch {
+			// fall through: a bracketed string that is not JSON is taken literally
+		}
+	}
+	if (trimmed.includes(",")) {
+		const parts = trimmed.split(",").map((x) => x.trim()).filter(Boolean);
+		if (parts.length > 1) return parts;
+	}
+	return [trimmed];
+}
+
 function strArr(v: unknown): string[] | undefined {
 	if (typeof v === "string") return [v];
 	if (Array.isArray(v)) {
@@ -113,7 +145,7 @@ function extractFields(kind: LedgerKind, a: Record<string, unknown>): Record<str
 		case "tech":
 			return defined({ name: str(a.name), host: str(a.host), version: str(a.version) });
 		case "hypothesis":
-			return defined({ statement: str(a.statement), target: str(a.target), class: str(a.class), method: str(a.approach) ?? str(a.method), outcome: oneOf(a.outcome, HYPOTHESIS_OUTCOMES), evidence: str(a.evidence), findingId: str(a.findingId) });
+			return defined({ statement: str(a.statement), target: asList(a.target)[0], class: asList(a.class)[0], method: str(a.approach) ?? str(a.method), outcome: oneOf(a.outcome, HYPOTHESIS_OUTCOMES), evidence: str(a.evidence), findingId: str(a.findingId) });
 		case "finding":
 			return defined({ title: str(a.title), severity: oneOf(a.severity, SEVERITIES), target: str(a.target), class: str(a.class), cwe: str(a.cwe), cvss: str(a.cvss), description: str(a.description), repro: str(a.repro), evidence: strArr(a.evidence), status: oneOf(a.status, FINDING_STATUSES), hypothesisId: str(a.hypothesisId) });
 		case "blocker":
@@ -214,9 +246,9 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 			// reason") is expressible in one call: class and target accept lists and
 			// the cross product is recorded. Without this, coverage stays at 0% on
 			// real runs no matter how thorough the review was.
-			if (kind === "hypothesis" && (Array.isArray(a.class) || Array.isArray(a.target))) {
-				const classes = Array.isArray(a.class) ? strArr(a.class) ?? [] : [required(str(a.class), "record hypothesis: 'class' is required")];
-				const targets = Array.isArray(a.target) ? strArr(a.target) ?? [] : [required(str(a.target), "record hypothesis: 'target' is required")];
+			if (kind === "hypothesis" && (asList(a.class).length > 1 || asList(a.target).length > 1)) {
+				const classes = asList(a.class);
+				const targets = asList(a.target);
 				if (classes.length === 0 || targets.length === 0) throw new Error("record hypothesis: 'class' and 'target' lists must be non-empty");
 				const statement = required(str(a.statement), "record hypothesis: 'statement' is required");
 				const outcome = oneOf(a.outcome, HYPOTHESIS_OUTCOMES) ?? "proposed";
