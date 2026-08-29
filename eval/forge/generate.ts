@@ -15,6 +15,7 @@
  */
 
 import type { AnswerKey, KeyCell } from "../key.ts";
+import { NODE_EXPRESS } from "./templates/node-express.ts";
 import { PYTHON_FLASK } from "./templates/python-flask.ts";
 import type { ForgeSpec, Route, SiteRecord, VulnClass, VulnTemplate } from "./types.ts";
 import { VULN_CLASSES } from "./types.ts";
@@ -51,28 +52,93 @@ function pick<T>(rng: () => number, xs: readonly T[]): T {
 	return xs[Math.floor(rng() * xs.length)] as T;
 }
 
-function makeRoutes(rng: () => number, count: number): Route[] {
+function makeRoutes(rng: () => number, count: number, paramStyle: "flask" | "express"): Route[] {
 	const used = new Set<string>();
 	const routes: Route[] = [];
 	while (routes.length < count) {
 		const noun = pick(rng, NOUNS);
 		const style = rng();
-		const path = style < 0.4 ? `/api/${noun}` : style < 0.7 ? `/api/${noun}/<ref>` : `/api/${noun}/search`;
+		const refToken = paramStyle === "express" ? ":ref" : "<ref>";
+		const path = style < 0.4 ? `/api/${noun}` : style < 0.7 ? `/api/${noun}/${refToken}` : `/api/${noun}/search`;
 		if (used.has(path)) continue;
 		used.add(path);
-		const method: Route["method"] = path.endsWith("<ref>") ? "GET" : rng() < 0.5 ? "GET" : "POST";
+		const method: Route["method"] = path.endsWith(refToken) ? "GET" : rng() < 0.5 ? "GET" : "POST";
 		routes.push({
 			method,
 			path,
 			handler: `${noun}_${routes.length}`,
-			param: path.includes("<ref>") ? "ref" : pick(rng, PARAMS),
+			param: path.includes(refToken) ? "ref" : pick(rng, PARAMS),
 			jsonOnly: rng() < 0.6,
 		});
 	}
 	return routes;
 }
 
-const PACKS: Record<string, VulnTemplate[]> = { "python-flask": PYTHON_FLASK };
+/**
+ * Per-stack assembly. Everything Python-specific used to be inline here, which
+ * meant a second stack could not exist — and a single-stack corpus cannot report
+ * the cross-stratum spread that says whether competence is stack-specific.
+ */
+interface StackSpec {
+	pack: VulnTemplate[];
+	mainFile: string;
+	/** Filler handler bodies: ordinary work, no security-relevant sink. */
+	filler: Array<(noun: string) => string>;
+	handlerBlock(route: Route, body: string): string;
+	/** How a handler's definition line starts, for scoping the sink search. */
+	defLine(handler: string): string;
+	assemble(helpers: string[], handlers: string[]): string;
+}
+
+const STACKS: Record<string, StackSpec> = {
+	"python-flask": {
+		pack: PYTHON_FLASK,
+		mainFile: "app.py",
+		filler: [
+			(n) => `    page = int(request.args.get("page", 1))\n    con = sqlite3.connect(DB_PATH)\n    rows = con.execute("SELECT id FROM ${n} LIMIT 20 OFFSET ?", ((page - 1) * 20,)).fetchall()\n    return jsonify({"page": page, "items": rows})`,
+			(n) => `    con = sqlite3.connect(DB_PATH)\n    total = con.execute("SELECT COUNT(*) FROM ${n}").fetchone()[0]\n    return jsonify({"count": total})`,
+			(n) => `    con = sqlite3.connect(DB_PATH)\n    rows = con.execute("SELECT id, created_at FROM ${n} ORDER BY created_at DESC LIMIT 10").fetchall()\n    return jsonify([{"id": r[0], "created_at": r[1]} for r in rows])`,
+			() => `    return jsonify({"status": "ok", "version": os.environ.get("APP_VERSION", "1.0")})`,
+		],
+		handlerBlock: (route, body) =>
+			`@app.route("${route.path}", methods=["${route.method}"])\ndef ${route.handler}(${route.path.includes("<ref>") ? "ref" : ""}):\n${body}\n`,
+		defLine: (handler) => `def ${handler}(`,
+		assemble: (helpers, handlers) => [
+			"import os", "import sqlite3", "import subprocess", "",
+			"from flask import Flask, abort, jsonify, render_template_string, request, session", "",
+			"app = Flask(__name__)",
+			'app.secret_key = os.environ.get("APP_SECRET", "dev")',
+			'DB_PATH = os.environ.get("DB_PATH", "app.db")',
+			'STORAGE_ROOT = os.path.realpath(os.environ.get("STORAGE_ROOT", "/srv/storage"))',
+			"", "", ...helpers, "", ...handlers,
+		].join("\n"),
+	},
+	"node-express": {
+		pack: NODE_EXPRESS,
+		mainFile: "app.js",
+		filler: [
+			(n) => `  const page = Number(req.query.page || 1);\n  const rows = await db.query("SELECT id FROM ${n} LIMIT 20 OFFSET $1", [(page - 1) * 20]);\n  res.json({ page, items: rows });`,
+			(n) => `  const rows = await db.query("SELECT COUNT(*) AS n FROM ${n}");\n  res.json({ count: rows[0].n });`,
+			(n) => `  const rows = await db.query("SELECT id, created_at FROM ${n} ORDER BY created_at DESC LIMIT 10");\n  res.json(rows);`,
+			() => `  res.json({ status: "ok", version: process.env.APP_VERSION || "1.0" });`,
+		],
+		handlerBlock: (route, body) =>
+			`app.${route.method.toLowerCase()}("${route.path}", async (req, res) => {\n${body}\n});\n`,
+		defLine: (handler) => `// handler ${handler}`,
+		assemble: (helpers, handlers) => [
+			'const express = require("express");',
+			'const path = require("path");',
+			'const fs = require("fs/promises");',
+			'const { exec, execFile } = require("child_process");',
+			'const db = require("./db");', "",
+			"const app = express();",
+			'const STORAGE_ROOT = path.resolve(process.env.STORAGE_ROOT || "/srv/storage");', "",
+			"function escapeHtml(value) {",
+			'  return String(value).replace(/[&<>"\']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", \'"\': "&quot;", "\'": "&#39;" })[c]);',
+			"}", "", ...helpers, "", ...handlers, "", "module.exports = app;",
+		].join("\n"),
+	},
+};
 
 export interface ForgeTarget {
 	/** Handler bodies rendered from templates — the audit's positive class. */
@@ -88,11 +154,12 @@ export interface ForgeTarget {
 
 export function generate(spec: ForgeSpec): ForgeTarget {
 	const rng = mulberry32(spec.seed);
-	const pack = PACKS[spec.stack];
-	if (!pack) throw new Error(`forge: no template pack for stack ${spec.stack}`);
+	const stack = STACKS[spec.stack];
+	if (!stack) throw new Error(`forge: no template pack for stack ${spec.stack}`);
+	const pack = stack.pack;
 
 	const fillerCount = spec.fillerRoutes ?? spec.routes;
-	const routes = makeRoutes(rng, spec.routes + fillerCount);
+	const routes = makeRoutes(rng, spec.routes + fillerCount, spec.stack === "node-express" ? "express" : "flask");
 	const fillers = routes.splice(spec.routes);
 	const siteBodies: string[] = [];
 	const fillerBodies: string[] = [];
@@ -123,14 +190,14 @@ export function generate(spec: ForgeSpec): ForgeTarget {
 			if (site.extraFile) extraFiles[site.extraFile.path] = site.extraFile.content;
 			sites.push({
 				route, class: template.class, idiom: template.idiom, vulnerable: isVuln,
-				taintDepth, file: "app.py", sinkMarker: site.sinkMarker,
+				taintDepth, file: stack.mainFile, sinkMarker: site.sinkMarker,
 				severity: template.severity, safeReason: template.safeReason,
 			});
 			cells.push({
 				element: `${route.method} ${route.path}`,
 				class: template.class,
 				truth: isVuln ? "vulnerable" : "clear",
-				...(isVuln ? { sink: "app.py:0" } : { why: template.safeReason }),
+				...(isVuln ? { sink: `${stack.mainFile}:0` } : { why: template.safeReason }),
 				severity: template.severity,
 				aliases: [route.path, route.handler],
 				strata: { stack: spec.stack, idiom: template.idiom, taint: `depth-${taintDepth}` },
@@ -151,19 +218,16 @@ export function generate(spec: ForgeSpec): ForgeTarget {
 			});
 		}
 
-		const decorator = `@app.route("${route.path}", methods=["${route.method}"])`;
-		handlerBlocks.push(`${decorator}\ndef ${route.handler}(${route.path.includes("<ref>") ? "ref" : ""}):\n${bodies.join("\n")}\n`);
+		handlerBlocks.push(stack.handlerBlock(route, bodies.join("\n")));
 	}
 
 	// Filler routes: ordinary work, and genuinely clear for every class.
 	for (const route of fillers) {
-		const body = (FILLER_BODIES[Math.floor(rng() * FILLER_BODIES.length)] as (p: string) => string)(
+		const body = (stack.filler[Math.floor(rng() * stack.filler.length)] as (n: string) => string)(
 			route.path.split("/")[2] ?? "records",
 		);
 		fillerBodies.push(body);
-		handlerBlocks.push(
-			`@app.route("${route.path}", methods=["${route.method}"])\ndef ${route.handler}(${route.path.includes("<ref>") ? "ref" : ""}):\n${body}\n`,
-		);
+		handlerBlocks.push(stack.handlerBlock(route, body));
 		for (const cls of VULN_CLASSES) {
 			cells.push({
 				element: `${route.method} ${route.path}`,
@@ -176,41 +240,25 @@ export function generate(spec: ForgeSpec): ForgeTarget {
 		}
 	}
 
-	const appPy = [
-		"import os",
-		"import sqlite3",
-		"import subprocess",
-		"",
-		"from flask import Flask, abort, jsonify, render_template_string, request, session",
-		"",
-		"app = Flask(__name__)",
-		'app.secret_key = os.environ.get("APP_SECRET", "dev")',
-		'DB_PATH = os.environ.get("DB_PATH", "app.db")',
-		'STORAGE_ROOT = os.path.realpath(os.environ.get("STORAGE_ROOT", "/srv/storage"))',
-		"",
-		"",
-		...dedupe(helperBlocks),
-		"",
-		...handlerBlocks,
-	].join("\n");
+	const mainSource = stack.assemble(dedupe(helperBlocks), handlerBlocks);
 
-	const files: Record<string, string> = { "app.py": appPy, ...extraFiles };
+	const files: Record<string, string> = { [stack.mainFile]: mainSource, ...extraFiles };
 
 	// Recover sink lines from the finished text — no markers were written into it.
 	// The search starts at the site's OWN handler: two routes can render the same
 	// sink text, and a naive first-match would give them both the first line,
 	// making the key's ground truth wrong for every instance after the first.
-	const lines = appPy.split("\n");
+	const lines = mainSource.split("\n");
 	for (const cell of cells) {
 		if (cell.truth !== "vulnerable") continue;
 		const site = sites.find(
 			(s) => `${s.route.method} ${s.route.path}` === cell.element && s.class === cell.class && s.vulnerable,
 		);
 		if (!site) continue;
-		const handlerLine = lines.findIndex((l) => l.startsWith(`def ${site.route.handler}(`));
+		const handlerLine = lines.findIndex((l) => l.includes(stack.defLine(site.route.handler)) || l.includes(`"${site.route.path}"`));
 		const from = handlerLine >= 0 ? handlerLine : 0;
 		const offset = lines.slice(from).findIndex((l) => l.includes(site.sinkMarker));
-		cell.sink = offset >= 0 ? `app.py:${from + offset + 1}` : "app.py:unresolved";
+		cell.sink = offset >= 0 ? `${stack.mainFile}:${from + offset + 1}` : `${stack.mainFile}:unresolved`;
 	}
 
 	return {

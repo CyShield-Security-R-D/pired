@@ -16,6 +16,7 @@ import { dirname, join } from "node:path";
 import { auditSites } from "./audit.ts";
 import { generate } from "./generate.ts";
 import type { ForgeSpec, Stack } from "./types.ts";
+import { NODE_EXPRESS } from "./templates/node-express.ts";
 import { PYTHON_FLASK } from "./templates/python-flask.ts";
 
 function value(name: string, def?: string): string | undefined {
@@ -54,8 +55,9 @@ writeFileSync(keyPath, `${JSON.stringify(target.key, null, 2)}\n`);
 // Audit every template's rendered pair, not just the ones this seed emitted:
 // the question is whether the generator leaks, not whether one target did.
 const ctx = { route: { method: "GET" as const, path: "/api/x", handler: "h", param: "q", jsonOnly: false }, taintDepth: 1, rng: () => 0.5 };
-const vulnSites = PYTHON_FLASK.map((t) => t.vulnerable(ctx).body);
-const safeSites = PYTHON_FLASK.map((t) => t.safe(ctx).body);
+const pack = spec.stack === "node-express" ? NODE_EXPRESS : PYTHON_FLASK;
+const vulnSites = pack.map((t) => t.vulnerable(ctx).body);
+const safeSites = pack.map((t) => t.safe(ctx).body);
 void vulnSites; void safeSites;
 // The gate compares rendered sites against this target's ordinary handlers —
 // same granularity, same file, same style. That is the LAVA question.
