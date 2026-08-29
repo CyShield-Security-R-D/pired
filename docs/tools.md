@@ -78,7 +78,9 @@ recall query=<query> [limit=50]
 | `loot` | **Handles only** — never secrets. |
 | `notes` | The engagement notebook. |
 
-`next` and `gaps` are the ones that keep an engagement honest: they are how the agent stays systematic and avoids quitting early. Per the benchmark, this discipline — not a bigger model — is where the recall lift came from. See [Evaluation](evaluation.md).
+`next` and `gaps` are the ones that keep an engagement honest: they are how the agent stays systematic and avoids quitting early.
+
+This is the harness's central bet, and it is worth being precise about its evidence: the published benchmark **did not test it**. The detection lift it measured is attributable to the security-tuned prompt, because in the re-run the ledger was barely written to and detection held anyway. A one-shot scan is the task least likely to need durable state. See [Evaluation](evaluation.md#what-the-benchmark-does-not-establish).
 
 ## Blockers and momentum
 

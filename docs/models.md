@@ -8,7 +8,7 @@ What pired contributes is `~/.pired/models.json`: any OpenAI-compatible provider
 
 A consultant under NDA often *cannot* paste client source into a frontier API. That is a contract term, not a preference.
 
-So pired is tuned for ~30B open-weight models running on the engagement box, and the benchmark is built around that constraint: pired + Qwen3.8 27B locally reached 0.81 recall against 0.68 for a frontier agent on the same target, because the lift came from the harness — coverage discipline — rather than the model. See [Evaluation](evaluation.md).
+So pired is tuned for ~30B open-weight models running on the engagement box, and the benchmark is built around that constraint: pired + Qwen3.8 27B locally reached **0.74 recall** against 0.68 for a frontier agent on the same target, with 100% critical recall — the lift coming from the security-tuned prompt rather than from model size. See [Evaluation](evaluation.md).
 
 Frontier and subscription models work fine too, wherever the engagement allows them. Nothing in pired assumes a local model.
 

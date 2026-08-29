@@ -1,6 +1,6 @@
 # Evaluation
 
-pired makes a measurable claim — that coverage discipline lifts recall more than a bigger model does — so it carries the instrument to check it.
+pired makes a testable claim — that coverage discipline lifts recall more than a bigger model does — so it carries the instrument to check it, and to say which parts of the claim the evidence actually reaches.
 
 Two layers, answering different questions:
 
@@ -59,7 +59,27 @@ A controlled, three-arm comparison on a ground-truth-labeled vulnerable banking 
 
 Arm C is the one that matters: same model as A, without pired. The gap between them *is* the harness effect.
 
-The headline is that wrapping the same 27B model in pired lifted recall well past the frontier agent's, and that a re-run on a mutated variant — renamed routes, shifted lines, changed literals, built to defeat training-data recall — did not move the score.
+| | Recall | Precision | F1 | Critical |
+|---|:--:|:--:|:--:|:--:|
+| **A · pired + qwen3.8-27b** | **0.74** <sub>[0.70, 0.79]</sub> | 0.65 | 0.69 | **100%** |
+| B · codex + gpt-5.6-sol | 0.68 | **0.80** | **0.74** | 93% |
+| C · vanilla pi + qwen3.8-27b | 0.59 | 0.56 | 0.57 | 79% |
+
+Arm A is n=5 with a 95% interval, from a re-run that reproduced the original single-run figures; B and C are single runs.
+
+### What the benchmark establishes
+
+**A security-tuned prompt beats a bigger model** on this task: the same 27B model went from F1 0.57 to 0.69 and from 79% to 100% critical recall, ahead of a frontier agent on recall and critical coverage.
+
+**The result is not memorization.** Against a mutated variant — renamed routes, shifted line numbers, changed literals — recall was identical, with 0/6 decoys.
+
+### What the benchmark does not establish
+
+**That `record`/`recall` caused the lift.** The re-run graded the ledger alongside the emitted report and found **0.8 records per run** against 61 findings emitted: `findings.jsonl` was absent for four of five runs, and `hypotheses.jsonl` and `inventory.jsonl` for all five. The engagement apparatus was bypassed and detection held anyway, so the defensible attribution is the prompt.
+
+This is not evidence that the ledger is worthless — it is evidence that **this benchmark never tested it**. A one-shot detection scan is the task least likely to benefit from durable cross-session state. The experiment that would settle it is the compounding one — three arms, k sessions, persisted versus wiped ledger — and it has not been run.
+
+A later prompt revision (*explore-first + coverage floor*) scored 0.81 recall / 0.76 F1 in a **single** run. It is not in the table above: it has not been replicated, and the contamination control was never re-run against it.
 
 Full methodology, per-category breakdown, exact token and cost accounting, and threats to validity: **[`research/`](../research/)**.
 
@@ -68,8 +88,8 @@ Full methodology, per-category breakdown, exact token and cost accounting, and t
 | [01 — Development](../research/01-pired-development.md) | Goals, architecture, ontology, the self-review hardening pass. |
 | [02 — Methodology](../research/02-benchmark-methodology.md) | The three arms, fairness and contamination controls, the grader. |
 | [03 — Results](../research/03-results.md) | Scores, the harness effect, OWASP breakdown, the hard tail. |
-| [04 — Findings](../research/04-findings-and-conclusions.md) | Harness > model for recall, cost reality, the business-logic frontier. |
-| [05 — Re-run](../research/05-rerun-2026-08.md) | An independent replication, and what it showed was *not* exercised. |
+| [04 — Findings](../research/04-findings-and-conclusions.md) | Harness > model for recall, cost reality, the business-logic frontier. **Its §6 record/recall claim is superseded by 05.** |
+| [05 — Re-run](../research/05-rerun-2026-08.md) | An independent replication at n=5 — and the ledger grading that showed the workflow was never exercised. |
 
 ## Grading your own engagement
 

@@ -18,8 +18,8 @@ A consultant under NDA often *cannot* paste client source into a frontier API �
 
 Three claims:
 
-- **It runs on your hardware.** Tuned for ~30B open-weight models (Qwen3.8 27B, Gemma 3 27B, DeepSeek), so client code never leaves the engagement box — and it still beats a frontier agent on recall (below). Frontier and subscription models work too, where the engagement allows them.
-- **Coverage discipline, not vibes.** `checklist × inventory = coverage → hypotheses → findings`, with `recall gaps` keeping the agent testing while gaps remain. Per the benchmark, this — not a bigger model — is where the recall lift came from.
+- **It runs on your hardware.** Tuned for ~30B open-weight models (Qwen3.8 27B, Gemma 3 27B, DeepSeek), so client code never leaves the engagement box — and it still beats a frontier agent on recall and critical coverage (below). Frontier and subscription models work too, where the engagement allows them.
+- **Coverage discipline, not vibes.** `checklist × inventory = coverage → hypotheses → findings`, with `recall gaps` keeping the agent testing while gaps remain — and *ruling a class out* recorded as real work, which a findings list cannot express. What the benchmark shows is the security prompt lifting a 27B model past a frontier agent on recall; whether the ledger compounds on top of that is stated as open, below.
 - **One workspace, both halves of the engagement.** `review` for whitebox, `recon`/`pentest` for blackbox, over a single engagement ontology, so findings, evidence, and coverage correlate across the whole job instead of living in two disconnected tools.
 
 **What pired is not.** Not a scanner: it owns no detection engines and makes no claim to reproducible, rule-count-comparable output. Not the assessment: it drafts findings for an operator to verify, and the operator signs the report. Two principles keep it that way:
@@ -29,22 +29,35 @@ Three claims:
 
 ---
 
-## The headline result
+## The benchmark result
 
-We benchmarked pired on a **ground-truth-labeled vulnerable banking app** (53 CWE/OWASP-tagged vulnerabilities, deterministic grader). Same target, same prompt, same grader — the only variable is **harness + model**.
+A **ground-truth-labeled vulnerable banking app** (53 CWE/OWASP-tagged vulnerabilities, deterministic grader). Same target, same prompt, same grader — the only variable is **harness + model**.
 
 | | Recall | Precision | F1 | Critical recall | Cost/scan |
 |---|:--:|:--:|:--:|:--:|:--:|
-| **pired + Qwen3.8 27B** *(local)* | **0.81** | 0.72 | **0.76** | **100%** | ~$0.26 |
-| codex + gpt-5.6-sol *(frontier)* | 0.68 | **0.80** | 0.73 | 93% | ~$0.19 |
+| **pired + Qwen3.8 27B** *(local)* | **0.74** <sub>[0.70, 0.79]</sub> | 0.65 | 0.69 | **100%** | ~$0.26 |
+| codex + gpt-5.6-sol *(frontier)* | 0.68 | **0.80** | **0.74** | 93% | ~$0.19 |
 | vanilla pi + Qwen3.8 27B *(no pired)* | 0.59 | 0.56 | 0.57 | 79% | ~$0.16 |
 
-**Two findings stand out:**
+pired's row is **n=5 with a 95% interval**, from an independent re-run ([`research/05`](./research/05-rerun-2026-08.md)) that reproduced the original single-run figures. The baselines are single runs. Scored on the same key, pired's precision rises to 0.73 and F1 to 0.74 once the arms stop being penalised for reporting real frontend bugs the key cannot score.
 
-1. **The harness is worth more than the model.** Wrapping the *same* 27B model in pired lifted recall **0.59 → 0.81** and F1 **0.57 → 0.76**, with critical coverage **79% → 100%** — surpassing a frontier agent on both recall and F1. The lift comes from an *explore-first, then coverage-floor* method — the model reasons openly, then a checklist floor and a precise-capture step ensure nothing systematic is skipped — not from a bigger model. The gains land where a generic prompt is weak: all cryptographic-failure bugs (4/4 vs 0/4 for the bare model), plus business-logic and design flaws it previously walked past.
-2. **It's genuine, not memorized.** Re-run on a **mutated** variant (renamed routes, shifted lines, changed literals) built to defeat training-data recall, pired + Qwen scored an **identical 0.74 recall / 100% critical** — the score didn't move.
+### What this establishes
 
-The trade-off is honest: pired + a local model now leads on **recall, F1, and critical coverage**; the frontier agent keeps an edge on **raw precision** (fewer false positives). Full methodology, per-category breakdown, the harness-improvement experiment, exact token/cost accounting, and threats to validity are in **[`research/`](./research/)**.
+**A security-tuned prompt is worth more than a bigger model.** The same 27B model went from F1 **0.57 → 0.69** and critical coverage **79% → 100%**, beating a frontier agent on recall (0.74 vs 0.68) and on critical recall, at a fraction of its parameter count. The gains land where a generic prompt is weak: all cryptographic-failure bugs (4/4 vs 0/4 for the bare model), plus business-logic and design flaws it previously walked past.
+
+**It is genuine, not memorized.** Re-run against a **mutated** variant — renamed routes, shifted line numbers, changed literals, built to defeat training-data recall — recall was **identical**, at 100% critical and 0/6 decoys. The score did not move.
+
+The trade-off is honest: pired leads on **recall and critical coverage**, the frontier agent leads on **raw precision**, and F1 is a tie once scoped to what the key can score.
+
+### What it does not establish
+
+**That the `record`/`recall` machinery caused the lift.** The re-run graded the ledger alongside the report and found it essentially unused — **0.8 records per run** against 61 findings emitted. The engagement apparatus was bypassed, and detection held anyway. So the supported attribution is the *prompt*, not the coverage ledger.
+
+That is not evidence the ledger is worthless; it is evidence that **this benchmark never tested it**. A one-shot detection scan is the task least likely to need durable cross-session state. The experiment that would settle it — persisted versus wiped ledger across k sessions — is built and has not been run.
+
+One further caveat we would rather state than have found: a later prompt revision (*explore-first + coverage floor*) scored **0.81 recall / 0.76 F1** in a **single** run ([`research/03 §5d`](./research/03-results.md)). It is promising, not replicated, and the contamination control above was never re-run against it — so it is not the number in the table.
+
+Full methodology, per-category breakdown, exact token/cost accounting, and threats to validity: **[`research/`](./research/)**.
 
 ---
 
@@ -177,7 +190,7 @@ checklist × inventory = coverage → hypotheses → findings
 ```
 
 - **`record`** writes hypotheses, findings, inventory, loot, and blockers to an append-only, versioned JSONL workspace.
-- **`recall`** queries it (`recall next`, `recall gaps`) so the agent keeps testing while coverage gaps remain — the discipline that drove the recall gains above.
+- **`recall`** queries it (`recall next`, `recall gaps`) so the agent keeps testing while coverage gaps remain. This is the harness's central bet; see [what the benchmark does and does not establish](#what-it-does-not-establish).
 - The **scope gate** keeps `bash` and tool calls on authorized targets. It is **focus / accident-prevention, not a sandbox** — a determined bypass (shell tricks, encoding) defeats it; the real boundary is the container/network. Run pired inside a VM/container scoped to the engagement.
 
 ## Architecture
