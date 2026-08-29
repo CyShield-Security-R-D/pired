@@ -90,6 +90,8 @@ Full methodology, per-category breakdown, exact token and cost accounting, and t
 | [03 — Results](../research/03-results.md) | Scores, the harness effect, OWASP breakdown, the hard tail. |
 | [04 — Findings](../research/04-findings-and-conclusions.md) | Harness > model for recall, cost reality, the business-logic frontier. **Its §6 record/recall claim is superseded by 05.** |
 | [05 — Re-run](../research/05-rerun-2026-08.md) | An independent replication at n=5 — and the ledger grading that showed the workflow was never exercised. |
+| [06 — Compounding](../research/06-compounding-2026-08.md) | Persisted vs wiped ledger over k sessions: **no measurable recall benefit**, and the scoring artifact that first suggested otherwise. |
+| [07 — Real-app corpus](../research/07-corpus-2026-08.md) | 17 real CVEs with maintainer patches as ground truth: recall halves versus the teaching app, and the harnesses are complementary. |
 
 ## Grading your own engagement
 

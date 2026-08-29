@@ -36,10 +36,33 @@ export interface Finding {
 export async function fromLedger(engagementDir: string): Promise<Finding[]> {
 	if (!existsSync(join(engagementDir, "findings.jsonl"))) return [];
 	const ws = new Workspace(engagementDir, makeHostServices());
+
+	// A finding often names its file only through the inventory element it targets
+	// ("target": "e1587b" -> endpoint path src/requests/utils.py). Resolving that
+	// recovers findings that are perfectly well located but whose file lives one
+	// hop away, which the raw text scan drops.
+	//
+	// Deliberately conservative: the file may come from the inventory, but the
+	// LINE must appear in the finding itself. Inventing a line would let a
+	// file-only finding land inside a truth window by accident, which inflates
+	// recall — a worse failure than under-counting.
+	const inventory = new Map<string, string>();
+	for (const r of await ws.read("inventory")) {
+		const rec = r as unknown as { id: string; path?: string; value?: string };
+		const file = rec.path ?? rec.value;
+		if (file && /\.(?:py|js|jsx|ts|tsx)$/.test(file)) inventory.set(rec.id, file);
+	}
+
 	const out: Finding[] = [];
 	for (const f of await ws.read("findings")) {
-		const hay = [f.target, f.description, f.repro, ...(f.evidence ?? [])].filter(Boolean).join(" ");
-		const m = /([\w./-]+\.(?:py|js|jsx|ts|tsx)):(\d+)/.exec(hay);
+		const hay = [f.target, f.description, f.repro, f.title, ...(f.evidence ?? [])].filter(Boolean).join(" ");
+		let m = /([\w./-]+\.(?:py|js|jsx|ts|tsx)):(\d+)/.exec(hay);
+		if (!m) {
+			// file from the inventory + a line stated in the finding's own text
+			const viaInventory = f.target ? inventory.get(f.target) : undefined;
+			const line = /\bline[s]?\s+(\d+)/i.exec(hay);
+			if (viaInventory && line) m = [hay, viaInventory, line[1]!] as unknown as RegExpExecArray;
+		}
 		if (!m) continue;
 		out.push({
 			file: m[1] as string,
@@ -79,7 +102,25 @@ export interface Score {
  */
 export async function scoreFindings(findings: Finding[], outPath: string, truthPath?: string): Promise<Score> {
 	const tmp = `${outPath}.findings.json`;
-	await writeFile(tmp, JSON.stringify(findings, null, 2));
+
+	// Corpus truth is built from OSV advisories, which carry a file and a line
+	// range but no CWE or vuln_class. The grader's class_matches() allows a
+	// location-only match ONLY when the finding omits both class fields; a
+	// finding that supplies a CWE falls through to equality checks against a
+	// truth class that does not exist, and is scored as a miss.
+	//
+	// So against classless truth, reporting a CWE — exactly what both harnesses
+	// are prompted to do — guarantees a false negative. Strip the class fields
+	// in that case so matching is location-only, which is the only thing this
+	// truth can actually support. DVBank's own key carries classes and is
+	// untouched.
+	let scored = findings;
+	if (truthPath) {
+		const truth = JSON.parse(await readFile(truthPath, "utf8")) as Array<Record<string, unknown>>;
+		const classless = truth.every((t) => !t.cwe && !t.vuln_class);
+		if (classless) scored = findings.map(({ cwe: _c, vuln_class: _v, ...rest }) => rest);
+	}
+	await writeFile(tmp, JSON.stringify(scored, null, 2));
 	try {
 		await run("python3", [
 			join(DVBANK, "eval/graders/detection_grader.py"),

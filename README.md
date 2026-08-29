@@ -57,6 +57,19 @@ That is not evidence the ledger is worthless; it is evidence that **this benchma
 
 One further caveat we would rather state than have found: a later prompt revision (*explore-first + coverage floor*) scored **0.81 recall / 0.76 F1** in a **single** run ([`research/03 §5d`](./research/03-results.md)). It is promising, not replicated, and the contamination control above was never re-run against it — so it is not the number in the table.
 
+### The number that matters most
+
+Measured against **real CVEs in real software** — 17 targets built from maintainer security patches, scanning the code immediately before the fix — recall roughly **halves**:
+
+| | teaching app *(DVBank)* | real CVEs *(corpus)* |
+|---|:--:|:--:|
+| **pired + Qwen3.8 27B** | 0.74 | **0.33** |
+| codex + gpt-5.6-sol | 0.68 | 0.29 |
+
+pired stays competitive with a frontier agent on real code — a one-finding lead at n=21, so directional rather than decisive. But **any claim built on the teaching-app number overstates real-world capability by about 2×**, for both harnesses equally.
+
+More useful than either figure: the two find *different* bugs, agreeing on only 3 of 10 targets where either scored. **Union of both: 0.476** — running both finds ~43% more real vulnerabilities than running the better one. See [`research/07`](./research/07-corpus-2026-08.md).
+
 Full methodology, per-category breakdown, exact token/cost accounting, and threats to validity: **[`research/`](./research/)**.
 
 ---
