@@ -72,15 +72,20 @@ export interface Score {
 	total_findings: number;
 }
 
-export async function scoreFindings(findings: Finding[], outPath: string): Promise<Score> {
+/**
+ * @param truthPath ground truth to score against. Defaults to DVBank's key; the
+ *   real-app corpus passes its own per-target file, which the grader accepts
+ *   unchanged (verified: an oracle built from a corpus truth file scores 1.0).
+ */
+export async function scoreFindings(findings: Finding[], outPath: string, truthPath?: string): Promise<Score> {
 	const tmp = `${outPath}.findings.json`;
 	await writeFile(tmp, JSON.stringify(findings, null, 2));
 	try {
 		await run("python3", [
 			join(DVBANK, "eval/graders/detection_grader.py"),
-			"--truth", join(DVBANK, "eval/ground_truth.json"),
+			"--truth", truthPath ?? join(DVBANK, "eval/ground_truth.json"),
 			"--findings", tmp,
-			"--decoys", join(DVBANK, "eval/decoys/manifest.json"),
+			...(truthPath ? [] : ["--decoys", join(DVBANK, "eval/decoys/manifest.json")]),
 			"--window", "3", "--out", outPath,
 		], { maxBuffer: 1 << 26 });
 		// Metrics are nested under `summary`; reading the top level scores a

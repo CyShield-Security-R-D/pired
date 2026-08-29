@@ -25,7 +25,9 @@
     "assay:grade": "node --experimental-strip-types eval/grade-cli.ts",
     "assay:experiment": "node --experimental-strip-types eval/experiment-cli.ts",
     "assay:compounding": "node --experimental-strip-types eval/compounding.ts",
-    "assay:corpus": "node --experimental-strip-types eval/corpus/fetch.ts"
+    "assay:corpus": "node --experimental-strip-types eval/corpus/fetch.ts",
+    "assay:corpus-scan": "node --experimental-strip-types eval/corpus/run.ts",
+    "assay:progress": "node --experimental-strip-types eval/progress.ts"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",

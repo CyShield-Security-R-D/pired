@@ -251,6 +251,11 @@ for (const adv of advisories.slice(0, limit)) {
 			repo: `${owner}/${repo}`, sha, target, truth: join(outRoot, `${slug}.truth.json`), entries: key.length,
 		});
 		built += 1;
+		// Written after every target, not once at the end: a slow clone on one
+		// large project should not strand the targets already built. The first run
+		// hung on mlflow and left five finished targets unusable for want of a
+		// manifest.
+		await writeFile(join(outRoot, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
 		process.stdout.write(
 			`  ${adv.id}  ${adv.published?.slice(0, 10)}  ${owner}/${repo}@${sha.slice(0, 8)}  →  ${key.length} truth entr${key.length === 1 ? "y" : "ies"} in ${new Set(key.map((k) => k.file)).size} file(s), ${removed} leak file(s) stripped\n`,
 		);
