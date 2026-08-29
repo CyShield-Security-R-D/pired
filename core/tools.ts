@@ -188,7 +188,7 @@ How these connect (this is what makes coverage work, not ceremony):
 - Coverage is your checklist's classes x the surface *you have recorded*. A host or endpoint you never recorded has no cells at all, so it can never show as tested and 'recall gaps' cannot route you to it. Record the surface as you discover it.
 - A cell is settled by a hypothesis outcome, not by a finding: outcome 'confirmed' marks it vulnerable, 'refuted' marks it clear. Ruling a class out is real work and only counts if you record the refutation — otherwise the cell stays untested no matter how carefully you looked. Settling one cell per call would be hundreds of calls, so record refutations in the shape you reasoned in: one call with a list of classes (and/or targets) and the single reason they share.
 - A confirmed hypothesis should also be recorded as a finding, tagged with the same 'class' so the finding maps back to its cell.
-- 'evidence' is a workspace-relative PATH, not inline text. Create it with record kind=evidence (which returns the path), then cite that exact path. Never cite a path you did not get back from a record kind=evidence call — an unresolvable path is an unsupported claim, and inventing one is worse than omitting it.`;
+- 'evidence' is a workspace-relative PATH, not inline text. Create it with record kind=evidence (which returns the path), then cite that exact path. Paths are verified on write: a finding or hypothesis citing a path that does not resolve is rejected, so cite only what you actually saved, or omit the field.`;
 
 const RECORD_PARAMETERS: JsonSchema = {
 	type: "object",
@@ -266,6 +266,32 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 					}
 				}
 				return text(`Recorded ${ids.length} hypotheses (${targets.length} target(s) x ${classes.length} class(es)), outcome=${outcome}.`, { kind, ids });
+			}
+
+			// Evidence must resolve before a claim citing it is accepted.
+			//
+			// Adding `record kind=evidence` gave the model a way to create evidence
+			// files, and it started emitting well-formed paths — to files it had not
+			// written. Measured across six live runs, evidence backing sat at 0.49:
+			// roughly half of all cited paths pointed at nothing. That is worse than
+			// the original malformed-text failure, because it looks correct.
+			//
+			// A finding is a claim in a document a client reads. Citing an artifact
+			// that does not exist is a fabrication, so the tool refuses rather than
+			// hoping the prompt is persuasive. The error names the fix.
+			const claimed = kind === "finding" ? strArr(a.evidence) ?? [] : kind === "hypothesis" ? [str(a.evidence)].filter((x): x is string => !!x) : [];
+			if (claimed.length > 0) {
+				const missing: string[] = [];
+				for (const rel of claimed) {
+					if ((await deps.workspace.readRelative(rel)) === undefined) missing.push(rel);
+				}
+				if (missing.length > 0) {
+					throw new Error(
+						`record ${kind}: evidence path(s) do not resolve: ${missing.join(", ")}. ` +
+							"Create each with record kind=evidence (it returns the path to cite), or omit the evidence field. " +
+							"Citing a file that does not exist is an unsupported claim.",
+					);
+				}
 			}
 
 			const store = STORE_FOR_KIND[kind];

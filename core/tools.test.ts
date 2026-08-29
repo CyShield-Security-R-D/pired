@@ -236,3 +236,52 @@ describe("list coercion on hypothesis fields", () => {
 		expect(hyps[0]).toMatchObject({ target: "e1", class: "sqli" });
 	});
 });
+
+describe("evidence must resolve before a claim citing it is accepted", () => {
+	it("rejects a finding citing a path that was never written", async () => {
+		const { ctx, record } = await setup();
+		await expect(
+			record.execute(
+				{ kind: "finding", title: "SQLi", severity: "high", target: "e1", evidence: ["evidence/never-written.txt"] },
+				ctx,
+			),
+		).rejects.toThrow(/do not resolve/);
+	});
+
+	it("accepts a finding whose evidence was actually saved", async () => {
+		const { ws, ctx, record } = await setup();
+		const res = await record.execute({ kind: "evidence", name: "sqli.txt", content: "HTTP 500 SQL syntax error" }, ctx);
+		const rel = (res.details as { path: string }).path;
+		await record.execute(
+			{ kind: "finding", title: "SQLi", severity: "high", target: "e1", evidence: [rel] },
+			ctx,
+		);
+		expect((await ws.read("findings"))[0]).toMatchObject({ evidence: [rel] });
+	});
+
+	it("names every missing path so the model can fix them all at once", async () => {
+		const { ctx, record } = await setup();
+		await expect(
+			record.execute(
+				{ kind: "finding", title: "x", severity: "low", target: "e1", evidence: ["evidence/a.txt", "evidence/b.txt"] },
+				ctx,
+			),
+		).rejects.toThrow(/a\.txt.*b\.txt/);
+	});
+
+	it("still accepts a finding with no evidence claim", async () => {
+		const { ws, ctx, record } = await setup();
+		await record.execute({ kind: "finding", title: "x", severity: "low", target: "e1" }, ctx);
+		expect(await ws.read("findings")).toHaveLength(1);
+	});
+
+	it("gates hypotheses too", async () => {
+		const { ctx, record } = await setup();
+		await expect(
+			record.execute(
+				{ kind: "hypothesis", statement: "s", target: "e1", class: "sqli", evidence: "evidence/ghost.txt" },
+				ctx,
+			),
+		).rejects.toThrow(/do not resolve/);
+	});
+});
