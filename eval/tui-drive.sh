@@ -40,18 +40,20 @@ for e in sorted([e for e in m if os.path.isdir(e['target'])], key=lambda e: kb(e
 tmux kill-session -t "$SESSION" 2>/dev/null
 tmux new-session -d -s "$SESSION" -n review -x 230 -y 56 "echo 'starting…'; sleep 2"
 # Right-hand pane: results, refreshed continuously.
-tmux split-window -t "$SESSION:review" -h -l 62 \
+# Layout, built in a deliberate order because the previous version produced a
+# stack of full-width panes instead of a side rail: split the WINDOW horizontally
+# first so the right column is full height, then split only the LEFT pane for
+# results. Splitting the right column instead is what buried the panel at the
+# bottom. Geometry is verified after the fact rather than assumed.
+tmux split-window -h -t "$SESSION:review.0" -l "${RAIL_WIDTH:-62}" \
+  "node --experimental-strip-types $REPO/bin/pired-state.mjs --watch --every 5 --width $(( ${RAIL_WIDTH:-62} - 2 )) --lines 40"
+
+tmux split-window -v -t "$SESSION:review.0" -l 30% \
   "while true; do clear; echo '── results ──'; echo; cat $RESULTS 2>/dev/null; echo; echo \"[\$(grep -c . $RESULTS 2>/dev/null) / ${#TARGETS[@]} targets]\"; sleep 5; done"
 # Optional third pane: live engagement state — scope, type, coverage, surface,
 # hypotheses by outcome, findings by severity. Set PANEL=0 to omit it.
-if [ "${PANEL:-1}" = "1" ]; then
-  # A genuine full-height side rail: pi exposes only setHeader/setFooter, so the
-  # side panel lives at the terminal level rather than inside the TUI. It reads
-  # pired's own derivation via bin/pired-state.mjs instead of scraping the
-  # ledgers, so the panel and the TUI can never disagree.
-  tmux split-window -t "$SESSION:review.1" -v -l 62% \
-    "node --experimental-strip-types $REPO/bin/pired-state.mjs --watch --every 5 --width 60 --lines 30"
-fi
+# The rail is pane 1 and is created above; PANEL=0 drops it.
+if [ "${PANEL:-1}" = "0" ]; then tmux kill-pane -t "$SESSION:review.1" 2>/dev/null; fi
 
 for T in "${TARGETS[@]}"; do
   name=$(basename "$T")
