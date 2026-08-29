@@ -10,7 +10,7 @@
 # leaving silence to be interpreted.
 set -uo pipefail
 LOG="${1:-/tmp/corpusrun2.log}"
-prev_cpu=""; prev_line=""; stall=0
+prev_cpu=""; prev_line=""; prev_led=""; stall=0; beat=0
 
 secs() { local t=$1 h m s; IFS=: read -r h m s <<<"$t"; [ -z "$s" ] && { s=$m; m=$h; h=0; }; echo $((10#$h*3600 + 10#$m*60 + 10#$s)); }
 
@@ -44,7 +44,14 @@ while true; do
   else
     [ $stall -ge 5 ] && echo "RECOVERED — $tgt resumed"
     stall=0
-    echo "WORKING $tgt cpu=${cpu}s $led  [$results/15 done]"
+    # CPU ticks every poll, so reporting on it alone is a heartbeat once a
+    # minute — noise. Speak when the ledger moves (real work landed) or every
+    # tenth poll, so a long quiet stretch still confirms liveness.
+    beat=$((beat+1))
+    if [ "$led" != "${prev_led:-}" ] || [ $((beat % 10)) -eq 0 ]; then
+      echo "WORKING $tgt cpu=${cpu}s $led  [$results/15 done]"
+    fi
+    prev_led="$led"
   fi
   prev_cpu=$cpu
   sleep 60
