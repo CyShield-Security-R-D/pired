@@ -39,10 +39,16 @@ while true; do
 
   if [ "$cpu" = "${prev_cpu:-}" ]; then
     stall=$((stall+1))
-    # 5 consecutive polls (~5 min) with no CPU movement is not thinking.
-    [ $stall -eq 5 ] && echo "HUNG — $tgt: no CPU progress for ~5min (cpu=${cpu}s) $led"
+    # CPU is a poor liveness signal here and the threshold was badly wrong.
+    # A process waiting on an HTTP response burns no CPU, so on a deliberately
+    # slow inference server "no CPU for five minutes" is the normal case, not a
+    # hang — that threshold produced false HUNG verdicts on runs that were
+    # working fine, and one of them was killed on the strength of it.
+    # Thirty minutes without a single ledger write is worth mentioning; less
+    # than that is just the server being cheap.
+    [ $stall -eq 30 ] && echo "QUIET — $tgt: no ledger write for ~30min (cpu=${cpu}s) $led — may be normal on a slow server"
   else
-    [ $stall -ge 5 ] && echo "RECOVERED — $tgt resumed"
+    [ $stall -ge 30 ] && echo "RESUMED — $tgt writing again"
     stall=0
     # CPU ticks every poll, so reporting on it alone is a heartbeat once a
     # minute — noise. Speak when the ledger moves (real work landed) or every
