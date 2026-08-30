@@ -22,6 +22,7 @@ import { cp, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { promisify } from "node:util";
 import { dedupe, fromLedger, scoreFindings } from "../dvbank/score.ts";
+import { scopeClause } from "./lib.ts";
 
 const run = promisify(execFile);
 const PIRED = new URL("../../bin/pired.mjs", import.meta.url).pathname;
@@ -41,6 +42,11 @@ interface Entry {
 	target: string;
 	truth: string;
 	entries: number;
+	/** Application targets carry a scope; library targets do not. */
+	scope?: string[];
+	scope_files?: number;
+	scope_loc?: number;
+	surface?: "direct" | "indirect";
 }
 
 const corpusDir = arg("corpus", "/tmp/corpus");
@@ -120,8 +126,34 @@ const jobs = targets.map((m) => async (): Promise<void> => {
 		const pending = run(process.execPath, [
 			PIRED, "--profile", "review", "--provider", arg("provider", "openrouter"),
 			"--model", arg("model", "qwen/qwen3.8-27b"),
-			"--no-theme", "--target", m.target, "--prompt", PROMPT,
-		], { timeout: Number(arg("timeout", "1800000")), maxBuffer: 512 * 1024 * 1024, cwd: m.target });
+			"--no-theme", "--target", m.target, "--prompt", PROMPT + scopeClause(m.scope),
+		], {
+			timeout: Number(arg("timeout", "1800000")), maxBuffer: 512 * 1024 * 1024, cwd: m.target,
+			// The seal, in the runner rather than alongside it.
+			//
+			// Every target here is a pre-fix commit of a public project, so the fixed
+			// release *is* the answer key: an agent that can reach pypi, npm or github
+			// can download it and diff the answer out, and the pired transcripts showed
+			// exactly that happening up to 34 times on a single target. That is
+			// retrieval, not discovery, and it is the difference between a number that
+			// means something and one that does not.
+			//
+			// This lived outside the runner during the first sealed experiment, which
+			// is precisely how the codex arm ran unsealed for three full passes without
+			// anyone noticing. A control that has to be remembered is not a control.
+			// Blackhole outbound HTTP for the agent's shell commands; exempt only the
+			// model endpoint and the local metering proxy. Byte-identical in intent to
+			// the codex arm, so neither harness is advantaged by its seal.
+			...(arg("sealed") === "no" ? {} : {
+				env: {
+					...process.env,
+					HTTPS_PROXY: "http://127.0.0.1:1", HTTP_PROXY: "http://127.0.0.1:1",
+					https_proxy: "http://127.0.0.1:1", http_proxy: "http://127.0.0.1:1",
+					NO_PROXY: "localhost,127.0.0.1,openrouter.ai",
+					no_proxy: "localhost,127.0.0.1,openrouter.ai",
+				},
+			}),
+		});
 		pending.child.stdin?.end();
 		await pending;
 	} catch (err) {

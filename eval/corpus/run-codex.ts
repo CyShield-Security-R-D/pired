@@ -21,6 +21,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { dedupe, scoreFindings } from "../dvbank/score.ts";
 import type { Finding } from "../dvbank/score.ts";
+import { scopeClause } from "./lib.ts";
 
 const exec = promisify(execFile);
 const RUN_ID = Math.random().toString(36).slice(2, 8);
@@ -39,6 +40,8 @@ interface Entry {
 	target: string;
 	truth: string;
 	entries: number;
+	scope?: string[];
+	surface?: "direct" | "indirect";
 }
 
 const PROMPT =
@@ -110,15 +113,36 @@ const jobs = targets.map((m) => async (): Promise<void> => {
 		const pending = exec(
 			"codex",
 			[
-				"exec", "--skip-git-repo-check", "--ephemeral",
+				"exec", "--skip-git-repo-check",
+				// no --ephemeral: it discarded the transcripts, so codex's behaviour
+				// could not be audited afterwards while pired's could.
 				"-s", "read-only",
 				"-C", m.target,
 				"-o", outFile,
 				"--output-schema", schemaPath,
 				...(arg("model") ? ["-m", arg("model")] : []),
-				PROMPT,
+				PROMPT + scopeClause(m.scope),
 			],
-			{ timeout: Number(arg("timeout", "1800000")), maxBuffer: 1 << 26, cwd: m.target },
+			{
+				timeout: Number(arg("timeout", "1800000")), maxBuffer: 1 << 26, cwd: m.target,
+				// codex's read-only sandbox restricts filesystem writes, NOT network —
+				// verified: it fetches pypi.org happily. Since the corpus is built from
+				// pre-patch commits, an agent that can reach pypi or github can download
+				// the fixed release and diff out the answer, which is what the pired
+				// transcripts showed it doing up to 34 times on a single target.
+				//
+				// Blackhole outbound HTTP for the agent's shell commands while exempting
+				// codex's own model API, so the arm is sealed the same way pired's is.
+				...(arg("sealed") === "no" ? {} : {
+					env: {
+						...process.env,
+						HTTPS_PROXY: "http://127.0.0.1:1", HTTP_PROXY: "http://127.0.0.1:1",
+						https_proxy: "http://127.0.0.1:1", http_proxy: "http://127.0.0.1:1",
+						NO_PROXY: "api.openai.com,chatgpt.com,auth.openai.com,localhost,127.0.0.1",
+						no_proxy: "api.openai.com,chatgpt.com,auth.openai.com,localhost,127.0.0.1",
+					},
+				}),
+			},
 		);
 		// codex exec reads stdin even with a prompt argument and blocks on the
 		// open pipe execFile gives it (research/02 §5).
