@@ -30,7 +30,7 @@ describe("pired extension registration", () => {
 		const { api, seen } = stubApi();
 		piredExtension(api as never);
 		expect(seen.commands).toEqual(expect.arrayContaining([
-			"panel", "coverage", "findings",
+			"panel", "coverage", "findings", "maximize",
 			// The browser: the surface and the hypotheses behind the panel's counts.
 			"surface", "hypotheses",
 		]));

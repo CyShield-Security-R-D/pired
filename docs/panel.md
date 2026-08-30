@@ -128,3 +128,24 @@ The panel reads the workspace ledgers and pired's own derived stats — the same
 `bin/pired-state.mjs` imports pired's `core/` directly rather than parsing the `.jsonl` files itself. An earlier version scraped the ledgers, which meant the panel and the TUI could disagree about the same engagement; going through the same derivation makes that impossible.
 
 The renderer itself (`core/panel.ts`) is a pure module: colour, width measurement, and truncation are injected, so it renders identically in the TUI overlay, a tmux pane, and a unit test.
+
+## Maximizing
+
+`alt+m` (or `/maximize`) grows the rail to 70% width and 90% height and makes it scrollable. Press it again — or `esc` — to restore.
+
+```
+↑ ↓  /  k j      scroll a line
+PgUp PgDn        scroll a page
+g G / Home End   top, bottom
+alt+m / esc / q  restore
+```
+
+The restored rail drops whole sections to fit its half-screen budget, which is right for a glance and wrong for reading: twelve findings truncated to three is a summary of a summary. Maximized, the panel lays out everything and scrolls it, with `↓ N more` on the bottom edge while there is content below.
+
+It is still a side panel, not a takeover. The transcript stays visible on the left, which is the point — you are usually reading the panel *against* something the agent just said.
+
+Two behaviours worth knowing:
+
+**It captures the keyboard only while maximized.** The rail is a view and must never take the keys you are using to talk to the agent, but a scrollable view has to receive arrow keys. Capturing follows the mode, and restoring hands the keyboard straight back.
+
+**Both frame edges stay pinned** while the body moves, so the box does not appear to lose its lid every time you scroll. An out-of-range offset is clamped rather than rejected — a held-down arrow key stops cleanly at the end instead of emptying the frame.

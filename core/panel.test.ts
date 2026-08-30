@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dismissHint, renderPanel, type PanelData, type PanelMode, type PanelTone } from "./panel.ts";
+import { dismissHint, renderPanel, scrollFramed, type PanelData, type PanelMode, type PanelTone } from "./panel.ts";
 
 const ink = (_t: PanelTone, s: string): string => s; // colourless stand-in
 const measure = (s: string): number => s.length;
@@ -182,5 +182,48 @@ describe("the frame survives a tight budget", () => {
 		expect(lines[0]).toContain("╭");
 		expect(lines.at(-1)).toContain("╰");
 		expect(lines.join("\n")).toContain("alt+p to hide");
+	});
+});
+
+describe("scrollFramed", () => {
+	const framed = (n: number): string[] => ["╭top╮", ...Array.from({ length: n }, (_, i) => `row${i}`), "╰bot╯"];
+
+	it("returns content untouched when it already fits", () => {
+		const r = scrollFramed(framed(3), 0, 10);
+		expect(r.lines).toHaveLength(5);
+		expect(r.below).toBe(0);
+	});
+
+	it("keeps both frame edges pinned while the body moves", () => {
+		const r = scrollFramed(framed(20), 5, 10);
+		expect(r.lines[0]).toBe("╭top╮");
+		expect(r.lines.at(-1)).toBe("╰bot╯");
+		expect(r.lines).toHaveLength(10);
+		expect(r.lines[1]).toBe("row5");
+	});
+
+	it("clamps an overscrolled offset instead of emptying the frame", () => {
+		// The caller's offset and the content length change independently, so a
+		// held-down arrow must not be able to scroll past the end.
+		const r = scrollFramed(framed(20), 9999, 10);
+		expect(r.lines).toHaveLength(10);
+		expect(r.below).toBe(0);
+		expect(r.scroll).toBe(12); // 20 body rows, 8 visible
+		expect(r.lines.at(-2)).toBe("row19");
+	});
+
+	it("clamps a negative offset to the top", () => {
+		expect(scrollFramed(framed(20), -5, 10).scroll).toBe(0);
+	});
+
+	it("reports how much is out of view on each side", () => {
+		const r = scrollFramed(framed(20), 4, 10);
+		expect(r.above).toBe(4);
+		expect(r.below).toBe(20 - (4 + 8));
+	});
+
+	it("degrades rather than throwing at absurd heights", () => {
+		expect(scrollFramed(framed(20), 0, 0).lines).toEqual([]);
+		expect(scrollFramed(framed(20), 0, 2).lines).toHaveLength(2);
 	});
 });

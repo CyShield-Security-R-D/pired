@@ -283,3 +283,43 @@ export function renderPanel(opts: PanelOptions): string[] {
 		? frameLines(out, `${ink("accent", "⦿")} ${ink("title", d.engagement)}`, opts.width, ink, measure, truncate)
 		: out;
 }
+
+/**
+ * Window a framed panel to `height` rows, keeping both frame edges pinned.
+ *
+ * The rail drops whole sections to fit its half-screen budget, which is right
+ * for a glance and wrong for reading: a findings list of twelve is not something
+ * you want truncated to three. Maximised, the panel renders everything and this
+ * scrolls it — but the border has to stay put, or the box appears to lose its
+ * lid every time the body moves.
+ *
+ * Pure and total: an out-of-range scroll is clamped rather than rejected, since
+ * the caller's scroll offset and the content length change independently and a
+ * held-down arrow key must not be able to produce an empty frame.
+ */
+export interface ScrollWindow {
+	lines: string[];
+	/** The offset actually used, after clamping. */
+	scroll: number;
+	/** Body rows below the window; 0 when the end is visible. */
+	below: number;
+	above: number;
+}
+
+export function scrollFramed(all: string[], scroll: number, height: number): ScrollWindow {
+	if (all.length <= height || all.length < 3 || height < 3) {
+		return { lines: all.slice(0, Math.max(0, height)), scroll: 0, below: 0, above: 0 };
+	}
+	const top = all[0] as string;
+	const bottom = all[all.length - 1] as string;
+	const body = all.slice(1, -1);
+	const bodyHeight = height - 2;
+	const max = Math.max(0, body.length - bodyHeight);
+	const at = Math.max(0, Math.min(scroll, max));
+	return {
+		lines: [top, ...body.slice(at, at + bodyHeight), bottom],
+		scroll: at,
+		above: at,
+		below: Math.max(0, body.length - (at + bodyHeight)),
+	};
+}

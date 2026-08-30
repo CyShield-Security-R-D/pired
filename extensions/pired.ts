@@ -32,7 +32,7 @@ import type { Gate } from "../core/ports.ts";
 import { buildSystemPrompt, PIRED_PROFILES, type PiredProfile } from "../core/prompts.ts";
 import { createScopeGate } from "../core/scope.ts";
 import { renderCoveragePanel, type Tone } from "../core/coverage-panel.ts";
-import { dismissHint, PANEL_MODES, renderPanel, type PanelData, type PanelMode, type PanelTone } from "../core/panel.ts";
+import { dismissHint, PANEL_MODES, renderPanel, scrollFramed, type PanelData, type PanelMode, type PanelTone } from "../core/panel.ts";
 import { computeCoverageView, computeEngagementStats, coveragePercent, type EngagementStats } from "../core/stats.ts";
 import { layoutStatusLine, type Segment } from "../core/statusline.ts";
 import { createCoreTools } from "../core/tools.ts";
@@ -270,6 +270,21 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	 * onHandle gives the handle used to close it again.
 	 */
 	let railHandle: { hide(): void; setHidden(h: boolean): void } | undefined;
+	/**
+	 * Maximised: a wider, taller, scrollable rail — still a side panel, not a
+	 * takeover.
+	 *
+	 * The half-screen rail drops whole sections to fit, which is right for a
+	 * glance and wrong for reading: twelve findings truncated to three is a
+	 * summary of a summary. Maximising renders everything and scrolls it.
+	 *
+	 * Capturing follows the mode. The rail must never take the keyboard from the
+	 * operator, but a scrollable view has to receive arrow keys, so it captures
+	 * only while maximised and hands the keyboard back on restore.
+	 */
+	let railMax = false;
+	let railScroll = 0;
+	let railRerender: (() => void) | undefined;
 	let railDone: (() => void) | undefined;
 
 	/**
@@ -304,8 +319,12 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	 * hint. The panel's own section-dropping is the graceful path and it only
 	 * runs when maxLines is honest about the space available.
 	 */
-	const railRows = (): number => {
-		const rows = process.stdout.rows ?? 40;
+	const railRows = (tui?: { terminal?: { rows: number } }): number => {
+		// tui.terminal.rows over process.stdout.rows: the TUI knows the size it is
+		// actually laying out for, which is not the same thing when pired is driven
+		// through a pipe or a multiplexer.
+		const rows = tui?.terminal?.rows ?? process.stdout.rows ?? 40;
+		if (railMax) return Math.max(6, Math.floor(rows * 0.9));
 		const h = railHeight();
 		return typeof h === "number" ? h : Math.floor((rows * Number.parseInt(h, 10)) / 100);
 	};
@@ -342,33 +361,56 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	const openInlineRail = async (ctx: ExtensionContext): Promise<void> => {
 		const width = railWidth();
 		void ctx.ui.custom<void>(
-			(_tui, theme, _keybindings, done) => {
+			(tui, theme, _keybindings, done) => {
 				railDone = () => done();
+				railRerender = () => tui.requestRender();
 				return {
 					render: (w: number): string[] => {
 						if (!panelData) return [theme.fg("dim", "pired: no engagement state yet")];
-						return renderPanel({
+						const rows = railRows(tui);
+						const lines = renderPanel({
 							mode: panelMode,
 							data: panelData,
 							width: w,
-							// Not a constant: this must match the overlay's own maxHeight or
-							// the panel lays out more than can be shown and pi clips the end.
-							maxLines: railRows(),
+							// Maximised, the panel lays out everything and scrollFramed
+							// windows it. Restored, it must match the overlay's own maxHeight
+							// or it lays out more than can be shown and pi clips the end.
+							maxLines: railMax ? 4000 : rows,
 							frame: true,
 							// The panel opens over the transcript — and now does so without
 							// being asked — so it owes the operator an exit that works on the
 							// machine they are reading it on. See dismissHint.
-							hint: dismissHint(process.platform),
+							hint: railMax ? "↑↓ scroll · alt+m restore · esc close" : dismissHint(process.platform),
 							ink: (tone, text) => theme.fg(PANEL_TONE_COLOR[tone], text),
 							measure: visibleWidth,
 							truncate: (x, ww) => truncateToWidth(x, ww, theme.fg("dim", "…")),
 						});
+						if (!railMax) return lines;
+						const win = scrollFramed(lines, railScroll, rows);
+						railScroll = win.scroll; // adopt the clamp, so a held key stops cleanly
+						return win.below > 0
+							? [...win.lines.slice(0, -1), theme.fg("dim", truncateToWidth(`  ↓ ${win.below} more`, w))]
+							: win.lines;
 					},
 					invalidate(): void {},
-					// The rail is a view, not a prompt: it must not capture the keys
-					// the operator is using to talk to the agent.
-					handleInput(): boolean {
-						return false;
+					handleInput(data: string): boolean {
+						// Restored, the rail is a view and must not take the keys the
+						// operator is using to talk to the agent.
+						if (!railMax) return false;
+						const page = Math.max(1, railRows(tui) - 4);
+						if (matchesKey(data, Key.up) || data === "k") railScroll -= 1;
+						else if (matchesKey(data, Key.down) || data === "j") railScroll += 1;
+						else if (matchesKey(data, Key.pageUp)) railScroll -= page;
+						else if (matchesKey(data, Key.pageDown)) railScroll += page;
+						else if (matchesKey(data, Key.home) || data === "g") railScroll = 0;
+						else if (matchesKey(data, Key.end) || data === "G") railScroll = 1e9;
+						else if (matchesKey(data, Key.escape) || data === "q") {
+							railMax = false;
+							railScroll = 0;
+						} else return false;
+						if (railScroll < 0) railScroll = 0;
+						tui.requestRender();
+						return true;
 					},
 				};
 			},
@@ -388,13 +430,11 @@ export default function piredExtension(pi: ExtensionAPI): void {
 				// keyboard focus by default, so without it the rail silently swallows
 				// every keystroke and the app looks frozen. The panel is a view, not
 				// a prompt — it must never take the keyboard from the operator.
-				overlayOptions: () => ({
-					anchor: "top-right",
-					width,
-					maxHeight: railHeight(),
-					offsetY: 1,
-					nonCapturing: true,
-				}),
+				// Re-evaluated by pi on layout, which is what lets alt+m resize a panel
+				// that is already open instead of tearing it down and rebuilding it.
+				overlayOptions: () => (railMax
+					? { anchor: "top-right", width: "70%", minWidth: 60, maxHeight: "90%", offsetY: 1, nonCapturing: false }
+					: { anchor: "top-right", width, maxHeight: railHeight(), offsetY: 1, nonCapturing: true }),
 				onHandle: (h) => {
 					railHandle = h;
 					// If the host focuses it anyway, hand the keyboard straight back.
@@ -829,10 +869,48 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	 * pi or readline — ctrl+g was registered and silently skipped as a conflict —
 	 * so alt+p it is, which is at least mnemonic.
 	 */
+	pi.registerShortcut("alt+m", {
+		description: "maximize the engagement panel and scroll it",
+		handler: async (ctx) => {
+			if (ctx.mode !== "tui") return;
+			if (!railHandle) {
+				// Nothing to maximize yet: open it maximized rather than doing nothing.
+				railMax = true;
+				railScroll = 0;
+				try {
+					await openInlineRail(ctx);
+				} catch {}
+				return;
+			}
+			railMax = !railMax;
+			railScroll = 0;
+			railRerender?.();
+		},
+	});
+
 	pi.registerShortcut("alt+p", {
 		description: "pired: toggle the engagement panel",
 		handler: async (ctx) => {
 			await togglePanel("", ctx);
+		},
+	});
+
+	pi.registerCommand("maximize", {
+		description: "Maximize the engagement panel (scrollable); run again to restore",
+		handler: async (_args, ctx) => {
+			if (ctx.mode !== "tui") {
+				ctx.ui.notify("pired: the panel is a terminal view; nothing to maximize here", "warning");
+				return;
+			}
+			if (!railHandle) {
+				railMax = true;
+				railScroll = 0;
+				await openInlineRail(ctx).catch(() => {});
+				return;
+			}
+			railMax = !railMax;
+			railScroll = 0;
+			railRerender?.();
 		},
 	});
 
