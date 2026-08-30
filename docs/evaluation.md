@@ -93,6 +93,7 @@ Full methodology, per-category breakdown, exact token and cost accounting, and t
 | [06 — Compounding](../research/06-compounding-2026-08.md) | Persisted vs wiped ledger over k sessions: **no measurable recall benefit**, and the scoring artifact that first suggested otherwise. |
 | [07 — Real-app corpus](../research/07-corpus-2026-08.md) | 17 real CVEs with maintainer patches as ground truth: recall halves versus the teaching app, and the harnesses are complementary. |
 | [08 — Application corpus](../research/08-application-corpus-2026-08.md) | Why the library corpus was measuring ontology mismatch rather than the harness, and the application corpus built to replace it. |
+| [09 — Misses](../research/09-misses-2026-08.md) | Every missed bug so far, per target: what it was, what the ledger shows, and what was reported instead. Engagement predicts detection; the misses all live off the request surface. |
 
 ## Two corpora, one answer key
 

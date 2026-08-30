@@ -246,3 +246,8 @@ not evidence of a pattern, which is exactly why targets carry a `direct` /
 
 **n = 1 of 20. No pooled recall is reported here, and none should be quoted from
 this document until the run completes.**
+
+Per-bug detail for every miss recorded so far — the six on the sealed library
+corpus and this one — is in [09](09-misses-2026-08.md), along with the finding
+that on the library corpus the mechanism fired on two targets of six and those
+two are the only two that scored.
