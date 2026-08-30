@@ -70,7 +70,9 @@ Measured against **real CVEs in real software** — 17 targets built from mainta
 
 The ranges are not decoration. Run pired three times over the same targets and it changes its answer on **half of them**; run codex three times and it reproduces on **5 of 6**. Recall differences of a few points sit inside pired's own run-to-run spread, so we do not claim a ranking.
 
-What three passes each *did* settle is more useful: the two harnesses have **reproducible blind spots in opposite directions** — one jinja sandbox breakout that pired finds 3/3 and codex never finds, and another that codex finds 3/3 and pired found once. They are complements, not substitutes. And pired's consistency gap is now a measured defect rather than a suspicion. See [`research/07`](./research/07-corpus-2026-08.md).
+One caveat matters more than the ranking, and it generalises beyond this project: **a network-capable agent can retrieve the answer.** The corpus is built from pre-patch commits, so the released version *is* the key — and the transcripts show up to 34 `pip download` / `git clone` / `diff -ru` attempts per target. `.git` and changelog stripping cannot prevent that.
+
+Re-run with the network denied through pired's own scope gate and targets restored from pristine snapshots, **pooled recall held at 0.250** — but the two hits took ~1000 seconds of genuine analysis each, against ~150 seconds for the runs that gave up. The score survives the seal; the *method* changes completely. `jinja-1475` is the clean result: full recall, sealed, on a bug codex missed 3/3. See [`research/07`](./research/07-corpus-2026-08.md).
 
 Full methodology, per-category breakdown, exact token/cost accounting, and threats to validity: **[`research/`](./research/)**.
 

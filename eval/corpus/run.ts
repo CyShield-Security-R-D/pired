@@ -17,7 +17,8 @@
  */
 
 import { execFile } from "node:child_process";
-import { readFile, rm, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { cp, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { promisify } from "node:util";
 import { dedupe, fromLedger, scoreFindings } from "../dvbank/score.ts";
@@ -74,6 +75,22 @@ interface Row extends Entry {
 	error?: string;
 }
 
+/**
+ * Keep one immutable copy of each target and restore from it before every run.
+ *
+ * Taken on first use, so it must be taken from a tree fetch.ts has just built —
+ * snapshotting a dirty target would bake the contamination in permanently.
+ */
+async function restorePristine(target: string): Promise<void> {
+	const snap = `${target}.pristine`;
+	if (!existsSync(snap)) {
+		await cp(target, snap, { recursive: true });
+		return;
+	}
+	await rm(target, { recursive: true, force: true });
+	await cp(snap, target, { recursive: true });
+}
+
 const rows: Row[] = [];
 process.stderr.write(`⦿ corpus scan · ${targets.length} target(s) · ${RUN_ID}\n\n`);
 
@@ -86,6 +103,15 @@ const jobs = targets.map((m) => async (): Promise<void> => {
 	const name = basename(m.target);
 	const engagementDir = join(process.env.HOME ?? "", ".pired", "engagements", name);
 	await rm(engagementDir, { recursive: true, force: true });
+	// The agent runs with cwd = the target, so its PoC scripts, scanner output and
+	// evidence files land *inside the tree it is reviewing*. Left there, the next
+	// pass reviews a different codebase than the first one did — and so does the
+	// other arm, since both read the same directory. Two independent harnesses
+	// flipping the same target in the same direction is how this surfaced.
+	//
+	// Restore from a pristine snapshot before every run so each pass sees the
+	// tree fetch.ts built, not what the previous agent left behind.
+	await restorePristine(m.target);
 	await pretrust(m.target);
 	const started = Date.now();
 	let ok = true;
