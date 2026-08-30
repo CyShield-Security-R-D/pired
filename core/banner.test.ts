@@ -72,15 +72,17 @@ describe("reserving height for the panel", () => {
 		expect(lines.at(-1)).toBe("");
 	});
 
-	it("reserves inside the block, not underneath it", () => {
+	it("reserves above itself, and sits at the foot of what it reserved", () => {
 		// The rows exist because the panel floats over the transcript and the editor
-		// has to clear it. Under the block they read as a hole between the banner
-		// and the editor; inside it they are negative space with an edge below.
+		// has to clear it. Under the block they were a hole between the banner and
+		// the first reply; above it they are margin before anything has been said.
 		const lines = renderBanner({ ...opts(160), minLines: 24 });
 		expect(lines.length).toBe(24);
+		expect(lines[0]?.trim()).toBe("");
+		expect(lines.slice(0, 12).every((l) => l.trim() === "")).toBe(true);
+		// The block ends where it reserved to, next to the editor.
 		const last = lines.map((l) => l.trim()).filter(Boolean).at(-1) as string;
 		expect(last).toContain("/panel");
-		// And the pad is genuinely inside: rows above the foot, not after it.
 		expect(lines.slice(-3).filter((l) => l.trim() === "").length).toBeLessThanOrEqual(1);
 	});
 
