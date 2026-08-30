@@ -92,6 +92,36 @@ Full methodology, per-category breakdown, exact token and cost accounting, and t
 | [05 — Re-run](../research/05-rerun-2026-08.md) | An independent replication at n=5 — and the ledger grading that showed the workflow was never exercised. |
 | [06 — Compounding](../research/06-compounding-2026-08.md) | Persisted vs wiped ledger over k sessions: **no measurable recall benefit**, and the scoring artifact that first suggested otherwise. |
 | [07 — Real-app corpus](../research/07-corpus-2026-08.md) | 17 real CVEs with maintainer patches as ground truth: recall halves versus the teaching app, and the harnesses are complementary. |
+| [08 — Application corpus](../research/08-application-corpus-2026-08.md) | Why the library corpus was measuring ontology mismatch rather than the harness, and the application corpus built to replace it. |
+
+## Two corpora, one answer key
+
+Both corpora in `eval/corpus/` are built from real, disclosed vulnerabilities the same way, and `lib.ts` holds that derivation once so the two cannot drift:
+
+```
+real advisory id  →  real fix commit  →  checkout at sha^1
+                  →  the maintainer's own diff is the answer key
+                  →  history, changelogs and advisory mentions stripped
+```
+
+What differs is the target class, and that turned out to matter more than anything else about the instrument.
+
+| | `fetch.ts` — libraries | `fetch-apps.ts` — applications |
+|---|---|---|
+| Selected by | package name in a registry | route density in the checkout |
+| Surface | none pired can record | hosts, endpoints, params |
+| Scope | whole repo (small) | largest subtree under a file cap |
+| Measures | deep single-function logic bugs | review at engagement scale |
+
+pired's coverage model is `checklist classes × recorded surface`, and its surface vocabulary is `host / service / endpoint / param / tech`. A parsing library presents none of that, and the sealed library runs recorded **zero hypotheses** — the mechanism under test never engaged. The library corpus is kept because a harness that cannot do library CVEs should say so with a number, but the application corpus is the one that measures the claim.
+
+Both fetchers seal the agent's network themselves rather than relying on a wrapper: every target is a pre-fix commit of a public project, so the fixed release *is* the answer key, and an agent that can reach a package index can diff the answer out instead of finding it.
+
+```bash
+node eval/corpus/fetch-apps.ts --dry                 # what would be admitted, and why
+node eval/corpus/fetch-apps.ts --classify <dir>      # run the admission rule against a checkout
+node eval/corpus/fetch-apps.ts --limit 1 --max 5     # build
+```
 
 ## Grading your own engagement
 
@@ -109,3 +139,4 @@ Two things worth stating plainly, because the instrument is only useful if its l
 
 - **pired is not a scanner.** It owns no detection engines and makes no claim to reproducible, rule-count-comparable output against one.
 - **A benchmark is one target.** The corpus work in `eval/corpus/` exists to widen that — real applications with maintainer security patches as ground truth — and where a result has not been produced, the research says so rather than implying one.
+- **A benchmark can measure the wrong thing entirely.** The library corpus produced a clean, sealed, reproducible number that was substantially about pired's ontology not fitting its targets. It took a contradiction with DVBank to notice. Coverage engagement — hypotheses recorded, cells settled — is reported alongside recall now, because a run where the mechanism never fires is a void result, not a low score.

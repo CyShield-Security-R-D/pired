@@ -135,7 +135,10 @@ const ROUTE_RE = [
 	String.raw`\[(HttpGet|HttpPost|HttpPut|Route)\(`,
 ].join("|");
 
-const VENDORED = /(^|\/)(node_modules|vendor|third_party|\.git|dist|build|\.venv|site-packages)(\/|$)/;
+// Hidden directories are excluded wholesale, not enumerated: `.github` carried
+// enough Python to be picked up as reviewable scope on superset, and no
+// application keeps its request-handling code behind a dot.
+const VENDORED = /(^|\/)(node_modules|vendor|third_party|dist|build|site-packages)(\/|$)|(^|\/)\.[^/]+(\/|$)/;
 const TEMPLATE_RE = /(^|\/)(templates?|views?|layouts)(\/|$)|\.(html|htm|j2|jinja2?|tmpl|gohtml|erb|blade\.php|twig|hbs|ejs)$/i;
 const MIGRATION_RE = /(^|\/)(migrations?|migrate|alembic|Migrations)(\/|$)/i;
 const SERVER_RE = /(^|\/)(manage\.py|wsgi\.py|asgi\.py|routes\.rb|server\.(js|ts|go)|main\.go|Dockerfile|docker-compose\.ya?ml|index\.php|artisan)$/i;
@@ -226,6 +229,12 @@ const cap = Number(arg("cap", "1200"));
 const outRoot = arg("out", "/tmp/corpus-apps") as string;
 const dry = flag("dry");
 const only = arg("only", "");
+// A global ceiling on built targets. Without it a two-advisory sweep across the
+// whole seed list is ~140 working trees on disk, and run.ts keeps a pristine
+// copy of each — the corpus would outgrow the machine before it was ever
+// scanned. Stopping early is also how the seed list stays long: unproductive
+// names cost nothing when the build has a budget.
+const maxTargets = Number(arg("max", "0"));
 
 /**
  * `--classify DIR` runs the admission rule against a checkout that is already on
@@ -274,8 +283,10 @@ process.stdout.write(
 );
 
 for (const ecosystem of ecosystems) {
+	if (maxTargets > 0 && stats.built >= maxTargets) break;
 	const packages = override.length > 0 ? override : (SEEDS[ecosystem] ?? []);
 	for (const pkg of packages) {
+		if (maxTargets > 0 && stats.built >= maxTargets) break;
 		if (only && !pkg.includes(only)) continue;
 		let advisories: Advisory[] = [];
 		try {
@@ -292,6 +303,7 @@ for (const ecosystem of ecosystems) {
 		stats.advisories += Math.min(advisories.length, limit);
 
 		for (const adv of advisories.slice(0, limit)) {
+			if (maxTargets > 0 && stats.built >= maxTargets) break;
 			const ref = (adv.references ?? []).map((r) => COMMIT_RE.exec(r.url)).find(Boolean);
 			if (!ref) continue;
 			const [, owner, repo, shortSha] = ref as unknown as [string, string, string, string];

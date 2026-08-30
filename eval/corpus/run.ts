@@ -21,7 +21,7 @@ import { existsSync } from "node:fs";
 import { cp, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { promisify } from "node:util";
-import { dedupe, fromLedger, scoreFindings } from "../dvbank/score.ts";
+import { dedupe, engagementTelemetry, fromLedger, scoreFindings } from "../dvbank/score.ts";
 import { scopeClause } from "./lib.ts";
 
 const run = promisify(execFile);
@@ -79,6 +79,7 @@ interface Row extends Entry {
 	seconds: number;
 	ok: boolean;
 	error?: string;
+	engaged?: { surface: number; hypotheses: number; settled: number; findings: number };
 }
 
 /**
@@ -179,14 +180,21 @@ const jobs = targets.map((m) => async (): Promise<void> => {
 	}
 	const findings = dedupe(await fromLedger(engagementDir));
 	const score = await scoreFindings(findings, join(corpusDir, `${name}-${RUN_ID}.report.json`), m.truth);
+	// What the coverage machinery did, not just what it found. A run that records
+	// no hypotheses did not exercise the thing under test, and reporting its recall
+	// without that fact is how three passes of the library corpus came to look like
+	// a harness result.
+	const engaged = await engagementTelemetry(engagementDir);
 	rows.push({
 		...m, recall: score.recall ?? 0, precision: score.precision ?? 0,
 		found: score.true_positives ?? 0, reported: findings.length,
-		seconds: Math.round((Date.now() - started) / 1000), ok, error,
+		seconds: Math.round((Date.now() - started) / 1000), ok, error, engaged,
 	});
 	process.stderr.write(
 		ok
-			? `  ${m.id.padEnd(24)} recall ${(score.recall ?? 0).toFixed(2)}  found ${score.true_positives ?? 0}/${m.entries}  reported ${findings.length}  ${Math.round((Date.now() - started) / 1000)}s\n`
+			? `  ${m.id.padEnd(24)} recall ${(score.recall ?? 0).toFixed(2)}  found ${score.true_positives ?? 0}/${m.entries}  reported ${findings.length}  ` +
+				`[surface ${engaged.surface} hyp ${engaged.hypotheses}/${engaged.settled} settled]${engaged.hypotheses === 0 ? " ⚠ MECHANISM IDLE" : ""}  ` +
+				`${Math.round((Date.now() - started) / 1000)}s\n`
 			: `  ${m.id.padEnd(24)} FAILED — ${error}\n`,
 	);
 });
@@ -217,6 +225,22 @@ if (good.length > 0) {
 	const totalFound = good.reduce((a, r) => a + r.found, 0);
 	const totalBugs = good.reduce((a, r) => a + r.entries, 0);
 	process.stdout.write(`\npooled: ${totalFound}/${totalBugs} known bug locations found (${(totalFound / totalBugs).toFixed(3)})\n`);
+
+	// The pooled recall means nothing on its own if the harness never ran its own
+	// method. State it next to the number rather than leaving it to be discovered
+	// later from a transcript.
+	const scored = rows.filter((r) => r.ok);
+	const idle = scored.filter((r) => (r.engaged?.hypotheses ?? 0) === 0);
+	const hyp = scored.reduce((a, r) => a + (r.engaged?.hypotheses ?? 0), 0);
+	const settled = scored.reduce((a, r) => a + (r.engaged?.settled ?? 0), 0);
+	process.stdout.write(`coverage engaged: ${hyp} hypotheses, ${settled} settled across ${scored.length} target(s)\n`);
+	if (idle.length > 0) {
+		process.stdout.write(
+			`⚠ ${idle.length}/${scored.length} target(s) recorded ZERO hypotheses — on those the coverage\n` +
+			`  mechanism never engaged, so their recall measures a plain reviewer, not this harness:\n` +
+			`  ${idle.map((r) => r.id).join(", ")}\n`,
+		);
+	}
 }
 await writeFile(join(corpusDir, `scan-${RUN_ID}.json`), `${JSON.stringify(rows, null, 2)}\n`);
 process.stdout.write(`raw → ${join(corpusDir, `scan-${RUN_ID}.json`)}\n`);

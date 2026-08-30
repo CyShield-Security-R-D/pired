@@ -50,13 +50,13 @@ export async function fromLedger(engagementDir: string): Promise<Finding[]> {
 	for (const r of await ws.read("inventory")) {
 		const rec = r as unknown as { id: string; path?: string; value?: string };
 		const file = rec.path ?? rec.value;
-		if (file && /\.(?:py|js|jsx|ts|tsx)$/.test(file)) inventory.set(rec.id, file);
+		if (file && /\.(?:py|pyi|js|jsx|ts|tsx|go|rb|php|java|cs|rs|kt|scala)$/.test(file)) inventory.set(rec.id, file);
 	}
 
 	const out: Finding[] = [];
 	for (const f of await ws.read("findings")) {
 		const hay = [f.target, f.description, f.repro, f.title, ...(f.evidence ?? [])].filter(Boolean).join(" ");
-		let m = /([\w./-]+\.(?:py|js|jsx|ts|tsx)):(\d+)/.exec(hay);
+		let m = /([\w./-]+\.(?:py|pyi|js|jsx|ts|tsx|go|rb|php|java|cs|rs|kt|scala)):(\d+)/.exec(hay);
 		if (!m) {
 			// file from the inventory + a line stated in the finding's own text
 			const viaInventory = f.target ? inventory.get(f.target) : undefined;
@@ -135,5 +135,43 @@ export async function scoreFindings(findings: Finding[], outPath: string, truthP
 		return parsed.summary ?? { recall: 0, precision: 0, f1: 0, true_positives: 0, total_findings: 0 };
 	} catch {
 		return { recall: 0, precision: 0, f1: 0, true_positives: 0, total_findings: 0 };
+	}
+}
+
+/**
+ * What the coverage machinery actually did, independent of what it found.
+ *
+ * Every sealed library run scored some recall and recorded **zero hypotheses**:
+ * the mechanism under test never engaged, and the number that came out was a
+ * measurement of a plain reviewer with a weaker model. Recall alone cannot tell
+ * those two situations apart, which is how a corpus spent three passes measuring
+ * the wrong thing before a contradiction with DVBank surfaced it.
+ *
+ * Reported beside recall from now on. A run with zero hypotheses is a void
+ * result, not a low score.
+ */
+export interface EngagementTelemetry {
+	surface: number;
+	hypotheses: number;
+	settled: number;
+	findings: number;
+}
+
+export async function engagementTelemetry(engagementDir: string): Promise<EngagementTelemetry> {
+	const empty = { surface: 0, hypotheses: 0, settled: 0, findings: 0 };
+	if (!existsSync(engagementDir)) return empty;
+	try {
+		const ws = new Workspace(engagementDir, makeHostServices());
+		const hyps = await ws.read("hypotheses");
+		return {
+			surface: (await ws.read("inventory")).length,
+			hypotheses: hyps.length,
+			// Settled means the cell moved: a proposal nobody tested leaves the
+			// matrix exactly as open as it was.
+			settled: hyps.filter((h) => h.outcome === "confirmed" || h.outcome === "refuted").length,
+			findings: (await ws.read("findings")).length,
+		};
+	} catch {
+		return empty;
 	}
 }

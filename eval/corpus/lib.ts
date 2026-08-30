@@ -278,12 +278,18 @@ export function deriveScope(source: string[], truth: TruthEntry[], cap: number):
 				siblings.add(cand);
 			}
 		}
+		// Largest first, not alphabetically. Superset's scope came back as
+		// `.github, RELEASING, docker, scripts, superset` because name order reaches
+		// repo furniture before it reaches the application: the cap should be spent
+		// on the most code available, and a name tiebreak keeps it reproducible.
+		const sized = [...siblings]
+			.map((d) => ({ dir: d, n: source.filter((f) => f.startsWith(`${d}/`)).length }))
+			.sort((a, b) => b.n - a.n || a.dir.localeCompare(b.dir));
 		let total = count([...chosen]);
-		for (const sib of [...siblings].sort()) {
-			const add = source.filter((f) => f.startsWith(`${sib}/`)).length;
-			if (total + add > cap) continue;
-			chosen.add(sib);
-			total += add;
+		for (const { dir, n } of sized) {
+			if (total + n > cap) continue;
+			chosen.add(dir);
+			total += n;
 		}
 		return { dirs: [...chosen].sort(), files: total, overCap: false };
 	};

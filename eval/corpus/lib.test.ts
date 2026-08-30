@@ -98,3 +98,14 @@ describe("deriveScope widening", () => {
 		expect(a.dirs).toEqual(["alpha", "mid", "zeta"]);
 	});
 });
+
+describe("deriveScope sibling order", () => {
+	it("spends the cap on the largest siblings, not the alphabetically first", () => {
+		// Name order reaches repo furniture (.github, docker, scripts) before it
+		// reaches the application, and leaves the cap underfilled.
+		const source = tree({ base: 100, alpha: 400, zed: 500 });
+		const s = deriveScope(source, [at("base/x.go")], 600);
+		expect(s.dirs).toEqual(["base", "zed"]);
+		expect(s.files).toBe(600);
+	});
+});
