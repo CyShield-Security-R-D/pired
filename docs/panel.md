@@ -124,10 +124,10 @@ The rail takes 38% of the screen, wants at least 56 columns and never exceeds 88
 
 Two consequences inside the panel. Prose — a finding title — takes every column it is given, which is the point. Tables do not: a label and its count are capped to a 44-column measure, like the coverage bar's 24, because a table that grows with the screen puts "tech" at one edge and its "1" at the other. And the surface grid drops to one column until there are more than three kinds to spread.
 
-The banner is a lockup, not a stretch: it keeps its own width wherever the terminal ends, with every row inside it sharing one left and one right edge. It picks its layout by measuring what fits rather than by a breakpoint — the old fixed 40 meant a 100-column terminal chose the labelled layout and then truncated its own last two rows. Three layouts, in order of how much room there is:
+The banner spans the column it lives in, so its rule and its command row end at the gutter and the two blocks close together — sized to its content instead, the block stopped thirty columns short of the panel and they read as unrelated things sharing a screen. It picks its layout by measuring what fits rather than by a breakpoint — the old fixed 40 meant a 100-column terminal chose the labelled layout and then truncated its own last two rows. Three layouts, in order of how much room there is:
 
-- **beside** (≈133 columns and up) — the facts stand to the right of the wordmark and the tagline shares the rule's baseline with the commands. Six rows.
-- **stacked** (≈98–132) — the wordmark, then the rule, then the facts under it, with the tagline on the wordmark's own baseline. Capped at 72 columns.
+- **beside** (≈133 columns and up) — the facts stand to the right of the wordmark, and the tagline and the commands take the two ends of the row under the rule. Six rows.
+- **stacked** (≈98–132) — the wordmark, then the rule, then the facts under it, with the tagline on the wordmark's own baseline.
 - **narrow** (the columns left beside the panel on a smaller terminal) — no label column, since "engagement" beside "acme" spends eleven columns explaining what the value already says, and the commands wrap.
 
 ## Outside the TUI: `pired-state`

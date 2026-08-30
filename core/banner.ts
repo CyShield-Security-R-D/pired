@@ -120,17 +120,23 @@ function facts(info: BannerInfo, compact = false): Array<[string, string]> {
 /**
  * Pad to `minLines`, never truncating: the banner is content, not a viewport.
  *
- * The padding goes *above* the block, which sits at the foot of what it
- * reserves. The rows themselves are not negotiable — the panel is a floating
- * overlay, pi owns the layout root, and padding the banner is the only way the
- * editor clears it — but where they sit is. Under the block they were a hole
- * between the banner and the first reply, in the middle of the reading path;
- * above it they are margin before anything has been said, and the wordmark
- * lands next to the editor, which is where the eye is when it goes to type.
+ * The rows themselves are not negotiable — the panel is a floating overlay, pi
+ * owns the layout root, and padding the banner is the only way the editor clears
+ * it — but where the block sits inside them is. It is centred, because those rows
+ * are exactly the rows the panel occupies: the two blocks then share a horizontal
+ * band and a centre line, and read as one arrangement rather than as a banner
+ * that happens to be somewhere near a panel. Padding it all underneath put a hole
+ * between the banner and the first reply; all above dropped the banner to the
+ * foot with the panel towering over it.
+ *
+ * The odd row goes below, which places the block a line high — optical centring,
+ * since a block sitting dead centre reads as slightly low.
  */
 function reserve(lines: string[], minLines: number | undefined): string[] {
 	if (!minLines || lines.length >= minLines) return lines;
-	return [...Array(minLines - lines.length).fill(""), ...lines];
+	const pad = minLines - lines.length;
+	const above = Math.floor(pad / 2);
+	return [...Array(above).fill(""), ...lines, ...Array(pad - above).fill("")];
 }
 
 export function renderBanner(o: BannerOptions): string[] {
@@ -150,7 +156,12 @@ export function renderBanner(o: BannerOptions): string[] {
 	const compactNeeds = Math.max(ART_WIDTH + FACT_GAP + factW, measure(TAGLINE) + 3 + measure(cmdRow));
 	const avail = width - INDENT.length;
 	const compact = avail >= compactNeeds;
-	const inner = compact ? compactNeeds : Math.min(avail, LOCKUP - INDENT.length);
+	// compactNeeds decides whether the layout fits; it does not decide the width.
+	// Sized to its content the block stopped thirty columns short of the panel and
+	// the two read as unrelated things that happened to share a screen. Sized to
+	// the column it lives in, the rule and the commands run to the panel's edge
+	// and the pair closes: same top, same bottom, one gutter between them.
+	const inner = compact ? avail : Math.min(avail, LOCKUP - INDENT.length);
 	const lockup = inner + INDENT.length;
 	// The tagline is set against the art's last row rather than its first: aligned
 	// to the baseline it reads as a lockup, aligned to the top it reads as two
@@ -184,8 +195,9 @@ export function renderBanner(o: BannerOptions): string[] {
 		});
 		const under = labelled.slice(art.length)
 			.map((f) => INDENT + " ".repeat(ART_WIDTH + FACT_GAP) + factLine(f));
-		// Tagline and commands share the row under the rule, each on its own edge:
-		// the block is bounded left and right by the same two columns everywhere.
+		// Tagline and commands share the row under the rule, each on its own edge —
+		// so the row is as wide as the rule above it, and its right end lands
+		// against the panel just as the rule does.
 		const cmds = COMMANDS.map((c) => ink("accent", c)).join(ink("muted", "   "));
 		const gap = Math.max(3, inner - measure(TAGLINE) - measure(cmdRow));
 		return reserve([

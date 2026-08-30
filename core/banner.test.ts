@@ -72,21 +72,19 @@ describe("reserving height for the panel", () => {
 		expect(lines.at(-1)).toBe("");
 	});
 
-	it("reserves above itself, and sits at the foot of what it reserved", () => {
+	it("centres itself in what it reserved — those rows are the panel's rows", () => {
 		// The rows exist because the panel floats over the transcript and the editor
-		// has to clear it. Under the block they were a hole between the banner and
-		// the first reply; above it they are margin before anything has been said.
+		// has to clear it, so they are exactly the rows the panel occupies. Centring
+		// in them is what puts the two blocks on one horizontal band.
 		const lines = renderBanner({ ...opts(160), minLines: 24 });
 		expect(lines.length).toBe(24);
-		expect(lines[0]?.trim()).toBe("");
-		expect(lines.slice(0, 12).every((l) => l.trim() === "")).toBe(true);
-		// The block ends where it reserved to, next to the editor.
-		const last = lines.map((l) => l.trim()).filter(Boolean).at(-1) as string;
-		expect(last).toContain("/panel");
-		expect(lines.slice(-3).filter((l) => l.trim() === "").length).toBeLessThanOrEqual(1);
+		const filled = lines.map((l, i) => [l, i] as const).filter(([l]) => l.trim());
+		const above = filled[0]?.[1] as number;
+		const below = 24 - 1 - (filled.at(-1)?.[1] as number);
+		expect(Math.abs(above - below)).toBeLessThanOrEqual(2);
 	});
 
-	it("puts the commands within reach of the editor in every layout", () => {
+	it("ends on the commands in every layout, whatever the padding", () => {
 		for (const w of [27, 62, 160]) {
 			const lines = renderBanner({ ...opts(w), minLines: 24 });
 			const foot = lines.map((l) => l.trim()).filter(Boolean).at(-1) as string;
@@ -147,12 +145,13 @@ describe("sharing the terminal with the panel", () => {
 describe("a wide terminal", () => {
 	const widest = (w: number): number => Math.max(...renderBanner(opts(w)).map((l) => l.length));
 
-	it("is a lockup, not a stretch: the block keeps its own width", () => {
-		// Given the whole of a 2k screen the banner used to right-align the tagline
-		// to the far edge and draw a 58-column rule under it, so the two ends of one
-		// block agreed with nothing and the space between read as a hole.
-		expect(widest(160)).toBe(widest(400));
-		expect(widest(400)).toBeLessThanOrEqual(80);
+	it("spans the column it was given, so its edge meets the panel's", () => {
+		// Sized to its content the block stopped thirty columns short of the panel,
+		// and the two read as unrelated things that happened to share a screen. The
+		// rule and the commands now run to the edge of the gutter.
+		for (const w of [120, 160, 240]) {
+			expect(widest(w), `at ${w} columns`).toBe(w);
+		}
 	});
 
 	it("stands the facts beside the wordmark instead of under it", () => {
