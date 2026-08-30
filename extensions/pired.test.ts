@@ -191,16 +191,22 @@ describe("alt+m", () => {
 		const host = railHost();
 		await host.maximize();
 		const rail = host.overlay();
+		expect(rail.options.width).toBe("70%");
 
 		// pi routes extension shortcuts through the editor, so while the rail holds
 		// focus alt+m never reaches the handler. The rail answers for it itself.
 		expect(rail.component.handleInput?.(ESC + "m")).toBe(true);
-		expect(rail.options.width).not.toBe("70%");
-		expect(rail.focused).toBe(false);
+		await Promise.resolve();
 
-		await host.maximize();
-		expect(rail.component.handleInput?.(ESC)).toBe(true);
-		expect(rail.options.nonCapturing).toBe(true);
-		expect(rail.focused).toBe(false);
+		// Restoring rebuilds the overlay rather than editing the one pi is holding:
+		// `nonCapturing` is fixed when an overlay is created, and unfocus() only
+		// releases to the next *capturing* overlay, so a rail opened as a view can
+		// never be given the keyboard by toggling its options. The old entry is
+		// hidden; the live one is a fresh, non-capturing, half-width rail.
+		expect(rail.hidden).toBe(true);
+		expect(host.overlay().options.width).not.toBe("70%");
+		expect(host.overlay().options.nonCapturing).toBe(true);
+		expect(host.overlay().focused).toBe(false);
 	});
+
 });

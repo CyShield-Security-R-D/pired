@@ -64,7 +64,12 @@ export interface PanelData {
 	surface: Record<string, number>;
 	hypotheses: Record<string, number>;
 	findings: Record<Severity, number>;
-	recentFindings: Array<{ severity: string; title: string }>;
+	/** Enough of each finding that the panel can show one in full, not just list it. */
+	recentFindings: Array<{
+		severity: string; title: string;
+		id?: string; cwe?: string; class?: string; status?: string;
+		target?: string; description?: string; repro?: string; evidence?: string[];
+	}>;
 	openBlockers: Array<{ question: string; priority?: string }>;
 	evidence: number;
 }
@@ -101,6 +106,12 @@ export interface PanelOptions {
 	 * to arrive too.
 	 */
 	expanded?: boolean;
+	/**
+	 * Index of the highlighted finding, when the panel is being read rather than
+	 * glanced at. Out-of-range values are ignored rather than clamped: the caller
+	 * owns the cursor, and a panel that silently moved it would fight them.
+	 */
+	selected?: number;
 }
 
 const BORDER = { tl: "╭", tr: "╮", bl: "╰", br: "╯", h: "─", v: "│", ml: "├", mr: "┤" } as const;
@@ -276,8 +287,13 @@ export function renderPanel(opts: PanelOptions): string[] {
 		} else {
 			line(`  ${sev.map((s) => `${ink(SEVERITY_TONE[s], "⬤")} ${ink("muted", SEVERITY_ABBR[s])} ${ink("title", String(d.findings[s]))}`).join(ink("muted", "  "))}`);
 			const shown = opts.expanded ? d.recentFindings.length : mode === "findings" ? 12 : 3;
-			for (const f of d.recentFindings.slice(0, shown)) {
-				line(`  ${ink(SEVERITY_TONE[f.severity as Severity] ?? "muted", "▸")} ${f.title}`);
+			for (const [i, f] of d.recentFindings.slice(0, shown).entries()) {
+				const tone = SEVERITY_TONE[f.severity as Severity] ?? "muted";
+				// The cursor is a filled marker plus the title in full ink; unselected
+				// rows keep the hollow marker. Two cues, because a highlight alone is
+				// invisible on a terminal that renders the accent as plain text.
+				const on = opts.selected === i;
+				line(`  ${ink(tone, on ? "▶" : "▸")} ${on ? ink("title", f.title) : f.title}`);
 			}
 		}
 	}
@@ -342,4 +358,81 @@ export function scrollFramed(all: string[], scroll: number, height: number): Scr
 		above: at,
 		below: Math.max(0, body.length - (at + bodyHeight)),
 	};
+}
+
+/**
+ * One finding, in full, laid out for the maximised panel.
+ *
+ * Reading a finding is a different job from listing them, and doing it in the
+ * same frame is what keeps the panel a single surface: the operator never leaves
+ * the rail to find out what a row means. Separate from renderPanel because the
+ * two share no layout — the sections that make the dashboard useful are noise
+ * once you are reading one row of it.
+ */
+export interface FindingDetailOptions {
+	finding: PanelData["recentFindings"][number];
+	engagement: string;
+	width: number;
+	maxLines: number;
+	ink: (tone: PanelTone, text: string) => string;
+	measure: (s: string) => number;
+	truncate: (s: string, width: number) => string;
+	frame?: boolean;
+	hint?: string;
+}
+
+/** Wrap on spaces: a description is prose, and breaking it mid-word reads as corruption. */
+function wrapWords(text: string, width: number, measure: (s: string) => number): string[] {
+	const out: string[] = [];
+	let line = "";
+	for (const w of text.split(/\s+/).filter(Boolean)) {
+		const next = line ? `${line} ${w}` : w;
+		if (measure(next) > width && line) {
+			out.push(line);
+			line = w;
+		} else line = next;
+	}
+	if (line) out.push(line);
+	return out;
+}
+
+export function renderFindingDetail(o: FindingDetailOptions): string[] {
+	const { finding: f, ink, measure, truncate } = o;
+	const framed = o.frame === true && o.width >= 24 && o.maxLines >= 4;
+	const width = framed ? o.width - 2 : o.width;
+	const hint = o.hint && o.maxLines >= 5 ? o.hint : undefined;
+	const body: string[] = [];
+	const labelW = 11;
+	const field = (k: string, v: string, tone: PanelTone = "label"): void => {
+		for (const [i, l] of wrapWords(v, Math.max(8, width - labelW - 2), measure).entries()) {
+			body.push(`${ink("muted", (i === 0 ? k : "").padEnd(labelW))}${ink(tone, l)}`);
+		}
+	};
+
+	const tone = SEVERITY_TONE[f.severity as Severity] ?? "muted";
+	body.push("");
+	for (const l of wrapWords(f.title, width - 2, measure)) body.push(`  ${ink("title", l)}`);
+	body.push("");
+	field("severity", f.severity, tone);
+	if (f.cwe) field("cwe", f.cwe);
+	if (f.class) field("class", f.class);
+	if (f.target) field("target", f.target);
+	if (f.status) field("status", f.status, "muted");
+	if (f.description) {
+		body.push("");
+		for (const l of wrapWords(f.description, width - 2, measure)) body.push(`  ${ink("muted", l)}`);
+	}
+	if (f.repro) {
+		body.push("");
+		field("repro", f.repro, "muted");
+	}
+	for (const e of f.evidence ?? []) field("evidence", e, "muted");
+
+	const room = o.maxLines - (framed ? 2 : 0) - (hint ? 1 : 0);
+	const lines = body.slice(0, Math.max(0, room)).map((l) => truncate(l, width));
+	if (hint) {
+		const pad = Math.max(0, width - measure(hint));
+		lines.push(" ".repeat(pad) + ink("muted", hint));
+	}
+	return framed ? frameLines(lines, o.engagement, o.width, ink, measure, truncate) : lines;
 }

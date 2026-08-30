@@ -134,11 +134,15 @@ The renderer itself (`core/panel.ts`) is a pure module: colour, width measuremen
 `alt+m` (or `/maximize`) grows the rail to 70% width and 90% height and makes it scrollable. Press it again — or `esc` — to restore.
 
 ```
-↑ ↓  /  k j      scroll a line
+↑ ↓  /  k j      select a finding (scroll, when there are none)
+⏎  →  l          read the selected finding in full
+esc  ←  h        back to the list
 PgUp PgDn        scroll a page
-g G / Home End   top, bottom
-alt+m / esc / q  restore
+g G / Home End   first, last
+alt+m / q        restore
 ```
+
+Selecting a finding and pressing `⏎` replaces the list with that finding in full — severity, CWE, class, target, status, description, repro steps and every evidence path — **in the same frame**. The rail stays one surface: you never leave it to find out what a row meant, and there is no second overlay to discover.
 
 The restored rail shows three findings and three blockers, because that is what fits. Maximized it shows **all** of them — height alone is not what makes a view readable, the content has to arrive too. A panel that grew to forty rows and still rendered three findings would scroll nothing and look like a rendering bug.
 
@@ -148,7 +152,9 @@ It is still a side panel, not a takeover. The transcript stays visible on the le
 
 Two behaviours worth knowing:
 
-**It captures the keyboard only while maximized.** The rail is a view and must never take the keys you are using to talk to the agent, but a scrollable view has to receive arrow keys. Capturing follows the mode, and restoring hands the keyboard straight back. pi routes extension shortcuts through the *editor*, so while the rail holds the keyboard none of them reach their handlers — which is why the rail answers for `alt+m` itself, and why hiding a maximized panel with `alt+p` means pressing `esc` first.
+**It captures the keyboard only while maximized**, and toggling *rebuilds* the overlay rather than resizing it. `nonCapturing` is fixed when an overlay is created, and `unfocus()` only releases to the next *capturing* overlay — so a rail opened as a view can never be handed the keyboard by changing its options later. Maximizing tears the overlay down and opens a new one in the mode wanted.
+
+**The rail answers for `alt+m` itself.** pi routes extension shortcuts through the editor, so while the maximized rail holds focus the registered shortcut never fires. Without the rail handling that key, maximize would be a toggle that only went one way. pi routes extension shortcuts through the *editor*, so while the rail holds the keyboard none of them reach their handlers — which is why the rail answers for `alt+m` itself, and why hiding a maximized panel with `alt+p` means pressing `esc` first.
 
 **The size is a live read, not a re-render.** `ui.custom` resolves `overlayOptions` exactly once: the function form is called when the overlay is shown and never again. pi-tui, though, re-reads the fields of the object that resolution produced on every frame. So the rail hands pi a single object whose `width`, `maxHeight` and `nonCapturing` are getters over the current mode — that, and not the repaint, is what resizes a panel that is already open. Returning a fresh object from a function looks equivalent and silently does nothing after the first frame: the panel lays out a full screen of content into an overlay still capped at half of one, and pi slices off everything past the cap, including the `↓ N more` line that would have told you content was missing.
 

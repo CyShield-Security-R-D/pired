@@ -32,7 +32,7 @@ import type { Gate } from "../core/ports.ts";
 import { buildSystemPrompt, PIRED_PROFILES, type PiredProfile } from "../core/prompts.ts";
 import { createScopeGate } from "../core/scope.ts";
 import { renderCoveragePanel, type Tone } from "../core/coverage-panel.ts";
-import { dismissHint, PANEL_MODES, renderPanel, scrollFramed, type PanelData, type PanelMode, type PanelTone } from "../core/panel.ts";
+import { dismissHint, PANEL_MODES, renderFindingDetail, renderPanel, scrollFramed, type PanelData, type PanelMode, type PanelTone } from "../core/panel.ts";
 import { computeCoverageView, computeEngagementStats, coveragePercent, type EngagementStats } from "../core/stats.ts";
 import { layoutStatusLine, type Segment } from "../core/statusline.ts";
 import { createCoreTools } from "../core/tools.ts";
@@ -291,7 +291,11 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	const MAXIMIZE_KEY = Key.alt("m");
 	let railMax = false;
 	let railScroll = 0;
+	let railSel = 0;
+	/** Reading one finding rather than the list. */
+	let railDetail = false;
 	let railRerender: (() => void) | undefined;
+	let railCtx: ExtensionContext | undefined;
 	let railDone: (() => void) | undefined;
 
 	/**
@@ -398,19 +402,29 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	 * never took it: it swallows every keystroke and the app looks frozen, so
 	 * restoring hands the keyboard straight back.
 	 */
-	const syncRailFocus = (): void => {
-		try {
-			if (railMax) railHandle?.focus?.();
-			else railHandle?.unfocus?.();
-		} catch {}
-	};
-
-	/** The one way in and out of maximised: geometry, focus and repaint together. */
-	const setRailMax = (next: boolean): void => {
+	/**
+	 * The one way in and out of maximised — and it recreates the overlay.
+	 *
+	 * `nonCapturing` is fixed when the overlay is created. pi re-evaluates
+	 * overlayOptions for layout, so flipping it there resizes the panel but never
+	 * gives it the keyboard, and `unfocus()` only releases "to the next visible
+	 * capturing overlay" — a nonCapturing rail cannot take focus however it is
+	 * asked. Toggling therefore tears the overlay down and opens a new one in the
+	 * mode wanted, which is also why the rail must remember the context it was
+	 * opened with.
+	 */
+	const setRailMax = async (next: boolean): Promise<void> => {
 		railMax = next;
 		railScroll = 0;
-		syncRailFocus();
-		railRerender?.();
+		railSel = 0;
+		railDetail = false;
+		const ctx = railCtx;
+		try {
+			railHandle?.hide();
+		} catch {}
+		railHandle = undefined;
+		railDone = undefined;
+		if (ctx) await openInlineRail(ctx).catch(() => {});
 	};
 
 	/**
@@ -432,6 +446,9 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	};
 
 	const openInlineRail = async (ctx: ExtensionContext): Promise<void> => {
+		// Remembered so a maximise toggle can rebuild the overlay: capturing is
+		// fixed at creation, so the only way to change it is to open a new one.
+		railCtx = ctx;
 		void ctx.ui.custom<void>(
 			(tui, theme, _keybindings, done) => {
 				railDone = () => done();
@@ -440,27 +457,38 @@ export default function piredExtension(pi: ExtensionAPI): void {
 					render: (w: number): string[] => {
 						if (!panelData) return [theme.fg("dim", "pired: no engagement state yet")];
 						const rows = railRows(tui);
+						const ink = (tone: PanelTone, text: string) => theme.fg(PANEL_TONE_COLOR[tone], text);
+						const truncate = (x: string, ww: number) => truncateToWidth(x, ww, theme.fg("dim", "…"));
+						const finds = panelData.recentFindings;
+
+						// Reading one finding, in the same frame the list was in. The rail
+						// stays a single surface: no second overlay, nothing to find.
+						const chosen = finds[railSel];
+						if (railMax && railDetail && chosen) {
+							return renderFindingDetail({
+								finding: chosen, engagement: scope.engagement,
+								width: w, maxLines: rows, frame: true,
+								hint: "esc back · ↑↓ list · q close",
+								ink, measure: visibleWidth, truncate,
+							});
+						}
+
 						const lines = renderPanel({
 							mode: panelMode,
 							data: panelData,
 							width: w,
-							// Maximised, the panel lays out everything and scrollFramed
-							// windows it. Restored, it must match the overlay's own maxHeight
-							// or it lays out more than can be shown and pi clips the end.
 							maxLines: railMax ? 4000 : rows,
 							expanded: railMax,
+							selected: railMax ? railSel : undefined,
 							frame: true,
-							// The panel opens over the transcript — and now does so without
-							// being asked — so it owes the operator an exit that works on the
-							// machine they are reading it on. See dismissHint.
-							hint: railMax ? "↑↓ scroll · ⏎ findings · esc restore" : dismissHint(process.platform, w),
-							ink: (tone, text) => theme.fg(PANEL_TONE_COLOR[tone], text),
-							measure: visibleWidth,
-							truncate: (x, ww) => truncateToWidth(x, ww, theme.fg("dim", "…")),
+							hint: railMax
+								? (finds.length > 0 ? "↑↓ select · ⏎ open · esc restore" : "↑↓ scroll · esc restore")
+								: dismissHint(process.platform, w),
+							ink, measure: visibleWidth, truncate,
 						});
 						if (!railMax) return lines;
 						const win = scrollFramed(lines, railScroll, rows);
-						railScroll = win.scroll; // adopt the clamp, so a held key stops cleanly
+						railScroll = win.scroll;
 						return win.below > 0
 							? [...win.lines.slice(0, -1), theme.fg("dim", truncateToWidth(`  ↓ ${win.below} more`, w))]
 							: win.lines;
@@ -470,15 +498,43 @@ export default function piredExtension(pi: ExtensionAPI): void {
 						// Restored, the rail is a view and must not take the keys the
 						// operator is using to talk to the agent.
 						if (!railMax) return false;
+						const finds = panelData?.recentFindings ?? [];
 						const page = Math.max(1, railRows(tui) - 4);
-						if (matchesKey(data, Key.up) || data === "k") railScroll -= 1;
-						else if (matchesKey(data, Key.down) || data === "j") railScroll += 1;
-						else if (matchesKey(data, Key.pageUp)) railScroll -= page;
+
+						if (matchesKey(data, MAXIMIZE_KEY)) {
+							void setRailMax(false);
+							return true;
+						}
+
+						if (railDetail) {
+							if (matchesKey(data, Key.escape) || matchesKey(data, Key.left) || data === "h") railDetail = false;
+							else if (matchesKey(data, Key.up) || data === "k") { railSel = Math.max(0, railSel - 1); }
+							else if (matchesKey(data, Key.down) || data === "j") { railSel = Math.min(finds.length - 1, railSel + 1); }
+							else if (data === "q") void setRailMax(false);
+							else return false;
+							tui.requestRender();
+							return true;
+						}
+
+						if (matchesKey(data, Key.up) || data === "k") {
+							// With findings present the cursor moves; without them there is
+							// nothing to select and the same key scrolls instead.
+							if (finds.length > 0) railSel = Math.max(0, railSel - 1);
+							else railScroll -= 1;
+						} else if (matchesKey(data, Key.down) || data === "j") {
+							if (finds.length > 0) railSel = Math.min(finds.length - 1, railSel + 1);
+							else railScroll += 1;
+						} else if (matchesKey(data, Key.pageUp)) railScroll -= page;
 						else if (matchesKey(data, Key.pageDown)) railScroll += page;
-						else if (matchesKey(data, Key.home) || data === "g") railScroll = 0;
-						else if (matchesKey(data, Key.end) || data === "G") railScroll = 1e9;
-						else if (matchesKey(data, Key.escape) || data === "q" || matchesKey(data, MAXIMIZE_KEY)) setRailMax(false);
-						else return false;
+						else if (matchesKey(data, Key.home) || data === "g") { railScroll = 0; railSel = 0; }
+						else if (matchesKey(data, Key.end) || data === "G") { railScroll = 1e9; railSel = Math.max(0, finds.length - 1); }
+						else if (matchesKey(data, Key.enter) || matchesKey(data, Key.right) || data === "l") {
+							if (finds.length === 0) return false;
+							railDetail = true;
+						} else if (matchesKey(data, Key.escape) || data === "q") {
+							void setRailMax(false);
+							return true;
+						} else return false;
 						if (railScroll < 0) railScroll = 0;
 						tui.requestRender();
 						return true;
@@ -491,10 +547,15 @@ export default function piredExtension(pi: ExtensionAPI): void {
 				overlayOptions: railOverlay,
 				onHandle: (h) => {
 					railHandle = h;
+					// Maximised, the rail is being read and needs the keyboard; restored,
+					// it is a view and must never take the keys meant for the agent.
+					try {
+						if (railMax) h.focus?.();
+						else h.unfocus?.();
+					} catch {}
 					// A rail opened as a view hands the keyboard straight back; one opened
 					// maximised keeps it. Unconditional unfocus here is what used to make
 					// alt+m-from-closed open a scroller that ignored the arrow keys.
-					syncRailFocus();
 				},
 			},
 		);
@@ -623,6 +684,14 @@ export default function piredExtension(pi: ExtensionAPI): void {
 			for (const x of xs) m[x] = (m[x] ?? 0) + 1;
 			return m;
 		};
+		// A finding's target is an element id or a raw string; resolving the former
+		// is what turns "e1a2b3" into "GET /api/v2/dags" in the detail view.
+		const surfaceLabels = new Map<string, string>(
+			inv.map((r) => {
+				const rec = r as unknown as { id: string; path?: string; value?: string; name?: string };
+				return [rec.id, rec.path ?? rec.value ?? rec.name ?? rec.id];
+			}),
+		);
 		const checklist = await ws.readChecklist();
 		const TYPE: Record<string, string> = {
 			"code-review": "review · source audit",
@@ -644,7 +713,14 @@ export default function piredExtension(pi: ExtensionAPI): void {
 			// Newest first, and enough of them that a maximised panel has something to
 			// scroll. The rail still renders three; the cap is here only so a very
 			// long engagement cannot make every frame quadratic.
-			recentFindings: finds.slice(-200).reverse().map((f) => ({ severity: f.severity, title: f.title })),
+			recentFindings: finds.slice(-200).reverse().map((f) => ({
+				severity: f.severity, title: f.title, id: f.id, cwe: f.cwe, class: f.class,
+				status: f.status, description: f.description, repro: f.repro,
+				evidence: f.evidence,
+				// Resolved through the inventory when it is an element id, kept verbatim
+				// when it is a raw string. Both exist now that target is optional.
+				target: typeof f.target === "string" ? (surfaceLabels.get(f.target) ?? f.target) : undefined,
+			})),
 			openBlockers: blockers.map((b) => ({ question: b.question, priority: b.priority })),
 			evidence: 0,
 		};
@@ -935,12 +1011,14 @@ export default function piredExtension(pi: ExtensionAPI): void {
 				// Nothing to maximize yet: open it maximized rather than doing nothing.
 				railMax = true;
 				railScroll = 0;
+				railSel = 0;
+				railDetail = false;
 				try {
 					await openInlineRail(ctx);
 				} catch {}
 				return;
 			}
-			setRailMax(!railMax);
+			await setRailMax(!railMax);
 		},
 	});
 
