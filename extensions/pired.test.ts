@@ -29,7 +29,11 @@ describe("pired extension registration", () => {
 	it("exposes the operator-facing commands", () => {
 		const { api, seen } = stubApi();
 		piredExtension(api as never);
-		expect(seen.commands).toEqual(expect.arrayContaining(["panel", "coverage", "findings"]));
+		expect(seen.commands).toEqual(expect.arrayContaining([
+			"panel", "coverage", "findings",
+			// The browser: the surface and the hypotheses behind the panel's counts.
+			"surface", "hypotheses",
+		]));
 	});
 
 	it("binds a key for the panel — a view behind a typed command gets checked less", () => {
@@ -42,5 +46,17 @@ describe("pired extension registration", () => {
 		const { api, seen } = stubApi();
 		piredExtension(api as never);
 		expect(seen.events).toContain("tool_execution_end");
+	});
+});
+
+describe("older hosts", () => {
+	it("loads against a pi with no entry-renderer API", () => {
+		// registerEntryRenderer and appendEntry are newer than the rest of the API.
+		// A pi without them must start pired without a banner, not fail to load it.
+		const { api } = stubApi();
+		const bare = { ...api } as Record<string, unknown>;
+		bare.registerEntryRenderer = undefined;
+		bare.appendEntry = undefined;
+		expect(() => piredExtension(bare as never)).not.toThrow();
 	});
 });

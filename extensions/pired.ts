@@ -25,6 +25,7 @@ import {
 	type BrowserKey, type BrowserState, type BrowserTone, buildBrowserModel,
 	initialState, reduceBrowser, renderBrowser,
 } from "../core/browser.ts";
+import { type BannerTone, renderBanner } from "../core/banner.ts";
 import { exportFindingsMarkdown } from "../core/export.ts";
 import type { BlockerRecord, Checklist, EngagementScope, Severity, TargetType } from "../core/ontology.ts";
 import type { Gate } from "../core/ports.ts";
@@ -80,6 +81,12 @@ const PRIORITY = {
 };
 
 /** Coverage-panel tones mapped onto the active theme. */
+const BANNER_TONE_COLOR: Record<BannerTone, ThemeColor> = {
+	// "pi" recedes and "red" carries the accent: the name is the two words, and
+	// the wordmark should explain itself without a caption.
+	pi: "dim", red: "accent", label: "text", muted: "dim", accent: "accent", rule: "dim",
+};
+
 const BROWSER_TONE_COLOR: Record<BrowserTone, ThemeColor> = {
 	clear: "success", vulnerable: "error", testing: "warning", blocked: "muted",
 	"not-tested": "dim", "n/a": "dim", title: "accent", label: "text", muted: "dim",
@@ -204,6 +211,12 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	// state you have to summon is state you check less often than you should.
 	// `--pired-panel off` (or `pired --no-panel`) starts without it, and `/panel`
 	// still toggles it either way.
+	pi.registerFlag("pired-banner", {
+		description: "show the welcome banner on start: on | off",
+		type: "string",
+		default: "on",
+	});
+
 	pi.registerFlag("pired-panel", { description: "show the engagement panel on start: on | off", type: "string", default: "on" });
 	registerPiredProviders(pi);
 
@@ -685,6 +698,28 @@ export default function piredExtension(pi: ExtensionAPI): void {
 				await openInlineRail(ctx);
 			} catch {}
 		}
+
+		// The welcome banner, as a transcript entry rather than a widget.
+		//
+		// There was a banner widget once and dropping it was right: it held layout
+		// forever to repeat a brand the status line already carries. A custom entry
+		// is written once, scrolls away like any other, and — being a CustomEntry —
+		// never enters the model's context, so the greeting costs no tokens.
+		//
+		// Last, so the first frame a person sees already has real numbers in it.
+		if (ctx.mode === "tui" && String(pi.getFlag("pired-banner") ?? "on").toLowerCase() !== "off") {
+			try {
+				pi.appendEntry?.("pired-welcome", {
+					engagement: scope.engagement,
+					profile,
+					scope: scope.authorized ? (scope.mode ?? "enforce") : "not authorized",
+					model: ctx.model?.id,
+					surface: stats?.surface,
+					coveragePct: stats?.coveragePct,
+					findings: stats?.findingsTotal,
+				});
+			} catch {}
+		}
 	});
 
 	// Chain politely: pi hands us the fully-assembled base prompt (its own agent
@@ -931,6 +966,34 @@ export default function piredExtension(pi: ExtensionAPI): void {
 			{ overlay: true, overlayOptions: { width: "90%", minWidth: 48, maxHeight: "80%", anchor: "center" } },
 		);
 	};
+
+	/**
+	 * The welcome entry's renderer.
+	 *
+	 * A CustomEntry carries data, not lines, so the banner is laid out at render
+	 * time against the terminal's real width — resize the window and it reflows
+	 * rather than staying frozen at whatever the width was at session start.
+	 */
+	// Guarded like every other host call: registerEntryRenderer is newer than the
+	// rest of the API, and a pi without it must start pired without a banner
+	// rather than fail to load the extension at all.
+	pi.registerEntryRenderer?.<{
+		engagement: string; profile: string; scope: string; model?: string;
+		surface?: number; coveragePct?: number; findings?: number;
+	}>("pired-welcome", (entry, _options, theme) => {
+		const info = entry.data;
+		if (!info) return undefined;
+		return {
+			render: (width: number): string[] =>
+				renderBanner({
+					info, width,
+					ink: (tone, text) => theme.fg(BANNER_TONE_COLOR[tone], text),
+					measure: visibleWidth,
+					truncate: (x, w) => truncateToWidth(x, w, theme.fg("dim", "…")),
+				}),
+			invalidate(): void {},
+		};
+	});
 
 	pi.registerCommand("surface", {
 		description: "Browse the recorded attack surface and its coverage",

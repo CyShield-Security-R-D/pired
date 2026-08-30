@@ -260,3 +260,25 @@ pired --fullscreen
 which passes `--tui-mode fullscreen` to pi and takes the alternate screen. The editor then sits on the last row, the status line under it, and the panel rail runs the full height on the right — which is the layout the rail was drawn for.
 
 The trade is scrollback: the alternate screen is discarded on exit, so the conversation does not stay in the terminal's history.
+
+## The welcome banner
+
+A session opens with the mark, the engagement it is about to work on, and the four commands that open the views:
+
+```
+  ⦿  p i r e d                          security engagement harness
+  ──────────────────────────────────────────────────────────
+
+  engagement   airflow-ftxin0
+  profile      review · scope enforce
+  model        qwen3.8-27b
+  recorded     41 surface · 12% covered · 2 findings
+
+  /surface   /hypotheses   /coverage   /panel
+```
+
+`recorded` appears only when the engagement already holds work — a fresh one showing `0 surface · 0% covered` reads as a failed run rather than a starting point. The tagline drops before anything else as the terminal narrows, and under 28 columns only the mark and the name remain.
+
+It is a **transcript entry**, not a widget: written once, scrolled away like any other, and — being a custom entry — never part of the model's context, so the greeting costs no tokens. There was a banner widget once and removing it was right; it held layout forever to repeat a brand the status line already carries.
+
+Turn it off with `--pired-banner off`.
