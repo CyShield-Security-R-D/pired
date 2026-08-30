@@ -159,3 +159,28 @@ describe("dismissHint", () => {
 		}
 	});
 });
+
+describe("the frame survives a tight budget", () => {
+	it("never returns more lines than maxLines, at any budget", () => {
+		// The rail asked renderPanel for 60 lines while its overlay could show ~20.
+		// The panel laid out everything, pi clipped the overflow, and what got
+		// clipped was the end: the closing frame and the dismiss hint.
+		for (const max of [6, 8, 12, 20, 30]) {
+			const lines = renderPanel({
+				mode: "state", data, width: 56, maxLines: max, hint: "alt+p to hide",
+				ink, measure, truncate, frame: true,
+			});
+			expect(lines.length).toBeLessThanOrEqual(max);
+		}
+	});
+
+	it("keeps both frame edges and the hint rather than dropping them last", () => {
+		const lines = renderPanel({
+			mode: "state", data, width: 56, maxLines: 10, hint: "alt+p to hide",
+			ink, measure, truncate, frame: true,
+		});
+		expect(lines[0]).toContain("╭");
+		expect(lines.at(-1)).toContain("╰");
+		expect(lines.join("\n")).toContain("alt+p to hide");
+	});
+});

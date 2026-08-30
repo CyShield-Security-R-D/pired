@@ -295,11 +295,25 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	 * with blank lines that push the editor off the bottom, which would be a worse
 	 * bug than the overlap it fixes.
 	 */
+	/**
+	 * The rail's height in rows, resolved from whatever railHeight() expresses.
+	 *
+	 * renderPanel has to be told this number. Given a larger budget it lays out
+	 * more sections than the overlay can show, pi clips the overflow, and what
+	 * gets clipped is the end of the panel — its closing frame and the dismiss
+	 * hint. The panel's own section-dropping is the graceful path and it only
+	 * runs when maxLines is honest about the space available.
+	 */
+	const railRows = (): number => {
+		const rows = process.stdout.rows ?? 40;
+		const h = railHeight();
+		return typeof h === "number" ? h : Math.floor((rows * Number.parseInt(h, 10)) / 100);
+	};
+
 	const bannerReserve = (): number => {
 		if (String(pi.getFlag("pired-panel") ?? "on").toLowerCase() === "off") return 0;
 		const rows = process.stdout.rows ?? 40;
-		const h = railHeight();
-		const panelRows = typeof h === "number" ? h : Math.floor((rows * Number.parseInt(h, 10)) / 100);
+		const panelRows = railRows();
 		const RAIL_OFFSET_Y = 1;
 		// Leave room for the editor box and the status line beneath it.
 		return Math.max(0, Math.min(panelRows + RAIL_OFFSET_Y + 1, rows - 8));
@@ -337,7 +351,9 @@ export default function piredExtension(pi: ExtensionAPI): void {
 							mode: panelMode,
 							data: panelData,
 							width: w,
-							maxLines: 60,
+							// Not a constant: this must match the overlay's own maxHeight or
+							// the panel lays out more than can be shown and pi clips the end.
+							maxLines: railRows(),
 							frame: true,
 							// The panel opens over the transcript — and now does so without
 							// being asked — so it owes the operator an exit that works on the
