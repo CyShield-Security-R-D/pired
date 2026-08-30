@@ -376,11 +376,12 @@ export default function piredExtension(pi: ExtensionAPI): void {
 							// windows it. Restored, it must match the overlay's own maxHeight
 							// or it lays out more than can be shown and pi clips the end.
 							maxLines: railMax ? 4000 : rows,
+							expanded: railMax,
 							frame: true,
 							// The panel opens over the transcript — and now does so without
 							// being asked — so it owes the operator an exit that works on the
 							// machine they are reading it on. See dismissHint.
-							hint: railMax ? "↑↓ scroll · alt+m restore · esc close" : dismissHint(process.platform),
+							hint: railMax ? "↑↓ scroll · esc restore" : dismissHint(process.platform, w),
 							ink: (tone, text) => theme.fg(PANEL_TONE_COLOR[tone], text),
 							measure: visibleWidth,
 							truncate: (x, ww) => truncateToWidth(x, ww, theme.fg("dim", "…")),
@@ -586,7 +587,10 @@ export default function piredExtension(pi: ExtensionAPI): void {
 			surface: tally(inv.map((r) => r.kind)),
 			hypotheses: tally(hyps.map((h) => h.outcome)),
 			findings: st.findings,
-			recentFindings: finds.slice(-4).reverse().map((f) => ({ severity: f.severity, title: f.title })),
+			// Newest first, and enough of them that a maximised panel has something to
+			// scroll. The rail still renders three; the cap is here only so a very
+			// long engagement cannot make every frame quadratic.
+			recentFindings: finds.slice(-200).reverse().map((f) => ({ severity: f.severity, title: f.title })),
 			openBlockers: blockers.map((b) => ({ question: b.question, priority: b.priority })),
 			evidence: 0,
 		};

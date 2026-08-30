@@ -140,7 +140,9 @@ g G / Home End   top, bottom
 alt+m / esc / q  restore
 ```
 
-The restored rail drops whole sections to fit its half-screen budget, which is right for a glance and wrong for reading: twelve findings truncated to three is a summary of a summary. Maximized, the panel lays out everything and scrolls it, with `↓ N more` on the bottom edge while there is content below.
+The restored rail shows three findings and three blockers, because that is what fits. Maximized it shows **all** of them — height alone is not what makes a view readable, the content has to arrive too. A panel that grew to forty rows and still rendered three findings would scroll nothing and look like a rendering bug.
+
+`↓ N more` sits on the bottom edge while there is content below. If nothing scrolls, there is genuinely nothing below: on a small engagement the whole panel already fits.
 
 It is still a side panel, not a takeover. The transcript stays visible on the left, which is the point — you are usually reading the panel *against* something the agent just said.
 

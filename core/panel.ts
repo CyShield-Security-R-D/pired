@@ -35,8 +35,17 @@ export const PANEL_MODES = ["state", "coverage", "findings", "blockers"] as cons
  * command works on every platform and every terminal, so that is what a Mac is
  * told. The shortcut still fires wherever the terminal does send Meta.
  */
-export function dismissHint(platform: string): string {
-	return platform === "darwin" ? "/panel to hide" : "alt+p to hide";
+export function dismissHint(platform: string, width = 0): string {
+	const mac = platform === "darwin";
+	const expand = mac ? "/maximize" : "alt+m";
+	const hide = mac ? "/panel" : "alt+p";
+	// Advertise expanding first: hiding is discoverable by trying to get rid of
+	// the thing, while a scrollable panel is not discoverable at all — a feature
+	// nothing names is a feature nobody has. Both fit a default 56-column rail;
+	// on a narrower one the hint falls back to naming the way out, which is the
+	// one a panel shown unasked owes the operator.
+	const both = `${expand} expand · ${hide} hide`;
+	return width > 0 && width < both.length + 4 ? `${hide} to hide` : both;
 }
 export type PanelMode = (typeof PANEL_MODES)[number];
 
@@ -82,6 +91,16 @@ export interface PanelOptions {
 	 * the way, which is exactly when a bottom-dropped line would be gone.
 	 */
 	hint?: string;
+	/**
+	 * Show every item a section holds instead of a head slice.
+	 *
+	 * The rail shows three findings because it has room for three. Maximised it
+	 * has room for forty, and showing three anyway makes the extra height look
+	 * broken: nothing scrolls, and the panel appears to have simply grown its
+	 * margins. Height alone is not what makes a view readable — the content has
+	 * to arrive too.
+	 */
+	expanded?: boolean;
 }
 
 const BORDER = { tl: "╭", tr: "╮", bl: "╰", br: "╯", h: "─", v: "│", ml: "├", mr: "┤" } as const;
@@ -181,10 +200,10 @@ export function renderPanel(opts: PanelOptions): string[] {
 	if (d.openBlockers.length > 0 && mode !== "findings") {
 		line("");
 		section("needs you");
-		for (const b of d.openBlockers.slice(0, 3)) {
+		for (const b of d.openBlockers.slice(0, opts.expanded ? d.openBlockers.length : 3)) {
 			line(`  ${ink("warn", "!")} ${ink("title", b.question)}`);
 		}
-		if (d.openBlockers.length > 3) line(ink("muted", `    +${d.openBlockers.length - 3} more`));
+		if (!opts.expanded && d.openBlockers.length > 3) line(ink("muted", `    +${d.openBlockers.length - 3} more`));
 	}
 
 	if (mode === "state" || mode === "coverage") {
@@ -256,7 +275,8 @@ export function renderPanel(opts: PanelOptions): string[] {
 			line(ink("muted", "  none recorded"));
 		} else {
 			line(`  ${sev.map((s) => `${ink(SEVERITY_TONE[s], "⬤")} ${ink("muted", SEVERITY_ABBR[s])} ${ink("title", String(d.findings[s]))}`).join(ink("muted", "  "))}`);
-			for (const f of d.recentFindings.slice(0, mode === "findings" ? 12 : 3)) {
+			const shown = opts.expanded ? d.recentFindings.length : mode === "findings" ? 12 : 3;
+			for (const f of d.recentFindings.slice(0, shown)) {
 				line(`  ${ink(SEVERITY_TONE[f.severity as Severity] ?? "muted", "▸")} ${f.title}`);
 			}
 		}

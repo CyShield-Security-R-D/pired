@@ -143,22 +143,31 @@ describe("dismiss hint", () => {
 
 describe("dismissHint", () => {
 	it("names the shortcut where the terminal sends Meta", () => {
-		expect(dismissHint("linux")).toBe("alt+p to hide");
-		expect(dismissHint("win32")).toBe("alt+p to hide");
+		expect(dismissHint("linux")).toBe("alt+m expand · alt+p hide");
 	});
 
-	it("names the command on macOS, where Option+P types π instead", () => {
-		expect(dismissHint("darwin")).toBe("/panel to hide");
+	it("names the commands on macOS, where Option+P types π instead", () => {
+		expect(dismissHint("darwin")).toBe("/maximize expand · /panel hide");
 	});
 
 	it("never suggests a key the reader cannot press", () => {
-		// The panel is shown by default, so this string is the only exit most
-		// operators will ever read. It must be actionable on every platform.
-		for (const p of ["darwin", "linux", "win32", "freebsd"]) {
-			expect(dismissHint(p)).toMatch(/^(alt\+p|\/panel) to hide$/);
-		}
+		expect(dismissHint("darwin")).not.toContain("alt+");
+		expect(dismissHint("darwin", 56)).not.toContain("alt+");
+	});
+
+	it("advertises expanding, not only the way out", () => {
+		// Hiding is discoverable by trying to get rid of the thing. A scrollable
+		// panel is not discoverable at all — a feature nothing names is a feature
+		// nobody has.
+		expect(dismissHint("linux")).toContain("expand");
+	});
+
+	it("falls back to the way out when the rail is too narrow for both", () => {
+		expect(dismissHint("linux", 20)).toBe("alt+p to hide");
+		expect(dismissHint("darwin", 20)).toBe("/panel to hide");
 	});
 });
+
 
 describe("the frame survives a tight budget", () => {
 	it("never returns more lines than maxLines, at any budget", () => {
@@ -225,5 +234,33 @@ describe("scrollFramed", () => {
 	it("degrades rather than throwing at absurd heights", () => {
 		expect(scrollFramed(framed(20), 0, 0).lines).toEqual([]);
 		expect(scrollFramed(framed(20), 0, 2).lines).toHaveLength(2);
+	});
+});
+
+describe("expanded", () => {
+	const many: PanelData = {
+		...data,
+		recentFindings: Array.from({ length: 30 }, (_, i) => ({ severity: "high", title: `finding ${i}` })),
+		openBlockers: Array.from({ length: 8 }, (_, i) => ({ question: `blocker ${i}` })),
+	};
+	const run = (expanded: boolean): string =>
+		renderPanel({ mode: "state", data: many, width: 70, maxLines: 400, expanded, ink, measure, truncate }).join("\n");
+
+	it("shows three findings restored, and all of them expanded", () => {
+		// Maximizing gave the panel room for forty and it kept showing three, so
+		// nothing scrolled and the extra height looked like a rendering bug.
+		expect(run(false)).toContain("finding 2");
+		expect(run(false)).not.toContain("finding 9");
+		expect(run(true)).toContain("finding 29");
+	});
+
+	it("drops the '+N more' elision when everything is shown", () => {
+		expect(run(false)).toContain("more");
+		expect(run(true)).not.toContain("+5 more");
+	});
+
+	it("produces enough lines to actually scroll", () => {
+		const lines = renderPanel({ mode: "state", data: many, width: 70, maxLines: 400, expanded: true, ink, measure, truncate });
+		expect(lines.length).toBeGreaterThan(30);
 	});
 });
