@@ -29,6 +29,7 @@ import { CELL_GLYPH } from "./coverage-panel.ts";
 import type { Tone } from "./coverage-panel.ts";
 import type {
 	CoverageCell,
+	Severity,
 	CoverageStatus,
 	FindingRecord,
 	HypothesisOutcome,
@@ -40,7 +41,7 @@ import type {
 /** The coverage tones plus the one this view adds for the cursor row. */
 export type BrowserTone = Tone | "selected";
 
-export type BrowserView = "surface" | "element" | "hypotheses" | "hypothesis";
+export type BrowserView = "surface" | "element" | "hypotheses" | "hypothesis" | "findings" | "finding";
 
 /** Outcome filter for the hypotheses list. `open` is anything not yet settled. */
 export type HypothesisFilter = "all" | "confirmed" | "refuted" | "open";
@@ -74,11 +75,25 @@ export interface HypothesisRow {
 	findingId?: string;
 }
 
+export interface FindingRow {
+	id: string;
+	title: string;
+	severity: Severity;
+	class?: string;
+	cwe?: string;
+	status?: string;
+	targetLabel: string;
+	description?: string;
+	repro?: string;
+	evidence?: string[];
+}
+
 export interface BrowserModel {
 	engagement: string;
 	classes: Array<{ id: string; title: string }>;
 	surface: SurfaceRow[];
 	hypotheses: HypothesisRow[];
+	findings: FindingRow[];
 	counts: Record<HypothesisFilter, number>;
 }
 
@@ -90,11 +105,17 @@ export interface BrowserState {
 	/** Held while drilled into one element, and kept so `out` can return to it. */
 	elementId?: string;
 	hypothesisId?: string;
+	findingId?: string;
 }
 
 export function initialState(view: BrowserView = "surface"): BrowserState {
 	return { view, cursor: 0, scroll: 0, filter: "all" };
 }
+
+const SEVERITY_RANK: Record<Severity, number> = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
+const SEVERITY_TONE: Record<Severity, Tone> = {
+	critical: "vulnerable", high: "vulnerable", medium: "testing", low: "clear", info: "muted",
+};
 
 const OUTCOME_TONE: Record<HypothesisOutcome, Tone> = {
 	confirmed: "vulnerable",
@@ -200,12 +221,33 @@ export function buildBrowserModel(input: BuildModelInput): BrowserModel {
 		};
 	});
 
+	// Worst first. A findings view in recording order buries a critical under six
+	// info rows, which is the opposite of what the list is for.
+	const findingRows: FindingRow[] = findings
+		.map((f) => {
+			const t = typeof f.target === "string" ? f.target : undefined;
+			return {
+				id: f.id,
+				title: f.title,
+				severity: f.severity,
+				class: f.class,
+				cwe: f.cwe,
+				status: f.status,
+				targetLabel: (t && labels.get(t)) || t || "—",
+				description: f.description,
+				repro: f.repro,
+				evidence: f.evidence,
+			};
+		})
+		.sort((a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity] || a.title.localeCompare(b.title));
+
 	const settled = (o: HypothesisOutcome): boolean => o === "confirmed" || o === "refuted";
 	return {
 		engagement,
 		classes,
 		surface,
 		hypotheses: rows,
+		findings: findingRows,
 		counts: {
 			all: rows.length,
 			confirmed: rows.filter((h) => h.outcome === "confirmed").length,
@@ -234,6 +276,7 @@ function rowCount(model: BrowserModel, state: BrowserState): number {
 		case "surface": return model.surface.length;
 		case "hypotheses": return visibleHypotheses(model, state).length;
 		case "element": return model.classes.length;
+		case "findings": return model.findings.length;
 		default: return 0;
 	}
 }
@@ -260,13 +303,18 @@ export function reduceBrowser(state: BrowserState, key: BrowserKey, model: Brows
 		case "top": return move(0);
 		case "bottom": return move(total - 1);
 		case "close": return "close";
-		case "switch":
-			return { ...initialState(state.view === "surface" ? "hypotheses" : "surface"), filter: state.filter };
+		case "switch": {
+			const order: BrowserView[] = ["surface", "hypotheses", "findings"];
+			const here = order.indexOf(state.view === "element" ? "surface" : state.view === "hypothesis" ? "hypotheses" : state.view === "finding" ? "findings" : state.view);
+			const next = order[(Math.max(0, here) + 1) % order.length] as BrowserView;
+			return { ...initialState(next), filter: state.filter };
+		}
 		case "filter:all": return { ...state, filter: "all", cursor: 0, scroll: 0 };
 		case "filter:confirmed": return { ...state, filter: "confirmed", cursor: 0, scroll: 0 };
 		case "filter:refuted": return { ...state, filter: "refuted", cursor: 0, scroll: 0 };
 		case "filter:open": return { ...state, filter: "open", cursor: 0, scroll: 0 };
 		case "out": {
+			if (state.view === "finding") return { ...state, view: "findings", findingId: undefined };
 			if (state.view === "hypothesis") {
 				return { ...state, view: state.elementId ? "element" : "hypotheses", hypothesisId: undefined };
 			}
@@ -277,6 +325,10 @@ export function reduceBrowser(state: BrowserState, key: BrowserKey, model: Brows
 			if (state.view === "surface") {
 				const row = model.surface[state.cursor];
 				return row ? { ...state, view: "element", elementId: row.id, cursor: 0, scroll: 0 } : state;
+			}
+			if (state.view === "findings") {
+				const row = model.findings[state.cursor];
+				return row ? { ...state, view: "finding", findingId: row.id } : state;
 			}
 			if (state.view === "hypotheses") {
 				const row = visibleHypotheses(model, state)[state.cursor];
@@ -346,13 +398,15 @@ function header(title: string, right: string, o: RenderOptions): string[] {
 /** The key legend, which differs per view and is the only affordance a user gets. */
 function footer(o: RenderOptions): string[] {
 	const { state, ink, width } = o;
-	const keys = state.view === "hypothesis"
+	const keys = state.view === "hypothesis" || state.view === "finding"
 		? "↑↓ scroll · esc back · q close"
 		: state.view === "element"
 			? "↑↓ move · ⏎ open · esc back · tab hypotheses · q close"
 			: state.view === "surface"
 				? "↑↓ move · ⏎ open · tab hypotheses · q close"
-				: "↑↓ move · ⏎ open · a/c/r/o filter · tab surface · q close";
+				: state.view === "findings"
+					? "↑↓ move · ⏎ open · tab surface · q close"
+					: "↑↓ move · ⏎ open · a/c/r/o filter · tab findings · q close";
 	return [rule(width, ink), ink("muted", o.truncate(keys, width))];
 }
 
@@ -428,6 +482,47 @@ function hypothesesBody(o: RenderOptions): string[] {
 	return out;
 }
 
+function findingsBody(o: RenderOptions): string[] {
+	const { model, state, width, ink, measure, truncate } = o;
+	if (model.findings.length === 0) {
+		return [ink("muted", "  no findings recorded")];
+	}
+	const sevW = 9;
+	const clsW = 12;
+	const out: string[] = [];
+	for (const [i, f] of model.findings.slice(state.scroll, state.scroll + o.height).entries()) {
+		const idx = state.scroll + i;
+		const sev = ink(SEVERITY_TONE[f.severity], pad(f.severity, sevW, measure));
+		const cls = ink("muted", pad(truncate(f.cwe || f.class || "", clsW), clsW, measure));
+		out.push(row(idx === state.cursor, `${sev} ${cls} ${f.title}`, width, o));
+	}
+	return out;
+}
+
+function findingBody(o: RenderOptions): string[] {
+	const { model, state, width, ink, measure, truncate } = o;
+	const f = model.findings.find((x) => x.id === state.findingId);
+	if (!f) return [ink("muted", "  finding not found")];
+	const labelW = 12;
+	const field = (k: string, v: string, tone: BrowserTone = "label"): string[] =>
+		wrap(v, Math.max(8, width - labelW - 2), measure).map((line, i) =>
+			`${ink("muted", pad(i === 0 ? k : "", labelW, measure))}${ink(tone, line)}`);
+
+	const out: string[] = [
+		...field("severity", f.severity, SEVERITY_TONE[f.severity]),
+		...(f.cwe ? field("cwe", f.cwe) : []),
+		...(f.class ? field("class", f.class) : []),
+		...field("target", f.targetLabel),
+		...(f.status ? field("status", f.status, "muted") : []),
+		"",
+		...wrap(f.title, width, measure).map((l) => ink("label", l)),
+	];
+	if (f.description) out.push("", ...wrap(f.description, width, measure).map((l) => ink("muted", l)));
+	if (f.repro) out.push("", ...field("repro", f.repro, "muted"));
+	for (const e of f.evidence ?? []) out.push(...field("evidence", e, "muted"));
+	return out.slice(state.scroll, state.scroll + o.height).map((l) => truncate(l, width));
+}
+
 /** Wrap on spaces; a hypothesis statement is a sentence, not a path. */
 function wrap(text: string, width: number, measure: (s: string) => number): string[] {
 	const words = text.split(/\s+/).filter(Boolean);
@@ -500,6 +595,15 @@ export function renderBrowser(o: RenderOptions): string[] {
 				...footer(o),
 			];
 		}
+		case "findings": {
+			const worst = model.findings[0];
+			const tally = model.findings.length === 0
+				? "none"
+				: `${model.findings.length} · worst ${worst?.severity ?? "-"}`;
+			return [...header(`findings · ${model.engagement}`, tally, o), ...findingsBody(o), ...footer(o)];
+		}
+		case "finding":
+			return [...header("finding", model.engagement, o), ...findingBody(o), ...footer(o)];
 		default:
 			return [...header("hypothesis", model.engagement, o), ...hypothesisBody(o), ...footer(o)];
 	}

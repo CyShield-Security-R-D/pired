@@ -148,6 +148,8 @@ It is still a side panel, not a takeover. The transcript stays visible on the le
 
 Two behaviours worth knowing:
 
-**It captures the keyboard only while maximized.** The rail is a view and must never take the keys you are using to talk to the agent, but a scrollable view has to receive arrow keys. Capturing follows the mode, and restoring hands the keyboard straight back.
+**It captures the keyboard only while maximized.** The rail is a view and must never take the keys you are using to talk to the agent, but a scrollable view has to receive arrow keys. Capturing follows the mode, and restoring hands the keyboard straight back. pi routes extension shortcuts through the *editor*, so while the rail holds the keyboard none of them reach their handlers — which is why the rail answers for `alt+m` itself, and why hiding a maximized panel with `alt+p` means pressing `esc` first.
+
+**The size is a live read, not a re-render.** `ui.custom` resolves `overlayOptions` exactly once: the function form is called when the overlay is shown and never again. pi-tui, though, re-reads the fields of the object that resolution produced on every frame. So the rail hands pi a single object whose `width`, `maxHeight` and `nonCapturing` are getters over the current mode — that, and not the repaint, is what resizes a panel that is already open. Returning a fresh object from a function looks equivalent and silently does nothing after the first frame: the panel lays out a full screen of content into an overlay still capped at half of one, and pi slices off everything past the cap, including the `↓ N more` line that would have told you content was missing.
 
 **Both frame edges stay pinned** while the body moves, so the box does not appear to lose its lid every time you scroll. An out-of-range offset is clamped rather than rejected — a held-down arrow key stops cleanly at the end instead of emptying the frame.

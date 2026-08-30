@@ -31,7 +31,11 @@ const hypotheses = [
 	{ id: "hy2", kind: "hypothesis", class: "idor", target: "e1", outcome: "confirmed", statement: "dag_id not scoped to caller", findingId: "f1" },
 ] as unknown as HypothesisRecord[];
 
-const findings = [{ id: "f1", kind: "finding", title: "IDOR", severity: "high", target: "e1" }] as unknown as FindingRecord[];
+const findings = [
+	{ id: "f1", kind: "finding", title: "IDOR on dag list", severity: "high", target: "e1", cwe: "CWE-639", description: "dag_id is not scoped to the caller", repro: "GET /api/v2/dags?dag_id=other", evidence: ["evidence/idor.txt"] },
+	{ id: "f2", kind: "finding", title: "No dependency pins", severity: "info" },
+	{ id: "f3", kind: "finding", title: "Secrets to stdout", severity: "medium", target: "telegram.py:55" },
+] as unknown as FindingRecord[];
 
 const model: BrowserModel = buildBrowserModel({
 	engagement: "airflow", classes: CLASSES, cells, inventory, hypotheses, findings,
@@ -204,5 +208,59 @@ describe("element rows never contradict their glyph", () => {
 		}).join("\n");
 		expect(lines).toContain("clear · no hypothesis recorded");
 		expect(lines).not.toContain("clear · no hypothesis recorded\nnot tested");
+	});
+});
+
+describe("findings", () => {
+	it("orders worst first, not by recording order", () => {
+		// Recording order buries a critical under six info rows, which is the
+		// opposite of what the list is for.
+		expect(model.findings.map((f) => f.severity)).toEqual(["high", "medium", "info"]);
+	});
+
+	it("resolves a target through the inventory, and keeps a raw one as given", () => {
+		expect(model.findings.find((f) => f.id === "f1")?.targetLabel).toBe("GET /api/v2/dags");
+		expect(model.findings.find((f) => f.id === "f3")?.targetLabel).toBe("telegram.py:55");
+	});
+
+	it("shows an em dash for a finding with no target at all", () => {
+		expect(model.findings.find((f) => f.id === "f2")?.targetLabel).toBe("—");
+	});
+
+	it("drills into a finding and back out", () => {
+		let s = initialState("findings");
+		s = reduceBrowser(s, "in", model, 10) as BrowserState;
+		expect(s.view).toBe("finding");
+		expect(s.findingId).toBe("f1");
+		s = reduceBrowser(s, "out", model, 10) as BrowserState;
+		expect(s.view).toBe("findings");
+	});
+
+	it("puts severity, cwe, target, description and evidence in the detail", () => {
+		const text = renderBrowser(opts({ ...initialState("finding"), findingId: "f1" })).join("\n");
+		expect(text).toContain("high");
+		expect(text).toContain("CWE-639");
+		expect(text).toContain("GET /api/v2/dags");
+		expect(text).toContain("dag_id is not scoped");
+		expect(text).toContain("evidence/idor.txt");
+	});
+
+	it("tab cycles surface -> hypotheses -> findings -> surface", () => {
+		let s = initialState("surface");
+		s = reduceBrowser(s, "switch", model, 10) as BrowserState;
+		expect(s.view).toBe("hypotheses");
+		s = reduceBrowser(s, "switch", model, 10) as BrowserState;
+		expect(s.view).toBe("findings");
+		s = reduceBrowser(s, "switch", model, 10) as BrowserState;
+		expect(s.view).toBe("surface");
+	});
+
+	it("never emits a line wider than the width it was given", () => {
+		for (const v of ["findings", "finding"] as const) {
+			for (const w of [40, 70, 110]) {
+				const st = { ...initialState(v), findingId: "f1" };
+				for (const l of renderBrowser(opts(st, w))) expect(l.length).toBeLessThanOrEqual(w);
+			}
+		}
 	});
 });

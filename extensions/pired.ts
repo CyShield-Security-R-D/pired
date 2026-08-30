@@ -269,7 +269,7 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	 * belongs to pi — but it is a real side panel, present without a multiplexer.
 	 * onHandle gives the handle used to close it again.
 	 */
-	let railHandle: { hide(): void; setHidden(h: boolean): void } | undefined;
+	let railHandle: { hide(): void; setHidden(h: boolean): void; focus?(): void; unfocus?(o?: unknown): void } | undefined;
 	/**
 	 * Maximised: a wider, taller, scrollable rail — still a side panel, not a
 	 * takeover.
@@ -282,6 +282,13 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	 * operator, but a scrollable view has to receive arrow keys, so it captures
 	 * only while maximised and hands the keyboard back on restore.
 	 */
+	/**
+	 * Named once because two places need the same key: pi routes shortcuts through
+	 * the *editor*, so while the maximised rail holds the keyboard alt+m never
+	 * reaches the handler that would restore it. The rail has to answer for the
+	 * key itself, and a second literal here is a toggle that only goes one way.
+	 */
+	const MAXIMIZE_KEY = Key.alt("m");
 	let railMax = false;
 	let railScroll = 0;
 	let railRerender: (() => void) | undefined;
@@ -341,6 +348,72 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	const railWidth = (): number => Number(process.env.PIRED_RAIL_WIDTH ?? 56);
 
 	/**
+	 * The overlay's geometry, as one object pi holds a reference to.
+	 *
+	 * ui.custom resolves overlayOptions exactly once: the function form is called
+	 * at show time and never again. pi-tui, though, re-reads the fields of the
+	 * object it was handed on every frame — so getters, not a function, are what
+	 * let alt+m resize a panel that is already open. Without them the maximised
+	 * panel laid out a 90%-tall screen of content into an overlay still capped at
+	 * 50% and 56 columns, and pi sliced off everything past the cap, including the
+	 * "↓ n more" line that says there is more to see. It looked like a panel that
+	 * had lost half its content rather than one that had not been resized.
+	 */
+	const railOverlay = {
+		// Top-right, not full height. The overlay paints over the transcript rather
+		// than reflowing it, so where it sits decides how much it costs you: the
+		// newest output and the editor are at the bottom, which is exactly the part
+		// you are reading. Anchoring to the top covers older, already-read lines.
+		// offsetY leaves a row of breathing space at the very top.
+		anchor: "top-right" as const,
+		offsetY: 1,
+		get width(): number | `${number}%` {
+			return railMax ? "70%" : railWidth();
+		},
+		get minWidth(): number | undefined {
+			return railMax ? 60 : undefined;
+		},
+		// Restored, maxHeight caps the rail at half the screen so a long panel
+		// cannot creep down into the live region.
+		get maxHeight(): number | `${number}%` {
+			return railMax ? "90%" : railHeight();
+		},
+		// nonCapturing is load-bearing: ui.custom shows a component WITH keyboard
+		// focus by default, so without it the rail silently swallows every keystroke
+		// and the app looks frozen. Restored, the panel is a view, not a prompt, and
+		// must never take the keyboard from the operator; maximised, it is a
+		// scroller and has to receive arrow keys.
+		get nonCapturing(): boolean {
+			return !railMax;
+		},
+	};
+
+	/**
+	 * Point the keyboard at whichever thing is currently a prompt.
+	 *
+	 * Both directions have to be asked for explicitly. nonCapturing is only
+	 * consulted when the overlay is *shown*, so a rail opened as a view and then
+	 * maximised still has focus on the editor and would scroll for nobody. And an
+	 * overlay that keeps focus after it stops handling keys is worse than one that
+	 * never took it: it swallows every keystroke and the app looks frozen, so
+	 * restoring hands the keyboard straight back.
+	 */
+	const syncRailFocus = (): void => {
+		try {
+			if (railMax) railHandle?.focus?.();
+			else railHandle?.unfocus?.();
+		} catch {}
+	};
+
+	/** The one way in and out of maximised: geometry, focus and repaint together. */
+	const setRailMax = (next: boolean): void => {
+		railMax = next;
+		railScroll = 0;
+		syncRailFocus();
+		railRerender?.();
+	};
+
+	/**
 	 * Columns the banner may use: everything left of the panel.
 	 *
 	 * The panel is an overlay, so pi hands the banner the full terminal width and
@@ -359,7 +432,6 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	};
 
 	const openInlineRail = async (ctx: ExtensionContext): Promise<void> => {
-		const width = railWidth();
 		void ctx.ui.custom<void>(
 			(tui, theme, _keybindings, done) => {
 				railDone = () => done();
@@ -381,7 +453,7 @@ export default function piredExtension(pi: ExtensionAPI): void {
 							// The panel opens over the transcript — and now does so without
 							// being asked — so it owes the operator an exit that works on the
 							// machine they are reading it on. See dismissHint.
-							hint: railMax ? "↑↓ scroll · esc restore" : dismissHint(process.platform, w),
+							hint: railMax ? "↑↓ scroll · ⏎ findings · esc restore" : dismissHint(process.platform, w),
 							ink: (tone, text) => theme.fg(PANEL_TONE_COLOR[tone], text),
 							measure: visibleWidth,
 							truncate: (x, ww) => truncateToWidth(x, ww, theme.fg("dim", "…")),
@@ -405,10 +477,8 @@ export default function piredExtension(pi: ExtensionAPI): void {
 						else if (matchesKey(data, Key.pageDown)) railScroll += page;
 						else if (matchesKey(data, Key.home) || data === "g") railScroll = 0;
 						else if (matchesKey(data, Key.end) || data === "G") railScroll = 1e9;
-						else if (matchesKey(data, Key.escape) || data === "q") {
-							railMax = false;
-							railScroll = 0;
-						} else return false;
+						else if (matchesKey(data, Key.escape) || data === "q" || matchesKey(data, MAXIMIZE_KEY)) setRailMax(false);
+						else return false;
 						if (railScroll < 0) railScroll = 0;
 						tui.requestRender();
 						return true;
@@ -417,31 +487,14 @@ export default function piredExtension(pi: ExtensionAPI): void {
 			},
 			{
 				overlay: true,
-				// Top-right, not full height. The overlay paints over the transcript
-				// rather than reflowing it, so where it sits decides how much it costs
-				// you: the newest output and the editor are at the bottom, which is
-				// exactly the part you are reading. Anchoring to the top covers older,
-				// already-read lines instead.
-				//
-				// maxHeight caps it at half the screen so a long panel cannot creep
-				// down into the live region, and offsetY leaves a row of breathing
-				// space at the very top.
-				//
-				// nonCapturing is load-bearing: ui.custom shows a component WITH
-				// keyboard focus by default, so without it the rail silently swallows
-				// every keystroke and the app looks frozen. The panel is a view, not
-				// a prompt — it must never take the keyboard from the operator.
-				// Re-evaluated by pi on layout, which is what lets alt+m resize a panel
-				// that is already open instead of tearing it down and rebuilding it.
-				overlayOptions: () => (railMax
-					? { anchor: "top-right", width: "70%", minWidth: 60, maxHeight: "90%", offsetY: 1, nonCapturing: false }
-					: { anchor: "top-right", width, maxHeight: railHeight(), offsetY: 1, nonCapturing: true }),
+				// Not a function: pi calls that form once, at show time. See railOverlay.
+				overlayOptions: railOverlay,
 				onHandle: (h) => {
 					railHandle = h;
-					// If the host focuses it anyway, hand the keyboard straight back.
-					try {
-						(h as { unfocus?: (o?: unknown) => void }).unfocus?.();
-					} catch {}
+					// A rail opened as a view hands the keyboard straight back; one opened
+					// maximised keeps it. Unconditional unfocus here is what used to make
+					// alt+m-from-closed open a scroller that ignored the arrow keys.
+					syncRailFocus();
 				},
 			},
 		);
@@ -454,6 +507,7 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		railDone?.();
 		railHandle = undefined;
 		railDone = undefined;
+		railRerender = undefined;
 	};
 
 	const tmuxCmd = (args: string[]): Promise<string> =>
@@ -873,7 +927,7 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	 * pi or readline — ctrl+g was registered and silently skipped as a conflict —
 	 * so alt+p it is, which is at least mnemonic.
 	 */
-	pi.registerShortcut("alt+m", {
+	pi.registerShortcut(MAXIMIZE_KEY, {
 		description: "maximize the engagement panel and scroll it",
 		handler: async (ctx) => {
 			if (ctx.mode !== "tui") return;
@@ -886,9 +940,7 @@ export default function piredExtension(pi: ExtensionAPI): void {
 				} catch {}
 				return;
 			}
-			railMax = !railMax;
-			railScroll = 0;
-			railRerender?.();
+			setRailMax(!railMax);
 		},
 	});
 
@@ -912,9 +964,7 @@ export default function piredExtension(pi: ExtensionAPI): void {
 				await openInlineRail(ctx).catch(() => {});
 				return;
 			}
-			railMax = !railMax;
-			railScroll = 0;
-			railRerender?.();
+			setRailMax(!railMax);
 		},
 	});
 
@@ -931,6 +981,12 @@ export default function piredExtension(pi: ExtensionAPI): void {
 			if (arg !== "footer" && arg !== "tmux") {
 				if (railHandle && (!arg || arg === "off")) {
 					closeInlineRail();
+					// Dismissing ends the maximised session too: reopening should give
+					// back the glance it was opened as, not a scroller nobody asked for.
+					// A mode switch below deliberately keeps it, since that is the same
+					// reading session with a different view in it.
+					railMax = false;
+					railScroll = 0;
 					ctx.ui.notify("pired: panel hidden", "info");
 					return;
 				}
@@ -1044,7 +1100,7 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	};
 
 	/** Open the browser at `view`; shared by /surface and /hypotheses. */
-	const openBrowser = async (ctx: ExtensionContext, view: "surface" | "hypotheses"): Promise<void> => {
+	const openBrowser = async (ctx: ExtensionContext, view: "surface" | "hypotheses" | "findings"): Promise<void> => {
 		if (!workspace) {
 			ctx.ui.notify("pired: no engagement workspace yet", "warning");
 			return;
@@ -1142,6 +1198,11 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	pi.registerCommand("hypotheses", {
 		description: "Browse hypotheses — confirmed, refuted, and still open",
 		handler: async (_args, ctx) => { await openBrowser(ctx, "hypotheses"); },
+	});
+
+	pi.registerCommand("report", {
+		description: "Browse findings — select one to read its detail",
+		handler: async (_args, ctx) => { await openBrowser(ctx, "findings"); },
 	});
 
 	pi.registerCommand("findings", {

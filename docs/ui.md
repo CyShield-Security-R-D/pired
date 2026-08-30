@@ -230,6 +230,10 @@ Rows are ordered **least-settled first** — the reason to open this view is to 
 
 A row never contradicts its glyph. Where a cell is settled but no hypothesis is recorded behind it, the row says so rather than reporting the cell untested.
 
+`/report` lists the findings, worst severity first — recording order buries a critical under six info rows. `⏎` opens one in full: severity, CWE, class, target, status, description, repro steps and every evidence path. `Tab` cycles the three lists: surface → hypotheses → findings.
+
+From the maximized panel, `⏎` hands off here. The panel is a dashboard — it tells you there are twelve findings; reading one properly is this view's job, and building a second selectable list inside a fixed layout would only duplicate it.
+
 `/hypotheses` lists them flat, with `a` / `c` / `r` / `o` filtering to all, confirmed, refuted, or open. **The refuted ones are the point.** Confirmed hypotheses become findings; refuted ones are the evidence that everything else was checked — the difference between "we found three bugs" and "we tested 174 hypotheses across 10 endpoints and three held". `⏎` opens one in full: statement, class, target, method, evidence path, and the finding it produced.
 
 ### Keys
