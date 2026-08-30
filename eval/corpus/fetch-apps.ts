@@ -141,6 +141,12 @@ const ROUTE_RE = [
 const VENDORED = /(^|\/)(node_modules|vendor|third_party|dist|build|site-packages)(\/|$)|(^|\/)\.[^/]+(\/|$)/;
 const TEMPLATE_RE = /(^|\/)(templates?|views?|layouts)(\/|$)|\.(html|htm|j2|jinja2?|tmpl|gohtml|erb|blade\.php|twig|hbs|ejs)$/i;
 const MIGRATION_RE = /(^|\/)(migrations?|migrate|alembic|Migrations)(\/|$)/i;
+// A compose file at or near the root is what makes a target a candidate for the
+// *dynamic* corpus — the same checkout, but stood up and tested through HTTP
+// rather than read. Recorded here so that corpus can be selected from clones
+// this build already paid for, instead of fetching everything a second time.
+const COMPOSE_RE = /^(docker-)?compose([-.][\w.-]+)?\.ya?ml$/i;
+
 const SERVER_RE = /(^|\/)(manage\.py|wsgi\.py|asgi\.py|routes\.rb|server\.(js|ts|go)|main\.go|Dockerfile|docker-compose\.ya?ml|index\.php|artisan)$/i;
 
 /**
@@ -177,7 +183,7 @@ async function walk(root: string): Promise<Walk> {
 	return { all, source };
 }
 
-interface Classification { app: boolean; routes: number; templates: boolean; migrations: boolean; server: boolean; why: string }
+interface Classification { app: boolean; routes: number; templates: boolean; migrations: boolean; server: boolean; compose: string[]; why: string }
 
 async function classify(dir: string, w: Walk): Promise<Classification> {
 	// grep exits 1 on "no match", which execFile reports as a failure; that is a
@@ -199,6 +205,9 @@ async function classify(dir: string, w: Walk): Promise<Classification> {
 	const templates = w.all.some((f) => TEMPLATE_RE.test(f));
 	const migrations = w.all.some((f) => MIGRATION_RE.test(f));
 	const server = w.all.some((f) => SERVER_RE.test(f));
+	// Root and one level down: a compose file buried in an integration-test
+	// directory does not stand the application up.
+	const compose = w.all.filter((f) => f.split("/").length <= 2 && COMPOSE_RE.test(f.split("/").pop() ?? ""));
 	const corroborated = [templates, migrations, server].filter(Boolean).length;
 
 	// Three route files, not one: a library can carry a single incidental match in
@@ -207,7 +216,7 @@ async function classify(dir: string, w: Walk): Promise<Classification> {
 	const why = app
 		? `${routes} route file(s)` + (templates ? ", templates" : "") + (migrations ? ", migrations" : "") + (server ? ", server entry" : "")
 		: routes < 3 ? `only ${routes} route file(s) — not a served application` : "routes but no templates/migrations/server entry";
-	return { app, routes, templates, migrations, server, why };
+	return { app, routes, templates, migrations, server, compose, why };
 }
 
 async function countLines(root: string, files: string[]): Promise<number> {
@@ -250,6 +259,7 @@ if (classifyOnly) {
 	process.stdout.write(
 		`${cls.app ? "APPLICATION" : "not an application"}  ${classifyOnly}\n` +
 		`  routes: ${cls.routes} file(s)   templates: ${cls.templates}   migrations: ${cls.migrations}   server entry: ${cls.server}\n` +
+		`  compose: ${cls.compose.length > 0 ? cls.compose.join(", ") : "none"}\n` +
 		`  source files: ${w.source.length}   verdict: ${cls.why}\n`,
 	);
 	process.exit(cls.app ? 0 : 1);
@@ -264,6 +274,8 @@ interface ManifestEntry {
 	repo: string; sha: string; target: string; truth: string; entries: number;
 	scope: string[]; scope_files: number; scope_loc: number; repo_files: number;
 	surface: "direct" | "indirect"; routes: number;
+	/** Compose files at or near the root — the dynamic corpus selects on these. */
+	runnable: string[];
 }
 
 const manifest: ManifestEntry[] = await (async () => {
@@ -385,7 +397,7 @@ for (const ecosystem of ecosystems) {
 					id: adv.id, package: pkg, ecosystem, published: adv.published?.slice(0, 10),
 					repo: `${owner}/${repo}`, sha, target, truth: truthPath, entries: key.length,
 					scope: scope.dirs, scope_files: scopeFiles.length, scope_loc: loc,
-					repo_files: w.source.length, surface, routes: cls.routes,
+					repo_files: w.source.length, surface, routes: cls.routes, runnable: cls.compose,
 				};
 				const i = manifest.findIndex((m) => m.id === entry.id && m.package === entry.package);
 				if (i >= 0) manifest[i] = entry;
@@ -394,7 +406,7 @@ for (const ecosystem of ecosystems) {
 				stats.built += 1;
 				process.stdout.write(
 					`  ${adv.id.padEnd(22)} ${(adv.published ?? "").slice(0, 10)}  ${owner}/${repo}@${sha.slice(0, 8)}  ` +
-					`${key.length} truth entr${key.length === 1 ? "y" : "ies"}  ${surface}  ` +
+					`${key.length} truth entr${key.length === 1 ? "y" : "ies"}  ${surface}${cls.compose.length > 0 ? " runnable" : ""}  ` +
 					`scope ${scope.dirs.length}d (${scopeFiles.length} files, ${loc.toLocaleString()} loc)  ${removed} leak(s) stripped\n`,
 				);
 			} catch (err) {
