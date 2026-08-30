@@ -37,11 +37,19 @@ const ART: Array<[pi: string, red: string]> = [
 ];
 const ART_WIDTH = 17;
 const TAGLINE = "security engagement harness";
-/** A rule that spans the whole terminal reads as heavy; this one reads as drawn. */
-const MAX_RULE = 58;
+/**
+ * The banner is a lockup, not a stretch.
+ *
+ * Everything in it — the tagline on the wordmark's baseline, the rule, the facts
+ * and the commands — is laid out against this width rather than the terminal's.
+ * Given a 117-column box the old layout right-aligned the tagline to the far
+ * edge and drew a 58-column rule under it, so the two ends of the same block
+ * agreed with nothing and the space between them read as a hole rather than as
+ * margin. A rule that spans the whole terminal reads as heavy; one that spans
+ * the lockup reads as drawn.
+ */
+const LOCKUP = 72;
 const INDENT = "  ";
-/** Below this a label column costs more than it explains. */
-const NARROW_MAX = 40;
 /** Below this not even the wordmark fits. */
 const TINY_MIN = ART_WIDTH + 4;
 
@@ -117,7 +125,10 @@ export function renderBanner(o: BannerOptions): string[] {
 	const { info, width, ink, measure, truncate } = o;
 	if (width < TINY_MIN) return [truncate(`${ink("accent", MARK)} ${ink("pi", "pi")}${ink("red", "red")}`, width)];
 
-	const inner = width - INDENT.length;
+	// Wide terminals get a lockup of a fixed width, not a banner stretched across
+	// the glass: the block's right edge is LOCKUP, wherever the terminal's is.
+	const lockup = Math.min(width, LOCKUP);
+	const inner = lockup - INDENT.length;
 	// The tagline is set against the art's last row rather than its first: aligned
 	// to the baseline it reads as a lockup, aligned to the top it reads as two
 	// unrelated things that happen to share a line.
@@ -125,17 +136,29 @@ export function renderBanner(o: BannerOptions): string[] {
 	const room = inner - ART_WIDTH - 2 >= TAGLINE.length;
 	const headLines = art.map((l, i) =>
 		i === art.length - 1 && room
-			? pad(INDENT + l, width - TAGLINE.length, measure) + ink("muted", TAGLINE)
+			? pad(INDENT + l, lockup - TAGLINE.length, measure) + ink("muted", TAGLINE)
 			: INDENT + l);
 
-	const rows = facts(info, width <= NARROW_MAX);
+	// Which layout, decided by what fits rather than by a width. A fixed
+	// breakpoint of forty columns meant a 100-column terminal — 42 columns left
+	// beside the panel — chose the labelled layout and then truncated its own
+	// last two rows, so the recorded facts and half the command list ended in an
+	// ellipsis. Measuring the content cannot get that wrong.
+	const labelled = facts(info, false);
+	const labelW = Math.max(...labelled.map((r) => r[0].length)) + 3;
+	const needs = Math.max(
+		...labelled.map(([, v]) => labelW + measure(v)),
+		measure(COMMANDS.join("   ")),
+	);
+	const roomy = inner >= needs;
+	const rows = roomy ? labelled : facts(info, true);
 
 	// Narrow: the banner is sharing the terminal with the panel, so it gets the
 	// columns to its left and nothing more. A label column is the first thing to
 	// go — "engagement" beside "pired" spends eleven of twenty-seven columns
 	// explaining what the value already says — and the commands wrap instead of
 	// running off the edge.
-	if (width <= NARROW_MAX) {
+	if (!roomy) {
 		const cmds: string[] = [];
 		let line = "";
 		for (const c of COMMANDS) {
@@ -150,7 +173,7 @@ export function renderBanner(o: BannerOptions): string[] {
 			"",
 			...artLines(ink).map((l) => truncate(INDENT + l, width)),
 			"",
-			truncate(INDENT + ink("rule", "─".repeat(Math.max(0, Math.min(inner, MAX_RULE)))), width),
+			truncate(INDENT + ink("rule", "─".repeat(Math.max(0, inner))), width),
 			"",
 			...rows.map(([, v]) => truncate(`${INDENT}${ink("label", v)}`, width)),
 			"",
@@ -159,13 +182,11 @@ export function renderBanner(o: BannerOptions): string[] {
 		], o.minLines);
 	}
 
-	const labelW = Math.max(...rows.map((r) => r[0].length)) + 3;
-
 	return reserve([
 		"",
 		...headLines.map((l) => truncate(l, width)),
 		"",
-		truncate(INDENT + ink("rule", "─".repeat(Math.max(0, Math.min(inner, MAX_RULE)))), width),
+		truncate(INDENT + ink("rule", "─".repeat(Math.max(0, inner))), width),
 		"",
 		...rows.map(([k, v]) => truncate(`${INDENT}${ink("muted", pad(k, labelW, measure))}${ink("label", v)}`, width)),
 		"",

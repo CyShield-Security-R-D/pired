@@ -307,3 +307,32 @@ describe("a finding, read in the panel", () => {
 		expect(detail({ severity: "info" }).join("\n")).toContain("<muted>info");
 	});
 });
+
+describe("a rail that grew with the terminal", () => {
+	// The rail is no longer a fixed 56 columns, so anything inside it that was
+	// laid out against the full width now stretches with the screen.
+	const wide = (width: number): string[] =>
+		renderPanel({ mode: "state", data, width, maxLines: 60, ink, measure, truncate });
+
+	it("keeps a label and its count in the same measure", () => {
+		// At 120 columns the surface table put "endpoint" at one edge and its count
+		// at the other, and asked the eye to carry the association across.
+		const row = wide(120).find((l) => l.includes("endpoint")) as string;
+		expect(row.trimEnd().length).toBeLessThanOrEqual(46);
+	});
+
+	it("does the same for the hypotheses table", () => {
+		const row = wide(120).find((l) => l.includes("refuted")) as string;
+		expect(row.trimEnd().length).toBeLessThanOrEqual(46);
+	});
+
+	it("still spends the whole width on the things that are prose", () => {
+		// A finding title is not a table: it takes every column it can get, which is
+		// the entire point of a rail that grows with the screen.
+		const long = { ...data, recentFindings: [{ severity: "high", title: "Q".repeat(200) }] };
+		const title = (width: number): number => (renderPanel({
+			mode: "state", data: long, width, maxLines: 60, ink, measure, truncate,
+		}).find((l) => l.includes("▸")) as string).length;
+		expect(title(120)).toBeGreaterThan(title(56));
+	});
+});

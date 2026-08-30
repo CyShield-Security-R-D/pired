@@ -166,6 +166,16 @@ function frameLines(
 /** Shared with the coverage matrix so a glyph means one thing across the tool. */
 const GLYPH = { clear: "●", vulnerable: "▲", testing: "◐", blocked: "⊘", "not-tested": "·" } as const;
 
+/**
+ * The widest a label-and-count table is allowed to be.
+ *
+ * The rail grows with the terminal, and a table that grows with it stops being a
+ * table: at 67 columns "tech" and its "1" sat twenty-six spaces apart, with the
+ * eye asked to carry the association across the gap. Same instinct as the
+ * coverage bar, which has always been capped at 24 — a measure, not a stretch.
+ */
+const TABLE_MAX = 44;
+
 const SEVERITY_ORDER: Severity[] = ["critical", "high", "medium", "low", "info"];
 const SEVERITY_TONE: Record<Severity, PanelTone> = {
 	critical: "bad", high: "bad", medium: "warn", low: "accent", info: "muted",
@@ -259,15 +269,19 @@ export function renderPanel(opts: PanelOptions): string[] {
 		if (surf.length) {
 			line("");
 			section("surface");
-			// Two columns so a wide surface does not run down the whole rail.
-			const w = Math.floor((width - 4) / 2);
-			for (let i = 0; i < surf.length; i += 2) {
+			// Two columns so a wide surface does not run down the whole rail — but
+			// only once there is a surface to spread. Two columns holding one entry
+			// puts its count in the middle of the table, out of line with every
+			// other count in the panel.
+			const cols = surf.length > 3 ? 2 : 1;
+			const w = Math.floor((Math.min(width, TABLE_MAX) - 4) / cols);
+			for (let i = 0; i < surf.length; i += cols) {
 				const cell = (e?: [string, number]): string => {
 					if (!e) return "";
 					const num = String(e[1]);
 					return pad(`${ink("muted", e[0])}${" ".repeat(Math.max(1, w - e[0].length - num.length - 2))}${ink("title", num)}`, w);
 				};
-				line(`  ${cell(surf[i])}${cell(surf[i + 1])}`.trimEnd());
+				line(`  ${cell(surf[i])}${cols === 2 ? cell(surf[i + 1]) : ""}`.trimEnd());
 			}
 		}
 
@@ -276,9 +290,10 @@ export function renderPanel(opts: PanelOptions): string[] {
 			line("");
 			section("hypotheses");
 			const numWidth = Math.max(...hyps.map(([, n]) => String(n).length));
+			const w = Math.min(width, TABLE_MAX);
 			for (const [outcome, n] of hyps) {
 				const count = " ".repeat(numWidth - String(n).length) + String(n);
-				line(`  ${ink(OUTCOME_TONE[outcome] ?? "muted", OUTCOME_GLYPH[outcome] ?? "·")} ${pad(ink("muted", outcome), width - numWidth - 6)}${ink("title", count)}`);
+				line(`  ${ink(OUTCOME_TONE[outcome] ?? "muted", OUTCOME_GLYPH[outcome] ?? "·")} ${pad(ink("muted", outcome), w - numWidth - 6)}${ink("title", count)}`);
 			}
 		}
 	}

@@ -27,6 +27,7 @@ import {
 } from "../core/browser.ts";
 import { type BannerTone, renderBanner } from "../core/banner.ts";
 import { exportFindingsMarkdown } from "../core/export.ts";
+import { bannerColumns, railColumns } from "../core/layout.ts";
 import type { BlockerRecord, Checklist, EngagementScope, Severity, TargetType } from "../core/ontology.ts";
 import type { Gate } from "../core/ports.ts";
 import { buildSystemPrompt, PIRED_PROFILES, type PiredProfile } from "../core/prompts.ts";
@@ -297,6 +298,12 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	let railDetail = false;
 	let railRerender: (() => void) | undefined;
 	let railCtx: ExtensionContext | undefined;
+	/**
+	 * The TUI the rail is drawn on. Its terminal is the one to size against:
+	 * process.stdout is a different thing when pired is driven through a pipe or
+	 * a multiplexer, and the panel would then be laid out for the wrong screen.
+	 */
+	let railTui: TUI | undefined;
 	let railDone: (() => void) | undefined;
 
 	/**
@@ -335,7 +342,7 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		// tui.terminal.rows over process.stdout.rows: the TUI knows the size it is
 		// actually laying out for, which is not the same thing when pired is driven
 		// through a pipe or a multiplexer.
-		const rows = tui?.terminal?.rows ?? process.stdout.rows ?? 40;
+		const rows = tui?.terminal?.rows ?? railTui?.terminal?.rows ?? process.stdout.rows ?? 40;
 		if (railMax) return Math.max(6, Math.floor(rows * 0.9));
 		const h = railHeight();
 		return typeof h === "number" ? h : Math.floor((rows * Number.parseInt(h, 10)) / 100);
@@ -343,14 +350,38 @@ export default function piredExtension(pi: ExtensionAPI): void {
 
 	const bannerReserve = (): number => {
 		if (String(pi.getFlag("pired-panel") ?? "on").toLowerCase() === "off") return 0;
-		const rows = process.stdout.rows ?? 40;
-		const panelRows = railRows();
+		const rows = railTui?.terminal?.rows ?? process.stdout.rows ?? 40;
+		const cap = railRows();
+		// What the panel actually draws, not what it is allowed to draw. A fresh
+		// engagement's panel is a third of the height a busy one needs, and
+		// reserving the cap regardless is a wall of blank rows above the editor —
+		// most visible on a tall screen, where the cap is half of a lot. Line count
+		// does not depend on colour or truncation, so the cheapest honest answer is
+		// to lay the panel out and count.
+		const drawn = panelData
+			? renderPanel({
+				mode: panelMode, data: panelData, width: railWidth(), maxLines: cap, frame: true, hint: " ",
+				ink: (_t, x) => x, measure: visibleWidth, truncate: (x) => x,
+			}).length
+			: cap;
 		const RAIL_OFFSET_Y = 1;
 		// Leave room for the editor box and the status line beneath it.
-		return Math.max(0, Math.min(panelRows + RAIL_OFFSET_Y + 1, rows - 8));
+		return Math.max(0, Math.min(drawn + RAIL_OFFSET_Y + 1, rows - 8));
 	};
 
-	const railWidth = (): number => Number(process.env.PIRED_RAIL_WIDTH ?? 56);
+	/**
+	 * Columns for the rail, taken from the terminal it is being drawn on.
+	 *
+	 * Fixed at 56 it was a sliver on a wide screen — truncating every finding
+	 * title with sixty columns sitting empty beside it — and the same 56 was most
+	 * of a small one. core/layout.ts holds the share and the caps; PIRED_RAIL_WIDTH
+	 * still wins outright.
+	 */
+	const railWidth = (cols?: number): number => {
+		const raw = process.env.PIRED_RAIL_WIDTH;
+		const override = raw === undefined ? undefined : Number(raw);
+		return railColumns(cols ?? railTui?.terminal?.columns ?? process.stdout.columns ?? 100, override);
+	};
 
 	/**
 	 * The overlay's geometry, as one object pi holds a reference to.
@@ -439,11 +470,7 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	 */
 	const bannerWidth = (full: number): number => {
 		if (String(pi.getFlag("pired-panel") ?? "on").toLowerCase() === "off") return full;
-		const free = full - railWidth() - 2;
-		// Under ~18 columns nothing legible fits beside the rail, so the banner
-		// takes the full width and accepts the overlap for that frame; the panel
-		// can be dismissed with alt+p on a terminal that small.
-		return free >= 18 ? free : full;
+		return bannerColumns(full, railWidth(full));
 	};
 
 	const openInlineRail = async (ctx: ExtensionContext): Promise<void> => {
@@ -452,6 +479,7 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		railCtx = ctx;
 		void ctx.ui.custom<void>(
 			(tui, theme, _keybindings, done) => {
+				railTui = tui;
 				railDone = () => done();
 				railRerender = () => tui.requestRender();
 				return {

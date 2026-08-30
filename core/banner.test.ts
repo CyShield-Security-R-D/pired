@@ -109,6 +109,36 @@ describe("sharing the terminal with the panel", () => {
 	it("keeps the label column when there is room for it", () => {
 		expect(renderBanner(opts(88)).join("\n")).toContain("engagement");
 	});
+
+	it("picks the layout by what fits, not by a breakpoint", () => {
+		// 42 columns is what a 100-column terminal leaves beside the panel. A fixed
+		// breakpoint of 40 chose the labelled layout here and then truncated its own
+		// last two rows: the recorded facts and half the command list.
+		const text = renderBanner(opts(42)).join("\n");
+		expect(text).toContain("41 surface · 2 findings");
+		expect(text).toContain("/coverage");
+		expect(text).toContain("/panel");
+		for (const l of renderBanner(opts(42))) expect(l.length).toBeLessThanOrEqual(42);
+	});
+});
+
+describe("a wide terminal", () => {
+	it("is a lockup, not a stretch: the block keeps its own width", () => {
+		// Given the whole of a 2k screen the banner used to right-align the tagline
+		// to the far edge and draw a 58-column rule under it, so the two ends of one
+		// block agreed with nothing and the space between read as a hole.
+		const lines = renderBanner(opts(160));
+		expect(Math.max(...lines.map((l) => l.length))).toBeLessThanOrEqual(72);
+	});
+
+	it("still sets the tagline on the wordmark's baseline", () => {
+		const lines = renderBanner(opts(160));
+		const tag = lines.find((l) => l.includes("security engagement harness"));
+		expect(tag).toContain("▀   ▀");
+		// And ends where the rule ends, which is what makes it read as one block.
+		const rule = lines.find((l) => l.trim().startsWith("─"));
+		expect(tag?.length).toBe(rule?.length);
+	});
 });
 
 describe("the wordmark", () => {

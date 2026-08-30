@@ -98,10 +98,31 @@ Sections are dropped from the bottom when space runs short. Blockers and the hin
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `PIRED_RAIL_WIDTH` | `56` (inline), `64` (tmux) | Panel width in columns. |
+| `PIRED_RAIL_WIDTH` | scales with the terminal (see below), `64` (tmux) | Panel width in columns. Naming one wins outright. |
 | `PIRED_RAIL_HEIGHT` | `50%` | Inline rail height: `N` rows or `N%` of the screen. Anything else falls back to `50%`. |
 
 Below 24 columns the frame is dropped rather than mangled; below 12 the panel renders nothing at all. Every framed line is padded to exactly the panel width — a ragged right edge reads as a rendering bug rather than a style.
+
+### The rail and the banner share the terminal
+
+Both used to be fixed: 56 columns of rail, and the banner took what was left. That reads well at 85 columns, which is what it was designed at, and badly at either extreme — at 175 the rail was a sliver still truncating every finding title with sixty columns of nothing beside it, and at 70 it refused to shrink, so the banner gave up and the rail painted over the wordmark.
+
+`core/layout.ts` holds the arithmetic, in one place and under test:
+
+| Terminal | Rail | Banner |
+|---|---|---|
+| 60 | 32 | 26 |
+| 70 | 42 | 26 |
+| 85 | 56 | 27 |
+| 120 | 56 | 62 |
+| 175 | 67 | 106 |
+| 400 | 88 | 310 |
+
+The rail takes 38% of the screen, wants at least 56 columns and never exceeds 88 — a side panel that keeps growing stops being one — and yields below its preferred width rather than crowd the banner out. `PIRED_RAIL_WIDTH` overrides all of it: someone who names a width has a reason.
+
+Two consequences inside the panel. Prose — a finding title — takes every column it is given, which is the point. Tables do not: a label and its count are capped to a 44-column measure, like the coverage bar's 24, because a table that grows with the screen puts "tech" at one edge and its "1" at the other. And the surface grid drops to one column until there are more than three kinds to spread.
+
+The banner is a lockup, not a stretch: 72 columns wide wherever the terminal ends, with the tagline, the rule and the facts sharing one right edge. It picks its layout by measuring what fits rather than by a breakpoint — the old fixed 40 meant a 100-column terminal chose the labelled layout and then truncated its own last two rows.
 
 ## Outside the TUI: `pired-state`
 

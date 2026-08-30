@@ -134,7 +134,9 @@ async function main() {
     maxLines: Number(arg("lines", "24")),
     ink: (tone, text) => `${C[tone] ?? ""}${text}\x1b[0m`,
     measure: (s) => strip(s).length,
-    truncate: (s, w) => (strip(s).length <= w ? s : strip(s).slice(0, w)),
+    // The ellipsis is the difference between "this line was cut" and "the title
+    // ends mid-word", which reads as corrupted data rather than as a narrow pane.
+    truncate: (s, w) => (strip(s).length <= w ? s : `${strip(s).slice(0, Math.max(0, w - 1))}…`),
     frame: !has("no-frame"),
   });
   process.stdout.write(`${lines.join("\n")}\n`);
