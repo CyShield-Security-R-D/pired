@@ -228,10 +228,13 @@ export function renderPanel(opts: PanelOptions): string[] {
 	const pad = (s: string, n: number): string => s + " ".repeat(Math.max(0, n - measure(s)));
 
 	// --- header ---------------------------------------------------------------
-	// Framed, the engagement name lives in the top border, so repeating it here
-	// would waste the most valuable line in the panel.
-	if (!framed) line(`${ink("accent", "⦿")} ${ink("title", d.engagement)}`);
-	if (d.engagementType) line(`  ${ink("muted", d.engagementType)}`);
+	// Framed, the engagement name lives in the top border — and so does its type,
+	// which is four words that were costing a whole row of a twenty-row view.
+	// Unframed there is no border to put them in, so they take their line.
+	if (!framed) {
+		line(`${ink("accent", "⦿")} ${ink("title", d.engagement)}`);
+		if (d.engagementType) line(`  ${ink("muted", d.engagementType)}`);
+	}
 
 	// A blocker is the one thing that needs a human. It goes near the top and is
 	// never dropped for space.
@@ -246,10 +249,22 @@ export function renderPanel(opts: PanelOptions): string[] {
 	if (mode === "state" || mode === "coverage") {
 		if (d.coveragePct !== undefined) {
 			section("coverage");
-			const barWidth = Math.max(8, Math.min(24, width - 10));
+			const pct = `${d.coveragePct}%`;
+			const counts = `${d.settled ?? 0} of ${d.cells ?? 0} cells · ${d.gaps ?? 0} gaps`;
+			// A bar and the numbers it draws are one fact, and two rows for one fact
+			// is how a panel gets tall. So they share a row, and the bar gives up the
+			// columns to make that work — down to twelve, under which it stops being
+			// a bar and the two go back to a row each.
+			const beside = width - measure(counts) - measure(pct) - 5;
+			const together = beside >= 12;
+			const barWidth = Math.max(8, Math.min(24, together ? beside : width - 10));
 			const filled = Math.round((d.coveragePct / 100) * barWidth);
-			line(`  ${ink("accent", "█".repeat(filled))}${ink("muted", "░".repeat(barWidth - filled))} ${ink("title", `${d.coveragePct}%`)}`);
-			line(ink("muted", `  ${d.settled ?? 0} of ${d.cells ?? 0} cells · ${d.gaps ?? 0} gaps`));
+			const bar = `  ${ink("accent", "█".repeat(filled))}${ink("muted", "░".repeat(barWidth - filled))} ${ink("title", pct)}`;
+			if (together) line(`${bar}  ${ink("muted", counts)}`);
+			else {
+				line(bar);
+				line(ink("muted", `  ${counts}`));
+			}
 			const c = d.coverage;
 			if (c) {
 				const parts = ([
@@ -332,20 +347,27 @@ export function renderPanel(opts: PanelOptions): string[] {
 	}
 
 	// --- footer ---------------------------------------------------------------
-	if (room() > 1 && d.evidence > 0) {
-		line("");
-		line(ink("muted", `  ${d.evidence} evidence file${d.evidence === 1 ? "" : "s"}`));
-	}
-
+	// One row, both ends: the evidence count on the left, the dismiss hint on the
+	// right. They were a blank line, a count and a hint — three rows for a number
+	// and a keystroke, in the view that has to earn every row it takes.
+	const evidence = d.evidence > 0 ? `  ${d.evidence} evidence file${d.evidence === 1 ? "" : "s"}` : "";
 	if (hint) {
 		const clipped = truncate(hint, width - 2);
-		out.push(" ".repeat(Math.max(0, width - measure(clipped) - 1)) + ink("muted", clipped));
+		const gap = width - measure(evidence) - measure(clipped) - 1;
+		const together = Boolean(evidence) && gap >= 2;
+		// Too narrow to share the row, and the count still worth having: it takes
+		// its own line rather than being dropped for a layout that saves nothing.
+		if (evidence && !together && room() > 0) line(ink("muted", evidence));
+		out.push(together
+			? ink("muted", evidence) + " ".repeat(gap) + ink("muted", clipped)
+			: " ".repeat(Math.max(0, width - measure(clipped) - 1)) + ink("muted", clipped));
+	} else if (evidence && room() > 0) {
+		line(ink("muted", evidence));
 	}
 
 	if (!framed) return out.map((l) => (l.startsWith(RULE) ? l.slice(RULE.length) : l));
-	return framed
-		? frameLines(out, `${ink("accent", "⦿")} ${ink("title", d.engagement)}`, opts.width, ink, measure, truncate)
-		: out;
+	const title = `${ink("accent", "⦿")} ${ink("title", d.engagement)}${d.engagementType ? ink("muted", ` · ${d.engagementType}`) : ""}`;
+	return framed ? frameLines(out, title, opts.width, ink, measure, truncate) : out;
 }
 
 /**

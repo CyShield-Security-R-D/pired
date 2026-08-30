@@ -46,7 +46,7 @@ It floats over the transcript rather than reflowing it — pi's layout root belo
 
 It is a view, not a prompt: it is created non-capturing and immediately unfocused, so it never takes a keystroke meant for the agent.
 
-The frame carries the engagement name in its top edge, tmux-style, and a dim dismiss hint on the last row. That hint's row is reserved *before* the sections are laid out, so it cannot be squeezed out by a full panel — which is exactly when you would want it.
+The frame carries the engagement name **and its type** in its top edge, tmux-style, and the last row holds the evidence count on the left with the dim dismiss hint on the right. Both are rows the panel used to spend on a few words each; the border and the footer had the space already. The hint's row is reserved *before* the sections are laid out, so it cannot be squeezed out by a full panel — which is exactly when you would want it. Unframed there is no border to put the name in, so it takes its line back.
 
 ### The hint is platform-aware
 
@@ -80,7 +80,7 @@ Terminal.app and iTerm2 send **Option+P as `π`**, not as Meta, so on a default 
 
 **`needs you`** — open blockers, at most three plus a `+N more`. It sits directly under the header in every mode but `findings`, and is **never dropped for space**. A blocker is the one line that needs a human; losing it to a short terminal would defeat the point of showing it.
 
-**`coverage`** — a bar, the settled/applicable count, gaps, and the per-status tally. See [Coverage](coverage.md) for what settles a cell.
+**`coverage`** — a bar with the settled/applicable count and gaps *beside* it, then the per-status tally. A bar and the numbers it draws are one fact, so they share a row, and the bar gives up columns to make that work — down to twelve, under which it stops being a bar and the two take a row each. See [Coverage](coverage.md) for what settles a cell.
 
 **`scope`** — `● authorized` or `○ NOT authorized`, the gate mode, and how many targets of each kind are in scope.
 
@@ -90,7 +90,7 @@ Terminal.app and iTerm2 send **Option+P as `π`**, not as Meta, so on a default 
 
 **`findings`** — the severity tally, then recent finding titles (3 in `state`, 12 in `findings`).
 
-**footer** — the evidence-file count, then the dismiss hint.
+**footer** — one row, both ends: the evidence-file count on the left, the dismiss hint on the right. Too narrow to share, and the count takes its own row rather than being dropped.
 
 Sections are dropped from the bottom when space runs short. Blockers and the hint are the exceptions.
 

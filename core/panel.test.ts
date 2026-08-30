@@ -365,3 +365,46 @@ describe("density", () => {
 		expect(row).toContain("host");
 	});
 });
+
+describe("rows a compact panel does not spend", () => {
+	const framed = (width: number, hint?: string): string[] => renderPanel({
+		mode: "state", data, width, maxLines: 60, frame: true,
+		...(hint === undefined ? {} : { hint }), ink, measure, truncate,
+	});
+
+	it("carries the engagement type in the border, not in a row of its own", () => {
+		const lines = framed(56);
+		expect(lines[0]).toContain("review · source audit");
+		expect(lines.slice(1).join("\n")).not.toContain("review · source audit");
+	});
+
+	it("still spells both out when there is no border to put them in", () => {
+		const bare = renderPanel({ mode: "state", data, width: 56, maxLines: 60, ink, measure, truncate });
+		expect(bare.join("\n")).toContain("acme");
+		expect(bare.join("\n")).toContain("review · source audit");
+	});
+
+	it("puts the coverage bar and its counts on one row when they fit", () => {
+		const row = framed(56).find((l) => l.includes("%")) as string;
+		expect(row).toContain("cells");
+	});
+
+	it("splits them again when the panel is too narrow to share", () => {
+		const lines = framed(34);
+		const bar = lines.find((l) => l.includes("%")) as string;
+		expect(bar).not.toContain("cells");
+		expect(lines.join("\n")).toContain("cells");
+	});
+
+	it("shares the last row between the evidence count and the dismiss hint", () => {
+		const last = framed(56, "alt+m expand · alt+p hide").at(-2) as string;
+		expect(last).toContain("evidence");
+		expect(last).toContain("alt+p hide");
+	});
+
+	it("gives the count its own row rather than dropping it when narrow", () => {
+		const lines = framed(30, "alt+m expand · alt+p hide");
+		expect(lines.join("\n")).toContain("evidence");
+		expect(lines.at(-2)).toContain("alt+p hide");
+	});
+});
