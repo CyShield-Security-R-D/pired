@@ -336,3 +336,32 @@ describe("a rail that grew with the terminal", () => {
 		expect(title(120)).toBeGreaterThan(title(56));
 	});
 });
+
+describe("density", () => {
+	const framed = (extra: Partial<PanelData> = {}): string[] => renderPanel({
+		mode: "state", data: { ...data, ...extra }, width: 56, maxLines: 60,
+		frame: true, hint: "alt+m expand · alt+p hide", ink, measure, truncate,
+	});
+
+	it("puts nothing above a section rule — the rule is the separator", () => {
+		// A blank line over a rule separates a separator, and there were five of
+		// them in a panel whose whole job is to be read at a glance.
+		const lines = framed();
+		for (const [i, l] of lines.entries()) {
+			if (!/^├/.test(l)) continue;
+			expect(lines[i - 1]?.trim().replace(/[│]/g, ""), `above ${l.slice(0, 20)}`).not.toBe("");
+		}
+	});
+
+	it("spends its rows on content, not on air", () => {
+		// Every blank row inside the frame is a finding that did not fit.
+		const blank = framed().filter((l) => l.replace(/[│ ]/g, "") === "").length;
+		expect(blank).toBeLessThanOrEqual(1);
+	});
+
+	it("still spreads a surface across two columns once there is one to spread", () => {
+		const wide = framed({ surface: { endpoint: 12, host: 3, param: 40, header: 2, cookie: 1 } });
+		const row = wide.find((l) => l.includes("endpoint")) as string;
+		expect(row).toContain("host");
+	});
+});

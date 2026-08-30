@@ -49,6 +49,8 @@ const TAGLINE = "security engagement harness";
  * the lockup reads as drawn.
  */
 const LOCKUP = 72;
+/** Columns between the wordmark and the facts standing beside it. */
+const FACT_GAP = 5;
 const INDENT = "  ";
 /** Below this not even the wordmark fits. */
 const TINY_MIN = ART_WIDTH + 4;
@@ -125,10 +127,21 @@ export function renderBanner(o: BannerOptions): string[] {
 	const { info, width, ink, measure, truncate } = o;
 	if (width < TINY_MIN) return [truncate(`${ink("accent", MARK)} ${ink("pi", "pi")}${ink("red", "red")}`, width)];
 
-	// Wide terminals get a lockup of a fixed width, not a banner stretched across
-	// the glass: the block's right edge is LOCKUP, wherever the terminal's is.
-	const lockup = Math.min(width, LOCKUP);
-	const inner = lockup - INDENT.length;
+	// Which layout, and how wide the block is, are one decision: each layout
+	// knows what it needs, and the lockup is that — never the terminal's width.
+	const labelled = facts(info, false);
+	const labelW = Math.max(...labelled.map((r) => r[0].length)) + 3;
+	const cmdRow = COMMANDS.join("   ");
+	const factW = Math.max(...labelled.map(([, v]) => labelW + measure(v)));
+	// Stacked, the block is as wide as its widest row, capped at LOCKUP.
+	const stackedNeeds = Math.max(factW, measure(cmdRow));
+	// Side by side, the wordmark and the facts share three rows, and the tagline
+	// and the commands share the row under the rule.
+	const compactNeeds = Math.max(ART_WIDTH + FACT_GAP + factW, measure(TAGLINE) + 3 + measure(cmdRow));
+	const avail = width - INDENT.length;
+	const compact = avail >= compactNeeds;
+	const inner = compact ? compactNeeds : Math.min(avail, LOCKUP - INDENT.length);
+	const lockup = inner + INDENT.length;
 	// The tagline is set against the art's last row rather than its first: aligned
 	// to the baseline it reads as a lockup, aligned to the top it reads as two
 	// unrelated things that happen to share a line.
@@ -139,19 +152,41 @@ export function renderBanner(o: BannerOptions): string[] {
 			? pad(INDENT + l, lockup - TAGLINE.length, measure) + ink("muted", TAGLINE)
 			: INDENT + l);
 
-	// Which layout, decided by what fits rather than by a width. A fixed
-	// breakpoint of forty columns meant a 100-column terminal — 42 columns left
-	// beside the panel — chose the labelled layout and then truncated its own
+	// Whether the labels survive is decided by what fits rather than by a width. A
+	// fixed breakpoint of forty columns meant a 100-column terminal — 42 columns
+	// left beside the panel — chose the labelled layout and then truncated its own
 	// last two rows, so the recorded facts and half the command list ended in an
 	// ellipsis. Measuring the content cannot get that wrong.
-	const labelled = facts(info, false);
-	const labelW = Math.max(...labelled.map((r) => r[0].length)) + 3;
-	const needs = Math.max(
-		...labelled.map(([, v]) => labelW + measure(v)),
-		measure(COMMANDS.join("   ")),
-	);
-	const roomy = inner >= needs;
+	const roomy = inner >= stackedNeeds;
 	const rows = roomy ? labelled : facts(info, true);
+
+	// --- compact: the facts stand beside the wordmark ------------------------
+	// Stacked, the banner is thirteen rows of mostly air, and the hole beside the
+	// wordmark is exactly the width the facts want. On a screen with the columns
+	// to spare they go there instead, which is five rows back and a block that
+	// reads as one shape rather than as a list under a picture.
+	if (compact) {
+		const factLine = ([k, v]: [string, string]): string =>
+			`${ink("muted", pad(k, labelW, measure))}${ink("label", v)}`;
+		const beside = art.map((l, i) => {
+			const f = labelled[i];
+			return INDENT + (f ? pad(l, ART_WIDTH + FACT_GAP, measure) + factLine(f) : l);
+		});
+		const under = labelled.slice(art.length)
+			.map((f) => INDENT + " ".repeat(ART_WIDTH + FACT_GAP) + factLine(f));
+		// Tagline and commands share the row under the rule, each on its own edge:
+		// the block is bounded left and right by the same two columns everywhere.
+		const cmds = COMMANDS.map((c) => ink("accent", c)).join(ink("muted", "   "));
+		const gap = Math.max(3, inner - measure(TAGLINE) - measure(cmdRow));
+		return reserve([
+			"",
+			...beside.map((l) => truncate(l, width)),
+			...under.map((l) => truncate(l, width)),
+			truncate(INDENT + ink("rule", "─".repeat(Math.max(0, inner))), width),
+			truncate(`${INDENT}${ink("muted", TAGLINE)}${" ".repeat(gap)}${cmds}`, width),
+			"",
+		], o.minLines);
+	}
 
 	// Narrow: the banner is sharing the terminal with the panel, so it gets the
 	// columns to its left and nothing more. A label column is the first thing to

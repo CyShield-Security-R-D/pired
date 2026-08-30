@@ -84,15 +84,17 @@ Terminal.app and iTerm2 send **Option+P as `π`**, not as Meta, so on a default 
 
 **`scope`** — `● authorized` or `○ NOT authorized`, the gate mode, and how many targets of each kind are in scope.
 
-**`surface`** — the recorded inventory by kind, in two columns so a wide surface does not run down the whole rail.
+**`surface`** — the recorded inventory by kind, in two columns once there are more than three kinds to spread. The cell keeps its width either way: a second column that is merely absent should not stretch the first one across the panel.
 
-**`hypotheses`** — outcomes by count, right-aligned so the eye can scan the numbers without reading them.
+**`hypotheses`** — outcomes by count, in the same cell as the surface table above it, so the two lists of counts read as one column rather than as two that nearly line up.
 
 **`findings`** — the severity tally, then recent finding titles (3 in `state`, 12 in `findings`).
 
 **footer** — the evidence-file count, then the dismiss hint.
 
 Sections are dropped from the bottom when space runs short. Blockers and the hint are the exceptions.
+
+Nothing is spaced above a section rule — the rule *is* the separator, and a blank line over one separates a separator. That was five rows out of twenty-two in a view whose whole job is to be read at a glance beside the transcript.
 
 ## Sizing
 
@@ -122,7 +124,11 @@ The rail takes 38% of the screen, wants at least 56 columns and never exceeds 88
 
 Two consequences inside the panel. Prose — a finding title — takes every column it is given, which is the point. Tables do not: a label and its count are capped to a 44-column measure, like the coverage bar's 24, because a table that grows with the screen puts "tech" at one edge and its "1" at the other. And the surface grid drops to one column until there are more than three kinds to spread.
 
-The banner is a lockup, not a stretch: 72 columns wide wherever the terminal ends, with the tagline, the rule and the facts sharing one right edge. It picks its layout by measuring what fits rather than by a breakpoint — the old fixed 40 meant a 100-column terminal chose the labelled layout and then truncated its own last two rows.
+The banner is a lockup, not a stretch: it keeps its own width wherever the terminal ends, with every row inside it sharing one left and one right edge. It picks its layout by measuring what fits rather than by a breakpoint — the old fixed 40 meant a 100-column terminal chose the labelled layout and then truncated its own last two rows. Three layouts, in order of how much room there is:
+
+- **beside** (≈133 columns and up) — the facts stand to the right of the wordmark and the tagline shares the rule's baseline with the commands. Six rows.
+- **stacked** (≈98–132) — the wordmark, then the rule, then the facts under it, with the tagline on the wordmark's own baseline. Capped at 72 columns.
+- **narrow** (the columns left beside the panel on a smaller terminal) — no label column, since "engagement" beside "acme" spends eleven columns explaining what the value already says, and the commands wrap.
 
 ## Outside the TUI: `pired-state`
 

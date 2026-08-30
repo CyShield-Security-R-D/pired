@@ -167,14 +167,20 @@ function frameLines(
 const GLYPH = { clear: "●", vulnerable: "▲", testing: "◐", blocked: "⊘", "not-tested": "·" } as const;
 
 /**
- * The widest a label-and-count table is allowed to be.
+ * The widest a label-and-count table is allowed to be, and the cell inside it.
  *
  * The rail grows with the terminal, and a table that grows with it stops being a
  * table: at 67 columns "tech" and its "1" sat twenty-six spaces apart, with the
  * eye asked to carry the association across the gap. Same instinct as the
  * coverage bar, which has always been capped at 24 — a measure, not a stretch.
+ *
+ * The cell is half the table whether or not a second column is filled, so a
+ * surface of one kind and a surface of six read at the same measure, and so do
+ * the hypotheses beneath them. Sized from the panel so a narrow rail still gets
+ * a proportional one.
  */
 const TABLE_MAX = 44;
+const tableCell = (width: number): number => Math.floor((Math.min(width, TABLE_MAX) - 4) / 2);
 
 const SEVERITY_ORDER: Severity[] = ["critical", "high", "medium", "low", "info"];
 const SEVERITY_TONE: Record<Severity, PanelTone> = {
@@ -207,7 +213,13 @@ export function renderPanel(opts: PanelOptions): string[] {
 	const line = (s: string): void => {
 		if (room() > 0) out.push(truncate(s, width));
 	};
-	/** A section rule: the label, then a hairline to the right margin. */
+	/**
+	 * A section rule: the label, then a hairline to the right margin.
+	 *
+	 * It is the separator, which is why nothing is spaced above it. A blank line
+	 * over a rule separates a separator, and it cost five rows out of twenty-two
+	 * in a panel whose whole job is to be read at a glance beside the transcript.
+	 */
 	const section = (label: string): void => {
 		if (room() < 2) return;
 		const dashes = Math.max(0, width - label.length - 3);
@@ -224,7 +236,6 @@ export function renderPanel(opts: PanelOptions): string[] {
 	// A blocker is the one thing that needs a human. It goes near the top and is
 	// never dropped for space.
 	if (d.openBlockers.length > 0 && mode !== "findings") {
-		line("");
 		section("needs you");
 		for (const b of d.openBlockers.slice(0, opts.expanded ? d.openBlockers.length : 3)) {
 			line(`  ${ink("warn", "!")} ${ink("title", b.question)}`);
@@ -234,7 +245,6 @@ export function renderPanel(opts: PanelOptions): string[] {
 
 	if (mode === "state" || mode === "coverage") {
 		if (d.coveragePct !== undefined) {
-			line("");
 			section("coverage");
 			const barWidth = Math.max(8, Math.min(24, width - 10));
 			const filled = Math.round((d.coveragePct / 100) * barWidth);
@@ -254,7 +264,6 @@ export function renderPanel(opts: PanelOptions): string[] {
 
 	if (mode === "state") {
 		if (d.scope) {
-			line("");
 			section("scope");
 			line(`  ${ink(d.scope.authorized ? "good" : "warn", d.scope.authorized ? "● authorized" : "○ NOT authorized")} ${ink("muted", d.scope.mode)}`);
 			const t = d.scope.targets ?? {};
@@ -267,14 +276,13 @@ export function renderPanel(opts: PanelOptions): string[] {
 
 		const surf = Object.entries(d.surface).filter(([, n]) => n > 0);
 		if (surf.length) {
-			line("");
 			section("surface");
 			// Two columns so a wide surface does not run down the whole rail — but
-			// only once there is a surface to spread. Two columns holding one entry
-			// puts its count in the middle of the table, out of line with every
-			// other count in the panel.
+			// only once there is a surface to spread. The cell keeps its width
+			// either way: a second column that is merely absent should not stretch
+			// the first one across the panel.
 			const cols = surf.length > 3 ? 2 : 1;
-			const w = Math.floor((Math.min(width, TABLE_MAX) - 4) / cols);
+			const w = tableCell(width);
 			for (let i = 0; i < surf.length; i += cols) {
 				const cell = (e?: [string, number]): string => {
 					if (!e) return "";
@@ -287,20 +295,20 @@ export function renderPanel(opts: PanelOptions): string[] {
 
 		const hyps = Object.entries(d.hypotheses).filter(([, n]) => n > 0);
 		if (hyps.length) {
-			line("");
 			section("hypotheses");
 			const numWidth = Math.max(...hyps.map(([, n]) => String(n).length));
-			const w = Math.min(width, TABLE_MAX);
+			// The same cell as the surface table above it, so the two lists of
+			// counts read as one column rather than as two that nearly line up.
+			const w = tableCell(width);
 			for (const [outcome, n] of hyps) {
 				const count = " ".repeat(numWidth - String(n).length) + String(n);
-				line(`  ${ink(OUTCOME_TONE[outcome] ?? "muted", OUTCOME_GLYPH[outcome] ?? "·")} ${pad(ink("muted", outcome), w - numWidth - 6)}${ink("title", count)}`);
+				line(`  ${ink(OUTCOME_TONE[outcome] ?? "muted", OUTCOME_GLYPH[outcome] ?? "·")} ${pad(ink("muted", outcome), Math.max(4, w - numWidth - 4))}${ink("title", count)}`);
 			}
 		}
 	}
 
 	if (mode === "state" || mode === "findings") {
 		const sev = SEVERITY_ORDER.filter((s) => (d.findings[s] ?? 0) > 0);
-		line("");
 		section("findings");
 		if (sev.length === 0) {
 			line(ink("muted", "  none recorded"));

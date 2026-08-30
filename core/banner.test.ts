@@ -123,21 +123,33 @@ describe("sharing the terminal with the panel", () => {
 });
 
 describe("a wide terminal", () => {
+	const widest = (w: number): number => Math.max(...renderBanner(opts(w)).map((l) => l.length));
+
 	it("is a lockup, not a stretch: the block keeps its own width", () => {
 		// Given the whole of a 2k screen the banner used to right-align the tagline
 		// to the far edge and draw a 58-column rule under it, so the two ends of one
 		// block agreed with nothing and the space between read as a hole.
-		const lines = renderBanner(opts(160));
-		expect(Math.max(...lines.map((l) => l.length))).toBeLessThanOrEqual(72);
+		expect(widest(160)).toBe(widest(400));
+		expect(widest(400)).toBeLessThanOrEqual(80);
 	});
 
-	it("still sets the tagline on the wordmark's baseline", () => {
+	it("stands the facts beside the wordmark instead of under it", () => {
+		// Stacked it is thirteen rows of mostly air, with a hole beside the wordmark
+		// exactly as wide as the facts want to be.
+		const lines = renderBanner(opts(160)).filter((l) => l.trim());
+		const first = lines.find((l) => l.includes("█▀█")) as string;
+		expect(first).toContain("engagement");
+		expect(lines.length).toBeLessThan(renderBanner(opts(72)).filter((l) => l.trim()).length);
+	});
+
+	it("pairs the tagline with the commands on the rule's baseline", () => {
 		const lines = renderBanner(opts(160));
-		const tag = lines.find((l) => l.includes("security engagement harness"));
-		expect(tag).toContain("▀   ▀");
-		// And ends where the rule ends, which is what makes it read as one block.
-		const rule = lines.find((l) => l.trim().startsWith("─"));
-		expect(tag?.length).toBe(rule?.length);
+		const tag = lines.find((l) => l.includes("security engagement harness")) as string;
+		// Both edges of the block are the rule's edges, which is what makes the
+		// whole thing read as one shape.
+		expect(tag).toContain("/panel");
+		const rule = lines.find((l) => l.trim().startsWith("─")) as string;
+		expect(tag.length).toBe(rule.length);
 	});
 });
 
@@ -156,7 +168,9 @@ describe("the wordmark", () => {
 	});
 
 	it("sets the tagline against the art's baseline, not its top", () => {
-		const lines = renderBanner(opts(88));
+		// Stacked — the layout for a terminal without the columns to stand the
+		// facts beside the wordmark.
+		const lines = renderBanner(opts(72));
 		const tagLine = lines.findIndex((l) => l.includes("security engagement harness"));
 		expect(lines[tagLine]).toContain("▀   ▀"); // the art's last row
 	});
