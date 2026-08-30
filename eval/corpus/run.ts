@@ -56,10 +56,24 @@ const only = arg("only", "");
 const wanted = only.split(",").map((x) => x.trim()).filter(Boolean);
 const targets = wanted.length ? manifest.filter((m) => wanted.some((w) => m.id.includes(w) || m.package.includes(w))) : manifest;
 
+// The first two clauses were added after gradio spent an hour concluding
+// "matches upstream Gradio 5.7.1 (no planted deviation found yet)" and recorded
+// one inventory row, no hypotheses and no findings. The target IS upstream at a
+// pre-fix commit, so matching a remembered release is guaranteed and proves
+// nothing — the bug is in the release. The seal stops retrieval over the wire
+// and does nothing about retrieval from weights.
+//
+// The last clause exists because that run put a genuinely good review into
+// notes.md. Coverage is computed from the ledger; an unrecorded review is void.
+//
+// Neither clause asserts a vulnerability exists — that would be a hint.
 const PROMPT =
-	"Perform a security review of this codebase. Record the surface you find, record hypotheses and their " +
-	"outcomes as you settle them, and record confirmed issues as findings with cwe, severity and the exact " +
-	"file:line of the vulnerable sink.";
+	"Perform a security review of this codebase. This is production source from a real project, not a " +
+	"modified or seeded copy: do not compare it against any upstream version you recall, and do not treat " +
+	"\"matches upstream\" as evidence that code is safe — judge each sink on its own behaviour. Record the " +
+	"surface you find, record hypotheses and their outcomes as you settle them, and record confirmed issues " +
+	"as findings with cwe, severity and the exact file:line of the vulnerable sink. Notes are not a " +
+	"substitute for recording: anything not in the ledger does not count.";
 
 async function pretrust(dir: string): Promise<void> {
 	const path = join(process.env.HOME ?? "", ".pi", "agent", "trust.json");

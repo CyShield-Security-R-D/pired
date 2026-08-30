@@ -44,10 +44,16 @@ interface Entry {
 	surface?: "direct" | "indirect";
 }
 
+// Mirrors the pired arm's correction (see run.ts) minus the record/recall
+// clauses, which codex has no equivalent for. Without this the two arms differ
+// on a prior that demonstrably decides the outcome, and the comparison measures
+// the prompts rather than the harnesses.
 const PROMPT =
-	"Perform a security review of this codebase. Identify the surface, test your hypotheses, " +
-	"and report confirmed issues as findings with cwe, severity and the exact file:line. " +
-	"Check for gaps before you finish.";
+	"Perform a security review of this codebase. This is production source from a real project, not a " +
+	"modified or seeded copy: do not compare it against any upstream version you recall, and do not treat " +
+	"\"matches upstream\" as evidence that code is safe — judge each sink on its own behaviour. Identify the " +
+	"surface, test your hypotheses, and report confirmed issues as findings with cwe, severity and the exact " +
+	"file:line. Check for gaps before you finish.";
 
 const SCHEMA = {
 	type: "object",

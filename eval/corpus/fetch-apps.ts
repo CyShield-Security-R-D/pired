@@ -41,9 +41,9 @@
  */
 
 import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
-import { join, relative } from "node:path";
-import { COMMIT_RE, NON_SOURCE, SOURCE_EXT, deriveScope, keyFromPatch, osvQuery, refineKey, resolveSha, run, stripLeakage } from "./lib.ts";
-import type { Advisory } from "./lib.ts";
+import { join } from "node:path";
+import { COMMIT_RE, deriveScope, walk, keyFromPatch, osvQuery, refineKey, resolveSha, run, stripLeakage } from "./lib.ts";
+import type { Advisory, Walk } from "./lib.ts";
 
 function arg(name: string, def?: string): string | undefined {
 	const i = process.argv.indexOf(`--${name}`);
@@ -135,10 +135,6 @@ const ROUTE_RE = [
 	String.raw`\[(HttpGet|HttpPost|HttpPut|Route)\(`,
 ].join("|");
 
-// Hidden directories are excluded wholesale, not enumerated: `.github` carried
-// enough Python to be picked up as reviewable scope on superset, and no
-// application keeps its request-handling code behind a dot.
-const VENDORED = /(^|\/)(node_modules|vendor|third_party|dist|build|site-packages)(\/|$)|(^|\/)\.[^/]+(\/|$)/;
 const TEMPLATE_RE = /(^|\/)(templates?|views?|layouts)(\/|$)|\.(html|htm|j2|jinja2?|tmpl|gohtml|erb|blade\.php|twig|hbs|ejs)$/i;
 const MIGRATION_RE = /(^|\/)(migrations?|migrate|alembic|Migrations)(\/|$)/i;
 // A compose file at or near the root is what makes a target a candidate for the
@@ -157,31 +153,6 @@ const SERVER_RE = /(^|\/)(manage\.py|wsgi\.py|asgi\.py|routes\.rb|server\.(js|ts
  * results rather than blended.
  */
 const SURFACE_RE = /(^|\/)(routes?|routers?|controllers?|views?|handlers?|api|endpoints?|middlewares?|serializers?|forms?|resources?|permissions?|policies|acl|auth\w*|security|session\w*)(\/|_|\.|$)/i;
-
-interface Walk { all: string[]; source: string[] }
-
-async function walk(root: string): Promise<Walk> {
-	const all: string[] = [];
-	const source: string[] = [];
-	const rec = async (dir: string): Promise<void> => {
-		// An unreadable directory is a fact about the checkout, not a failure of
-		// the walk: skip it and keep counting.
-		const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
-		for (const e of entries) {
-			const abs = join(dir, e.name);
-			const rel = relative(root, abs);
-			if (VENDORED.test(`/${rel}`)) continue;
-			if (e.isDirectory()) {
-				await rec(abs);
-				continue;
-			}
-			all.push(rel);
-			if (SOURCE_EXT.test(rel) && !NON_SOURCE.test(rel)) source.push(rel);
-		}
-	};
-	await rec(root);
-	return { all, source };
-}
 
 interface Classification { app: boolean; routes: number; templates: boolean; migrations: boolean; server: boolean; compose: string[]; why: string }
 

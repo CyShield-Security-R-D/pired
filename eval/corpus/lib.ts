@@ -10,7 +10,7 @@
 
 import { execFile } from "node:child_process";
 import { readFile, readdir, rm, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { promisify } from "node:util";
 
 export const run = promisify(execFile);
@@ -232,6 +232,36 @@ export function scopeClause(scope?: string[]): string {
 		" Confine both the review and the findings to that scope.";
 }
 
+// Hidden directories are excluded wholesale, not enumerated: `.github` carried
+// enough Python to be picked up as reviewable scope on superset, and no
+// application keeps its request-handling code behind a dot.
+export const VENDORED = /(^|\/)(node_modules|vendor|third_party|dist|build|site-packages)(\/|$)|(^|\/)\.[^/]+(\/|$)/;
+
+export interface Walk { all: string[]; source: string[] }
+
+export async function walk(root: string): Promise<Walk> {
+	const all: string[] = [];
+	const source: string[] = [];
+	const rec = async (dir: string): Promise<void> => {
+		// An unreadable directory is a fact about the checkout, not a failure of
+		// the walk: skip it and keep counting.
+		const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
+		for (const e of entries) {
+			const abs = join(dir, e.name);
+			const rel = relative(root, abs);
+			if (VENDORED.test(`/${rel}`)) continue;
+			if (e.isDirectory()) {
+				await rec(abs);
+				continue;
+			}
+			all.push(rel);
+			if (SOURCE_EXT.test(rel) && !NON_SOURCE.test(rel)) source.push(rel);
+		}
+	};
+	await rec(root);
+	return { all, source };
+}
+
 // --- scope ------------------------------------------------------------------
 
 export interface Scope { dirs: string[]; files: number; overCap: boolean }
@@ -247,8 +277,27 @@ export interface Scope { dirs: string[]; files: number; overCap: boolean }
  * counts go into the manifest so the haystack-to-needle ratio of every target is
  * stated rather than assumed.
  */
-export function deriveScope(source: string[], truth: TruthEntry[], cap: number): Scope {
-	if (source.length <= cap) return { dirs: ["."], files: source.length, overCap: false };
+export interface ScopeLimits {
+	/** Lines per source file, for the loc ceiling. Omit to cap on files alone. */
+	lines?: Map<string, number>;
+	locCap?: number;
+}
+
+export function deriveScope(source: string[], truth: TruthEntry[], cap: number, limits: ScopeLimits = {}): Scope {
+	const { lines, locCap } = limits;
+	const locOf = (dirs: string[]): number => {
+		if (!lines) return 0;
+		const files = dirs.includes(".") ? source : source.filter((f) => dirs.some((d) => f.startsWith(`${d}/`)));
+		return files.reduce((a, f) => a + (lines.get(f) ?? 0), 0);
+	};
+	// A scope has to clear both ceilings. The file cap bounds how much there is to
+	// enumerate; the loc cap bounds how much of it can be read into a context
+	// window. A target that passes one and fails the other is unreviewable in
+	// exactly the way that produces a timeout rather than a result.
+	const fits = (dirs: string[], n: number): boolean =>
+		n <= cap && (!locCap || !lines || locOf(dirs) <= locCap);
+
+	if (fits(["."], source.length)) return { dirs: ["."], files: source.length, overCap: false };
 	const under = (dirs: string[]): number =>
 		dirs.includes(".") ? source.length : source.filter((f) => dirs.some((d) => f.startsWith(`${d}/`))).length;
 
@@ -288,6 +337,7 @@ export function deriveScope(source: string[], truth: TruthEntry[], cap: number):
 		let total = count([...chosen]);
 		for (const { dir, n } of sized) {
 			if (total + n > cap) continue;
+			if (!fits([...chosen, dir], total + n)) continue;
 			chosen.add(dir);
 			total += n;
 		}
@@ -305,7 +355,7 @@ export function deriveScope(source: string[], truth: TruthEntry[], cap: number):
 		if (dirs.some((d) => d === "")) return { dirs: ["."], files: source.length, overCap: source.length > cap };
 		const files = under(dirs);
 		last = { dirs, files, overCap: false };
-		if (files <= cap) return widen(dirs, under);
+		if (fits(dirs, files)) return widen(dirs, under);
 	}
 	return { ...last, overCap: true };
 }

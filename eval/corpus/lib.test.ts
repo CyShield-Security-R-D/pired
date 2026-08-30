@@ -109,3 +109,30 @@ describe("deriveScope sibling order", () => {
 		expect(s.files).toBe(600);
 	});
 });
+
+describe("deriveScope loc ceiling", () => {
+	const lines = (per: Record<string, number>, source: string[]) =>
+		new Map(source.map((f) => [f, per[f.split("/")[0] as string] ?? 0]));
+
+	it("narrows a repo that fits on files but not on lines", () => {
+		// mlflow: 1,114 files — inside a 1,200 file cap — and 813k lines, far past
+		// what a 128k-token window can carry. Capping files alone admits it.
+		const source = tree({ big: 300, small: 300 });
+		const l = lines({ big: 2000, small: 50 }, source);
+		const s = deriveScope(source, [at("small/x.py")], 1200, { lines: l, locCap: 100_000 });
+		expect(s.dirs).toEqual(["small"]);
+		expect(s.files).toBe(300);
+	});
+
+	it("stops widening when the next sibling would breach the loc ceiling", () => {
+		const source = tree({ base: 100, tiny: 100, huge: 100 });
+		const l = lines({ base: 100, tiny: 100, huge: 5000 }, source);
+		const s = deriveScope(source, [at("base/x.py")], 1200, { lines: l, locCap: 50_000 });
+		expect(s.dirs).toEqual(["base", "tiny"]);
+	});
+
+	it("is unchanged when no loc ceiling is given", () => {
+		const source = tree({ a: 100, b: 100 });
+		expect(deriveScope(source, [at("a/x.py")], 1200).dirs).toEqual(["."]);
+	});
+});
