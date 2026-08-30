@@ -117,10 +117,22 @@ function facts(info: BannerInfo, compact = false): Array<[string, string]> {
 	return rows;
 }
 
-/** Pad to `minLines`, never truncating: the banner is content, not a viewport. */
-function reserve(lines: string[], minLines: number | undefined): string[] {
+/**
+ * Pad to `minLines`, never truncating: the banner is content, not a viewport.
+ *
+ * The padding goes *inside* the block, above its last `pin` rows, rather than
+ * underneath all of it. The rows exist because the panel is a floating overlay
+ * and the editor has to clear it — that is not negotiable — but where they sit
+ * is: under the block they read as a hole between the banner and the editor,
+ * and inside it they read as negative space bounded above by the facts and below
+ * by the rule. It also puts the commands directly above the editor, which is
+ * where the eye already is when it goes to type one.
+ */
+function reserve(lines: string[], minLines: number | undefined, pin = 0): string[] {
 	if (!minLines || lines.length >= minLines) return lines;
-	return [...lines, ...Array(minLines - lines.length).fill("")];
+	const pad: string[] = Array(minLines - lines.length).fill("");
+	const at = Math.max(0, lines.length - pin);
+	return [...lines.slice(0, at), ...pad, ...lines.slice(at)];
 }
 
 export function renderBanner(o: BannerOptions): string[] {
@@ -185,7 +197,7 @@ export function renderBanner(o: BannerOptions): string[] {
 			truncate(INDENT + ink("rule", "─".repeat(Math.max(0, inner))), width),
 			truncate(`${INDENT}${ink("muted", TAGLINE)}${" ".repeat(gap)}${cmds}`, width),
 			"",
-		], o.minLines);
+		], o.minLines, 3);
 	}
 
 	// Narrow: the banner is sharing the terminal with the panel, so it gets the
@@ -214,7 +226,7 @@ export function renderBanner(o: BannerOptions): string[] {
 			"",
 			...cmds.map((l) => truncate(INDENT + ink("accent", l), width)),
 			"",
-		], o.minLines);
+		], o.minLines, cmds.length + 1);
 	}
 
 	return reserve([
@@ -227,5 +239,5 @@ export function renderBanner(o: BannerOptions): string[] {
 		"",
 		truncate(INDENT + COMMANDS.map((c) => ink("accent", c)).join(ink("muted", "   ")), width),
 		"",
-	], o.minLines);
+	], o.minLines, 2);
 }

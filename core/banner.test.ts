@@ -72,6 +72,26 @@ describe("reserving height for the panel", () => {
 		expect(lines.at(-1)).toBe("");
 	});
 
+	it("reserves inside the block, not underneath it", () => {
+		// The rows exist because the panel floats over the transcript and the editor
+		// has to clear it. Under the block they read as a hole between the banner
+		// and the editor; inside it they are negative space with an edge below.
+		const lines = renderBanner({ ...opts(160), minLines: 24 });
+		expect(lines.length).toBe(24);
+		const last = lines.map((l) => l.trim()).filter(Boolean).at(-1) as string;
+		expect(last).toContain("/panel");
+		// And the pad is genuinely inside: rows above the foot, not after it.
+		expect(lines.slice(-3).filter((l) => l.trim() === "").length).toBeLessThanOrEqual(1);
+	});
+
+	it("puts the commands within reach of the editor in every layout", () => {
+		for (const w of [27, 62, 160]) {
+			const lines = renderBanner({ ...opts(w), minLines: 24 });
+			const foot = lines.map((l) => l.trim()).filter(Boolean).at(-1) as string;
+			expect(foot, `at ${w} columns`).toContain("/panel");
+		}
+	});
+
 	it("never truncates real content to hit minLines", () => {
 		const full = renderBanner(opts(88));
 		const padded = renderBanner({ ...opts(88), minLines: 2 });

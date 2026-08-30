@@ -315,7 +315,9 @@ The label column goes first — `engagement` beside `pired` spends eleven of twe
 
 The banner also **reserves the height the panel occupies**. pi owns the layout root, so the editor cannot be moved out of an overlay's way, and in inline mode it sits immediately after the last content — on a fresh session that put it around row 13, inside a panel spanning rows 1 to 21. Padding the banner to the panel's height is what puts the editor below it.
 
-The reservation is derived from the rail's own `maxHeight` and offset, so `PIRED_RAIL_HEIGHT` moves both together. It is zero when the panel is off, and capped to leave room for the editor and status line — filling a short terminal with blank lines would push the editor off the bottom, which is worse than the overlap it fixes.
+The reservation is the height the panel *actually draws*, not the height it is allowed to draw: a fresh engagement's panel is a third of a busy one's, and reserving the cap regardless is a wall of blank rows. It is zero when the panel is off, and capped to leave room for the editor and status line — filling a short terminal with blank lines would push the editor off the bottom, which is worse than the overlap it fixes.
+
+Those rows are padded **inside** the banner rather than underneath it: the wordmark and facts stay at the top, and the rule and commands sit at the foot, level with the panel's bottom edge. The space between is then bounded on three sides — facts above, rule below, panel to the right — and reads as negative space in a composed screen rather than as a hole under a floating block. It also puts the commands directly above the editor, which is where the eye already is when it goes to type one. On a conversation of any length the transcript fills that area anyway; this is what the welcome screen looks like before it does.
 
 It is all a **transcript entry**, not a widget: written once, scrolled away like any other, and — being a custom entry — never part of the model's context, so the greeting costs no tokens. There was a banner widget once and removing it was right; it held layout forever to repeat a brand the status line already carries.
 
