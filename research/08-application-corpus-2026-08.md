@@ -152,3 +152,97 @@ This matters more here than it did for libraries: a Gitea or Grafana advisory is
 far more widely written about than a sqlparse one, so an unsealed application run
 would be even more prone to retrieval than the runs that produced `research/07`'s
 retracted ranking.
+
+## The corpus as built
+
+31 clones admitted 20 targets across five ecosystems, 90 truth entries in total.
+Median target: **1,188 source files and 152k lines, holding one to three known
+bugs.** The library corpus's `psf/requests` was 19 files.
+
+| ecosystem | admitted | rejected | no source in fix |
+|---|---|---|---|
+| PyPI | 5 | 4 | 1 |
+| npm | 5 | 0 | 0 |
+| Go | 5 | 2 | 0 |
+| Packagist | 5 | 1 | 1 |
+| Maven | 1 | 1 | 0 |
+
+The classifier rejected jupyter-server, jupyterlab, notebook, streamlit and
+jenkins-core on the evidence in each checkout rather than on a guess about the
+project. It also has a known false negative: Tornado-style registration, where
+routes are a list of `(r"/api/…", Handler)` tuples rather than decorators or
+method calls, is not matched. That costs yield and admits nothing wrong.
+
+Every advisory is dated between 2025-10-23 and 2026-08-28. Ten of the twenty
+ship a compose file at their root, which is the selection pool for the dynamic
+corpus.
+
+Two targets exceed the file cap (keycloak 1,583, n8n 1,702): a single directory
+larger than the cap with nothing smaller to descend into. They are flagged
+rather than silently narrowed. n8n also carries 34 truth entries — a third of
+the corpus's total denominator in one target — and should be scored separately
+rather than pooled.
+
+## The mechanism finding
+
+This is independent of any recall number and it is the more important result.
+
+The first target scanned under the original prompt was gradio. After an hour it
+had recorded **one inventory row — `kind=host`, the repository itself — no
+hypotheses and no findings**, and been killed by the timeout. Its notes showed
+it had done real work:
+
+> Reviewed & matches upstream Gradio 5.7.1 (no planted deviation found yet):
+> routes.py (file serving allowlist via is_allowed_file, upload filename
+> sanitization+safe_join, proxy SSRF host-allowlist …), oauth.py (authlib state
+> check …), flagging.py (CSV injection mitigated …)
+
+Two failures, both fatal, neither visible in a recall number:
+
+1. **It validated against a remembered release.** The target *is* upstream at a
+   pre-fix commit, so "matches upstream" is guaranteed and proves nothing — the
+   bug is in the release. The network seal stops retrieval over the wire and
+   does nothing about retrieval from weights. It also assumed a *planted*
+   deviation, which is what forge and DVBank trained that expectation.
+2. **Everything went into notes.md.** Coverage is computed from the ledger, so a
+   review that never records is void however good it was.
+
+Two clauses were added to the prompt. Neither asserts that a vulnerability
+exists, which would be a hint: the target is production source rather than a
+seeded copy and must be judged on its own behaviour; and notes are not a
+substitute for recording.
+
+The next target, flarum, under the same model, same seal, same harness:
+
+| | gradio (before) | flarum (after) |
+|---|---|---|
+| inventory | `{host: 1}` | `{endpoint: 10}` |
+| hypotheses | 0 | **174** — 168 refuted, 6 confirmed |
+| findings | 0 | 3 |
+| verdict | mechanism idle | mechanism engaged |
+
+Every hypothesis settled. That had not happened on a corpus target in three
+prior passes. The ontology fix was necessary and not sufficient: the harness
+also has to be told that the code in front of it is the real thing.
+
+## What is not yet measured
+
+On Flarum the agent reported three issues outside the advisory — none of them
+verified, or checked against a current release — and **missed the advisory bug,
+0/1**.
+
+GHSA-xjvc-pw2r-6878 is a path traversal in `ValidateCustomLess.php`, reached
+through an admin settings write and then a LESS compile. It is not on a route.
+The agent had the class in mind — one refuted hypothesis tests path traversal on
+`/forum/gdpr/export/{file}` — and tested it in the wrong place, because the
+coverage matrix is `classes × surface elements` and this bug's home is not a
+surface element.
+
+That is the same structural gap as the library corpus, narrower: pired
+enumerates the request surface well, and bugs sitting *behind* it — validators,
+compilers, background jobs, migrations — have no cell to occupy. One target is
+not evidence of a pattern, which is exactly why targets carry a `direct` /
+`indirect` tier. Flarum is tagged `indirect`.
+
+**n = 1 of 20. No pooled recall is reported here, and none should be quoted from
+this document until the run completes.**
