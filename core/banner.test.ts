@@ -214,6 +214,16 @@ describe("where you are", () => {
 		}
 	});
 
+	it("keeps the wordmark centred against the facts it stands beside", () => {
+		// Five facts against three rows of wordmark left the mark riding high, which
+		// reads as a mark that was placed and facts that were poured in after it.
+		const lines = renderBanner({ ...opts(160), info: { ...info, cwd: "~/work/acme/api" } });
+		const first = lines.findIndex((l) => l.trim());
+		expect(lines.findIndex((l) => l.includes("█▀█"))).toBe(first + 1);
+		const lastArt = lines.findIndex((l) => l.includes("▀   ▀"));
+		expect(lines[lastArt + 1]).toContain("recorded");
+	});
+
 	it("drops it where the name already says it", () => {
 		// Narrow, every row counts and the path mostly repeats the line above it.
 		expect(at("~/work/acme/api", 27)).not.toContain("~/work/acme/api");

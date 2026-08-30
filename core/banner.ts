@@ -212,12 +212,20 @@ export function renderBanner(o: BannerOptions): string[] {
 	if (compact) {
 		const factLine = ([k, v]: [string, string]): string =>
 			`${ink("muted", pad(k, labelW, measure))}${ink("label", v)}`;
-		const beside = art.map((l, i) => {
-			const f = labelled[i];
-			return INDENT + (f ? pad(l, ART_WIDTH + FACT_GAP, measure) + factLine(f) : l);
+		// The two columns are centred against each other rather than both starting
+		// at the top: three rows of wordmark beside five of facts left the mark
+		// riding high on the block, which reads as a mark that was placed and facts
+		// that were poured in after it.
+		const rows = Math.max(art.length, labelled.length);
+		const artLead = Math.floor((rows - art.length) / 2);
+		const factLead = Math.floor((rows - labelled.length) / 2);
+		const beside = Array.from({ length: rows }, (_, i) => {
+			const l = art[i - artLead];
+			const f = labelled[i - factLead];
+			if (!f) return INDENT + (l ?? "");
+			return INDENT + pad(l ?? "", ART_WIDTH + FACT_GAP, measure) + factLine(f);
 		});
-		const under = labelled.slice(art.length)
-			.map((f) => INDENT + " ".repeat(ART_WIDTH + FACT_GAP) + factLine(f));
+		const under: string[] = [];
 		// Tagline and commands share the row under the rule, each on its own edge —
 		// so the row is as wide as the rule above it, and its right end lands
 		// against the panel just as the rule does.
