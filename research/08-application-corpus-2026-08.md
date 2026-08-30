@@ -251,3 +251,39 @@ Per-bug detail for every miss recorded so far — the six on the sealed library
 corpus and this one — is in [09](09-misses-2026-08.md), along with the finding
 that on the library corpus the mechanism fired on two targets of six and those
 two are the only two that scored.
+
+## A limit that did not exist
+
+Running the corpus on a local LM Studio at concurrency 3 produced eleven failed
+targets in two hours: eight `Model is unloaded`, two `Context size has been
+exceeded`, one aborted engine startup. The concurrency was chosen from a
+benchmark that measured tokens per second with ten-token prompts and read
+22.2 tok/s at concurrency 3 as headroom. That benchmark could not see the
+binding constraint, which is memory, not throughput.
+
+The context failures were then read as a second, independent problem — targets
+too large for a 128k window — and answered by adding a lines-of-code ceiling to
+scope derivation and rescoping 13 of 20 targets. mlflow went from 813k lines to
+150k, argo-cd from 288k to 148k.
+
+Both readings were wrong.
+
+**pi compacts by default.** `compaction ?? { enabled: true, reserveTokens: 16384,
+keepRecentTokens: 20000 }`, with `shouldCompact = contextTokens > contextWindow -
+reserveTokens`. It fires at roughly 111k of a 128k window without being asked.
+
+**LM Studio is llama.cpp-based, and parallel slots divide `n_ctx` between them.**
+Three concurrent agents were each given about 42k of context, not 128k. One
+cause — oversubscribed concurrency — produced both symptoms, and the second
+symptom was mistaken for evidence about the corpus.
+
+The scope was restored to the file cap it was designed with: median 155k lines,
+max 813k. The running scan at concurrency 1 has produced zero context errors.
+
+The loc ceiling remains in `deriveScope`, tested and off by default. It is a real
+capability for a genuinely context-bound run. It should not have been used to
+work around this one, and a benchmark that had been quietly made 5x easier on its
+largest target would have reported a number that meant nothing.
+
+The general lesson, which cost time twice in one session: **check what the tool
+already does before designing around a limit it does not have.**
