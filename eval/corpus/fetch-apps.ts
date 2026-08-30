@@ -399,7 +399,12 @@ for (const ecosystem of ecosystems) {
 					scope: scope.dirs, scope_files: scopeFiles.length, scope_loc: loc,
 					repo_files: w.source.length, surface, routes: cls.routes, runnable: cls.compose,
 				};
-				const i = manifest.findIndex((m) => m.id === entry.id && m.package === entry.package);
+				// Keyed on the target directory, not (id, package). A Go module that has
+				// bumped its major version appears in the seed list as both
+				// .../argo-cd/v2 and .../argo-cd/v3, and OSV returns the same advisory
+				// for both — two manifest rows pointing at one directory, which
+				// double-counts that bug in every pooled recall computed afterwards.
+				const i = manifest.findIndex((m) => m.target === entry.target);
 				if (i >= 0) manifest[i] = entry;
 				else manifest.push(entry);
 				await writeFile(join(outRoot, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);

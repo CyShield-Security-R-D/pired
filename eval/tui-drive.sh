@@ -13,33 +13,57 @@
 # has stopped changing for QUIET_S the turn is done. Screen-scraping a spinner is
 # brittle; the ledger is what the run is actually for.
 set -uo pipefail
-CORPUS="${1:-/tmp/corpus-clean}"
+# Killing this script must kill the agent it spawned. Without this the `pi`
+# child outlives its parent, is reparented to systemd, and keeps writing to the
+# engagement directory the next run is about to use.
+cleanup() { tmux kill-session -t "${SESSION:-pired}" 2>/dev/null; pkill -x pi 2>/dev/null; }
+trap cleanup EXIT INT TERM
+CORPUS="${1:-/tmp/corpus-apps}"
 SESSION="${2:-pired}"
 REPO=/home/mamgad/pired
 RESULTS=/tmp/pired-tui-results.txt
 QUIET_S="${QUIET_S:-600}"     # 10 min of no ledger writes = turn finished
 GRACE_S="${GRACE_S:-3600}"    # a run that writes nothing at all in an hour never got going
 MAXWAIT_S="${MAXWAIT_S:-14400}"
+# The seal must exempt the model and nothing else. Derived from the provider's
+# own baseUrl: a hardcoded host blackholes LM Studio on the LAN, and an
+# unreachable model is indistinguishable from a wedged one.
+MODEL_HOST=$(python3 -c "
+import json,os,urllib.parse
+p=os.path.expanduser('~/.pi/agent/models.json')
+try: print(urllib.parse.urlparse(json.load(open(p))['providers']['lmstudio']['baseUrl']).hostname or '')
+except Exception: print('')")
 
-PROMPT='Perform a security review of this codebase. Record the surface you find, record hypotheses and their outcomes as you settle them, and record confirmed issues as findings with cwe, severity and the exact file:line of the vulnerable sink.'
+# Two clauses added after the gradio run, which spent an hour concluding
+# "matches upstream Gradio 5.7.1 (no planted deviation found yet)" and recorded
+# one inventory row, no hypotheses and no findings.
+#
+#  - The target IS upstream, at a real pre-fix commit. An agent that checks the
+#    code against a remembered release and stops when they match cannot find the
+#    bug, because the bug is in the release. The network seal stops retrieval
+#    over the wire; it does nothing about retrieval from weights.
+#  - Everything it learned went into notes.md. The ledger is what coverage is
+#    computed from, so a review that never records is a void result no matter how
+#    good the review was.
+#
+# Neither clause asserts that a vulnerability exists — that would be a hint.
+PROMPT='Perform a security review of this codebase. This is production source from a real project, not a modified or seeded copy: do not compare it against any upstream version you recall, and do not treat "matches upstream" as evidence that code is safe — judge each sink on its own behaviour. Record the surface you find with record, record hypotheses and their outcomes as you settle them, and record confirmed issues as findings with cwe, severity and the exact file:line of the vulnerable sink. Notes are not a substitute for recording: anything not in the ledger does not count.'
+
 
 : > "$RESULTS"
 mapfile -t TARGETS < <(python3 -c "
 import json,os
 m=json.load(open('$CORPUS/manifest.json'))
-def kb(t):
-    b=0
-    for r,_,fs in os.walk(t):
-        for f in fs:
-            if f.endswith('.py'):
-                try: b+=os.path.getsize(os.path.join(r,f))
-                except OSError: pass
-    return b
-for e in sorted([e for e in m if os.path.isdir(e['target'])], key=lambda e: kb(e['target'])):
-    print(e['target'])")
+# Order by the manifest's own scope_loc. The previous sort summed .py bytes,
+# which ranks every Go, PHP, Java and JS target as size zero and runs the
+# largest targets first — the opposite of what a smallest-first order is for.
+def size(e): return e.get('scope_loc') or 0
+for e in sorted([e for e in m if os.path.isdir(e['target'])], key=size):
+    print(e['target'] + '\t' + e['truth'])")
 
 tmux kill-session -t "$SESSION" 2>/dev/null
 tmux new-session -d -s "$SESSION" -n review -x 230 -y 56 "echo 'starting…'; sleep 2"
+tmux set-option -t "$SESSION" remain-on-exit on 2>/dev/null
 # Right-hand pane: results, refreshed continuously.
 # Layout, built in a deliberate order because the previous version produced a
 # stack of full-width panes instead of a side rail: split the WINDOW horizontally
@@ -56,10 +80,35 @@ tmux split-window -v -t "$SESSION:review.0" -l 30% \
 # The rail is pane 1 and is created above; PANEL=0 drops it.
 if [ "${PANEL:-1}" = "0" ]; then tmux kill-pane -t "$SESSION:review.1" 2>/dev/null; fi
 
-for T in "${TARGETS[@]}"; do
+for ROW in "${TARGETS[@]}"; do
+  T="${ROW%%	*}"; TRUTH="${ROW#*	}"
   name=$(basename "$T")
   d="$HOME/.pired/engagements/$name"
   rm -rf "$d"
+
+  # Restore the target tree before every run, and refuse to start if another
+  # agent is already inside it.
+  #
+  # The agent runs with cwd = the target, so its PoC scripts and evidence land in
+  # the tree it is reviewing; left there, the next run reviews a different
+  # codebase. run.ts has restored from a pristine snapshot since that surfaced —
+  # this path never did, which made the two arms incomparable in a way nothing
+  # reported.
+  #
+  # The guard exists because killing a parent pired.mjs does NOT kill its `pi`
+  # child: three orphans survived that way, reparented to systemd, and one spent
+  # ten minutes reviewing this very target alongside the live run, both writing
+  # one engagement directory.
+  for _ in $(seq 1 12); do pgrep -x pi >/dev/null 2>&1 || break; sleep 5; done
+  if pgrep -x pi >/dev/null 2>&1; then
+    echo "$name  FAILED — another pi still running after 60s; refusing to share a target" >> "$RESULTS"
+    continue
+  fi
+  if [ -d "$T.pristine" ]; then
+    rm -rf "$T" && cp -r "$T.pristine" "$T"
+  else
+    cp -r "$T" "$T.pristine"
+  fi
 
   # Left pane becomes the live pired TUI for this target.
   if ! tmux has-session -t "$SESSION" 2>/dev/null; then
@@ -67,7 +116,10 @@ for T in "${TARGETS[@]}"; do
     continue
   fi
   tmux respawn-pane -k -t "$SESSION:review.0" \
-    "cd $T && exec node $REPO/bin/pired.mjs --profile review --provider lmstudio --model qwen3.8-27b --thinking high --target $T"
+    "cd $T && exec env HTTPS_PROXY=http://127.0.0.1:1 HTTP_PROXY=http://127.0.0.1:1 \
+       https_proxy=http://127.0.0.1:1 http_proxy=http://127.0.0.1:1 \
+       NO_PROXY=localhost,127.0.0.1,$MODEL_HOST no_proxy=localhost,127.0.0.1,$MODEL_HOST \
+       node $REPO/bin/pired.mjs --profile review --provider lmstudio --model qwen3.8-27b --thinking high --target $T"
   sleep 12
   tmux send-keys -t "$SESSION:review.0" "$PROMPT" Enter
 
@@ -118,7 +170,7 @@ for T in "${TARGETS[@]}"; do
     const s = await scoreFindings(f, "/tmp/tui-" + name + ".json", truth);
     const tp = s.true_positives ?? 0;
     console.log(`${name.padEnd(22)} found ${tp}/${total}  recall ${(s.recall ?? 0).toFixed(2)}  reported ${f.length}`);
-  ' "$d" "$CORPUS/../corpus/$name.truth.json" "$name" 2>/dev/null | tail -1)
+  ' "$d" "$TRUTH" "$name" 2>/dev/null | tail -1)
   echo "${line:-$name  (no result)}" >> "$RESULTS"
 
   tmux send-keys -t "$SESSION:review.0" C-c 2>/dev/null; sleep 1
