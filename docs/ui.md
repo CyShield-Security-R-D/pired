@@ -311,6 +311,8 @@ The label column goes first — `engagement` beside `pired` spends eleven of twe
 
 `recorded` appears only when the engagement already holds work: a fresh one showing `0 surface · 0% covered` reads as a failed run rather than a starting point.
 
+`directory` is the working directory, collapsed against home. The engagement name defaults to that directory's basename, so on its own it cannot tell two checkouts of the same repository apart — and which tree an engagement is pointed at is the first thing to be sure of. A long path is cut from the front, since `…/acme/services/api` identifies more than `~/clients/acme/…` does. It is dropped in the narrow layout, where every row counts and the path mostly repeats the name above it. Note that the ledgers do **not** live there: they are under `~/.pired/engagements/<name>`, or wherever `workspace` in the scope file points.
+
 ### Clearing the editor
 
 The banner also **reserves the height the panel occupies**. pi owns the layout root, so the editor cannot be moved out of an overlay's way, and in inline mode it sits immediately after the last content — on a fresh session that put it around row 13, inside a panel spanning rows 1 to 21. Padding the banner to the panel's height is what puts the editor below it.

@@ -57,6 +57,15 @@ const TINY_MIN = ART_WIDTH + 4;
 
 export interface BannerInfo {
 	engagement: string;
+	/**
+	 * The working directory, already collapsed against home by the caller.
+	 *
+	 * The engagement name defaults to this directory's basename, so on its own it
+	 * cannot tell two checkouts of the same repository apart — and which tree an
+	 * engagement is pointed at is the first thing a consultant needs to be sure
+	 * of. Nothing else on the screen carries it.
+	 */
+	cwd?: string;
 	profile: string;
 	/** Scope gate state, already worded — "enforce", "not authorized", "off". */
 	scope: string;
@@ -101,8 +110,11 @@ function artLines(ink: BannerOptions["ink"]): string[] {
 function facts(info: BannerInfo, compact = false): Array<[string, string]> {
 	const rows: Array<[string, string]> = [
 		["engagement", info.engagement],
-		["profile", `${info.profile} · scope ${info.scope}`],
 	];
+	// Dropped when compact: the engagement name is this directory's basename, so
+	// on a terminal counting rows the path mostly repeats the line above it.
+	if (info.cwd && !compact) rows.push(["directory", shortPath(info.cwd, 44)]);
+	rows.push(["profile", `${info.profile} · scope ${info.scope}`]);
 	if (info.model) rows.push(["model", info.model]);
 	// Only when the engagement already holds work. A fresh one showing
 	// "0 surface · 0% coverage" reads as a failure rather than a starting point.
@@ -115,6 +127,25 @@ function facts(info: BannerInfo, compact = false): Array<[string, string]> {
 		rows.push(["recorded", `${info.surface} surface${cov}${fnd}`]);
 	}
 	return rows;
+}
+
+/**
+ * Keep a path's tail, which is the part that identifies it.
+ *
+ * Cut from the front rather than the back: `~/clients/acme/…` tells you less
+ * than `…/acme/services/api`, and a truncated path that looks whole is worse
+ * than one that says it was cut.
+ */
+export function shortPath(path: string, max: number): string {
+	if (path.length <= max) return path;
+	const parts = path.split("/");
+	let out = parts.pop() ?? path;
+	for (let i = parts.length - 1; i >= 0; i--) {
+		const next = `${parts[i]}/${out}`;
+		if (next.length + 2 > max) break;
+		out = next;
+	}
+	return `…/${out}`.slice(-max);
 }
 
 /**

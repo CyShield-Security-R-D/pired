@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { renderBanner } from "./banner.ts";
+import { renderBanner, shortPath } from "./banner.ts";
 import type { BannerInfo } from "./banner.ts";
 
 const info: BannerInfo = {
@@ -185,5 +185,37 @@ describe("the wordmark", () => {
 		const lines = renderBanner(opts(72));
 		const tagLine = lines.findIndex((l) => l.includes("security engagement harness"));
 		expect(lines[tagLine]).toContain("▀   ▀"); // the art's last row
+	});
+});
+
+describe("where you are", () => {
+	// The engagement name defaults to the directory's basename, so on its own it
+	// cannot tell two checkouts of the same repository apart.
+	const at = (cwd: string, width = 160): string =>
+		renderBanner({ ...opts(width), info: { ...info, cwd } }).join("\n");
+
+	it("names the working directory, with a label when there is room", () => {
+		expect(at("~/work/acme/api")).toContain("directory");
+		expect(at("~/work/acme/api")).toContain("~/work/acme/api");
+	});
+
+	it("keeps the tail of a long path, and says it was cut", () => {
+		const long = "~/work/clients/acme-security/engagements/2026/api-gateway/services/auth";
+		expect(shortPath(long, 44)).toContain("services/auth");
+		expect(shortPath(long, 44).startsWith("…/")).toBe(true);
+		expect(shortPath(long, 44).length).toBeLessThanOrEqual(44);
+		expect(shortPath("~/short/path", 44)).toBe("~/short/path");
+	});
+
+	it("does not let a long path widen the block past its column", () => {
+		const long = "~/" + "deep/".repeat(30) + "api";
+		for (const line of renderBanner({ ...opts(120), info: { ...info, cwd: long } })) {
+			expect(line.length).toBeLessThanOrEqual(120);
+		}
+	});
+
+	it("drops it where the name already says it", () => {
+		// Narrow, every row counts and the path mostly repeats the line above it.
+		expect(at("~/work/acme/api", 27)).not.toContain("~/work/acme/api");
 	});
 });

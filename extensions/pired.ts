@@ -974,6 +974,9 @@ export default function piredExtension(pi: ExtensionAPI): void {
 			try {
 				pi.appendEntry?.("pired-welcome", {
 					engagement: scope.engagement,
+					// Collapsed against home here rather than in the renderer: the banner
+					// is a pure module and homedir() is a host call.
+					cwd: ctx.cwd.startsWith(homedir()) ? `~${ctx.cwd.slice(homedir().length)}` : ctx.cwd,
 					profile,
 					scope: scope.authorized ? (scope.mode ?? "enforce") : "not authorized",
 					model: ctx.model?.id,
@@ -1286,7 +1289,7 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	// rest of the API, and a pi without it must start pired without a banner
 	// rather than fail to load the extension at all.
 	pi.registerEntryRenderer?.<{
-		engagement: string; profile: string; scope: string; model?: string;
+		engagement: string; cwd?: string; profile: string; scope: string; model?: string;
 		surface?: number; coveragePct?: number; findings?: number;
 	}>("pired-welcome", (entry, _options, theme) => {
 		const info = entry.data;
