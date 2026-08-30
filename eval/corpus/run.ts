@@ -169,6 +169,12 @@ const jobs = targets.map((m) => async (): Promise<void> => {
 		const pending = run(process.execPath, [
 			PIRED, "--profile", "review", "--provider", PROVIDER,
 			"--model", arg("model", "qwen/qwen3.8-27b"),
+			// Explicit, and high by default. This runner set no thinking level at all,
+			// so it silently inherited `medium` from ~/.pi/agent/settings.json while
+			// tui-drive.sh passed `high` — which means flarum's 174 settled hypotheses
+			// and airflow's 2 were produced at different reasoning budgets, and the
+			// comparison drawn between them was partly a comparison of this flag.
+			"--thinking", arg("thinking", "high"),
 			"--no-theme", "--target", m.target, "--prompt", PROMPT + scopeClause(m.scope),
 		], {
 			timeout: Number(arg("timeout", "1800000")), maxBuffer: 512 * 1024 * 1024, cwd: m.target,
