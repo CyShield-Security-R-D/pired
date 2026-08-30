@@ -517,7 +517,7 @@ function findingBody(o: RenderOptions): string[] {
 		"",
 		...wrap(f.title, width, measure).map((l) => ink("label", l)),
 	];
-	if (f.description) out.push("", ...wrap(f.description, width, measure).map((l) => ink("muted", l)));
+	if (f.description) out.push("", ...wrap(f.description, width, measure).map((l) => ink("body", l)));
 	if (f.repro) out.push("", ...field("repro", f.repro, "muted"));
 	for (const e of f.evidence ?? []) out.push(...field("evidence", e, "muted"));
 	return out.slice(state.scroll, state.scroll + o.height).map((l) => truncate(l, width));

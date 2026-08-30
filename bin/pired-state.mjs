@@ -124,7 +124,7 @@ async function main() {
     return;
   }
 
-  const C = { title: "\x1b[1m", label: "\x1b[2m", muted: "\x1b[2m", accent: "\x1b[36m", good: "\x1b[32m", warn: "\x1b[33m", bad: "\x1b[31m" };
+  const C = { title: "\x1b[1m", body: "", label: "\x1b[2m", muted: "\x1b[2m", accent: "\x1b[36m", good: "\x1b[32m", warn: "\x1b[33m", bad: "\x1b[31m" };
   const strip = (s) => s.replace(/\x1b\[[0-9;]*m/g, "");
   const width = Number(arg("width", process.env.COLUMNS || "44"));
   const lines = renderPanel({

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dismissHint, renderPanel, scrollFramed, type PanelData, type PanelMode, type PanelTone } from "./panel.ts";
+import { dismissHint, renderFindingDetail, renderPanel, scrollFramed, type PanelData, type PanelMode, type PanelTone } from "./panel.ts";
 
 const ink = (_t: PanelTone, s: string): string => s; // colourless stand-in
 const measure = (s: string): number => s.length;
@@ -262,5 +262,48 @@ describe("expanded", () => {
 	it("produces enough lines to actually scroll", () => {
 		const lines = renderPanel({ mode: "state", data: many, width: 70, maxLines: 400, expanded: true, ink, measure, truncate });
 		expect(lines.length).toBeGreaterThan(30);
+	});
+});
+
+describe("a finding, read in the panel", () => {
+	// Tags each run with the tone it was asked for, so a test can assert contrast
+	// without knowing what colour a theme resolves that tone to.
+	const toned = (t: PanelTone, x: string): string => `<${t}>${x}</${t}>`;
+	const detail = (extra: Partial<PanelData["recentFindings"][number]> = {}): string[] =>
+		renderFindingDetail({
+			finding: {
+				severity: "high",
+				title: "JWT none-algorithm bypass",
+				cwe: "CWE-347",
+				status: "open",
+				description: "The verifier accepts alg=none, so any unsigned token is trusted.",
+				...extra,
+			},
+			engagement: "acme",
+			width: 60,
+			maxLines: 40,
+			ink: toned,
+			measure,
+			truncate,
+		});
+
+	it("renders the description as prose, not as scaffolding", () => {
+		const out = detail().join("\n");
+		// It read at `dim` — the darkest ink on the panel — for the one thing the
+		// detail view exists to show.
+		expect(out).toContain("<body>The verifier accepts alg=none,");
+		expect(out).not.toContain("<muted>The verifier accepts alg=none,");
+	});
+
+	it("keeps the key column quiet so the values carry", () => {
+		const out = detail({ target: "POST /api/session" }).join("\n");
+		// Key dim, value readable: both at `dim` is a field that looks empty.
+		expect(out).toMatch(/<muted>cwe\s*<\/muted><body>CWE-347/);
+		expect(out).toMatch(/<muted>target\s*<\/muted><body>POST \/api\/session/);
+	});
+
+	it("still spends the severity colour on severity", () => {
+		expect(detail().join("\n")).toContain("<bad>high");
+		expect(detail({ severity: "info" }).join("\n")).toContain("<muted>info");
 	});
 });

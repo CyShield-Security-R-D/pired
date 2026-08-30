@@ -16,7 +16,7 @@ import type { CoverageStatus } from "./ontology.ts";
 import type { CoverageView } from "./stats.ts";
 
 /** A paintable role: a cell status, or one of the panel's chrome tones. */
-export type Tone = CoverageStatus | "title" | "label" | "muted";
+export type Tone = CoverageStatus | "title" | "label" | "muted" | "body";
 
 /** Cell glyphs, all single-column so the bar length equals the cell count. */
 export const CELL_GLYPH: Record<CoverageStatus, string> = {

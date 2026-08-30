@@ -89,7 +89,7 @@ const BANNER_TONE_COLOR: Record<BannerTone, ThemeColor> = {
 
 const BROWSER_TONE_COLOR: Record<BrowserTone, ThemeColor> = {
 	clear: "success", vulnerable: "error", testing: "warning", blocked: "muted",
-	"not-tested": "dim", "n/a": "dim", title: "accent", label: "text", muted: "dim",
+	"not-tested": "dim", "n/a": "dim", title: "accent", label: "text", muted: "dim", body: "text",
 	// The cursor row. `accent` reads as selection against every shipped theme,
 	// and the leading marker stays as a redundant cue where it does not.
 	selected: "accent",
@@ -105,6 +105,7 @@ const TONE_COLOR: Record<Tone, ThemeColor> = {
 	title: "accent",
 	label: "text",
 	muted: "dim",
+	body: "text",
 };
 
 /** Severity initial + the theme color that carries its weight. */
@@ -249,7 +250,7 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	 */
 	/** Panel tones mapped onto the active theme's colour roles. */
 	const PANEL_TONE_COLOR: Record<PanelTone, Parameters<Theme["fg"]>[0]> = {
-		title: "text", label: "dim", muted: "dim", accent: "accent",
+		title: "text", body: "text", label: "dim", muted: "dim", accent: "accent",
 		good: "success", warn: "warning", bad: "error",
 	};
 
@@ -840,7 +841,7 @@ export default function piredExtension(pi: ExtensionAPI): void {
 						// meant to accompany.
 						if (panelOpen && panelData) {
 							const tone = (t: PanelTone): string => (
-								{ title: "text", label: "dim", muted: "dim", accent: "accent", good: "success", warn: "warning", bad: "error" } as Record<PanelTone, string>
+								{ title: "text", body: "text", label: "dim", muted: "dim", accent: "accent", good: "success", warn: "warning", bad: "error" } as Record<PanelTone, string>
 							)[t];
 							lines.push(
 								...renderPanel({

@@ -49,7 +49,12 @@ export function dismissHint(platform: string, width = 0): string {
 }
 export type PanelMode = (typeof PANEL_MODES)[number];
 
-export type PanelTone = "title" | "label" | "muted" | "accent" | "good" | "warn" | "bad";
+/**
+ * `body` is prose you are meant to read; `muted` is scaffolding you are meant to
+ * look past. They were the same colour, so a finding's description rendered in
+ * the dimmest ink on the panel — the one thing you opened the detail *for*.
+ */
+export type PanelTone = "title" | "body" | "label" | "muted" | "accent" | "good" | "warn" | "bad";
 
 export interface PanelData {
 	engagement: string;
@@ -403,7 +408,7 @@ export function renderFindingDetail(o: FindingDetailOptions): string[] {
 	const hint = o.hint && o.maxLines >= 5 ? o.hint : undefined;
 	const body: string[] = [];
 	const labelW = 11;
-	const field = (k: string, v: string, tone: PanelTone = "label"): void => {
+	const field = (k: string, v: string, tone: PanelTone = "body"): void => {
 		for (const [i, l] of wrapWords(v, Math.max(8, width - labelW - 2), measure).entries()) {
 			body.push(`${ink("muted", (i === 0 ? k : "").padEnd(labelW))}${ink(tone, l)}`);
 		}
@@ -420,11 +425,11 @@ export function renderFindingDetail(o: FindingDetailOptions): string[] {
 	if (f.status) field("status", f.status, "muted");
 	if (f.description) {
 		body.push("");
-		for (const l of wrapWords(f.description, width - 2, measure)) body.push(`  ${ink("muted", l)}`);
+		for (const l of wrapWords(f.description, width - 2, measure)) body.push(`  ${ink("body", l)}`);
 	}
 	if (f.repro) {
 		body.push("");
-		field("repro", f.repro, "muted");
+		field("repro", f.repro);
 	}
 	for (const e of f.evidence ?? []) field("evidence", e, "muted");
 
