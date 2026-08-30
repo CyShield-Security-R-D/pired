@@ -12,6 +12,7 @@
  */
 
 import { coveragePercent } from "./coverage.ts";
+import { frameLines } from "./frame.ts";
 import type { CoverageStatus } from "./ontology.ts";
 import type { CoverageView } from "./stats.ts";
 
@@ -51,6 +52,15 @@ export interface CoveragePanelOptions {
 	ink: (tone: Tone, text: string) => string;
 	measure: (s: string) => number;
 	truncate: (s: string, width: number) => string;
+	/**
+	 * Draw it in the same box the rail uses. The title then carries the heading,
+	 * so the two rows it would have taken go back to the matrix.
+	 */
+	frame?: boolean;
+	/** Rows the whole thing may occupy. Classes past the budget become a "+N". */
+	maxLines?: number;
+	/** Right-hand note on the summary row — "esc to close" for the overlay. */
+	hint?: string;
 }
 
 /**
@@ -66,21 +76,34 @@ function rowCount(statuses: CoverageStatus[]): string {
 
 /** Lay the matrix out as lines, none wider than `width`. */
 export function renderCoveragePanel(opts: CoveragePanelOptions): string[] {
-	const { view, engagement, width, ink, measure, truncate } = opts;
-	if (width <= 0) return [];
+	const { view, engagement, ink, measure, truncate } = opts;
+	const framed = opts.frame === true && opts.width >= 24;
+	// Two columns of left margin, as the rail has: content flush against a border
+	// reads as content that overflowed into it.
+	const width = (framed ? opts.width - 2 : opts.width) - 2;
+	const budget = (opts.maxLines ?? Number.MAX_SAFE_INTEGER) - (framed ? 2 : 0);
+	if (width <= 0 || budget <= 0) return [];
 	const { matrix, classes, elementIds } = view;
 
 	const pct = coveragePercent(matrix);
+	// Framed, the heading is the border's own label and the row it would have
+	// taken — with the blank under it — goes back to the matrix.
+	const title = `${ink("title", "⦿ coverage")}${ink("muted", ` · ${pct}%`)}`;
 	const head = (): string[] => {
-		const title = ink("title", `⦿ coverage · ${engagement}`);
+		if (framed) return [];
+		const left = ink("title", `⦿ coverage · ${engagement}`);
 		const right = ink("muted", `${pct}%`);
-		const gap = width - measure(title) - measure(right);
-		return [gap >= 1 ? title + " ".repeat(gap) + right : truncate(title, width)];
+		const gap = width - measure(left) - measure(right);
+		return [gap >= 1 ? left + " ".repeat(gap) + right : truncate(left, width), ""];
+	};
+	const done = (lines: string[]): string[] => {
+		const padded = lines.slice(0, budget).map((l) => (l ? `  ${l}` : l));
+		return framed ? frameLines(padded, title, opts.width, ink, measure, truncate) : padded;
 	};
 
-	if (classes.length === 0) return [...head(), "", ink("muted", "no checklist seeded for this engagement")];
+	if (classes.length === 0) return done([...head(), ink("muted", "no checklist seeded for this engagement")]);
 	if (elementIds.length === 0) {
-		return [...head(), "", ink("muted", "no surface recorded yet — run recon, or record inventory")];
+		return done([...head(), ink("muted", "no surface recorded yet — run recon, or record inventory")]);
 	}
 
 	// Statuses per class, in element order, so each row is one class's bar.
@@ -89,22 +112,32 @@ export function renderCoveragePanel(opts: CoveragePanelOptions): string[] {
 
 	const labelWidth = Math.min(MAX_LABEL, Math.max(...classes.map((c) => measure(c.title))));
 	const countWidth = `${elementIds.length}/${elementIds.length}`.length;
-	// label + 2 + bar + 2 + counts
-	const barWidth = Math.max(0, width - labelWidth - countWidth - 4);
+	// label + 2 + bar + 2 + counts. Room decides whether bars are drawn at all;
+	// the bar itself is never longer than there are cells to put in it. Padded out
+	// to the full width instead, a surface of seven elements pushed its counts
+	// eighty columns from the row they belong to.
+	const room = width - labelWidth - countWidth - 4;
+	const barWidth = Math.max(0, Math.min(elementIds.length, room));
 
 	const lines = head();
-	lines.push("");
 
-	if (barWidth < MIN_BAR) {
+	if (room < MIN_BAR) {
 		// Too narrow for bars: fall back to per-class counts alone.
 		for (const cls of classes) {
 			const statuses = byClass.get(cls.id) ?? [];
 			lines.push(truncate(`${ink("label", cls.title)} ${ink("muted", rowCount(statuses))}`, width));
 		}
-		return lines;
+		return done(lines);
 	}
 
-	for (const cls of classes) {
+	// The legend, the summary and the blank above them are the floor; classes fill
+	// what is left. Dropping rows silently would misreport the work, so the ones
+	// that do not fit are counted on a line of their own.
+	const floor = lines.length + 3;
+	const rowsFor = Math.max(1, budget - floor);
+	const shownClasses = classes.length > rowsFor ? classes.slice(0, rowsFor - 1) : classes;
+
+	for (const cls of shownClasses) {
 		const statuses = byClass.get(cls.id) ?? [];
 		const shown = statuses.slice(0, barWidth);
 		const overflow = statuses.length - shown.length;
@@ -123,6 +156,10 @@ export function renderCoveragePanel(opts: CoveragePanelOptions): string[] {
 		lines.push(truncate(`${ink("label", label)}${pad}  ${bar}${barPad}  ${countPad}${ink("muted", counts)}`, width));
 	}
 
+	if (shownClasses.length < classes.length) {
+		lines.push(ink("muted", `+${classes.length - shownClasses.length} more classes · /coverage`));
+	}
+
 	lines.push("");
 	const present = matrix.counts["n/a"] > 0 ? [...LEGEND, "n/a" as CoverageStatus] : LEGEND;
 	const legend = present.map((st) => `${ink(st, CELL_GLYPH[st])} ${ink("muted", LEGEND_WORD[st])}`).join("  ");
@@ -130,8 +167,8 @@ export function renderCoveragePanel(opts: CoveragePanelOptions): string[] {
 
 	const gaps = matrix.counts["not-tested"] + matrix.counts.blocked;
 	const summary = ink("muted", `${matrix.applicable} cells · ${gaps} gaps`);
-	const hint = ink("muted", "esc to close");
+	const hint = opts.hint ? ink("muted", opts.hint) : "";
 	const gap = width - measure(summary) - measure(hint);
-	lines.push(gap >= 1 ? summary + " ".repeat(gap) + hint : truncate(summary, width));
-	return lines;
+	lines.push(hint && gap >= 1 ? summary + " ".repeat(gap) + hint : truncate(summary, width));
+	return done(lines);
 }

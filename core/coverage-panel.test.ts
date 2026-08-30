@@ -108,14 +108,14 @@ describe("renderCoveragePanel with n/a cells", () => {
 
 	it("counts each row over its askable cells only", () => {
 		const lines = render(scoped, 60).map(strip);
-		expect(lines.find((l) => l.startsWith("tls"))).toMatch(/0\/1$/);
-		expect(lines.find((l) => l.startsWith("sqli"))).toMatch(/1\/1$/);
+		expect(lines.find((l) => l.trim().startsWith("tls"))).toMatch(/0\/1$/);
+		expect(lines.find((l) => l.trim().startsWith("sqli"))).toMatch(/1\/1$/);
 	});
 
 	it("still paints an n/a glyph in the bar so columns stay aligned", () => {
 		const lines = render(scoped, 60).map(strip);
-		const tls = lines.find((l) => l.startsWith("tls")) ?? "";
-		const sqli = lines.find((l) => l.startsWith("sqli")) ?? "";
+		const tls = lines.find((l) => l.trim().startsWith("tls")) ?? "";
+		const sqli = lines.find((l) => l.trim().startsWith("sqli")) ?? "";
 		expect(tls).toContain("–");
 		expect(sqli).toContain("–");
 		expect(tls.length).toBe(sqli.length);
@@ -131,5 +131,58 @@ describe("renderCoveragePanel with n/a cells", () => {
 	it("shows the n/a key in the legend only when one exists", () => {
 		expect(render(scoped, 80).map(strip).join("\n")).toContain("n/a");
 		expect(render(view(["e1"], ["sqli"]), 80).map(strip).join("\n")).not.toContain("n/a");
+	});
+});
+
+describe("the welcome screen's copy", () => {
+	// The panel floats, so the editor has to clear it, so the welcome entry is as
+	// tall as the panel. These options are what let the matrix fill those rows
+	// instead of blank ones.
+	const v = view(["/login", "/admin", "/api/tx"], ["authz", "injection", "crypto", "ssrf", "supply chain"], [
+		hyp("h1", "/login", "authz", "refuted"),
+		hyp("h2", "/admin", "authz", "confirmed"),
+	]);
+	const boxed = (width: number, maxLines: number): string[] =>
+		renderCoveragePanel({ view: v, engagement: "acme", width, frame: true, maxLines, ink, measure, truncate });
+
+	it("draws itself in the rail's box, with the heading in the border", () => {
+		const lines = boxed(60, 20);
+		expect(lines[0]).toContain("⦿ coverage");
+		expect(lines[0]).toContain("%");
+		// The heading row and the blank under it go back to the matrix.
+		expect(lines[1]).toContain("authz");
+	});
+
+	it("never exceeds the rows it was given, and says what it dropped", () => {
+		for (const budget of [8, 10, 12, 20]) {
+			expect(boxed(60, budget).length, `budget ${budget}`).toBeLessThanOrEqual(budget);
+		}
+		const tight = boxed(60, 9).map(strip).join("\n");
+		expect(tight).toMatch(/\+\d+ more classes/);
+	});
+
+	it("keeps a row's counts next to its bar rather than at the far edge", () => {
+		// Three elements is a three-cell bar; padded to the panel's width instead,
+		// the counts ended up eighty columns from the class they count.
+		// The frame pads every row to its border, so the question is where the
+		// counts sit, not how long the line is.
+		const row = strip(boxed(100, 20).find((l) => l.includes("authz")) as string);
+		expect(row.indexOf("2/3")).toBeGreaterThan(0);
+		expect(row.indexOf("2/3")).toBeLessThan(40);
+	});
+
+	it("says what to do when there is no surface yet, in the same box", () => {
+		const empty = renderCoveragePanel({
+			view: view([], ["authz"]), engagement: "acme", width: 60, frame: true, maxLines: 12,
+			ink, measure, truncate,
+		});
+		expect(empty.join("\n")).toContain("no surface recorded");
+		expect(empty[0]).toContain("⦿ coverage");
+	});
+
+	it("only offers a dismiss hint to something that can be dismissed", () => {
+		expect(render(v, 60).join("\n")).not.toContain("esc to close");
+		const overlay = renderCoveragePanel({ view: v, engagement: "acme", width: 60, hint: "esc to close", ink, measure, truncate });
+		expect(overlay.join("\n")).toContain("esc to close");
 	});
 });

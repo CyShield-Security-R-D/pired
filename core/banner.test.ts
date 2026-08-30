@@ -72,24 +72,15 @@ describe("reserving height for the panel", () => {
 		expect(lines.at(-1)).toBe("");
 	});
 
-	it("centres itself in what it reserved — those rows are the panel's rows", () => {
-		// The rows exist because the panel floats over the transcript and the editor
-		// has to clear it, so they are exactly the rows the panel occupies. Centring
-		// in them is what puts the two blocks on one horizontal band.
+	it("sits at the top of what it reserves", () => {
+		// The rows are the panel's height, and the welcome entry fills them with the
+		// coverage matrix. This padding is only the fallback for when there is no
+		// matrix to draw — an engagement with no checklist, or a panel turned off.
 		const lines = renderBanner({ ...opts(160), minLines: 24 });
 		expect(lines.length).toBe(24);
 		const filled = lines.map((l, i) => [l, i] as const).filter(([l]) => l.trim());
-		const above = filled[0]?.[1] as number;
-		const below = 24 - 1 - (filled.at(-1)?.[1] as number);
-		expect(Math.abs(above - below)).toBeLessThanOrEqual(2);
-	});
-
-	it("ends on the commands in every layout, whatever the padding", () => {
-		for (const w of [27, 62, 160]) {
-			const lines = renderBanner({ ...opts(w), minLines: 24 });
-			const foot = lines.map((l) => l.trim()).filter(Boolean).at(-1) as string;
-			expect(foot, `at ${w} columns`).toContain("/panel");
-		}
+		expect(filled[0]?.[1]).toBeLessThanOrEqual(1);
+		expect(lines.at(-1)?.trim()).toBe("");
 	});
 
 	it("never truncates real content to hit minLines", () => {

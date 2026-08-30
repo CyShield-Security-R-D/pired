@@ -120,23 +120,15 @@ function facts(info: BannerInfo, compact = false): Array<[string, string]> {
 /**
  * Pad to `minLines`, never truncating: the banner is content, not a viewport.
  *
+ * The padding goes underneath, so the block sits at the top of what it reserves.
  * The rows themselves are not negotiable — the panel is a floating overlay, pi
  * owns the layout root, and padding the banner is the only way the editor clears
- * it — but where the block sits inside them is. It is centred, because those rows
- * are exactly the rows the panel occupies: the two blocks then share a horizontal
- * band and a centre line, and read as one arrangement rather than as a banner
- * that happens to be somewhere near a panel. Padding it all underneath put a hole
- * between the banner and the first reply; all above dropped the banner to the
- * foot with the panel towering over it.
- *
- * The odd row goes below, which places the block a line high — optical centring,
- * since a block sitting dead centre reads as slightly low.
+ * it. What goes in them is: the welcome entry fills them with the coverage matrix
+ * when there is one, and only falls back to this when there is not.
  */
 function reserve(lines: string[], minLines: number | undefined): string[] {
 	if (!minLines || lines.length >= minLines) return lines;
-	const pad = minLines - lines.length;
-	const above = Math.floor(pad / 2);
-	return [...Array(above).fill(""), ...lines, ...Array(pad - above).fill("")];
+	return [...lines, ...Array(minLines - lines.length).fill("")];
 }
 
 export function renderBanner(o: BannerOptions): string[] {

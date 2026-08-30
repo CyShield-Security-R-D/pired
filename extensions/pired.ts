@@ -34,7 +34,7 @@ import { buildSystemPrompt, PIRED_PROFILES, type PiredProfile } from "../core/pr
 import { createScopeGate } from "../core/scope.ts";
 import { renderCoveragePanel, type Tone } from "../core/coverage-panel.ts";
 import { dismissHint, PANEL_MODES, renderFindingDetail, renderPanel, scrollFramed, type PanelData, type PanelMode, type PanelTone } from "../core/panel.ts";
-import { computeCoverageView, computeEngagementStats, coveragePercent, type EngagementStats } from "../core/stats.ts";
+import { computeCoverageView, computeEngagementStats, coveragePercent, type CoverageView, type EngagementStats } from "../core/stats.ts";
 import { layoutStatusLine, type Segment } from "../core/statusline.ts";
 import { createCoreTools } from "../core/tools.ts";
 import { Workspace } from "../core/workspace.ts";
@@ -629,6 +629,10 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		if (!workspace) return;
 		stats = await computeEngagementStats(workspace);
 		panelData = await collectPanelData(workspace, scope, stats);
+		// Cached for the same reason panelData is: a renderer runs on layout and
+		// cannot await a ledger read. The welcome screen draws the matrix, so it
+		// has to be here rather than fetched when /coverage is typed.
+		coverageView = await computeCoverageView(workspace).catch(() => undefined);
 		const parts = [`⦿ ${scope.engagement}`, `findings ${stats.findingsTotal}`];
 		if (stats.coveragePct !== undefined) parts.push(`cov ${stats.coveragePct}%`);
 		if (stats.blockers > 0) parts.push(`blockers ${stats.blockers}`);
@@ -649,6 +653,7 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	 * Answers are written back to the same record, so the ledger stays the single
 	 * source of truth and a resumed session sees the decision.
 	 */
+	let coverageView: CoverageView | undefined;
 	const promptedBlockers = new Set<string>();
 	const promptForNewBlockers = async (ctx: ExtensionContext): Promise<void> => {
 		if (!workspace || ctx.mode !== "tui") return;
@@ -1163,6 +1168,9 @@ export default function piredExtension(pi: ExtensionAPI): void {
 							view,
 							engagement: scope.engagement,
 							width,
+							// The overlay is dismissed with a key, so it says so; the welcome
+							// screen's copy is not dismissible and does not.
+							hint: "esc to close",
 							ink: (tone, text) => theme.fg(TONE_COLOR[tone], text),
 							measure: visibleWidth,
 							truncate: truncateToWidth,
@@ -1284,15 +1292,36 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		const info = entry.data;
 		if (!info) return undefined;
 		return {
-			render: (width: number): string[] =>
-				renderBanner({
-					info,
-					width: bannerWidth(width),
-					minLines: bannerReserve(),
-					ink: (tone, text) => theme.fg(BANNER_TONE_COLOR[tone], text),
-					measure: visibleWidth,
-					truncate: (x, w) => truncateToWidth(x, w, theme.fg("dim", "…")),
-				}),
+			render: (width: number): string[] => {
+				const cols = bannerWidth(width);
+				const rows = bannerReserve();
+				const ink = (tone: BannerTone, text: string) => theme.fg(BANNER_TONE_COLOR[tone], text);
+				const truncate = (x: string, w: number) => truncateToWidth(x, w, theme.fg("dim", "…"));
+				const banner = renderBanner({ info, width: cols, ink, measure: visibleWidth, truncate });
+
+				// The panel floats, so the editor has to clear it, so the welcome entry
+				// has to be that tall. Those rows were blank; the matrix that is the
+				// whole thesis of the harness — checklist × surface — is a better
+				// answer to "what goes here" than nothing, and on a fresh engagement
+				// it says what to do instead of showing an empty grid.
+				const room = rows - banner.length;
+				// Indented and narrowed to the banner's own measure, so the box's two
+				// edges are the wordmark's left margin and the rule's right end.
+				const box = coverageView && room >= 8
+					? renderCoveragePanel({
+						view: coverageView, engagement: scope.engagement, width: cols - 2,
+						frame: true, maxLines: room,
+						ink: (tone, text) => theme.fg(TONE_COLOR[tone], text),
+						measure: visibleWidth, truncate: truncateToWidth,
+					}).map((l) => `  ${l}`)
+					: [];
+				if (box.length === 0) {
+					return renderBanner({ info, width: cols, minLines: rows, ink, measure: visibleWidth, truncate });
+				}
+				const out = [...banner, ...box];
+				while (out.length < rows) out.push("");
+				return out;
+			},
 			invalidate(): void {},
 		};
 	});

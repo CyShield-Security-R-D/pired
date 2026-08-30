@@ -317,7 +317,15 @@ The banner also **reserves the height the panel occupies**. pi owns the layout r
 
 The reservation is the height the panel *actually draws*, not the height it is allowed to draw: a fresh engagement's panel is a third of a busy one's, and reserving the cap regardless is a wall of blank rows. It is zero when the panel is off, and capped to leave room for the editor and status line — filling a short terminal with blank lines would push the editor off the bottom, which is worse than the overlap it fixes.
 
-The banner is **centred** in those rows rather than pinned to either end of them. They are exactly the rows the panel occupies, so centring in them puts the two blocks on one horizontal band with a shared centre line, and the pair reads as an arrangement rather than as a banner that happens to be near a panel. Padding it all underneath put a hole between the banner and the first reply; all above dropped the banner to the foot with the panel towering over it. The odd row goes below, since a block sitting dead centre reads as slightly low. On a conversation of any length the transcript fills that area anyway; this is only what the welcome screen looks like before it does.
+### What goes in those rows
+
+The banner sits at the top of them, and the rows under it hold **the coverage matrix** — the same `checklist × surface` view `/coverage` opens, in the same box the rail is drawn in, indented to the wordmark's margin and ending where the banner's rule ends.
+
+Blank rows were the wrong answer to a question the layout was already asking. The reservation exists whatever we do, the matrix is the harness's whole thesis, and a welcome screen that shows where the work stands is worth more than one that shows a wordmark and a hole. On an engagement with no surface yet it says so in the same box — *no surface recorded yet — run recon, or record inventory* — which is the one thing a new engagement needs told.
+
+It fits itself to the rows it is given: classes fill what is left after the legend and the summary, and any that do not fit are counted on a line of their own rather than dropped, since silently showing three classes out of nine would misreport the work. Under eight rows there is no room for a box worth drawing, so the banner pads as it used to — which is what a narrow terminal gets, its banner being five rows taller.
+
+On a conversation of any length the transcript fills that area anyway; this is only what the welcome screen looks like before it does.
 
 It is all a **transcript entry**, not a widget: written once, scrolled away like any other, and — being a custom entry — never part of the model's context, so the greeting costs no tokens. There was a banner widget once and removing it was right; it held layout forever to repeat a brand the status line already carries.
 
