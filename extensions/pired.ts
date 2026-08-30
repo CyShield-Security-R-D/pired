@@ -286,6 +286,25 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		return Number.isFinite(rows) && rows > 0 ? rows : "50%";
 	};
 
+	/**
+	 * Rows the banner should reserve so the editor clears the panel.
+	 *
+	 * Derived from the rail's own maxHeight and offset rather than a constant, so
+	 * changing PIRED_RAIL_HEIGHT moves both together. Zero when the panel is off —
+	 * there is nothing to clear — and capped so a short terminal is not filled
+	 * with blank lines that push the editor off the bottom, which would be a worse
+	 * bug than the overlap it fixes.
+	 */
+	const bannerReserve = (): number => {
+		if (String(pi.getFlag("pired-panel") ?? "on").toLowerCase() === "off") return 0;
+		const rows = process.stdout.rows ?? 40;
+		const h = railHeight();
+		const panelRows = typeof h === "number" ? h : Math.floor((rows * Number.parseInt(h, 10)) / 100);
+		const RAIL_OFFSET_Y = 1;
+		// Leave room for the editor box and the status line beneath it.
+		return Math.max(0, Math.min(panelRows + RAIL_OFFSET_Y + 1, rows - 8));
+	};
+
 	const openInlineRail = async (ctx: ExtensionContext): Promise<void> => {
 		const width = Number(process.env.PIRED_RAIL_WIDTH ?? 56);
 		void ctx.ui.custom<void>(
@@ -987,6 +1006,7 @@ export default function piredExtension(pi: ExtensionAPI): void {
 			render: (width: number): string[] =>
 				renderBanner({
 					info, width,
+					minLines: bannerReserve(),
 					ink: (tone, text) => theme.fg(BANNER_TONE_COLOR[tone], text),
 					measure: visibleWidth,
 					truncate: (x, w) => truncateToWidth(x, w, theme.fg("dim", "…")),

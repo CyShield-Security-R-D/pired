@@ -283,6 +283,18 @@ It is a **transcript entry**, not a widget: written once, scrolled away like any
 
 Turn it off with `--pired-banner off`.
 
+The banner also **reserves the height the panel occupies**. The panel is a floating overlay anchored top-right — it draws over whatever is beneath it, and pi owns the layout root, so the editor cannot be moved out of its way. In pi's inline mode the editor sits immediately after the last content, which on a fresh session put it around row 13, inside a panel spanning rows 1 to 21:
+
+```
+  ⦿  p i r e d               │  review · source audit               │
+  ───────────────────────────│                                      │
+  engagement   pired         ├─ coverage ───────────────────────────┤
+─────────────────────────────│  ░░░░░░░░░░░░░░░░░░░░░░░░ 0%         │   ← the editor,
+─────────────────────────────│  0 of 76 cells · 76 gaps             │     cut in half
+```
+
+The reservation is derived from the rail's own `maxHeight` and offset, so changing `PIRED_RAIL_HEIGHT` moves both together. It is zero when the panel is off, and capped to leave room for the editor and status line so a short terminal is never filled with blank lines — pushing the editor off the bottom would be a worse bug than the overlap it fixes.
+
 ### A clean start
 
 pi prints a startup header listing every skill, prompt, extension and theme it loaded. pired ships 39 skills, so that header is a wall of text — and because the panel is a floating overlay anchored top-right, the wall ends up **behind** it, leaving both unreadable:

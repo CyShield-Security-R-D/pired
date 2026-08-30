@@ -45,6 +45,18 @@ export interface BannerOptions {
 	ink: (tone: BannerTone, text: string) => string;
 	measure: (s: string) => number;
 	truncate: (s: string, width: number) => string;
+	/**
+	 * Pad with blank lines to at least this many rows.
+	 *
+	 * The panel is a floating overlay anchored top-right: it draws over whatever
+	 * is beneath it and pi owns the layout root, so the editor cannot be moved
+	 * out of its way. In pi's inline mode the editor sits immediately after the
+	 * last content, which on a fresh session is around row 13 — inside a panel
+	 * spanning rows 1 to 21. The banner reserving that height is what puts the
+	 * editor below it, and it costs nothing once a conversation has grown enough
+	 * to push the editor down on its own.
+	 */
+	minLines?: number;
 }
 
 const COMMANDS = ["/surface", "/hypotheses", "/coverage", "/panel"];
@@ -75,6 +87,12 @@ function facts(info: BannerInfo): Array<[string, string]> {
 	return rows;
 }
 
+/** Pad to `minLines`, never truncating: the banner is content, not a viewport. */
+function reserve(lines: string[], minLines: number | undefined): string[] {
+	if (!minLines || lines.length >= minLines) return lines;
+	return [...lines, ...Array(minLines - lines.length).fill("")];
+}
+
 export function renderBanner(o: BannerOptions): string[] {
 	const { info, width, ink, measure, truncate } = o;
 	if (width < TINY_MIN) return [truncate(`${ink("accent", MARK)} ${wordmark(ink)}`, width)];
@@ -92,7 +110,7 @@ export function renderBanner(o: BannerOptions): string[] {
 	const rows = facts(info);
 	const labelW = Math.max(...rows.map((r) => r[0].length)) + 3;
 
-	return [
+	return reserve([
 		"",
 		truncate(INDENT + line1, width),
 		truncate(INDENT + ink("rule", "─".repeat(Math.max(0, Math.min(inner, MAX_RULE)))), width),
@@ -101,5 +119,5 @@ export function renderBanner(o: BannerOptions): string[] {
 		"",
 		truncate(INDENT + COMMANDS.map((c) => ink("accent", c)).join(ink("muted", "   ")), width),
 		"",
-	];
+	], o.minLines);
 }

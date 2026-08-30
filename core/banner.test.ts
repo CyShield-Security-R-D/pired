@@ -64,3 +64,21 @@ describe("renderBanner", () => {
 		for (const c of ["/surface", "/hypotheses", "/coverage", "/panel"]) expect(text).toContain(c);
 	});
 });
+
+describe("reserving height for the panel", () => {
+	it("pads to minLines so the editor lands below a floating panel", () => {
+		const lines = renderBanner({ ...opts(88), minLines: 22 });
+		expect(lines).toHaveLength(22);
+		expect(lines.at(-1)).toBe("");
+	});
+
+	it("never truncates real content to hit minLines", () => {
+		const full = renderBanner(opts(88));
+		const padded = renderBanner({ ...opts(88), minLines: 2 });
+		expect(padded).toEqual(full);
+	});
+
+	it("ignores minLines in the tiny layout, which has no room to give", () => {
+		expect(renderBanner({ ...opts(20), minLines: 22 })).toHaveLength(1);
+	});
+});
