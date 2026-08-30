@@ -60,7 +60,20 @@ const DEFAULTS: Partial<Record<LedgerKind, Record<string, unknown>>> = {
 
 const REQUIRED: Record<LedgerKind, string[]> = {
 	host: ["value"], service: ["host", "port"], endpoint: ["path"], param: ["name"], tech: ["name"],
-	hypothesis: ["statement", "target", "class"], finding: ["title", "severity", "target"], blocker: ["question"], loot: ["handle", "secret"],
+	hypothesis: ["statement", "target", "class"],
+	// `target` is deliberately NOT required for a finding.
+	//
+	// A finding is not only a confirmed vulnerability against a recorded surface
+	// element. "No dependency pins, so SCA is impossible", "secrets printed to
+	// stdout on every run", "this library is three majors behind" are all worth
+	// carrying to the report, and none of them has an endpoint or a host to hang
+	// off. Requiring one leaves the agent two options — invent an element id, or
+	// drop the observation into notes — and notes are where findings went to die.
+	//
+	// It stays required for a hypothesis, where the target is not a label but the
+	// coordinate of the coverage cell the hypothesis settles.
+	finding: ["title", "severity"],
+	blocker: ["question"], loot: ["handle", "secret"],
 };
 
 const DEFAULT_SURFACE_KINDS: InventoryKind[] = ["endpoint", "host"];
@@ -179,7 +192,8 @@ const RECORD_DESCRIPTION = `Record engagement state to the durable workspace. On
 - evidence: name, content — saves raw output to the workspace and returns the path to cite (this is how you create the file that 'evidence' fields reference)
 - host: value (+ip, tech[]); service: host, port (+proto, name); endpoint: path (+host, method, params[], auth); param: name (+endpoint, location); tech: name (+host, version)
 - hypothesis: statement, target (surface id), class (checklist id) (+approach, outcome[proposed|testing|confirmed|refuted|inconclusive], evidence). 'target' and 'class' also accept lists, recording the cross product in one call — use it when one piece of reasoning settles several cells at once.
-- finding: title, severity[info|low|medium|high|critical], target (+class, cwe, cvss, description, repro, evidence[], status)
+- finding: title, severity[info|low|medium|high|critical] (+target, class, cwe, cvss, description, repro, evidence[], status)
+  A finding is anything worth carrying into the report, not only a proven vulnerability. Use severity=info for an observation that costs nothing now but may matter later — a missing dependency pin, an unpinned base image, a permissive default, a lead you could not finish. 'target' is optional and accepts a recorded element id OR a raw string (a file path, a module, a component) when no element fits; give one when you can, and record the finding either way rather than leaving it in notes.
 - blocker: question (+blockerType, priority[low|medium|high], options[], blocks[] (work ids this gates))
 - loot: handle (e.g. cred:web-admin), secret (+lootType, username, target, source)
 Pass 'id' to update an existing record.
@@ -330,9 +344,18 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 						// required, which reads as the model's mistake even when the field
 						// was stripped from the schema before the model could send it.
 						const got = Object.keys(a).filter((k) => k !== "kind").join(", ") || "nothing";
+						// Tell the agent how to resolve it. A missing target is not an
+						// operator decision — the agent records the surface element itself,
+						// or names a raw one — and an error that only states a rule invites
+						// it to stop and ask, or to give up and write a note.
+						const how = field === "target"
+							? " A target is a recorded element id, or a raw string when nothing fits — a file path, a module, a component." +
+								" Record the surface element first (kind=endpoint/host/service/param/tech) and pass its id, or pass the raw string." +
+								" Do not ask the operator for it, and do not drop the record."
+							: "";
 						throw new Error(
-							`record ${kind}: '${field}' is required, but was not received. Fields received: ${got}. ` +
-							`If you did send '${field}', the tool schema dropped it — report this rather than working around it.`,
+							`record ${kind}: '${field}' is required, but was not received. Fields received: ${got}.` +
+							`${how} If you did send '${field}', the tool schema dropped it — report this rather than working around it.`,
 						);
 					}
 				}

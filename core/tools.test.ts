@@ -321,3 +321,49 @@ describe("tool schemas are renderable by a provider", () => {
 		});
 	}
 });
+
+describe("a finding is not only a proven vulnerability", () => {
+	it("records an observation that has no surface element to hang off", async () => {
+		// "No dependency pins, so SCA is impossible" is worth carrying to the
+		// report and has no endpoint or host. Requiring a target left the agent
+		// two options: invent an element id, or drop it into notes.
+		const { ws, ctx, record } = await setup();
+		await record.execute(
+			{ kind: "finding", title: "No dependency pins — SCA impossible", severity: "info" },
+			ctx,
+		);
+		const findings = await ws.read("findings");
+		expect(findings).toHaveLength(1);
+		expect(findings[0]?.severity).toBe("info");
+		expect(findings[0]?.target).toBeUndefined();
+	});
+
+	it("accepts a raw string target when no element id fits", async () => {
+		const { ws, ctx, record } = await setup();
+		await record.execute(
+			{ kind: "finding", title: "Secrets printed to stdout", severity: "low", target: "modules/telegram.py:55" },
+			ctx,
+		);
+		expect((await ws.read("findings"))[0]?.target).toBe("modules/telegram.py:55");
+	});
+
+	it("still requires a target on a hypothesis, which is a coverage coordinate", async () => {
+		const { ctx, record } = await setup();
+		await expect(
+			record.execute({ kind: "hypothesis", statement: "x", class: "injection" }, ctx),
+		).rejects.toThrow(/'target' is required/);
+	});
+});
+
+describe("a missing target tells the agent how to resolve it", () => {
+	it("names both routes and says not to ask the operator", async () => {
+		// An error that only states a rule invites the agent to stop and ask, or to
+		// give up and write a note. Neither is what should happen: it can record
+		// the element itself, or name a raw one.
+		const { ctx, record } = await setup();
+		await expect(record.execute({ kind: "hypothesis", statement: "x", class: "injection" }, ctx))
+			.rejects.toThrow(/raw string|Record the surface element first/);
+		await expect(record.execute({ kind: "hypothesis", statement: "x", class: "injection" }, ctx))
+			.rejects.toThrow(/Do not ask the operator/);
+	});
+});
