@@ -202,3 +202,47 @@ Colour carries meaning only — severity and outcome — never decoration. Every
 - `/coverage` prints a one-line summary (`coverage 62% · 170 cells · 65 gaps`) instead of opening an overlay.
 - Blocker dialogs do not fire. Blockers accumulate in the ledger and can be read with `recall blockers`, or with `pired-state --json`.
 - `/findings` behaves identically — it writes Markdown to the workspace either way.
+
+## The engagement browser
+
+`/surface` and `/hypotheses` open the same browser at different entry points. The panel shows counts; this shows the records behind them.
+
+```
+surface · airflow-ftxin0                        6 elements · 25/45 settled
+──────────────────────────────────────────────────────────────────────────
+▸ endp DELETE /api/v2/pools              ▲·●–◐·●⊘●●  5/9
+  endp GET /api/v2/dags                  ●●▲·●–◐·●⊘  5/9   ★1
+  host airflow.local                     ––––––––––  0/0
+──────────────────────────────────────────────────────────────────────────
+↑↓ move · ⏎ open · tab hypotheses · q close
+```
+
+Rows are ordered **least-settled first** — the reason to open this view is to find what nothing has touched. An element with no applicable class sorts last: `0/0` is not the most neglected row in the engagement, it is a row with no work in it.
+
+`⏎` on an element lists the checklist against it, one row per class, carrying the hypothesis that settled the cell:
+
+```
+▸ ● authz          role check enforced before the DAG list is returned
+  ▲ ssrf           vulnerable · no hypothesis recorded
+  · injection      not tested
+  – path-traversal does not apply
+```
+
+A row never contradicts its glyph. Where a cell is settled but no hypothesis is recorded behind it, the row says so rather than reporting the cell untested.
+
+`/hypotheses` lists them flat, with `a` / `c` / `r` / `o` filtering to all, confirmed, refuted, or open. **The refuted ones are the point.** Confirmed hypotheses become findings; refuted ones are the evidence that everything else was checked — the difference between "we found three bugs" and "we tested 174 hypotheses across 10 endpoints and three held". `⏎` opens one in full: statement, class, target, method, evidence path, and the finding it produced.
+
+### Keys
+
+| Key | Does |
+|---|---|
+| `↑` `↓` / `k` `j` | move |
+| `PgUp` `PgDn` | page |
+| `g` `G` / `Home` `End` | first, last |
+| `⏎` `→` `l` | drill in |
+| `Esc` `←` `h` | back, and out of the browser at the top level |
+| `Tab` | switch between surface and hypotheses, keeping the filter |
+| `a` `c` `r` `o` | filter all / confirmed / refuted / open |
+| `q` | close |
+
+Outside the TUI — `--print`, RPC, JSON — both commands report the tallies as a notification instead, so a headless run is told what it would have seen.

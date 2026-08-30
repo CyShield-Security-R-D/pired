@@ -13,6 +13,8 @@ Everything pired adds to pi. pi's own commands (`/model`, `/login`, `/reload`, s
 | `/panel tmux` | Toggle the panel as a real tmux pane instead. |
 | `/panel footer` | Toggle the footer-strip variant instead. |
 | `/coverage` | Open the coverage matrix — checklist × surface. |
+| `/surface` | Browse the recorded attack surface: one row per element, a coverage bar across the checklist, and drill-down into any element's classes. |
+| `/hypotheses` | Browse every hypothesis — confirmed, refuted and open — with outcome filters and full detail. |
 | `/findings` | Export findings to Markdown in the engagement workspace. |
 
 ## Keys

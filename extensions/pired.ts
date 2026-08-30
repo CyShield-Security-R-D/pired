@@ -20,7 +20,11 @@ import type {
 	ThemeColor,
 	ToolRenderResultOptions,
 } from "@earendil-works/pi-coding-agent";
-import { type Component, truncateToWidth, type TUI, visibleWidth } from "@earendil-works/pi-tui";
+import { type Component, Key, matchesKey, truncateToWidth, type TUI, visibleWidth } from "@earendil-works/pi-tui";
+import {
+	type BrowserKey, type BrowserState, type BrowserTone, buildBrowserModel,
+	initialState, reduceBrowser, renderBrowser,
+} from "../core/browser.ts";
 import { exportFindingsMarkdown } from "../core/export.ts";
 import type { BlockerRecord, Checklist, EngagementScope, Severity, TargetType } from "../core/ontology.ts";
 import type { Gate } from "../core/ports.ts";
@@ -76,6 +80,14 @@ const PRIORITY = {
 };
 
 /** Coverage-panel tones mapped onto the active theme. */
+const BROWSER_TONE_COLOR: Record<BrowserTone, ThemeColor> = {
+	clear: "success", vulnerable: "error", testing: "warning", blocked: "muted",
+	"not-tested": "dim", "n/a": "dim", title: "accent", label: "text", muted: "dim",
+	// The cursor row. `accent` reads as selection against every shipped theme,
+	// and the leading marker stays as a redundant cue where it does not.
+	selected: "accent",
+};
+
 const TONE_COLOR: Record<Tone, ThemeColor> = {
 	clear: "success",
 	vulnerable: "error",
@@ -828,6 +840,106 @@ export default function piredExtension(pi: ExtensionAPI): void {
 				{ overlay: true, overlayOptions: { width: "80%", minWidth: 40, maxHeight: "80%", anchor: "center" } },
 			);
 		},
+	});
+
+	/**
+	 * Raw terminal input to a semantic key.
+	 *
+	 * This mapping is the whole reason `core/browser.ts` speaks in names rather
+	 * than escape sequences: recognising them needs pi-tui's matchesKey, and
+	 * core/ carries no host imports. Vim keys sit alongside the arrows because a
+	 * list this dense is navigated by people who never take a hand off home row.
+	 */
+	const toBrowserKey = (data: string): BrowserKey | undefined => {
+		if (matchesKey(data, Key.up) || data === "k") return "up";
+		if (matchesKey(data, Key.down) || data === "j") return "down";
+		if (matchesKey(data, Key.pageUp)) return "pageUp";
+		if (matchesKey(data, Key.pageDown)) return "pageDown";
+		if (matchesKey(data, Key.home) || data === "g") return "top";
+		if (matchesKey(data, Key.end) || data === "G") return "bottom";
+		if (matchesKey(data, Key.enter) || matchesKey(data, Key.right) || data === "l") return "in";
+		// Escape is tested after every escape-prefixed sequence above: an arrow key
+		// arrives as an escape sequence, so checking it first would close the
+		// browser on every press of up.
+		if (matchesKey(data, Key.escape) || matchesKey(data, Key.left) || data === "h") return "out";
+		if (matchesKey(data, Key.tab)) return "switch";
+		if (data === "q") return "close";
+		if (data === "a") return "filter:all";
+		if (data === "c") return "filter:confirmed";
+		if (data === "r") return "filter:refuted";
+		if (data === "o") return "filter:open";
+		return undefined;
+	};
+
+	/** Open the browser at `view`; shared by /surface and /hypotheses. */
+	const openBrowser = async (ctx: ExtensionContext, view: "surface" | "hypotheses"): Promise<void> => {
+		if (!workspace) {
+			ctx.ui.notify("pired: no engagement workspace yet", "warning");
+			return;
+		}
+		const cov = await computeCoverageView(workspace);
+		const model = buildBrowserModel({
+			engagement: scope.engagement,
+			classes: cov?.classes ?? [],
+			cells: cov?.matrix.cells ?? [],
+			inventory: await workspace.read("inventory"),
+			hypotheses: await workspace.read("hypotheses"),
+			findings: await workspace.read("findings"),
+		});
+
+		if (ctx.mode !== "tui") {
+			const c = model.counts;
+			ctx.ui.notify(
+				`pired: ${model.surface.length} surface element(s) · ${c.all} hypotheses ` +
+				`(${c.confirmed} confirmed, ${c.refuted} refuted, ${c.open} open)`,
+				"info",
+			);
+			return;
+		}
+
+		let state: BrowserState = initialState(view);
+		await ctx.ui.custom<void>(
+			(tui, theme, _keybindings, done) => ({
+				render: (width: number): string[] => {
+					// Chrome is two header lines and two footer lines; the rest is body.
+					// stdout.rows is the only height signal a component gets — render()
+					// is handed a width and nothing else.
+					const rows = Math.max(12, Math.min(process.stdout.rows ?? 30, 46));
+					return renderBrowser({
+						model, state, width,
+						height: Math.max(3, Math.floor(rows * 0.8) - 5),
+						ink: (tone, text) => theme.fg(BROWSER_TONE_COLOR[tone], text),
+						measure: visibleWidth,
+						truncate: (x, ww) => truncateToWidth(x, ww, theme.fg("dim", "…")),
+					});
+				},
+				invalidate(): void {},
+				handleInput(data: string): void {
+					const key = toBrowserKey(data);
+					if (!key) return;
+					const next = reduceBrowser(state, key, model, Math.max(3, Math.floor((process.stdout.rows ?? 30) * 0.8) - 5));
+					if (next === "close") {
+						done();
+						return;
+					}
+					state = next;
+					// Without this the component keeps the old frame: pi renders on
+					// request, not on a timer.
+					tui.requestRender();
+				},
+			}),
+			{ overlay: true, overlayOptions: { width: "90%", minWidth: 48, maxHeight: "80%", anchor: "center" } },
+		);
+	};
+
+	pi.registerCommand("surface", {
+		description: "Browse the recorded attack surface and its coverage",
+		handler: async (_args, ctx) => { await openBrowser(ctx, "surface"); },
+	});
+
+	pi.registerCommand("hypotheses", {
+		description: "Browse hypotheses — confirmed, refuted, and still open",
+		handler: async (_args, ctx) => { await openBrowser(ctx, "hypotheses"); },
 	});
 
 	pi.registerCommand("findings", {
