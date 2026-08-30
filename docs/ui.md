@@ -263,10 +263,12 @@ The trade is scrollback: the alternate screen is discarded on exit, so the conve
 
 ## The welcome banner
 
-A session opens with the mark, the engagement it is about to work on, and the four commands that open the views:
+A session opens with the wordmark, the engagement it is about to work on, and the commands that open the views:
 
 ```
-  ⦿  p i r e d                          security engagement harness
+  █▀█ █ █▀█ █▀▀ █▀▄
+  █▀▀ █ █▀▄ █▀▀ █ █
+  ▀   ▀ ▀ ▀ ▀▀▀ ▀▀                          security engagement harness
   ──────────────────────────────────────────────────────────
 
   engagement   airflow-ftxin0
@@ -277,23 +279,43 @@ A session opens with the mark, the engagement it is about to work on, and the fo
   /surface   /hypotheses   /coverage   /panel
 ```
 
-`recorded` appears only when the engagement already holds work — a fresh one showing `0 surface · 0% covered` reads as a failed run rather than a starting point. The tagline drops before anything else as the terminal narrows, and under 28 columns only the mark and the name remain.
+Three rows of half blocks, not six of full ones. Block capitals are 34 columns wide and the space beside the panel is 27, so a full-height font could not sit next to the rail at all — and it reads as retro besides. The two tones are not decoration: the name is literally "pi" + "red", so the accent lands on the second half and the wordmark explains itself. The tagline is set against the art's **baseline** rather than its top, where it reads as a lockup instead of two unrelated things sharing a line.
 
-It is a **transcript entry**, not a widget: written once, scrolled away like any other, and — being a custom entry — never part of the model's context, so the greeting costs no tokens. There was a banner widget once and removing it was right; it held layout forever to repeat a brand the status line already carries.
+### Sharing the terminal with the panel
+
+The panel is a floating overlay: pi hands the banner the full terminal width and then paints the rail over its right-hand end. Left alone, that sliced the wordmark, the facts and the command list at the column where the rail begins.
+
+So the banner takes only the columns left of the panel, and drops what does not fit there:
+
+```
+  █▀█ █ █▀█ █▀▀ █▀▄          ╭─ ⦿ pired ─────────────────────╮
+  █▀▀ █ █▀▄ █▀▀ █ █          │  review · source audit        │
+  ▀   ▀ ▀ ▀ ▀▀▀ ▀▀           │                               │
+                             ├─ coverage ────────────────────┤
+  ─────────────────────────  │  ░░░░░░░░░░░░░░░░░░░░░░ 0%    │
+
+  pired                      │  0 of 76 cells · 76 gaps      │
+  review · scope off         │                               │
+  qwen3.8-27b                ├─ scope ───────────────────────┤
+  4 surface · 7 findings     │  ● authorized off             │
+
+  /surface  /hypotheses      ├─ surface ─────────────────────┤
+  /coverage  /panel          │  host        1  endpoint   3  │
+```
+
+The label column goes first — `engagement` beside `pired` spends eleven of twenty-seven columns explaining what the value already says. Coverage goes next, because the panel is rendering the same number three columns to the right. The commands wrap rather than running off the edge.
+
+`recorded` appears only when the engagement already holds work: a fresh one showing `0 surface · 0% covered` reads as a failed run rather than a starting point.
+
+### Clearing the editor
+
+The banner also **reserves the height the panel occupies**. pi owns the layout root, so the editor cannot be moved out of an overlay's way, and in inline mode it sits immediately after the last content — on a fresh session that put it around row 13, inside a panel spanning rows 1 to 21. Padding the banner to the panel's height is what puts the editor below it.
+
+The reservation is derived from the rail's own `maxHeight` and offset, so `PIRED_RAIL_HEIGHT` moves both together. It is zero when the panel is off, and capped to leave room for the editor and status line — filling a short terminal with blank lines would push the editor off the bottom, which is worse than the overlap it fixes.
+
+It is all a **transcript entry**, not a widget: written once, scrolled away like any other, and — being a custom entry — never part of the model's context, so the greeting costs no tokens. There was a banner widget once and removing it was right; it held layout forever to repeat a brand the status line already carries.
 
 Turn it off with `--pired-banner off`.
-
-The banner also **reserves the height the panel occupies**. The panel is a floating overlay anchored top-right — it draws over whatever is beneath it, and pi owns the layout root, so the editor cannot be moved out of its way. In pi's inline mode the editor sits immediately after the last content, which on a fresh session put it around row 13, inside a panel spanning rows 1 to 21:
-
-```
-  ⦿  p i r e d               │  review · source audit               │
-  ───────────────────────────│                                      │
-  engagement   pired         ├─ coverage ───────────────────────────┤
-─────────────────────────────│  ░░░░░░░░░░░░░░░░░░░░░░░░ 0%         │   ← the editor,
-─────────────────────────────│  0 of 76 cells · 76 gaps             │     cut in half
-```
-
-The reservation is derived from the rail's own `maxHeight` and offset, so changing `PIRED_RAIL_HEIGHT` moves both together. It is zero when the panel is off, and capped to leave room for the editor and status line so a short terminal is never filled with blank lines — pushing the editor off the bottom would be a worse bug than the overlap it fixes.
 
 ### A clean start
 

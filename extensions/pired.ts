@@ -305,8 +305,28 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		return Math.max(0, Math.min(panelRows + RAIL_OFFSET_Y + 1, rows - 8));
 	};
 
+	const railWidth = (): number => Number(process.env.PIRED_RAIL_WIDTH ?? 56);
+
+	/**
+	 * Columns the banner may use: everything left of the panel.
+	 *
+	 * The panel is an overlay, so pi hands the banner the full terminal width and
+	 * then paints the rail on top of its right-hand end — which sliced the wordmark,
+	 * the facts and the command list at the column where the rail begins. Narrowing
+	 * the banner to the free columns is what puts the two side by side instead of
+	 * on top of one another.
+	 */
+	const bannerWidth = (full: number): number => {
+		if (String(pi.getFlag("pired-panel") ?? "on").toLowerCase() === "off") return full;
+		const free = full - railWidth() - 2;
+		// Under ~18 columns nothing legible fits beside the rail, so the banner
+		// takes the full width and accepts the overlap for that frame; the panel
+		// can be dismissed with alt+p on a terminal that small.
+		return free >= 18 ? free : full;
+	};
+
 	const openInlineRail = async (ctx: ExtensionContext): Promise<void> => {
-		const width = Number(process.env.PIRED_RAIL_WIDTH ?? 56);
+		const width = railWidth();
 		void ctx.ui.custom<void>(
 			(_tui, theme, _keybindings, done) => {
 				railDone = () => done();
@@ -1005,7 +1025,8 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		return {
 			render: (width: number): string[] =>
 				renderBanner({
-					info, width,
+					info,
+					width: bannerWidth(width),
 					minLines: bannerReserve(),
 					ink: (tone, text) => theme.fg(BANNER_TONE_COLOR[tone], text),
 					measure: visibleWidth,

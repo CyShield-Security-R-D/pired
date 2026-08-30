@@ -20,12 +20,30 @@ export type BannerTone = "pi" | "red" | "label" | "muted" | "accent" | "rule";
 
 /** pired's engagement glyph, reused so the banner and the status line agree. */
 const MARK = "⦿";
+
+/**
+ * PIRED in a three-row half-block font, split at the word so each run takes its
+ * own tone.
+ *
+ * Full-height block capitals are six rows and thirty-four columns — wider than
+ * the space left beside the panel, and heavy enough to read as retro. Half
+ * blocks give the same weight in three rows and seventeen columns, which fits
+ * the narrow column and still lands as a wordmark rather than as text.
+ */
+const ART: Array<[pi: string, red: string]> = [
+	["█▀█ █", " █▀█ █▀▀ █▀▄"],
+	["█▀▀ █", " █▀▄ █▀▀ █ █"],
+	["▀   ▀", " ▀ ▀ ▀▀▀ ▀▀ "],
+];
+const ART_WIDTH = 17;
 const TAGLINE = "security engagement harness";
 /** A rule that spans the whole terminal reads as heavy; this one reads as drawn. */
 const MAX_RULE = 58;
 const INDENT = "  ";
-/** Below this, only the mark and the name fit. */
-const TINY_MIN = 28;
+/** Below this a label column costs more than it explains. */
+const NARROW_MAX = 40;
+/** Below this not even the wordmark fits. */
+const TINY_MIN = ART_WIDTH + 4;
 
 export interface BannerInfo {
 	engagement: string;
@@ -66,12 +84,11 @@ function pad(s: string, to: number, measure: (x: string) => number): string {
 	return gap > 0 ? s + " ".repeat(gap) : s;
 }
 
-/** `p i r e d`, split at the word so each half takes its own tone. */
-function wordmark(ink: BannerOptions["ink"]): string {
-	return `${ink("pi", "p i")} ${ink("red", "r e d")}`;
+function artLines(ink: BannerOptions["ink"]): string[] {
+	return ART.map(([pi, red]) => `${ink("pi", pi)}${ink("red", red)}`);
 }
 
-function facts(info: BannerInfo): Array<[string, string]> {
+function facts(info: BannerInfo, compact = false): Array<[string, string]> {
 	const rows: Array<[string, string]> = [
 		["engagement", info.engagement],
 		["profile", `${info.profile} · scope ${info.scope}`],
@@ -80,7 +97,10 @@ function facts(info: BannerInfo): Array<[string, string]> {
 	// Only when the engagement already holds work. A fresh one showing
 	// "0 surface · 0% coverage" reads as a failure rather than a starting point.
 	if (info.surface !== undefined && info.surface > 0) {
-		const cov = info.coveragePct !== undefined ? ` · ${info.coveragePct}% covered` : "";
+		// Coverage is dropped when narrow: the panel is rendering the same number
+		// three columns to the right, and repeating it is what pushes this line
+		// past the edge.
+		const cov = !compact && info.coveragePct !== undefined ? ` · ${info.coveragePct}% covered` : "";
 		const fnd = info.findings ? ` · ${info.findings} finding${info.findings === 1 ? "" : "s"}` : "";
 		rows.push(["recorded", `${info.surface} surface${cov}${fnd}`]);
 	}
@@ -95,24 +115,56 @@ function reserve(lines: string[], minLines: number | undefined): string[] {
 
 export function renderBanner(o: BannerOptions): string[] {
 	const { info, width, ink, measure, truncate } = o;
-	if (width < TINY_MIN) return [truncate(`${ink("accent", MARK)} ${wordmark(ink)}`, width)];
+	if (width < TINY_MIN) return [truncate(`${ink("accent", MARK)} ${ink("pi", "pi")}${ink("red", "red")}`, width)];
 
 	const inner = width - INDENT.length;
-	const head = `${ink("accent", MARK)}  ${wordmark(ink)}`;
-	// The tagline sits right-aligned against the mark when there is room for it,
-	// and simply drops when there is not — one line either way.
-	const headLen = measure(head);
-	const tag = ink("muted", TAGLINE);
-	const line1 = inner - headLen - 2 >= TAGLINE.length
-		? pad(head, inner - TAGLINE.length, measure) + tag
-		: head;
+	// The tagline is set against the art's last row rather than its first: aligned
+	// to the baseline it reads as a lockup, aligned to the top it reads as two
+	// unrelated things that happen to share a line.
+	const art = artLines(ink);
+	const room = inner - ART_WIDTH - 2 >= TAGLINE.length;
+	const headLines = art.map((l, i) =>
+		i === art.length - 1 && room
+			? pad(INDENT + l, width - TAGLINE.length, measure) + ink("muted", TAGLINE)
+			: INDENT + l);
 
-	const rows = facts(info);
+	const rows = facts(info, width <= NARROW_MAX);
+
+	// Narrow: the banner is sharing the terminal with the panel, so it gets the
+	// columns to its left and nothing more. A label column is the first thing to
+	// go — "engagement" beside "pired" spends eleven of twenty-seven columns
+	// explaining what the value already says — and the commands wrap instead of
+	// running off the edge.
+	if (width <= NARROW_MAX) {
+		const cmds: string[] = [];
+		let line = "";
+		for (const c of COMMANDS) {
+			const next = line ? `${line}  ${c}` : c;
+			if (next.length > inner && line) {
+				cmds.push(line);
+				line = c;
+			} else line = next;
+		}
+		if (line) cmds.push(line);
+		return reserve([
+			"",
+			...artLines(ink).map((l) => truncate(INDENT + l, width)),
+			"",
+			truncate(INDENT + ink("rule", "─".repeat(Math.max(0, Math.min(inner, MAX_RULE)))), width),
+			"",
+			...rows.map(([, v]) => truncate(`${INDENT}${ink("label", v)}`, width)),
+			"",
+			...cmds.map((l) => truncate(INDENT + ink("accent", l), width)),
+			"",
+		], o.minLines);
+	}
+
 	const labelW = Math.max(...rows.map((r) => r[0].length)) + 3;
 
 	return reserve([
 		"",
-		truncate(INDENT + line1, width),
+		...headLines.map((l) => truncate(l, width)),
+		"",
 		truncate(INDENT + ink("rule", "─".repeat(Math.max(0, Math.min(inner, MAX_RULE)))), width),
 		"",
 		...rows.map(([k, v]) => truncate(`${INDENT}${ink("muted", pad(k, labelW, measure))}${ink("label", v)}`, width)),
