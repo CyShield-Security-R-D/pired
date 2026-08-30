@@ -130,10 +130,10 @@ export function renderCoveragePanel(opts: CoveragePanelOptions): string[] {
 		return done(lines);
 	}
 
-	// The legend, the summary and the blank above them are the floor; classes fill
-	// what is left. Dropping rows silently would misreport the work, so the ones
-	// that do not fit are counted on a line of their own.
-	const floor = lines.length + 3;
+	// The legend and the summary are the floor; classes fill what is left. Dropping
+	// rows silently would misreport the work, so the ones that do not fit are
+	// counted on a line of their own.
+	const floor = lines.length + 2;
 	const rowsFor = Math.max(1, budget - floor);
 	const shownClasses = classes.length > rowsFor ? classes.slice(0, rowsFor - 1) : classes;
 
@@ -160,7 +160,8 @@ export function renderCoveragePanel(opts: CoveragePanelOptions): string[] {
 		lines.push(ink("muted", `+${classes.length - shownClasses.length} more classes · /coverage`));
 	}
 
-	lines.push("");
+	// No blank above the legend: it is the key to the rows over it and belongs
+	// with them, and a spare row here is a class that could have been shown.
 	const present = matrix.counts["n/a"] > 0 ? [...LEGEND, "n/a" as CoverageStatus] : LEGEND;
 	const legend = present.map((st) => `${ink(st, CELL_GLYPH[st])} ${ink("muted", LEGEND_WORD[st])}`).join("  ");
 	lines.push(truncate(legend, width));

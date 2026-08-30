@@ -1307,10 +1307,15 @@ export default function piredExtension(pi: ExtensionAPI): void {
 				// whole thesis of the harness — checklist × surface — is a better
 				// answer to "what goes here" than nothing, and on a fresh engagement
 				// it says what to do instead of showing an empty grid.
-				const room = rows - banner.length;
+				// One row short of the reservation, because the panel is offset a row
+				// down from the top of the entry: fill everything and the box's bottom
+				// border lands one row below the panel's, which is the sort of
+				// near-alignment that reads worse than no alignment at all. The row
+				// given up is the gap between the two boxes and the editor.
+				const room = rows - banner.length - 1;
 				// Indented and narrowed to the banner's own measure, so the box's two
 				// edges are the wordmark's left margin and the rule's right end.
-				const box = coverageView && room >= 8
+				const box = coverageView && room >= 7
 					? renderCoveragePanel({
 						view: coverageView, engagement: scope.engagement, width: cols - 2,
 						frame: true, maxLines: room,

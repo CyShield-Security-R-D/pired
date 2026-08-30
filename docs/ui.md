@@ -325,7 +325,9 @@ The banner sits at the top of them, and the rows under it hold **the coverage ma
 
 Blank rows were the wrong answer to a question the layout was already asking. The reservation exists whatever we do, the matrix is the harness's whole thesis, and a welcome screen that shows where the work stands is worth more than one that shows a wordmark and a hole. On an engagement with no surface yet it says so in the same box — *no surface recorded yet — run recon, or record inventory* — which is the one thing a new engagement needs told.
 
-It fits itself to the rows it is given: classes fill what is left after the legend and the summary, and any that do not fit are counted on a line of their own rather than dropped, since silently showing three classes out of nine would misreport the work. Under eight rows there is no room for a box worth drawing, so the banner pads as it used to — which is what a narrow terminal gets, its banner being five rows taller.
+It fits itself to the rows it is given: classes fill what is left after the legend and the summary, and any that do not fit are counted on a line of their own rather than dropped, since silently showing three classes out of nine would misreport the work. Under seven rows there is no room for a box worth drawing, so the banner pads as it used to — which is what a narrow terminal gets, its banner being five rows taller.
+
+It stops one row short of the reservation, because the panel is offset a row down from the top of the entry. Filling every row put the box's bottom border one line below the panel's — the sort of near-alignment that reads worse than none at all. The row given up is the gap between the two boxes and the editor, so the pair now closes on the same line.
 
 On a conversation of any length the transcript fills that area anyway; this is only what the welcome screen looks like before it does.
 

@@ -157,8 +157,13 @@ describe("the welcome screen's copy", () => {
 		for (const budget of [8, 10, 12, 20]) {
 			expect(boxed(60, budget).length, `budget ${budget}`).toBeLessThanOrEqual(budget);
 		}
-		const tight = boxed(60, 9).map(strip).join("\n");
+		// Five classes into seven rows: two rows of frame, the legend, the summary,
+		// and what is left goes to classes with the remainder counted.
+		const tight = boxed(60, 7).map(strip).join("\n");
 		expect(tight).toMatch(/\+\d+ more classes/);
+		// One row more and they all fit, which is the row the blank above the
+		// legend used to take.
+		expect(boxed(60, 9).map(strip).join("\n")).not.toMatch(/more classes/);
 	});
 
 	it("keeps a row's counts next to its bar rather than at the far edge", () => {
