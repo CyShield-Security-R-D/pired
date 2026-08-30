@@ -285,3 +285,39 @@ describe("evidence must resolve before a claim citing it is accepted", () => {
 		).rejects.toThrow(/do not resolve/);
 	});
 });
+
+describe("tool schemas are renderable by a provider", () => {
+	/**
+	 * Every property must declare a shape.
+	 *
+	 * `target` and `class` once had a description and nothing else. A typeless
+	 * property cannot be rendered into a function signature, so the field was
+	 * dropped before the model saw it — and since both are required by
+	 * `kind=finding` and `kind=hypothesis`, every attempt to record either was
+	 * rejected for a field the model had no way to send. Findings went to notes,
+	 * coverage stayed at zero, and three benchmark passes measured a mechanism
+	 * that was unreachable rather than idle.
+	 */
+	const shaped = (schema: Record<string, unknown>): boolean =>
+		schema.type !== undefined || schema.enum !== undefined ||
+		schema.anyOf !== undefined || schema.oneOf !== undefined;
+
+	// Built directly rather than through a fixture: this asserts on the schema
+	// shape, which needs no workspace behind it.
+	const tools: ToolDefinition[] = [
+		createRecordTool({ workspace: {} as never }),
+		createRecallTool({ workspace: {} as never }),
+	];
+	for (const tool of tools) {
+		it(`${tool.name}: every property declares a type`, () => {
+			const props = (tool.parameters.properties ?? {}) as Record<string, Record<string, unknown>>;
+			const typeless = Object.entries(props).filter(([, v]) => !shaped(v)).map(([k]) => k);
+			expect(typeless).toEqual([]);
+		});
+
+		it(`${tool.name}: every required field exists in properties`, () => {
+			const props = Object.keys(tool.parameters.properties ?? {});
+			for (const r of tool.parameters.required ?? []) expect(props).toContain(r);
+		});
+	}
+});

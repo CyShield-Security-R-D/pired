@@ -202,8 +202,27 @@ const RECORD_PARAMETERS: JsonSchema = {
 		host: { type: "string" }, port: { type: "integer" }, proto: { type: "string" }, name: { type: "string", description: "Name for param/tech; for kind=evidence, the filename to save under (e.g. \"sqli-login.txt\")." }, version: { type: "string" },
 		endpoint: { type: "string" }, method: { type: "string" }, path: { type: "string" }, params: { type: "array", items: { type: "string" } }, auth: { type: "string" }, location: { type: "string" },
 		statement: { type: "string" },
-		target: { description: "Surface element id, or a list of ids to settle together." },
-		class: { description: "Checklist class id, or a list of class ids to settle together." }, approach: { type: "string" }, outcome: { enum: HYPOTHESIS_OUTCOMES },
+		// `anyOf`, not a bare description. These two were the only properties in the
+		// schema with no type at all, and a typeless property is not something a
+		// provider can render into a function signature — the field was dropped
+		// before the model ever saw it, every `target` the model sent arrived as
+		// undefined, and `record kind=finding` and `kind=hypothesis` (which require
+		// it) rejected every single call.
+		//
+		// The agent behaved correctly under that: it tried, was refused, and wrote
+		// its findings into notes.md instead, reporting "record kind=finding
+		// rejected every value for its required target field". That is the whole
+		// explanation for zero hypotheses and zero findings across the corpus — the
+		// coverage mechanism was never idle, it was unreachable.
+		target: {
+			anyOf: [{ type: "string" }, { type: "array", items: { type: "string" } }],
+			description: "Surface element id, or a list of ids to settle together.",
+		},
+		class: {
+			anyOf: [{ type: "string" }, { type: "array", items: { type: "string" } }],
+			description: "Checklist class id, or a list of class ids to settle together.",
+		},
+		approach: { type: "string" }, outcome: { enum: HYPOTHESIS_OUTCOMES },
 		content: { type: "string", description: "For kind=evidence: the raw output to save to the file." },
 		title: { type: "string" }, severity: { enum: SEVERITIES }, cwe: { type: "string" }, cvss: { type: "string" }, description: { type: "string" }, repro: { type: "string" }, status: { type: "string" }, evidence: { type: "array", items: { type: "string" }, description: "Workspace-relative paths to evidence files you wrote (e.g. [\"evidence/sqli-login.txt\"]). Not inline text." },
 		question: { type: "string" }, blockerType: { enum: BLOCKER_TYPES }, priority: { enum: PRIORITIES }, options: { type: "array", items: { type: "string" } }, blocks: { type: "array", items: { type: "string" } }, context: { type: "string" },
@@ -306,7 +325,16 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 			} else {
 				const merged = { ...(DEFAULTS[kind] ?? {}), ...patch };
 				for (const field of REQUIRED[kind]) {
-					if (merged[field] === undefined) throw new Error(`record ${kind}: '${field}' is required`);
+					if (merged[field] === undefined) {
+						// Name what did arrive. The old message said only that a field was
+						// required, which reads as the model's mistake even when the field
+						// was stripped from the schema before the model could send it.
+						const got = Object.keys(a).filter((k) => k !== "kind").join(", ") || "nothing";
+						throw new Error(
+							`record ${kind}: '${field}' is required, but was not received. Fields received: ${got}. ` +
+							`If you did send '${field}', the tool schema dropped it — report this rather than working around it.`,
+						);
+					}
 				}
 				const id = existingId ?? ctx.services.ids.newId();
 				record = defined({ v: RECORD_VERSION, id, kind, createdAt: now, ...merged }) as unknown as LedgerRecord;
