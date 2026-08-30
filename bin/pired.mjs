@@ -7,7 +7,7 @@
  * Usage:
  *   pired [--profile review|recon|pentest] [--provider NAME] [--model ID]
  *         [--target DIR] [--thinking off|low|medium|high|max] [--no-theme]
- *         [--no-panel] [--prompt "one-shot"] [-- <extra pi args>]
+ *         [--no-panel] [--fullscreen] [--prompt "one-shot"] [-- <extra pi args>]
  *
  * Models come from ~/.pired/models.json (pired registers them into pi):
  *   --provider lmstudio  --model qwen3.8-27b            (local)
@@ -53,6 +53,13 @@ if (provider) piArgs.push("--provider", provider);
 if (model) piArgs.push("--model", model);
 if (!has("no-theme") && existsSync(THEME)) piArgs.push("--theme", THEME, "--use-theme", "pired");
 if (has("no-panel")) piArgs.push("--pired-panel", "off");
+// pi renders inline in the scrollback by default, so the editor sits after the
+// last output rather than on the terminal's final row and the screen has blank
+// space beneath it. `fullscreen` takes the alternate screen and pins the layout
+// to the terminal — which is also what the top-right panel rail was drawn for.
+// Not the default: inline keeps the conversation in scrollback, which is the
+// behaviour pi ships and some people prefer.
+if (has("fullscreen")) piArgs.push("--tui-mode", "fullscreen");
 if (promptText) piArgs.push("-p", promptText);
 piArgs.push(...passthrough);
 

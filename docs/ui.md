@@ -246,3 +246,17 @@ A row never contradicts its glyph. Where a cell is settled but no hypothesis is 
 | `q` | close |
 
 Outside the TUI — `--print`, RPC, JSON — both commands report the tallies as a notification instead, so a headless run is told what it would have seen.
+
+## Filling the terminal
+
+pi renders **inline in the scrollback** by default, so the editor sits after the last output rather than on the terminal's final row, and there is blank space beneath the whole UI. That is pi's `regular` TUI mode, and it keeps the conversation in scrollback where a normal shell leaves it.
+
+To pin the layout to the terminal instead:
+
+```bash
+pired --fullscreen
+```
+
+which passes `--tui-mode fullscreen` to pi and takes the alternate screen. The editor then sits on the last row, the status line under it, and the panel rail runs the full height on the right — which is the layout the rail was drawn for.
+
+The trade is scrollback: the alternate screen is discarded on exit, so the conversation does not stay in the terminal's history.
