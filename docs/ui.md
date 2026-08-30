@@ -282,3 +282,26 @@ A session opens with the mark, the engagement it is about to work on, and the fo
 It is a **transcript entry**, not a widget: written once, scrolled away like any other, and — being a custom entry — never part of the model's context, so the greeting costs no tokens. There was a banner widget once and removing it was right; it held layout forever to repeat a brand the status line already carries.
 
 Turn it off with `--pired-banner off`.
+
+### A clean start
+
+pi prints a startup header listing every skill, prompt, extension and theme it loaded. pired ships 39 skills, so that header is a wall of text — and because the panel is a floating overlay anchored top-right, the wall ends up **behind** it, leaving both unreadable:
+
+```
+[Skills]                     │  0 of 76 cells · 76 gaps             │
+  api-graphql, api-recon, api├─ scope ──────────────────────────────┤
+network-post-exploit-notes, n│  ● authorized off                    │
+```
+
+pi already has the fix, as a setting rather than a flag:
+
+```json
+// ~/.pi/agent/settings.json
+{ "quietStartup": true }
+```
+
+Default is `false`. `pi --verbose` shows the header again for a single run without changing the setting.
+
+pired does **not** set this for you. It is a global pi setting that affects every session, pired or not, and a launcher that quietly rewrites your editor's configuration is the kind of thing that earns a tool a bad reputation. The banner covers the orientation the header was providing — engagement, profile, model, and the commands worth knowing — so turning it on is a preference, not a repair.
+
+Worth knowing before you do: pi ships no `/skills` command, so the startup header is the only place that listing appears. Turning it off means checking `~/.pi/agent/settings.json` when you want to confirm what loaded.
