@@ -1310,14 +1310,14 @@ export default function piredExtension(pi: ExtensionAPI): void {
 				// whole thesis of the harness — checklist × surface — is a better
 				// answer to "what goes here" than nothing, and on a fresh engagement
 				// it says what to do instead of showing an empty grid.
-				// Three rows short of the reservation, and each one is accounted for.
-				// The rail is pinned a row from the top of the screen and the welcome
-				// entry starts a row below that, so rail line n lands beside entry line
-				// n-1: to close on the same row the entry must stop one line earlier
-				// than the rail does. The other is the reservation's own margin before
-				// the editor. Near-alignment reads worse than none at all, which is why
-				// this is arithmetic rather than a guess.
-				const room = rows - banner.length - 2;
+				// One row short of the reservation, which is the reservation's own
+				// margin before the editor. Entry line n lands beside rail line n — the
+				// rail's offset from the top of the screen is the same offset the
+				// transcript starts at, so it cancels — and the two boxes therefore
+				// close on the same row when the entry fills everything but that
+				// margin. Twice I reasoned my way to an off-by-one here and twice a
+				// screenshot settled it; near-alignment reads worse than none at all.
+				const room = rows - banner.length - 1;
 				// Indented and narrowed to the banner's own measure, so the box's two
 				// edges are the wordmark's left margin and the rule's right end.
 				const box = coverageView && room >= 7

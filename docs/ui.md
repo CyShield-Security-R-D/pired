@@ -327,7 +327,7 @@ Blank rows were the wrong answer to a question the layout was already asking. Th
 
 It fits itself to the rows it is given: classes fill what is left after the legend and the summary, and any that do not fit are counted on a line of their own rather than dropped, since silently showing three classes out of nine would misreport the work. Under seven rows there is no room for a box worth drawing, so the banner pads as it used to — which is what a narrow terminal gets, its banner being five rows taller.
 
-It stops two rows short of the reservation, and both are accounted for. The rail is pinned a row from the top of the screen and the welcome entry starts a row below that, so rail line *n* lands beside entry line *n-1* — to close on the same row, the entry has to stop one line earlier than the rail does. The other row is the reservation's own margin before the editor. Near-alignment reads worse than none at all, which is why this is arithmetic and not a guess; alignment costs the box two rows of matrix, and that is the price of the two boxes closing on one line.
+It stops one row short of the reservation, which is the reservation's own margin before the editor. Entry line *n* lands beside rail line *n* — the rail's offset from the top of the screen is the same offset the transcript starts at, so it cancels — and the two boxes therefore close on the same row when the entry fills everything but that margin. Near-alignment reads worse than none at all, so this is arithmetic rather than a guess; it took two screenshots to settle, because reasoning about it from the code got the offset backwards twice.
 
 On a conversation of any length the transcript fills that area anyway; this is only what the welcome screen looks like before it does.
 
