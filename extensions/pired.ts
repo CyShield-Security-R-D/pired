@@ -365,8 +365,11 @@ export default function piredExtension(pi: ExtensionAPI): void {
 			}).length
 			: cap;
 		const RAIL_OFFSET_Y = 1;
-		// Leave room for the editor box and the status line beneath it.
-		return Math.max(0, Math.min(drawn + RAIL_OFFSET_Y + 1, rows - 8));
+		// The rail's own offset, and one row of margin. The editor lands two rows
+		// clear of the rail's bottom border, which is margin enough for a layout
+		// whose exact spacing belongs to pi: too small here covers the editor with
+		// the panel, too large is a blank row nobody minds.
+		return Math.max(0, Math.min(drawn + RAIL_OFFSET_Y, rows - 8));
 	};
 
 	/**
@@ -1307,12 +1310,14 @@ export default function piredExtension(pi: ExtensionAPI): void {
 				// whole thesis of the harness — checklist × surface — is a better
 				// answer to "what goes here" than nothing, and on a fresh engagement
 				// it says what to do instead of showing an empty grid.
-				// One row short of the reservation, because the panel is offset a row
-				// down from the top of the entry: fill everything and the box's bottom
-				// border lands one row below the panel's, which is the sort of
-				// near-alignment that reads worse than no alignment at all. The row
-				// given up is the gap between the two boxes and the editor.
-				const room = rows - banner.length - 1;
+				// Three rows short of the reservation, and each one is accounted for.
+				// The rail is pinned a row from the top of the screen and the welcome
+				// entry starts a row below that, so rail line n lands beside entry line
+				// n-1: to close on the same row the entry must stop one line earlier
+				// than the rail does. The other is the reservation's own margin before
+				// the editor. Near-alignment reads worse than none at all, which is why
+				// this is arithmetic rather than a guess.
+				const room = rows - banner.length - 2;
 				// Indented and narrowed to the banner's own measure, so the box's two
 				// edges are the wordmark's left margin and the rule's right end.
 				const box = coverageView && room >= 7
