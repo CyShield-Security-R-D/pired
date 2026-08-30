@@ -144,3 +144,27 @@ pired is tuned for ~30B open-weight models so client code never has to leave the
 - [The interface](ui.md) — everything on screen.
 - [Coverage](coverage.md) — what the percentage actually measures.
 - [Commands and keys](commands.md) — the full command, flag, and environment reference.
+
+## Resuming
+
+Two things persist, and only one of them needs a flag.
+
+**The engagement resumes on its own.** pired names it after the target directory's basename, so pointing at the same directory reopens the same workspace — every hypothesis, finding and coverage cell intact:
+
+```bash
+pired --target ~/work/acme-app
+```
+
+Nothing to remember, no id to pass. `ls ~/.pired/engagements/` lists what exists, and `pired-state --engagement <name>` prints its state without launching anything.
+
+**The conversation is pi's**, and pired forwards any flag it does not own:
+
+```bash
+pired -r                    # pick a session to resume
+pired -c                    # continue the last one here
+pired --session <id>        # a specific one
+```
+
+A bare `pi -r` starts **without pired** — the extension is injected by pired's launcher with `-e`, so pi on its own knows nothing about it. Resume through `pired` and the extension comes with it.
+
+The engagement is the durable half. A transcript records how you got there; `findings.jsonl` and `hypotheses.jsonl` are the work product, and a cold start with no transcript loses nothing that matters — the assay tests exactly that as `continuity.resumption_fidelity`.
