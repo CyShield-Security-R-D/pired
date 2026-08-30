@@ -98,6 +98,34 @@ async function restorePristine(target: string): Promise<void> {
 	await cp(snap, target, { recursive: true });
 }
 
+/**
+ * The seal must exempt the model endpoint and nothing else — and the model
+ * endpoint is wherever the chosen provider actually lives.
+ *
+ * A hardcoded "openrouter.ai" blackholes LM Studio on the LAN, and a model that
+ * cannot be reached looks precisely like a model that has wedged: the agent
+ * produces nothing, the run times out, and the target gets written down as a
+ * zero. Derive the exemption from the provider's own baseUrl so the seal follows
+ * the provider instead of assuming one.
+ */
+const PROVIDER = arg("provider", "openrouter");
+const MODEL_HOST = await (async (): Promise<string> => {
+	try {
+		const cfg = JSON.parse(await readFile(join(process.env.HOME ?? "", ".pi", "agent", "models.json"), "utf8")) as {
+			providers?: Record<string, { baseUrl?: string }>;
+		};
+		const url = cfg.providers?.[PROVIDER]?.baseUrl;
+		return url ? new URL(url).hostname : "";
+	} catch {
+		return "";
+	}
+})();
+const NO_PROXY_HOSTS = ["localhost", "127.0.0.1", MODEL_HOST].filter(Boolean).join(",");
+if (arg("sealed") !== "no") {
+	process.stderr.write(`⦿ sealed · outbound HTTP blackholed except: ${NO_PROXY_HOSTS}\n`);
+	if (!MODEL_HOST) process.stderr.write(`⚠ no baseUrl found for provider "${PROVIDER}" — the model may be unreachable under the seal\n`);
+}
+
 const rows: Row[] = [];
 process.stderr.write(`⦿ corpus scan · ${targets.length} target(s) · ${RUN_ID}\n\n`);
 
@@ -125,7 +153,7 @@ const jobs = targets.map((m) => async (): Promise<void> => {
 	let error: string | undefined;
 	try {
 		const pending = run(process.execPath, [
-			PIRED, "--profile", "review", "--provider", arg("provider", "openrouter"),
+			PIRED, "--profile", "review", "--provider", PROVIDER,
 			"--model", arg("model", "qwen/qwen3.8-27b"),
 			"--no-theme", "--target", m.target, "--prompt", PROMPT + scopeClause(m.scope),
 		], {
@@ -150,8 +178,8 @@ const jobs = targets.map((m) => async (): Promise<void> => {
 					...process.env,
 					HTTPS_PROXY: "http://127.0.0.1:1", HTTP_PROXY: "http://127.0.0.1:1",
 					https_proxy: "http://127.0.0.1:1", http_proxy: "http://127.0.0.1:1",
-					NO_PROXY: "localhost,127.0.0.1,openrouter.ai",
-					no_proxy: "localhost,127.0.0.1,openrouter.ai",
+					NO_PROXY: NO_PROXY_HOSTS,
+					no_proxy: NO_PROXY_HOSTS,
 				},
 			}),
 		});
