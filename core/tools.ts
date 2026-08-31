@@ -262,6 +262,53 @@ const RECORD_PARAMETERS: JsonSchema = {
 	},
 };
 
+/**
+ * Every way a recorded element might be named, mapped to its id.
+ *
+ * A hypothesis settles a coverage cell only when its target IS an element id.
+ * The model does not write ids — it writes what it is looking at: "/api/register",
+ * "POST /api/login", "backend/auth.py". Measured on a live run: 0 of 107
+ * hypotheses resolved, so a ledger with 107 rows reported 0% coverage and gave no
+ * hint why. Ids are an implementation detail of the ledger; making the operator's
+ * agent memorise them is the tool's problem to solve, not the model's.
+ */
+function targetIndex(inventory: Awaited<ReturnType<Workspace["read"]>>): Map<string, string> {
+	const index = new Map<string, string>();
+	const add = (key: string | undefined, id: string): void => {
+		if (!key) return;
+		const k = key.trim().toLowerCase().replace(/\/+$/, "");
+		if (k.length > 0 && !index.has(k)) index.set(k, id);
+	};
+	for (const r of inventory) {
+		const rec = r as unknown as Record<string, unknown>;
+		const id = r.id;
+		add(id, id);
+		const path = typeof rec.path === "string" ? rec.path : undefined;
+		const method = typeof rec.method === "string" ? rec.method : undefined;
+		add(path, id);
+		if (method && path) add(`${method} ${path}`, id);
+		add(typeof rec.value === "string" ? rec.value : undefined, id);
+		add(typeof rec.name === "string" ? rec.name : undefined, id);
+	}
+	return index;
+}
+
+/** Resolve one target to an element id, or leave it as written. */
+function resolveTarget(raw: string, index: Map<string, string>): string {
+	const k = raw.trim().toLowerCase().replace(/\/+$/, "");
+	const hit = index.get(k);
+	if (hit) return hit;
+	// "POST /api/login (line 30)" and "/api/login?id=" both name /api/login.
+	const path = /(\/[^\s?#)]*)/.exec(k)?.[1];
+	if (path && index.get(path)) return index.get(path) as string;
+	// "backend/auth_routes.py:36" names a file. It settles a cell only if that
+	// file was recorded as surface — which is right: a target naming something
+	// nobody mapped cannot be a cell, and silently attaching it to an unrelated
+	// element would be worse than leaving it as written.
+	const noLine = k.replace(/:\d+(?:-\d+)?$/, "");
+	return index.get(noLine) ?? index.get(noLine.split("/").pop() ?? "") ?? raw;
+}
+
 export function createRecordTool(deps: ToolDeps): ToolDefinition {
 	return {
 		name: "record",
@@ -317,6 +364,19 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 					}
 				}
 				return text(`Recorded ${ids.length} hypotheses (${targets.length} target(s) x ${classes.length} class(es)), outcome=${outcome}.`, { kind, ids });
+			}
+
+			// Targets are resolved before anything is written: the model names what it
+			// is looking at, and the ledger keys on ids.
+			if (kind === "hypothesis" || kind === "finding") {
+				const index = targetIndex(await deps.workspace.read("inventory"));
+				if (index.size > 0) {
+					const wanted = asList(a.target).filter((t): t is string => typeof t === "string");
+					if (wanted.length > 0) {
+						const resolved = wanted.map((t) => resolveTarget(t, index));
+						a.target = Array.isArray(a.target) ? resolved : resolved[0];
+					}
+				}
 			}
 
 			// A class the checklist does not know is silent data loss.
