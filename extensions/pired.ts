@@ -29,10 +29,12 @@ import { type BannerTone, renderBanner } from "../core/banner.ts";
 import { exportFindingsMarkdown } from "../core/export.ts";
 import { bannerColumns, BROWSER_CHROME, OVERLAY, OVERLAY_HEIGHT_SHARE, railColumns } from "../core/layout.ts";
 import type { BlockerRecord, Checklist, EngagementScope, Severity, TargetType } from "../core/ontology.ts";
-import type { Gate } from "../core/ports.ts";
+import type { Gate, ToolContext, ToolDefinition } from "../core/ports.ts";
 import { buildSystemPrompt, PIRED_PROFILES, type PiredProfile } from "../core/prompts.ts";
 import { createScopeGate } from "../core/scope.ts";
 import { renderCoveragePanel, type Tone } from "../core/coverage-panel.ts";
+import { complete } from "@earendil-works/pi-ai/compat";
+import { classFromCwe, extractionSystemPrompt, extractionUserMessage, hypothesisForFinding, parseExtraction } from "../core/extract.ts";
 import { dismissHint, PANEL_MODES, renderFindingDetail, renderPanel, scrollFramed, type PanelData, type PanelMode, type PanelTone } from "../core/panel.ts";
 import { computeCoverageView, computeEngagementStats, coveragePercent, type CoverageView, type EngagementStats } from "../core/stats.ts";
 import { layoutStatusLine, type Segment } from "../core/statusline.ts";
@@ -234,6 +236,20 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	// Live engagement stats, refreshed each turn. Kept structured rather than
 	// parsed back out of the status string, so the footer can color each part.
 	let stats: EngagementStats | undefined;
+
+	/**
+	 * Records the current turn wrote, so phase two runs only when phase one
+	 * skipped the ledger. A turn that recorded as it went needs nothing.
+	 */
+	let recordsThisTurn = 0;
+	/**
+	 * Below this many characters a turn is an exchange, not a review, and running
+	 * a second model call over "ok, done" wastes a minute of a consultant's time.
+	 */
+	const EXTRACT_MIN_REVIEW = 1200;
+	let recordTool: ToolDefinition | undefined;
+	/** The last turn's prose, so `/extract` can be run again by hand. */
+	let lastReview = "";
 
 	// The panel rides in the footer, so showing and hiding it is a boolean and a
 	// re-render — no window management, no modal to dismiss. Off by default: the
@@ -949,6 +965,10 @@ export default function piredExtension(pi: ExtensionAPI): void {
 
 		for (const tool of createCoreTools({ workspace })) {
 			const presentation = tool.name === "record" ? { renderResult: renderRecordResult } : undefined;
+			// Held so phase two can write through the same tool the model would have
+			// called: same validation, same ids, same coverage effect. A second write
+			// path is a second set of rules to keep in step.
+			if (tool.name === "record") recordTool = tool;
 			pi.registerTool(toPiTool(tool, () => services, presentation));
 		}
 		pi.setActiveTools([...new Set([...pi.getActiveTools(), "record", "recall"])]);
@@ -1016,14 +1036,153 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	// Reflect a finding the moment it is recorded rather than at the end of the
 	// turn: `record` is the only tool that moves these numbers, so this stays
 	// cheap while making a long engagement's status line feel live.
+	/**
+	 * The turn's prose, thinking included.
+	 *
+	 * pired runs with visible thinking at "high", and on a review most of the
+	 * analysis lands in thinking rather than in the final text — the findings list
+	 * take four produced, CWEs and CVSS vectors and all, was reasoning. Extracting
+	 * only the final message would hand phase two a summary of the work instead of
+	 * the work.
+	 */
+	const assistantText = (message: unknown): string => {
+		const content = (message as { content?: unknown } | undefined)?.content;
+		if (!Array.isArray(content)) return "";
+		const parts: string[] = [];
+		for (const item of content) {
+			const c = item as { type?: string; text?: string; thinking?: string };
+			if (c.type === "text" && typeof c.text === "string") parts.push(c.text);
+			else if (c.type === "thinking" && typeof c.thinking === "string") parts.push(c.thinking);
+		}
+		return parts.join("\n\n").trim();
+	};
+
+	/**
+	 * Phase two: a fresh single-turn call that converts the review into records.
+	 *
+	 * Deliberately NOT a tool call. The failure being worked around is that the
+	 * model does not emit tool calls late in a long conversation, so asking it to
+	 * emit one here would reproduce the bug. It returns JSON; the harness writes.
+	 */
+	const runExtraction = async (ctx: ExtensionContext, review: string, trigger: "auto" | "manual"): Promise<void> => {
+		if (!workspace || !recordTool) return;
+		const model = ctx.model;
+		if (!model) {
+			if (trigger === "manual") ctx.ui.notify("pired: no model available to extract with", "warning");
+			return;
+		}
+
+		const checklist = await workspace.readChecklist();
+		const classList = checklist?.classes ?? [];
+		const classes = classList.map((c) => c.id);
+		ctx.ui.notify(`pired: review recorded nothing — extracting${trigger === "manual" ? "" : " automatically"}…`, "info");
+
+		let reply: string;
+		try {
+			const answer = await complete(model, {
+				systemPrompt: extractionSystemPrompt(classes),
+				messages: [{ role: "user", content: extractionUserMessage(review), timestamp: Date.now() }],
+			});
+			reply = assistantText(answer);
+		} catch (err) {
+			ctx.ui.notify(`pired: extraction call failed — ${err instanceof Error ? err.message : String(err)}`, "warning");
+			return;
+		}
+
+		const { extraction, errors } = parseExtraction(reply);
+		const toolCtx: ToolContext = { services, mode: ctx.mode } as unknown as ToolContext;
+
+		// Surface first: hypotheses and findings target elements by label, so the
+		// elements have to exist before anything can point at them.
+		const idFor = new Map<string, string>();
+		for (const el of extraction.surface) {
+			try {
+				const out = await recordTool.execute(elementArgs(el), toolCtx);
+				const id = (out as { details?: { ids?: string[] } }).details?.ids?.[0];
+				if (id) idFor.set(el.label, id);
+			} catch { /* one bad row must not stop the rest */ }
+		}
+
+		let wrote = 0;
+		for (const h of extraction.hypotheses) {
+			try {
+				await recordTool.execute({
+					kind: "hypothesis", statement: h.statement, class: h.class,
+					target: idFor.get(h.target) ?? h.target, outcome: h.outcome,
+				}, toolCtx);
+				wrote += 1;
+			} catch (err) { errors.push(`hypothesis "${h.statement.slice(0, 40)}…": ${err instanceof Error ? err.message : String(err)}`); }
+		}
+		let derived = 0;
+		for (const f of extraction.findings) {
+			// The extractor is given the vocabulary and still omits `class`; the
+			// checklist maps classes to CWEs, so recover it rather than lose the cell.
+			const cls = (f.class && classes.includes(f.class) ? f.class : undefined)
+				?? classFromCwe(f.cwe, classList);
+			const target = f.file ? `${f.file}${f.line ? `:${f.line}` : ""}` : undefined;
+			try {
+				await recordTool.execute({
+					kind: "finding", title: f.title, severity: f.severity,
+					class: cls, cwe: f.cwe, target, description: f.description,
+				}, toolCtx);
+				wrote += 1;
+			} catch (err) { errors.push(`finding "${f.title.slice(0, 40)}…": ${err instanceof Error ? err.message : String(err)}`); continue; }
+
+			// Coverage is settled by a hypothesis outcome, never by a finding. A run
+			// that produces only findings leaves every cell untested and the matrix at
+			// zero while the report fills up — so the confirmation the finding already
+			// represents is written as one. Bookkeeping, not inference.
+			if (cls && target && !extraction.hypotheses.some((h) => h.class === cls && h.target === target)) {
+				try {
+					const h = hypothesisForFinding(f, cls, target);
+					await recordTool.execute({
+						kind: "hypothesis", statement: h.statement, class: h.class,
+						target: h.target, outcome: h.outcome,
+					}, toolCtx);
+					derived += 1;
+				} catch { /* the finding is already written; the cell is the bonus */ }
+			}
+		}
+
+		await refreshStatus(ctx);
+		const dropped = errors.length > 0 ? ` · ${errors.length} row(s) dropped` : "";
+		ctx.ui.notify(
+			wrote > 0
+				? `pired: extracted ${extraction.surface.length} surface, ${extraction.hypotheses.length + derived} hypotheses, ${extraction.findings.length} findings${dropped}`
+				: `pired: extraction produced nothing${dropped ? ` (${errors[0]})` : ""}`,
+			wrote > 0 ? "info" : "warning",
+		);
+	};
+
+	/** One extracted element as `record` arguments. */
+	const elementArgs = (el: { kind: string; label: string }): Record<string, unknown> => {
+		if (el.kind === "endpoint") {
+			const m = /^([A-Z]+)\s+(.+)$/.exec(el.label);
+			return m ? { kind: "endpoint", method: m[1], path: m[2] } : { kind: "endpoint", path: el.label };
+		}
+		if (el.kind === "host") return { kind: "host", value: el.label };
+		return { kind: el.kind, name: el.label };
+	};
+
 	pi.on("tool_execution_end", async (event, ctx) => {
 		if (event.toolName === "record" && !event.isError) {
+			recordsThisTurn += 1;
 			await refreshStatus(ctx);
 			await promptForNewBlockers(ctx);
 		}
 	});
 
-	pi.on("turn_end", async (_event, ctx) => {
+	pi.on("turn_end", async (event, ctx) => {
+		const wrote = recordsThisTurn;
+		recordsThisTurn = 0;
+		// Phase two, and only when phase one skipped the ledger. A turn that
+		// recorded as it went needs nothing; a turn that reviewed at length and
+		// wrote nothing is the failure this exists for.
+		const review = assistantText(event.message);
+		if (review.length > 0) lastReview = review;
+		if (wrote === 0 && review.length >= EXTRACT_MIN_REVIEW) {
+			await runExtraction(ctx, review, "auto");
+		}
 		await refreshStatus(ctx);
 	});
 
@@ -1428,6 +1587,17 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	pi.registerCommand("findings", {
 		description: "Browse findings — select one to read its detail",
 		handler: async (_args, ctx) => { await openBrowser(ctx, "findings"); },
+	});
+
+	pi.registerCommand("extract", {
+		description: "Convert the last review into ledger records (runs automatically when a turn records nothing)",
+		handler: async (_args, ctx) => {
+			if (!lastReview) {
+				ctx.ui.notify("pired: nothing to extract — no review in this session yet", "warning");
+				return;
+			}
+			await runExtraction(ctx, lastReview, "manual");
+		},
 	});
 
 	pi.registerCommand("report", {

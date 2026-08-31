@@ -17,6 +17,34 @@ Everything pired adds to pi. pi's own commands (`/model`, `/login`, `/reload`, s
 | `/hypotheses` | Browse every hypothesis — confirmed, refuted and open — with outcome filters and full detail. |
 | `/findings` | Browse findings, worst first; select one to read its description, repro and evidence. |
 | `/report` | Write findings to Markdown in the engagement workspace. |
+| `/extract` | Convert the last review into ledger records. Runs automatically when a turn reviews at length and records nothing. |
+
+### Extraction, and why it exists
+
+A review turn is asked to do two jobs at once: reason about the code, and call
+`record` as it goes. Models do the first well and skip the second. Measured over
+five live runs on one prompt and one model: **868 records, 0, 0, 868, 0.** Told
+directly to *"record kind=finding with its cwe, severity and file:line"*, the
+model replied with a well-formed findings list in prose — CWEs, severities,
+CVSS vectors — and no tool call. The break is not in deciding what to record; it
+is in emitting the call at all, late in a long conversation.
+
+So the jobs are separated. Phase one reviews, uninterrupted, in prose. When a
+turn ends having recorded nothing, phase two makes a **fresh single-turn call**
+whose only job is to convert that review into rows — the regime where a small
+model is reliable — and it returns **JSON, not a tool call**, because a tool call
+is the thing that does not get emitted. The harness writes the rows through the
+same `record` tool the model would have used, so validation, ids and coverage
+behave identically.
+
+Two things the harness finishes on its own, because the extractor reliably omits
+them: a finding's checklist `class` is recovered from its CWE (the checklist
+already maps the two), and the **confirmed hypothesis a finding already
+represents** is written alongside it — coverage is settled by hypothesis
+outcomes, never by findings, so without it the matrix reads zero while the report
+fills up.
+
+`/extract` runs the same pass by hand.
 
 `/findings` reads, `/report` writes. It used to be the other way about — `/report`
 browsed while `/findings` exported — so the noun did the verb's job. `/export` is
