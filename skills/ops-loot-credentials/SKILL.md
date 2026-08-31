@@ -28,7 +28,7 @@ Record it once. If you later crack a hash or rotate to a new value, record the r
 
 ## 3. Redaction guarantee (why the handle discipline is enough)
 Redaction is registry-based and applied at export/share (PLAN.md §9, `core/redaction.ts`):
-- Every secret in `loot.jsonl` is masked to `[REDACTED <handle>]` in **findings export** (`/findings`, Markdown/JSON) and any share/publish path — traceable, not just blanked.
+- Every secret in `loot.jsonl` is masked to `[REDACTED <handle>]` in **findings export** (`/report`, Markdown/JSON) and any share/publish path — traceable, not just blanked.
 - It masks **only values the operator actually captured** (registry-based), so false positives are ~zero and real secrets don't slip through.
 - Longest-secret-first matching means a secret that's a prefix of another can't leave a tail behind.
 - **Caveat:** redaction protects the *export/share* boundary, not the live session JSONL (which may contain what the model saw — fine, it's local). So the plaintext still shouldn't be sprayed through context: record it as loot promptly so it's in the registry and masked on the way out.

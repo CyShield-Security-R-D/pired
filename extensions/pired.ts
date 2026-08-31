@@ -22,12 +22,12 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { type Component, Key, matchesKey, truncateToWidth, type TUI, visibleWidth } from "@earendil-works/pi-tui";
 import {
-	type BrowserKey, type BrowserState, type BrowserTone, buildBrowserModel,
-	initialState, reduceBrowser, renderBrowser,
+	type BrowserKey, type BrowserModel, type BrowserState, type BrowserTone, type BrowserView, buildBrowserModel,
+	detailRowCount, initialState, reduceBrowser, renderBrowser,
 } from "../core/browser.ts";
 import { type BannerTone, renderBanner } from "../core/banner.ts";
 import { exportFindingsMarkdown } from "../core/export.ts";
-import { bannerColumns, railColumns } from "../core/layout.ts";
+import { bannerColumns, BROWSER_CHROME, OVERLAY, OVERLAY_HEIGHT_SHARE, railColumns } from "../core/layout.ts";
 import type { BlockerRecord, Checklist, EngagementScope, Severity, TargetType } from "../core/ontology.ts";
 import type { Gate } from "../core/ports.ts";
 import { buildSystemPrompt, PIRED_PROFILES, type PiredProfile } from "../core/prompts.ts";
@@ -91,9 +91,10 @@ const BANNER_TONE_COLOR: Record<BannerTone, ThemeColor> = {
 const BROWSER_TONE_COLOR: Record<BrowserTone, ThemeColor> = {
 	clear: "success", vulnerable: "error", testing: "warning", blocked: "muted",
 	"not-tested": "dim", "n/a": "dim", title: "accent", label: "text", muted: "dim", body: "text",
-	// The cursor row. `accent` reads as selection against every shipped theme,
-	// and the leading marker stays as a redundant cue where it does not.
+	// The cursor row's FOREGROUND fallback, used only when no highlight painter is
+	// supplied; the real cursor is a background (see RenderOptions.highlight).
 	selected: "accent",
+	accent: "accent",
 };
 
 const TONE_COLOR: Record<Tone, ThemeColor> = {
@@ -1148,46 +1149,53 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		}
 	};
 
+	/**
+	 * Rows an 80%-height overlay actually gets.
+	 *
+	 * tui.terminal.rows over process.stdout.rows for the reason railRows gives:
+	 * under tmux or a pipe the TUI knows the size it is laying out for and the
+	 * process's stdout does not. One expression, because the browser had two that
+	 * disagreed — it clamped rows to 46 when rendering but not when paging, so on
+	 * a taller terminal the cursor walked off the bottom of the drawn window.
+	 */
+	const overlayRows = (tui?: { terminal?: { rows: number } }): number => {
+		const rows = tui?.terminal?.rows ?? railTui?.terminal?.rows ?? process.stdout.rows ?? 30;
+		// No floor: pi slices at exactly this number, so claiming more than it will
+		// show is how the closing border and the legend get cut on a short terminal.
+		return Math.max(1, Math.floor(rows * OVERLAY_HEIGHT_SHARE));
+	};
+
 	pi.registerCommand("coverage", {
-		description: "Show the coverage matrix (checklist × surface) for this engagement",
+		description: "Browse the coverage matrix — checklist × surface, with drill-down",
 		handler: async (_args, ctx) => {
 			if (!workspace) {
 				ctx.ui.notify("pired: no engagement workspace yet", "warning");
 				return;
 			}
-			const view = await computeCoverageView(workspace);
-			if (!view) {
-				ctx.ui.notify("pired: no checklist seeded for this engagement", "warning");
-				return;
-			}
-			// ui.custom renders a terminal component; headless modes get the summary.
+			// Headless modes get the summary; only a TUI can browse. The matrix is read
+			// here ONLY for that summary — openBrowser builds its own model, so doing
+			// this unconditionally read every ledger twice per /coverage.
 			if (ctx.mode !== "tui") {
+				const view = await computeCoverageView(workspace);
+				if (!view) {
+					ctx.ui.notify("pired: no checklist seeded for this engagement", "warning");
+					return;
+				}
 				const gaps = view.matrix.counts["not-tested"] + view.matrix.counts.blocked;
 				const pct = coveragePercent(view.matrix);
 				ctx.ui.notify(`pired: coverage ${pct}% · ${view.matrix.applicable} cells · ${gaps} gaps`, "info");
 				return;
 			}
-			await ctx.ui.custom<void>(
-				(_tui, theme, _keybindings, done) => ({
-					render: (width: number): string[] =>
-						renderCoveragePanel({
-							view,
-							engagement: scope.engagement,
-							width,
-							// The overlay is dismissed with a key, so it says so; the welcome
-							// screen's copy is not dismissible and does not.
-							hint: "esc to close",
-							ink: (tone, text) => theme.fg(TONE_COLOR[tone], text),
-							measure: visibleWidth,
-							truncate: truncateToWidth,
-						}),
-					invalidate(): void {},
-					handleInput(data: string): void {
-						if (data === "\x1b" || data === "q" || data === "\r" || data === "\n") done();
-					},
-				}),
-				{ overlay: true, overlayOptions: { width: "80%", minWidth: 40, maxHeight: "80%", anchor: "center" } },
-			);
+			// The matrix used to be a static overlay whose entire input handler was
+			// "close" — the one view in the tool you could not scroll, filter or open
+			// anything from, while its siblings were full browsers. It is the
+			// transpose of the surface view over a model that already holds it, so it
+			// is a view of the browser rather than a screen of its own; that also
+			// gives it the frame, the cursor and tab-cycling for free.
+			//
+			// renderCoveragePanel keeps its real job: the welcome box, where "fit into
+			// N rows and count the rest" is the point.
+			await openBrowser(ctx, "coverage");
 		},
 	});
 
@@ -1199,7 +1207,7 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	 * core/ carries no host imports. Vim keys sit alongside the arrows because a
 	 * list this dense is navigated by people who never take a hand off home row.
 	 */
-	const toBrowserKey = (data: string): BrowserKey | undefined => {
+	const toBrowserKey = (data: string, view?: BrowserView): BrowserKey | undefined => {
 		if (matchesKey(data, Key.up) || data === "k") return "up";
 		if (matchesKey(data, Key.down) || data === "j") return "down";
 		if (matchesKey(data, Key.pageUp)) return "pageUp";
@@ -1213,28 +1221,47 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		if (matchesKey(data, Key.escape) || matchesKey(data, Key.left) || data === "h") return "out";
 		if (matchesKey(data, Key.tab)) return "switch";
 		if (data === "q") return "close";
-		if (data === "a") return "filter:all";
-		if (data === "c") return "filter:confirmed";
-		if (data === "r") return "filter:refuted";
-		if (data === "o") return "filter:open";
+		if (data === "R") return "refresh";
+		// Only the hypotheses list has outcome filters. Firing them view-blind set a
+		// filter the current list never showed, which `switch` then carried into
+		// hypotheses — you tabbed over to a pre-filtered list you never filtered.
+		if (view === "hypotheses") {
+			if (data === "a") return "filter:all";
+			if (data === "c") return "filter:confirmed";
+			if (data === "r") return "filter:refuted";
+			if (data === "o") return "filter:open";
+		}
 		return undefined;
 	};
 
-	/** Open the browser at `view`; shared by /surface and /hypotheses. */
-	const openBrowser = async (ctx: ExtensionContext, view: "surface" | "hypotheses" | "findings"): Promise<void> => {
+	/** Body rows the browser gets: the overlay's height, less its chrome. */
+	const browserHeight = (tui?: { terminal?: { rows: number } }): number =>
+		Math.max(1, overlayRows(tui) - BROWSER_CHROME);
+
+	/** Open the browser at `view`; shared by /surface, /hypotheses and /findings. */
+	const openBrowser = async (ctx: ExtensionContext, view: "coverage" | "surface" | "hypotheses" | "findings"): Promise<void> => {
 		if (!workspace) {
 			ctx.ui.notify("pired: no engagement workspace yet", "warning");
 			return;
 		}
-		const cov = await computeCoverageView(workspace);
-		const model = buildBrowserModel({
-			engagement: scope.engagement,
-			classes: cov?.classes ?? [],
-			cells: cov?.matrix.cells ?? [],
-			inventory: await workspace.read("inventory"),
-			hypotheses: await workspace.read("hypotheses"),
-			findings: await workspace.read("findings"),
-		});
+		// Bound once: `workspace` is a mutable module-level binding, so the guard's
+		// narrowing does not survive into the closure that re-reads it.
+		const ws = workspace;
+		const build = async (): Promise<BrowserModel> => {
+			const cov = await computeCoverageView(ws);
+			return buildBrowserModel({
+				engagement: scope.engagement,
+				classes: cov?.classes ?? [],
+				cells: cov?.matrix.cells ?? [],
+				inventory: await ws.read("inventory"),
+				hypotheses: await ws.read("hypotheses"),
+				findings: await ws.read("findings"),
+			});
+		};
+		// Rebuildable: the browser is open while the agent is still recording, and a
+		// snapshot taken at open time quietly goes stale — a finding recorded a
+		// second later simply is not in the list. `R` re-reads the ledger.
+		let model = await build();
 
 		if (ctx.mode !== "tui") {
 			const c = model.counts;
@@ -1247,26 +1274,64 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		}
 
 		let state: BrowserState = initialState(view);
+		// The width the last frame was drawn at. A detail view wraps to it, so its
+		// scrollable length is only knowable here — handleInput is given no width.
+		let lastWidth = 72;
+		let reloadGen = 0;
 		await ctx.ui.custom<void>(
 			(tui, theme, _keybindings, done) => ({
 				render: (width: number): string[] => {
-					// Chrome is two header lines and two footer lines; the rest is body.
-					// stdout.rows is the only height signal a component gets — render()
-					// is handed a width and nothing else.
-					const rows = Math.max(12, Math.min(process.stdout.rows ?? 30, 46));
+					lastWidth = width;
 					return renderBrowser({
 						model, state, width,
-						height: Math.max(3, Math.floor(rows * 0.8) - 5),
+						// Chrome is the box edges, the tally, two rules and the legend.
+						height: browserHeight(tui),
+						maxLines: overlayRows(tui),
 						ink: (tone, text) => theme.fg(BROWSER_TONE_COLOR[tone], text),
+						// Background, not foreground: theme.fg resets with \x1b[39m, so an
+						// outer accent dies at the row's first inner colour and the cursor
+						// row renders less coloured than its neighbours. bg resets with
+						// \x1b[49m, which no foreground code emits. selectedBg was already
+						// in themes/pired.json and used by nothing.
+						highlight: (line) => theme.bg("selectedBg", line),
 						measure: visibleWidth,
 						truncate: (x, ww) => truncateToWidth(x, ww, theme.fg("dim", "…")),
 					});
 				},
 				invalidate(): void {},
 				handleInput(data: string): void {
-					const key = toBrowserKey(data);
+					const key = toBrowserKey(data, state.view);
 					if (!key) return;
-					const next = reduceBrowser(state, key, model, Math.max(3, Math.floor((process.stdout.rows ?? 30) * 0.8) - 5));
+					const height = browserHeight(tui);
+					const detailRows = detailRowCount({
+						model, state, width: lastWidth, height,
+						ink: (_t: BrowserTone, text: string) => text,
+						measure: visibleWidth,
+						truncate: (x: string, ww: number) => truncateToWidth(x, ww),
+					});
+					if (key === "refresh") {
+						// Generation guard: two fast presses otherwise resolve in arbitrary
+						// order and the older read can win.
+						const gen = ++reloadGen;
+						void build().then((fresh) => {
+							if (gen !== reloadGen) return;
+							model = fresh;
+							// The surface list re-sorts by progress on every build, so a kept
+							// cursor lands on a different row. Clamp it back into range.
+							const rows = detailRowCount({
+								model, state, width: lastWidth, height: browserHeight(tui),
+								ink: (_t: BrowserTone, x: string) => x, measure: visibleWidth,
+								truncate: (x: string, ww: number) => truncateToWidth(x, ww),
+							});
+							state = { ...state, cursor: 0, scroll: 0, ...(rows === 0 ? {} : {}) };
+							tui.requestRender();
+						}).catch((err) => {
+							// A failed reload must not look like a successful empty one.
+							ctx.ui.notify(`pired: reload failed — ${err instanceof Error ? err.message : String(err)}`, "warning");
+						});
+						return;
+					}
+					const next = reduceBrowser(state, key, model, height, detailRows);
 					if (next === "close") {
 						done();
 						return;
@@ -1277,7 +1342,7 @@ export default function piredExtension(pi: ExtensionAPI): void {
 					tui.requestRender();
 				},
 			}),
-			{ overlay: true, overlayOptions: { width: "90%", minWidth: 48, maxHeight: "80%", anchor: "center" } },
+			{ overlay: true, overlayOptions: { ...OVERLAY.browser } },
 		);
 	};
 
@@ -1324,6 +1389,9 @@ export default function piredExtension(pi: ExtensionAPI): void {
 					? renderCoveragePanel({
 						view: coverageView, engagement: scope.engagement, width: cols - 2,
 						frame: true, maxLines: room,
+						// Here the pointer is useful: this box is a summary and /coverage
+						// is where the rest of the classes are. The overlay omits it.
+						moreHint: "/coverage",
 						ink: (tone, text) => theme.fg(TONE_COLOR[tone], text),
 						measure: visibleWidth, truncate: truncateToWidth,
 					}).map((l) => `  ${l}`)
@@ -1349,13 +1417,21 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		handler: async (_args, ctx) => { await openBrowser(ctx, "hypotheses"); },
 	});
 
-	pi.registerCommand("report", {
+	/**
+	 * `/findings` reads them; `/report` writes the deliverable.
+	 *
+	 * It was the other way about: `/report` browsed while `/findings` exported, so
+	 * the noun did the verb's job. Naming the writer `/export` is not available —
+	 * pi already owns `/export`, `/copy` and `/share` — and `/report` is the better
+	 * word anyway: in an engagement the report *is* the written artifact.
+	 */
+	pi.registerCommand("findings", {
 		description: "Browse findings — select one to read its detail",
 		handler: async (_args, ctx) => { await openBrowser(ctx, "findings"); },
 	});
 
-	pi.registerCommand("findings", {
-		description: "Export findings to Markdown in the engagement workspace",
+	pi.registerCommand("report", {
+		description: "Write findings to Markdown in the engagement workspace",
 		handler: async (_args, ctx) => {
 			if (!workspace) {
 				ctx.ui.notify("pired: no engagement workspace yet", "warning");

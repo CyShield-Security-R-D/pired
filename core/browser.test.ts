@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-	buildBrowserModel, initialState, reduceBrowser, renderBrowser, visibleHypotheses,
+	buildBrowserModel, contentWidth, detailRowCount, initialState, reduceBrowser, renderBrowser, visibleHypotheses,
 } from "./browser.ts";
 import type { BrowserModel, BrowserState } from "./browser.ts";
 import type { CoverageCell, FindingRecord, HypothesisRecord, InventoryRecord } from "./ontology.ts";
@@ -146,10 +146,13 @@ describe("renderBrowser", () => {
 		}
 	});
 
-	it("shows the settled tally and element count in the surface header", () => {
-		const [head] = renderBrowser(opts(initialState()));
-		expect(head).toContain("surface · airflow");
-		expect(head).toContain("3 elements");
+	it("names the view in the frame's top edge and tallies underneath", () => {
+		const [edge, tally] = renderBrowser(opts(initialState()));
+		// The title sits in the box edge the way the rail sets its own; the count
+		// is its own row beneath, so a narrow frame truncates the title and not
+		// the number.
+		expect(edge).toContain("surface · airflow");
+		expect(tally).toContain("3 elements");
 	});
 
 	it("says plainly when nothing has been recorded", () => {
@@ -166,8 +169,8 @@ describe("renderBrowser", () => {
 
 	it("renders only the viewport slice", () => {
 		const body = renderBrowser(opts(initialState(), 80, 1));
-		// header(2) + 1 row + footer(2)
-		expect(body).toHaveLength(5);
+		// top edge + tally + rule + 1 row + rule + legend + bottom edge
+		expect(body).toHaveLength(7);
 	});
 
 	it("shows a class with no hypothesis as not tested", () => {
@@ -245,14 +248,12 @@ describe("findings", () => {
 		expect(text).toContain("evidence/idor.txt");
 	});
 
-	it("tab cycles surface -> hypotheses -> findings -> surface", () => {
-		let s = initialState("surface");
-		s = reduceBrowser(s, "switch", model, 10) as BrowserState;
-		expect(s.view).toBe("hypotheses");
-		s = reduceBrowser(s, "switch", model, 10) as BrowserState;
-		expect(s.view).toBe("findings");
-		s = reduceBrowser(s, "switch", model, 10) as BrowserState;
-		expect(s.view).toBe("surface");
+	it("tab cycles coverage -> surface -> hypotheses -> findings -> coverage", () => {
+		let s = initialState("coverage");
+		for (const expected of ["surface", "hypotheses", "findings", "coverage"]) {
+			s = reduceBrowser(s, "switch", model, 10) as BrowserState;
+			expect(s.view).toBe(expected);
+		}
 	});
 
 	it("never emits a line wider than the width it was given", () => {
@@ -260,6 +261,196 @@ describe("findings", () => {
 			for (const w of [40, 70, 110]) {
 				const st = { ...initialState(v), findingId: "f1" };
 				for (const l of renderBrowser(opts(st, w))) expect(l.length).toBeLessThanOrEqual(w);
+			}
+		}
+	});
+});
+
+describe("a detail view scrolls, because its footer says it does", () => {
+	// rowCount returned 0 for "finding" and "hypothesis", so move() clamped the
+	// cursor to 0 and scroll never advanced: everything past the first screenful
+	// of a finding's description, repro and evidence was unreachable while the
+	// footer advertised "↑↓ scroll".
+	const wordy = Array.from({ length: 40 }, (_, i) => `line ${i} of a long description`).join(" ");
+	const big = buildBrowserModel({
+		engagement: "airflow", classes: CLASSES, cells, inventory, hypotheses,
+		findings: [{
+			id: "f1", kind: "finding", title: "IDOR on dag list", severity: "high", target: "e1",
+			cwe: "CWE-639", description: wordy, repro: "GET /api/v2/dags?dag_id=other",
+			evidence: ["evidence/idor.txt", "evidence/idor2.txt"],
+		}] as unknown as FindingRecord[],
+	});
+	const at = (state: BrowserState) => ({ ...opts(state), model: big });
+	const state: BrowserState = { ...initialState("findings"), view: "finding", findingId: "f1" };
+
+	it("counts more lines than fit the viewport", () => {
+		expect(detailRowCount(at(state))).toBeGreaterThan(10);
+	});
+
+	it("advances the window on down, and lands at the end on bottom", () => {
+		const total = detailRowCount(at(state));
+		const down = reduceBrowser(state, "down", big, 10, total);
+		expect(down).not.toBe("close");
+		expect((down as BrowserState).scroll).toBe(1);
+
+		const end = reduceBrowser(state, "bottom", big, 10, total);
+		expect((end as BrowserState).scroll).toBe(total - 10);
+	});
+
+	it("renders a later slice once scrolled", () => {
+		const total = detailRowCount(at(state));
+		const top = renderBrowser(at(state));
+		const moved = reduceBrowser(state, "pageDown", big, 10, total) as BrowserState;
+		expect(renderBrowser(at(moved))).not.toEqual(top);
+	});
+
+	it("leads with the title, not the severity", () => {
+		const body = renderBrowser(at(state));
+		const title = body.findIndex((l) => l.includes("IDOR on dag list"));
+		const sev = body.findIndex((l) => l.includes("high"));
+		expect(title).toBeGreaterThan(-1);
+		expect(title).toBeLessThan(sev);
+	});
+});
+
+describe("the cursor row is painted, not just inked", () => {
+	it("uses the background painter when one is supplied", () => {
+		const painted: string[] = [];
+		const lines = renderBrowser({
+			...opts(initialState("surface")),
+			highlight: (s) => { painted.push(s); return `[${s}]`; },
+		});
+		expect(painted).toHaveLength(1);
+		expect(lines.some((l) => l.includes("["))).toBe(true);
+	});
+
+	it("falls back to the selected tone when no painter is given", () => {
+		const lines = renderBrowser(opts(initialState("surface")));
+		expect(lines.some((l) => l.startsWith("▸") || l.includes("▸"))).toBe(true);
+	});
+});
+
+describe("the coverage matrix is a browser view, not a wall", () => {
+	// It was a static overlay: its whole input handler closed it. The matrix is
+	// the transpose of the surface view and the model already carries it, so the
+	// class-major rows come from surface[].statuses rather than a second build.
+	it("has one row per checklist class", () => {
+		const lines = renderBrowser(opts(initialState("coverage")));
+		for (const c of CLASSES) expect(lines.join("\n")).toContain(c.title);
+	});
+
+	it("scrolls, where the static overlay could not", () => {
+		const s = reduceBrowser(initialState("coverage"), "down", model, 2) as BrowserState;
+		expect(s.cursor).toBe(1);
+	});
+
+	it("drills from a class into that class down the surface, and back out", () => {
+		let s = reduceBrowser(initialState("coverage"), "in", model, 10) as BrowserState;
+		expect(s.view).toBe("class");
+		expect(s.classId).toBe(CLASSES[0]?.id);
+		// One row per surface element, which is the column of the matrix.
+		expect(renderBrowser(opts(s)).join("\n")).toContain("/api/v2/dags");
+		s = reduceBrowser(s, "out", model, 10) as BrowserState;
+		expect(s.view).toBe("coverage");
+	});
+
+	it("returns to the class it came from when backing out of a hypothesis", () => {
+		let s = { ...initialState("coverage"), cursor: 0 } as BrowserState;
+		s = reduceBrowser(s, "in", model, 10) as BrowserState;        // -> class authz
+		expect(s.view).toBe("class");
+		// The surface is ordered least-settled first, so row 0 is e2 — which has no
+		// authz hypothesis. That cell is a gap, and a gap correctly opens nothing.
+		expect(reduceBrowser(s, "in", model, 10)).toEqual(s);
+		const onE1 = model.surface.findIndex((el) => el.id === "e1");
+		s = reduceBrowser(s, "down", model, 10) as BrowserState;
+		expect(s.cursor).toBe(onE1);
+		s = reduceBrowser(s, "in", model, 10) as BrowserState;
+		expect(s.view).toBe("hypothesis");
+		s = reduceBrowser(s, "out", model, 10) as BrowserState;
+		expect(s.view).toBe("class");
+	});
+
+	it("says what is missing rather than drawing an empty grid", () => {
+		const bare = buildBrowserModel({ engagement: "x", classes: CLASSES, cells: [], inventory: [], hypotheses: [], findings: [] });
+		const lines = renderBrowser({ ...opts(initialState("coverage")), model: bare });
+		expect(lines.join("\n")).toContain("no surface recorded yet");
+	});
+});
+
+describe("viewport state never crosses a view boundary", () => {
+	// cursor/scroll mean a ROW in a list and a LINE in a detail. Carrying one into
+	// the other rendered an empty findings list after backing out of a scrolled
+	// finding, and opened a finding halfway down its own body.
+	const wordy = Array.from({ length: 60 }, (_, i) => `word${i}`).join(" ");
+	const many = buildBrowserModel({
+		engagement: "t", classes: CLASSES, cells, inventory, hypotheses,
+		findings: Array.from({ length: 12 }, (_, i) => ({
+			id: `f${i}`, kind: "finding", title: `Finding ${i}`, severity: "high",
+			target: "e1", cwe: "CWE-89", description: wordy, evidence: ["evidence/a.txt"],
+		})) as unknown as FindingRecord[],
+	});
+	const at = (s: BrowserState) => ({ ...opts(s), model: many });
+
+	it("returns to a populated list after scrolling a detail", () => {
+		let s: BrowserState = initialState("findings");
+		s = reduceBrowser(s, "in", many, 8, 0) as BrowserState;
+		const total = detailRowCount(at(s));
+		for (let i = 0; i < 12; i++) s = reduceBrowser(s, "down", many, 8, total) as BrowserState;
+		expect(s.scroll).toBeGreaterThan(0);
+		s = reduceBrowser(s, "out", many, 8, total) as BrowserState;
+		expect(s.scroll).toBe(0);
+		expect(renderBrowser(at(s)).filter((l) => l.includes("Finding "))).not.toHaveLength(0);
+	});
+
+	it("opens a detail at its top, from anywhere in the list", () => {
+		let s: BrowserState = initialState("findings");
+		for (let i = 0; i < 9; i++) s = reduceBrowser(s, "down", many, 3, 0) as BrowserState;
+		s = reduceBrowser(s, "in", many, 3, 0) as BrowserState;
+		expect(s.scroll).toBe(0);
+	});
+
+	it("counts detail lines at the width the renderer wraps at", () => {
+		// A 4-column disagreement between counter and renderer left the last lines
+		// of a finding — its evidence paths — permanently unreachable.
+		const s: BrowserState = { ...initialState("findings"), view: "finding", findingId: "f0" };
+		const counted = detailRowCount({ ...at(s), width: 72 });
+		const rendered = renderBrowser({ ...at(s), width: 72, height: 999 }).length - 6;
+		expect(counted).toBe(rendered);
+		expect(contentWidth(72)).toBe(68);
+	});
+});
+
+describe("the frame never outgrows the rows it was given", () => {
+	it("honours maxLines, and drops the box before it drops the content", () => {
+		for (const budget of [20, 12, 9, 7]) {
+			const lines = renderBrowser({ ...opts(initialState("surface")), maxLines: budget });
+			expect(lines.length).toBeLessThanOrEqual(budget);
+		}
+		// Below the chrome's own floor a bare list beats a frame with no bottom.
+		const tiny = renderBrowser({ ...opts(initialState("surface")), maxLines: 4 });
+		expect(tiny.length).toBeLessThanOrEqual(4);
+		expect(tiny.join("")).not.toContain("╰");
+	});
+
+	it("does not promise rows behind an empty state", () => {
+		const bare = buildBrowserModel({ engagement: "x", classes: CLASSES, cells: [], inventory: [], hypotheses: [], findings: [] });
+		const lines = renderBrowser({ ...opts(initialState("coverage")), model: bare, height: 10 });
+		expect(lines.join("\n")).not.toMatch(/↓ \d+ more/);
+	});
+});
+
+describe("the overlay is opaque", () => {
+	// An overlay is composited over the transcript and the rail. The unframed
+	// browser padded nothing, so the screen underneath showed through: a recorded
+	// session renders "recorsurface · dvbank" — the word "record" from the
+	// transcript with the title written over it — and the rail's "─────┤" down the
+	// right of every row. Every emitted line must therefore fill the full width.
+	it("emits lines of exactly the requested width, in every view", () => {
+		for (const v of ["surface", "findings", "coverage", "hypotheses"] as const) {
+			for (const w of [60, 80, 104]) {
+				for (const l of renderBrowser({ ...opts(initialState(v), w, 6) })) {
+					expect(l).toHaveLength(w);
+				}
 			}
 		}
 	});

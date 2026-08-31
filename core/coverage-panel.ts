@@ -57,9 +57,19 @@ export interface CoveragePanelOptions {
 	 * so the two rows it would have taken go back to the matrix.
 	 */
 	frame?: boolean;
+	/**
+	 * Where to send a reader for the classes that did not fit. The welcome box
+	 * points at `/coverage`; the `/coverage` overlay passes nothing, because a
+	 * view telling you to open the view you are in is not an instruction.
+	 */
+	moreHint?: string;
 	/** Rows the whole thing may occupy. Classes past the budget become a "+N". */
 	maxLines?: number;
-	/** Right-hand note on the summary row — "esc to close" for the overlay. */
+	/**
+	 * Right-hand note on the summary row, e.g. a dismiss key. Takes a row of its
+	 * own when it will not fit beside the summary: it is the only text telling a
+	 * reader how to leave, so it is the last thing that may be dropped.
+	 */
 	hint?: string;
 }
 
@@ -87,8 +97,10 @@ export function renderCoveragePanel(opts: CoveragePanelOptions): string[] {
 
 	const pct = coveragePercent(matrix);
 	// Framed, the heading is the border's own label and the row it would have
-	// taken — with the blank under it — goes back to the matrix.
-	const title = `${ink("title", "⦿ coverage")}${ink("muted", ` · ${pct}%`)}`;
+	// taken — with the blank under it — goes back to the matrix. `⦿ view ·
+	// engagement` is the shape the rail and the browser both use; the percentage
+	// moves to the summary row so all three titles read the same way.
+	const title = `${ink("title", "⦿ coverage")}${ink("muted", ` · ${engagement}`)}`;
 	const head = (): string[] => {
 		if (framed) return [];
 		const left = ink("title", `⦿ coverage · ${engagement}`);
@@ -121,19 +133,55 @@ export function renderCoveragePanel(opts: CoveragePanelOptions): string[] {
 
 	const lines = head();
 
+	// The legend, the totals and the dismiss hint. Shared, because the narrow
+	// fallback below used to return without them — so the one layout where a
+	// reader most needs telling how to close the overlay was the one that never
+	// said.
+	// Does the dismiss hint fit beside the summary, or does it need its own row?
+	// It is the only text telling a reader how to close the overlay, so when it
+	// will not share a line it takes one — and the class budget must know that
+	// before it decides how many rows it can spend.
+	const summaryText = `${pct}% · ${matrix.applicable} cells · ${matrix.counts["not-tested"] + matrix.counts.blocked} gaps`;
+	const hintText = opts.hint ?? "";
+	const hintInline = hintText.length === 0
+		|| width - measure(summaryText) - measure(hintText) >= 1;
+	const tailRows = (withLegend: boolean): number =>
+		(withLegend ? 1 : 0) + 1 + (hintText && !hintInline ? 1 : 0);
+
+	const tail = (withLegend: boolean): string[] => {
+		const out: string[] = [];
+		if (withLegend) {
+			// No blank above the legend: it is the key to the rows over it and belongs
+			// with them, and a spare row here is a class that could have been shown.
+			const present = matrix.counts["n/a"] > 0 ? [...LEGEND, "n/a" as CoverageStatus] : LEGEND;
+			out.push(truncate(present.map((st) => `${ink(st, CELL_GLYPH[st])} ${ink("muted", LEGEND_WORD[st])}`).join("  "), width));
+		}
+		const summary = ink("muted", summaryText);
+		const hint = hintText ? ink("muted", hintText) : "";
+		if (hint && hintInline) {
+			const gap = width - measure(summaryText) - measure(hintText);
+			out.push(summary + " ".repeat(Math.max(0, gap)) + hint);
+		} else {
+			out.push(truncate(summary, width));
+			if (hint) out.push(truncate(hint, width));
+		}
+		return out;
+	};
+
 	if (room < MIN_BAR) {
-		// Too narrow for bars: fall back to per-class counts alone.
+		// Too narrow for bars: fall back to per-class counts alone. The legend keys
+		// glyphs this layout does not draw, so it goes; the hint stays.
 		for (const cls of classes) {
 			const statuses = byClass.get(cls.id) ?? [];
 			lines.push(truncate(`${ink("label", cls.title)} ${ink("muted", rowCount(statuses))}`, width));
 		}
-		return done(lines);
+		return done([...lines, ...tail(false)]);
 	}
 
 	// The legend and the summary are the floor; classes fill what is left. Dropping
 	// rows silently would misreport the work, so the ones that do not fit are
 	// counted on a line of their own.
-	const floor = lines.length + 2;
+	const floor = lines.length + tailRows(true);
 	const rowsFor = Math.max(1, budget - floor);
 	const shownClasses = classes.length > rowsFor ? classes.slice(0, rowsFor - 1) : classes;
 
@@ -157,19 +205,9 @@ export function renderCoveragePanel(opts: CoveragePanelOptions): string[] {
 	}
 
 	if (shownClasses.length < classes.length) {
-		lines.push(ink("muted", `+${classes.length - shownClasses.length} more classes · /coverage`));
+		const where = opts.moreHint ? ` · ${opts.moreHint}` : "";
+		lines.push(ink("muted", `+${classes.length - shownClasses.length} more classes${where}`));
 	}
 
-	// No blank above the legend: it is the key to the rows over it and belongs
-	// with them, and a spare row here is a class that could have been shown.
-	const present = matrix.counts["n/a"] > 0 ? [...LEGEND, "n/a" as CoverageStatus] : LEGEND;
-	const legend = present.map((st) => `${ink(st, CELL_GLYPH[st])} ${ink("muted", LEGEND_WORD[st])}`).join("  ");
-	lines.push(truncate(legend, width));
-
-	const gaps = matrix.counts["not-tested"] + matrix.counts.blocked;
-	const summary = ink("muted", `${matrix.applicable} cells · ${gaps} gaps`);
-	const hint = opts.hint ? ink("muted", opts.hint) : "";
-	const gap = width - measure(summary) - measure(hint);
-	lines.push(hint && gap >= 1 ? summary + " ".repeat(gap) + hint : truncate(summary, width));
-	return done(lines);
+	return done([...lines, ...tail(true)]);
 }

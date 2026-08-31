@@ -85,7 +85,7 @@ The panel's `scope` section adds the target counts, and `pired-state --json` exp
 
 ## Redaction
 
-Loot secrets are stored in plaintext in the workspace because the agent has to reuse them, but they must never cross a boundary that leaves the machine. `/findings` masks every captured secret in the exported Markdown, replacing it with `[REDACTED <handle>]` — traceable rather than merely blanked.
+Loot secrets are stored in plaintext in the workspace because the agent has to reuse them, but they must never cross a boundary that leaves the machine. `/report` masks every captured secret in the exported Markdown, replacing it with `[REDACTED <handle>]` — traceable rather than merely blanked.
 
 The masker is built from the loot ledger itself, so false positives are zero: it only masks values the operator actually captured. `recall loot` returns handles, never secrets, so a stray query cannot re-emit a credential into the transcript. See `core/redaction.ts`.
 

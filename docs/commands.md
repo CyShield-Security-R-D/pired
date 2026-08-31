@@ -15,7 +15,26 @@ Everything pired adds to pi. pi's own commands (`/model`, `/login`, `/reload`, s
 | `/coverage` | Open the coverage matrix — checklist × surface. |
 | `/surface` | Browse the recorded attack surface: one row per element, a coverage bar across the checklist, and drill-down into any element's classes. |
 | `/hypotheses` | Browse every hypothesis — confirmed, refuted and open — with outcome filters and full detail. |
-| `/findings` | Export findings to Markdown in the engagement workspace. |
+| `/findings` | Browse findings, worst first; select one to read its description, repro and evidence. |
+| `/report` | Write findings to Markdown in the engagement workspace. |
+
+`/findings` reads, `/report` writes. It used to be the other way about — `/report`
+browsed while `/findings` exported — so the noun did the verb's job. `/export` is
+not available for the writer: pi already owns `/export`, `/copy` and `/share`.
+
+## Keys inside a view
+
+| Key | Does |
+|---|---|
+| `↑` `↓` / `k` `j` | Move the cursor, or scroll a detail pane. |
+| `PgUp` `PgDn` | A screenful at a time. |
+| `Home` `End` / `g` `G` | Top, bottom. |
+| `⏎` / `→` / `l` | Open the row under the cursor. |
+| `esc` / `←` / `h` | Back out one level; at the top level, close. |
+| `tab` | Cycle surface → hypotheses → findings. |
+| `a` `c` `r` `o` | Filter hypotheses: all, confirmed, refuted, open. |
+| `R` | Re-read the ledger — the agent may have recorded more since you opened it. |
+| `q` | Close. |
 
 ## Keys
 
@@ -101,8 +120,8 @@ The agent has two tools beyond pi's own. They are documented in full at [Tools](
 ```
 record   kind=note|evidence|host|service|endpoint|param|tech
               |hypothesis|finding|blocker|loot
-recall   query=next|coverage|gaps|inventory|hypotheses|findings
-              |loot|blockers|notes
+recall   query=status|next|coverage|surface|gaps|inventory|hypotheses
+              |findings|loot|blockers|notes
 ```
 
 ## Files pired reads

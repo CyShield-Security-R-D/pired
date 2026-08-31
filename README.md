@@ -146,7 +146,7 @@ pi -e ./extensions/pired.ts --pired-profile review -p "audit ./src for injection
   }
   ```
 
-- **Findings** — `/findings` exports a Markdown report; engagement state lives in `~/.pired/engagements/<name>/` (see [`FORMAT.md`](./FORMAT.md)).
+- **Findings** — `/findings` browses them and `/report` exports a Markdown report; engagement state lives in `~/.pired/engagements/<name>/` (see [`FORMAT.md`](./FORMAT.md)).
 
 ## The interface
 

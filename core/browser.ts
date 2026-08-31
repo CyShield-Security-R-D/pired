@@ -27,6 +27,7 @@
 
 import { CELL_GLYPH } from "./coverage-panel.ts";
 import type { Tone } from "./coverage-panel.ts";
+import { frameLines, RULE } from "./frame.ts";
 import type {
 	CoverageCell,
 	Severity,
@@ -39,16 +40,20 @@ import type {
 } from "./ontology.ts";
 
 /** The coverage tones plus the one this view adds for the cursor row. */
-export type BrowserTone = Tone | "selected";
+export type BrowserTone = Tone | "selected" | "accent";
 
-export type BrowserView = "surface" | "element" | "hypotheses" | "hypothesis" | "findings" | "finding";
+export type BrowserView =
+	| "coverage" | "class"
+	| "surface" | "element"
+	| "hypotheses" | "hypothesis"
+	| "findings" | "finding";
 
 /** Outcome filter for the hypotheses list. `open` is anything not yet settled. */
 export type HypothesisFilter = "all" | "confirmed" | "refuted" | "open";
 
 export type BrowserKey =
 	| "up" | "down" | "pageUp" | "pageDown" | "top" | "bottom"
-	| "in" | "out" | "close" | "switch"
+	| "in" | "out" | "close" | "switch" | "refresh"
 	| "filter:all" | "filter:confirmed" | "filter:refuted" | "filter:open";
 
 export interface SurfaceRow {
@@ -104,6 +109,8 @@ export interface BrowserState {
 	filter: HypothesisFilter;
 	/** Held while drilled into one element, and kept so `out` can return to it. */
 	elementId?: string;
+	/** Held while drilled into one coverage class. */
+	classId?: string;
 	hypothesisId?: string;
 	findingId?: string;
 }
@@ -113,8 +120,13 @@ export function initialState(view: BrowserView = "surface"): BrowserState {
 }
 
 const SEVERITY_RANK: Record<Severity, number> = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
-const SEVERITY_TONE: Record<Severity, Tone> = {
-	critical: "vulnerable", high: "vulnerable", medium: "testing", low: "clear", info: "muted",
+const SEVERITY_TONE: Record<Severity, BrowserTone> = {
+	// low is neither "clear" nor "accent". Green means "ruled out" everywhere else
+	// in the tool, so a green low-severity bug says the opposite of what it is —
+	// but in themes/pired.json `accent` and `error` are the SAME red, which paints
+	// low identically to critical and redder than medium. "blocked" is the muted
+	// grey tone: present, ranked below medium, and not shouting.
+	critical: "vulnerable", high: "vulnerable", medium: "testing", low: "blocked", info: "muted",
 };
 
 const OUTCOME_TONE: Record<HypothesisOutcome, Tone> = {
@@ -271,22 +283,69 @@ export function visibleHypotheses(model: BrowserModel, state: BrowserState): Hyp
 	}
 }
 
-function rowCount(model: BrowserModel, state: BrowserState): number {
+function rowCount(model: BrowserModel, state: BrowserState, detailRows = 0): number {
 	switch (state.view) {
 		case "surface": return model.surface.length;
 		case "hypotheses": return visibleHypotheses(model, state).length;
 		case "element": return model.classes.length;
 		case "findings": return model.findings.length;
+		// The matrix, class-major: one row per class, then that class down the
+		// whole surface. Both are views over data the model already carries.
+		case "coverage": return model.classes.length;
+		case "class": return model.surface.length;
+		// A detail view scrolls over its own rendered lines, whose count depends on
+		// the width it wrapped at — which only the caller knows. Zero here is what
+		// pinned the cursor and made the detail unscrollable.
+		case "finding":
+		case "hypothesis": return detailRows;
+		default: return 0;
+	}
+}
+
+/**
+ * How many lines the current view can scroll through.
+ *
+ * Detail views wrap to the available width, so their length is a render-time
+ * fact. The adapter measures it with the width it last drew at and hands it to
+ * reduceBrowser.
+ */
+/**
+ * The width a body is laid out at, once the frame's borders and gutters are
+ * taken off. Exported because detailRowCount must measure at exactly the width
+ * renderBrowser wraps at — a 4-column disagreement silently made the last lines
+ * of a finding (its evidence paths) unreachable.
+ */
+export function contentWidth(width: number): number {
+	return Math.max(8, width - 4);
+}
+
+export function detailRowCount(o: RenderOptions): number {
+	const co: RenderOptions = { ...o, width: contentWidth(o.width) };
+	return detailRowCountAt(co);
+}
+
+function detailRowCountAt(o: RenderOptions): number {
+	switch (o.state.view) {
+		case "finding": return findingLines(o).length;
+		case "hypothesis": return hypothesisLines(o).length;
 		default: return 0;
 	}
 }
 
 // --- input -----------------------------------------------------------------
 
-export function reduceBrowser(state: BrowserState, key: BrowserKey, model: BrowserModel, viewport: number): BrowserState | "close" {
-	const total = rowCount(model, state);
+export function reduceBrowser(state: BrowserState, key: BrowserKey, model: BrowserModel, viewport: number, detailRows = 0): BrowserState | "close" {
+	const total = rowCount(model, state, detailRows);
 	const page = Math.max(1, viewport);
+	const detail = state.view === "finding" || state.view === "hypothesis";
 	const move = (n: number): BrowserState => {
+		if (detail) {
+			// No cursor in a detail pane: the keys move the window itself, clamped so
+			// the last line can reach the top of an empty screen but no further.
+			const maxScroll = Math.max(0, total - page);
+			const scroll = Math.max(0, Math.min(n, maxScroll));
+			return { ...state, cursor: 0, scroll };
+		}
 		const cursor = Math.max(0, Math.min(n, Math.max(0, total - 1)));
 		// Scroll by the least that keeps the cursor inside the window.
 		let scroll = state.scroll;
@@ -296,16 +355,24 @@ export function reduceBrowser(state: BrowserState, key: BrowserKey, model: Brows
 	};
 
 	switch (key) {
-		case "up": return move(state.cursor - 1);
-		case "down": return move(state.cursor + 1);
-		case "pageUp": return move(state.cursor - page);
-		case "pageDown": return move(state.cursor + page);
+		case "up": return move((detail ? state.scroll : state.cursor) - 1);
+		case "down": return move((detail ? state.scroll : state.cursor) + 1);
+		case "pageUp": return move((detail ? state.scroll : state.cursor) - page);
+		case "pageDown": return move((detail ? state.scroll : state.cursor) + page);
 		case "top": return move(0);
-		case "bottom": return move(total - 1);
+		case "bottom": return move(detail ? total : total - 1);
 		case "close": return "close";
+		// Handled by the adapter, which owns the workspace read. Returning state
+		// unchanged keeps the reducer pure and the cursor where it was.
+		case "refresh": return state;
 		case "switch": {
-			const order: BrowserView[] = ["surface", "hypotheses", "findings"];
-			const here = order.indexOf(state.view === "element" ? "surface" : state.view === "hypothesis" ? "hypotheses" : state.view === "finding" ? "findings" : state.view);
+			const order: BrowserView[] = ["coverage", "surface", "hypotheses", "findings"];
+			const here = order.indexOf(
+				state.view === "class" ? "coverage"
+					: state.view === "element" ? "surface"
+						: state.view === "hypothesis" ? "hypotheses"
+							: state.view === "finding" ? "findings"
+								: state.view);
 			const next = order[(Math.max(0, here) + 1) % order.length] as BrowserView;
 			return { ...initialState(next), filter: state.filter };
 		}
@@ -314,11 +381,13 @@ export function reduceBrowser(state: BrowserState, key: BrowserKey, model: Brows
 		case "filter:refuted": return { ...state, filter: "refuted", cursor: 0, scroll: 0 };
 		case "filter:open": return { ...state, filter: "open", cursor: 0, scroll: 0 };
 		case "out": {
-			if (state.view === "finding") return { ...state, view: "findings", findingId: undefined };
+			if (state.view === "finding") return { ...state, view: "findings", findingId: undefined, cursor: 0, scroll: 0 };
 			if (state.view === "hypothesis") {
-				return { ...state, view: state.elementId ? "element" : "hypotheses", hypothesisId: undefined };
+				const back: BrowserView = state.classId ? "class" : state.elementId ? "element" : "hypotheses";
+				return { ...state, view: back, hypothesisId: undefined, cursor: 0, scroll: 0 };
 			}
 			if (state.view === "element") return { ...state, view: "surface", elementId: undefined, cursor: 0, scroll: 0 };
+			if (state.view === "class") return { ...state, view: "coverage", classId: undefined, cursor: 0, scroll: 0 };
 			return "close";
 		}
 		case "in": {
@@ -328,11 +397,22 @@ export function reduceBrowser(state: BrowserState, key: BrowserKey, model: Brows
 			}
 			if (state.view === "findings") {
 				const row = model.findings[state.cursor];
-				return row ? { ...state, view: "finding", findingId: row.id } : state;
+				return row ? { ...state, view: "finding", findingId: row.id, cursor: 0, scroll: 0 } : state;
 			}
 			if (state.view === "hypotheses") {
 				const row = visibleHypotheses(model, state)[state.cursor];
-				return row ? { ...state, view: "hypothesis", hypothesisId: row.id } : state;
+				return row ? { ...state, view: "hypothesis", hypothesisId: row.id, cursor: 0, scroll: 0 } : state;
+			}
+			if (state.view === "coverage") {
+				const cls = model.classes[state.cursor];
+				return cls ? { ...state, view: "class", classId: cls.id, cursor: 0, scroll: 0 } : state;
+			}
+			if (state.view === "class") {
+				// Into the hypothesis that settled this cell. A cell with none is the
+				// gap the matrix exists to show, so it stays put.
+				const el = model.surface[state.cursor];
+				const hyp = el && model.hypotheses.find((h) => h.targetId === el.id && h.class === state.classId);
+				return hyp ? { ...state, view: "hypothesis", hypothesisId: hyp.id, cursor: 0, scroll: 0 } : state;
 			}
 			if (state.view === "element") {
 				// From a class row into the hypothesis that settled it. A class with no
@@ -340,7 +420,7 @@ export function reduceBrowser(state: BrowserState, key: BrowserKey, model: Brows
 				// rather than opening something unrelated.
 				const cls = model.classes[state.cursor];
 				const hyp = cls && model.hypotheses.find((h) => h.targetId === state.elementId && h.class === cls.id);
-				return hyp ? { ...state, view: "hypothesis", hypothesisId: hyp.id } : state;
+				return hyp ? { ...state, view: "hypothesis", hypothesisId: hyp.id, cursor: 0, scroll: 0 } : state;
 			}
 			return state;
 		}
@@ -359,6 +439,24 @@ export interface RenderOptions {
 	ink: (tone: BrowserTone, text: string) => string;
 	measure: (s: string) => number;
 	truncate: (s: string, width: number) => string;
+	/**
+	 * Hard ceiling on emitted lines, when the caller knows it.
+	 *
+	 * pi slices an overlay at maxHeight and the clipping takes the BOTTOM — the
+	 * legend and the closing border. Below the chrome's own floor the box cannot
+	 * fit at all, so the view degrades to a bare list rather than a sliced frame.
+	 */
+	maxLines?: number;
+	/**
+	 * Paint the cursor row's background.
+	 *
+	 * A foreground highlight cannot work here: the row is already inked, and a
+	 * theme's fg() resets with \x1b[39m, so the first inner colour ends the outer
+	 * one and the selected row renders *less* coloured than its neighbours. A
+	 * background resets with \x1b[49m, which inner foreground codes never emit.
+	 * Optional so core stays testable against a plain ASCII stand-in.
+	 */
+	highlight?: (s: string) => string;
 }
 
 const MIN_WIDTH = 32;
@@ -372,10 +470,6 @@ function pad(s: string, to: number, measure: (x: string) => number): string {
 	return gap > 0 ? s + " ".repeat(gap) : s;
 }
 
-function rule(width: number, ink: RenderOptions["ink"]): string {
-	return ink("muted", "─".repeat(Math.max(0, width)));
-}
-
 /**
  * A row of the list, with the cursor row painted rather than marked.
  *
@@ -386,13 +480,21 @@ function rule(width: number, ink: RenderOptions["ink"]): string {
 function row(selected: boolean, body: string, width: number, o: RenderOptions): string {
 	const line = `${selected ? "▸ " : "  "}${body}`;
 	const clipped = o.truncate(line, width);
-	return selected ? o.ink("selected", pad(clipped, width, o.measure)) : clipped;
+	if (!selected) return clipped;
+	const filled = pad(clipped, width, o.measure);
+	return o.highlight ? o.highlight(filled) : o.ink("selected", filled);
 }
 
-function header(title: string, right: string, o: RenderOptions): string[] {
+/**
+ * The tally line, right-aligned under the frame's title.
+ *
+ * The title itself now lives in the box's top edge, the way the rail and the
+ * coverage box set theirs, so this carries only the count.
+ */
+function header(right: string, o: RenderOptions): string[] {
 	const { width, ink, measure, truncate } = o;
-	const left = ink("title", truncate(title, Math.max(0, width - measure(right) - 1)));
-	return [pad(left, Math.max(0, width - measure(right)), measure) + ink("muted", right), rule(width, ink)];
+	const text = truncate(right, width);
+	return [pad("", Math.max(0, width - measure(text)), measure) + ink("muted", text), RULE];
 }
 
 /** The key legend, which differs per view and is the only affordance a user gets. */
@@ -402,18 +504,34 @@ function footer(o: RenderOptions): string[] {
 		? "↑↓ scroll · esc back · q close"
 		: state.view === "element"
 			? "↑↓ move · ⏎ open · esc back · tab hypotheses · q close"
-			: state.view === "surface"
-				? "↑↓ move · ⏎ open · tab hypotheses · q close"
+			: state.view === "coverage"
+				? "↑↓ move · ⏎ open class · tab surface · R reload · q close"
+				: state.view === "class"
+					? "↑↓ move · ⏎ open · esc back · tab surface · q close"
+					: state.view === "surface"
+						? "↑↓ move · ⏎ open · tab hypotheses · R reload · q close"
 				: state.view === "findings"
-					? "↑↓ move · ⏎ open · tab surface · q close"
-					: "↑↓ move · ⏎ open · a/c/r/o filter · tab findings · q close";
-	return [rule(width, ink), ink("muted", o.truncate(keys, width))];
+					? "↑↓ move · ⏎ open · tab coverage · R reload · q close"
+					: "↑↓ move · ⏎ open · a/c/r/o filter · tab findings · R reload · q close";
+	return [ink("muted", o.truncate(keys, width))];
+}
+
+/** `↓ N more` when the list runs past the window, as the rail marks its overflow. */
+function overflow(o: RenderOptions, total: number, bodyLines: number): string {
+	// An empty state is one line of prose, not a truncated list: counting the
+	// rows that "would" have followed promises content that does not exist.
+	if (bodyLines === 0 || total === 0) return "";
+	const shown = o.state.scroll + Math.min(o.height, bodyLines);
+	const left = total - shown;
+	return left > 0 ? o.ink("muted", `↓ ${left} more`) : "";
 }
 
 function surfaceBody(o: RenderOptions): string[] {
 	const { model, state, width, ink, measure, truncate } = o;
 	if (model.surface.length === 0) {
-		return [ink("muted", "  no surface recorded yet — the agent has not called record"), ""];
+		// Same words as core/coverage-panel.ts and docs/coverage.md. Two texts for
+		// one condition reads as two different conditions.
+		return [ink("muted", "  no surface recorded yet — run recon, or record inventory"), ""];
 	}
 	const barLen = Math.min(MAX_BAR, model.classes.length);
 	const right = barLen + 1 + 7 + 4;
@@ -429,6 +547,70 @@ function surfaceBody(o: RenderOptions): string[] {
 		const label = pad(truncate(r.label, labelW), labelW, measure);
 		const kind = ink("muted", pad(r.kind.slice(0, 4), 5, measure));
 		out.push(row(idx === state.cursor, `${kind}${label} ${bar} ${pad(count, 7, measure)}${flag}`, width, o));
+	}
+	return out;
+}
+
+/**
+ * The matrix, class-major: one row per checklist class, its cells across the
+ * whole recorded surface.
+ *
+ * The transpose of elementBody. Both read the same `surface[].statuses`, which
+ * is built in class order — so a class row is that column of the matrix and no
+ * new data has to be assembled.
+ */
+function coverageBody(o: RenderOptions): string[] {
+	const { model, state, width, ink, measure, truncate } = o;
+	if (model.classes.length === 0) return [ink("muted", "  no checklist seeded for this engagement")];
+	if (model.surface.length === 0) {
+		return [ink("muted", "  no surface recorded yet — run recon, or record inventory")];
+	}
+	const n = model.surface.length;
+	// Size the count column from the widest number it must hold. A fixed 7 cut
+	// "41/41" to "41/4", which reads as a different, wrong denominator.
+	const countW = `${n}/${n}`.length;
+	const barLen = Math.min(MAX_BAR, n);
+	const labelW = Math.max(12, Math.min(MAX_LABEL, width - barLen - countW - 6));
+	const out: string[] = [];
+	for (const [i, cls] of model.classes.slice(state.scroll, state.scroll + o.height).entries()) {
+		const idx = state.scroll + i;
+		const statuses = model.surface.map((el) => el.statuses[idx] ?? "not-tested");
+		const askable = statuses.filter((st) => st !== "n/a").length;
+		const settled = statuses.filter((st) => st === "clear" || st === "vulnerable").length;
+		// Reserve room for the "+N" inside the bar rather than past it, exactly as
+		// renderCoveragePanel does. Dropping elements with no marker misreports the
+		// surface: 41 elements silently drawn as 24.
+		const hidden = n - barLen;
+		const marker = hidden > 0 ? `+${hidden}` : "";
+		const cells = statuses.slice(0, Math.max(0, barLen - marker.length))
+			.map((st) => ink(st, CELL_GLYPH[st])).join("");
+		const bar = cells + (marker ? ink("muted", marker) : "");
+		const barPad = " ".repeat(Math.max(0, barLen - measure(bar)));
+		const label = pad(truncate(cls.title || cls.id, labelW), labelW, measure);
+		const count = pad(`${settled}/${askable}`, countW, measure);
+		out.push(row(idx === state.cursor, `${label} ${bar}${barPad} ${count}`, width, o));
+	}
+	return out;
+}
+
+/** One class down the surface: which elements it is settled on, and which not. */
+function classBody(o: RenderOptions): string[] {
+	const { model, state, width, ink, measure, truncate } = o;
+	const idxOfClass = model.classes.findIndex((c) => c.id === state.classId);
+	if (idxOfClass < 0) return [ink("muted", "  class not found")];
+	const nameW = Math.max(16, Math.min(38, Math.floor(width * 0.4)));
+	const out: string[] = [];
+	for (const [i, el] of model.surface.slice(state.scroll, state.scroll + o.height).entries()) {
+		const idx = state.scroll + i;
+		const status = el.statuses[idxOfClass] ?? "not-tested";
+		const hyp = model.hypotheses.find((h) => h.targetId === el.id && h.class === state.classId);
+		const glyph = ink(status, CELL_GLYPH[status]);
+		const name = pad(truncate(el.label, nameW), nameW, measure);
+		const settledWithoutHypothesis = status === "clear" || status === "vulnerable";
+		const rest = hyp
+			? hyp.statement
+			: ink("muted", STATUS_WORD[status] + (settledWithoutHypothesis ? " · no hypothesis recorded" : ""));
+		out.push(row(idx === state.cursor, `${glyph} ${name} ${rest}`, width, o));
 	}
 	return out;
 }
@@ -499,8 +681,16 @@ function findingsBody(o: RenderOptions): string[] {
 	return out;
 }
 
-function findingBody(o: RenderOptions): string[] {
-	const { model, state, width, ink, measure, truncate } = o;
+/**
+ * Every line of a finding's detail, unsliced.
+ *
+ * Split from the body so the reducer can count them. rowCount used to return 0
+ * for this view, which clamped the cursor at 0 and made `scroll` unreachable —
+ * so a finding's description, repro and evidence were invisible past the first
+ * screenful while the footer advertised "↑↓ scroll".
+ */
+function findingLines(o: RenderOptions): string[] {
+	const { model, state, width, ink, measure } = o;
 	const f = model.findings.find((x) => x.id === state.findingId);
 	if (!f) return [ink("muted", "  finding not found")];
 	const labelW = 12;
@@ -508,19 +698,26 @@ function findingBody(o: RenderOptions): string[] {
 		wrap(v, Math.max(8, width - labelW - 2), measure).map((line, i) =>
 			`${ink("muted", pad(i === 0 ? k : "", labelW, measure))}${ink(tone, line)}`);
 
+	// Title first, metadata after — as core/panel.ts:renderFindingDetail has it.
+	// Leading with severity and CWE means you read a finding's classification
+	// before its name.
 	const out: string[] = [
+		...wrap(f.title, width, measure).map((l) => ink("label", l)),
+		"",
 		...field("severity", f.severity, SEVERITY_TONE[f.severity]),
 		...(f.cwe ? field("cwe", f.cwe) : []),
 		...(f.class ? field("class", f.class) : []),
 		...field("target", f.targetLabel),
 		...(f.status ? field("status", f.status, "muted") : []),
-		"",
-		...wrap(f.title, width, measure).map((l) => ink("label", l)),
 	];
 	if (f.description) out.push("", ...wrap(f.description, width, measure).map((l) => ink("body", l)));
 	if (f.repro) out.push("", ...field("repro", f.repro, "muted"));
 	for (const e of f.evidence ?? []) out.push(...field("evidence", e, "muted"));
-	return out.slice(state.scroll, state.scroll + o.height).map((l) => truncate(l, width));
+	return out;
+}
+
+function findingBody(o: RenderOptions): string[] {
+	return findingLines(o).slice(o.state.scroll, o.state.scroll + o.height).map((l) => o.truncate(l, o.width));
 }
 
 /** Wrap on spaces; a hypothesis statement is a sentence, not a path. */
@@ -539,8 +736,9 @@ function wrap(text: string, width: number, measure: (s: string) => number): stri
 	return lines.length > 0 ? lines : [""];
 }
 
-function hypothesisBody(o: RenderOptions): string[] {
-	const { model, state, width, ink, measure, truncate } = o;
+/** Every line of a hypothesis's detail, unsliced. See findingLines. */
+function hypothesisLines(o: RenderOptions): string[] {
+	const { model, state, width, ink, measure } = o;
 	const h = model.hypotheses.find((x) => x.id === state.hypothesisId);
 	if (!h) return [ink("muted", "  hypothesis not found")];
 	const labelW = 10;
@@ -558,53 +756,142 @@ function hypothesisBody(o: RenderOptions): string[] {
 	if (h.method) out.push("", ...field("method", h.method, "muted"));
 	if (h.evidence) out.push(...field("evidence", h.evidence, "muted"));
 	if (h.findingId) out.push(...field("finding", h.findingId, "vulnerable"));
-	// Scrolling a detail pane is uncommon but a long statement must stay readable
-	// on a short terminal rather than being silently cut.
-	return out.slice(state.scroll, state.scroll + o.height).map((l) => truncate(l, width));
+	return out;
 }
 
-export function renderBrowser(o: RenderOptions): string[] {
-	if (o.width < MIN_WIDTH) return [o.truncate(o.ink("muted", "too narrow"), o.width)];
-	const { model, state } = o;
+function hypothesisBody(o: RenderOptions): string[] {
+	return hypothesisLines(o).slice(o.state.scroll, o.state.scroll + o.height).map((l) => o.truncate(l, o.width));
+}
 
+/** Title for the box's top edge, in the rail's `⦿ name · qualifier` shape. */
+function frameTitle(o: RenderOptions): string {
+	const { model, state } = o;
 	switch (state.view) {
+		case "coverage": return `⦿ coverage · ${model.engagement}`;
+		case "class": {
+			const cls = model.classes.find((c) => c.id === state.classId);
+			return `⦿ ${cls?.title ?? state.classId ?? "class"} · ${model.engagement}`;
+		}
+		case "surface": return `⦿ surface · ${model.engagement}`;
+		case "element": {
+			const el = model.surface.find((s) => s.id === state.elementId);
+			return `⦿ ${el ? el.label : "element"} · ${model.engagement}`;
+		}
+		case "hypotheses": {
+			const filt = state.filter === "all" ? "" : ` [${state.filter}]`;
+			return `⦿ hypotheses${filt} · ${model.engagement}`;
+		}
+		case "findings": return `⦿ findings · ${model.engagement}`;
+		case "finding": return `⦿ finding · ${model.engagement}`;
+		default: return `⦿ hypothesis · ${model.engagement}`;
+	}
+}
+
+/** The tally and the body, before any framing. */
+function parts(o: RenderOptions): { tally: string; body: string[]; total: number } {
+	const { model, state } = o;
+	switch (state.view) {
+		case "coverage": {
+			const m = model.surface.reduce((a, r) => ({ s: a.s + r.settled, k: a.k + r.askable }), { s: 0, k: 0 });
+			const pct = m.k > 0 ? Math.round((m.s / m.k) * 100) : 0;
+			return {
+				tally: `${pct}% · ${model.classes.length} classes · ${m.k - m.s} gaps`,
+				body: coverageBody(o), total: model.classes.length,
+			};
+		}
+		case "class": {
+			const i = model.classes.findIndex((c) => c.id === state.classId);
+			const statuses = model.surface.map((el) => el.statuses[i] ?? "not-tested");
+			const askable = statuses.filter((st) => st !== "n/a").length;
+			const settled = statuses.filter((st) => st === "clear" || st === "vulnerable").length;
+			return {
+				tally: `${settled}/${askable} settled across ${model.surface.length} elements`,
+				body: classBody(o), total: model.surface.length,
+			};
+		}
 		case "surface": {
 			const settled = model.surface.reduce((a, r) => a + r.settled, 0);
 			const askable = model.surface.reduce((a, r) => a + r.askable, 0);
-			return [
-				...header(`surface · ${model.engagement}`, `${model.surface.length} elements · ${settled}/${askable} settled`, o),
-				...surfaceBody(o),
-				...footer(o),
-			];
+			return {
+				tally: `${model.surface.length} elements · ${settled}/${askable} settled`,
+				body: surfaceBody(o), total: model.surface.length,
+			};
 		}
 		case "element": {
 			const el = model.surface.find((s) => s.id === state.elementId);
-			return [
-				...header(el ? el.label : "element", el ? `${el.kind} · ${el.settled}/${el.askable} settled` : "", o),
-				...elementBody(o),
-				...footer(o),
-			];
+			return {
+				tally: el ? `${el.kind} · ${el.settled}/${el.askable} settled` : "",
+				body: elementBody(o), total: model.classes.length,
+			};
 		}
 		case "hypotheses": {
 			const c = model.counts;
-			const tally = `${c.confirmed} confirmed · ${c.refuted} refuted · ${c.open} open`;
-			const filt = state.filter === "all" ? "" : ` [${state.filter}]`;
-			return [
-				...header(`hypotheses${filt} · ${model.engagement}`, tally, o),
-				...hypothesesBody(o),
-				...footer(o),
-			];
+			return {
+				tally: `${c.confirmed} confirmed · ${c.refuted} refuted · ${c.open} open`,
+				body: hypothesesBody(o), total: visibleHypotheses(model, state).length,
+			};
 		}
 		case "findings": {
 			const worst = model.findings[0];
-			const tally = model.findings.length === 0
-				? "none"
-				: `${model.findings.length} · worst ${worst?.severity ?? "-"}`;
-			return [...header(`findings · ${model.engagement}`, tally, o), ...findingsBody(o), ...footer(o)];
+			return {
+				tally: model.findings.length === 0 ? "none" : `${model.findings.length} · worst ${worst?.severity ?? "-"}`,
+				body: findingsBody(o), total: model.findings.length,
+			};
 		}
-		case "finding":
-			return [...header("finding", model.engagement, o), ...findingBody(o), ...footer(o)];
-		default:
-			return [...header("hypothesis", model.engagement, o), ...hypothesisBody(o), ...footer(o)];
+		case "finding": {
+			const lines = findingLines(o);
+			return { tally: `${lines.length} lines`, body: findingBody(o), total: lines.length };
+		}
+		default: {
+			const lines = hypothesisLines(o);
+			return { tally: `${lines.length} lines`, body: hypothesisBody(o), total: lines.length };
+		}
 	}
+}
+
+/**
+ * The browser, drawn in the same box the rail and the coverage matrix use.
+ *
+ * Before this it was two bare rules around a list flush against the overlay
+ * edge — the only view in the tool without a frame, which read as a raw dump
+ * beside everything else. The box, the title in the top edge and the key legend
+ * welded into the bottom section all come from core/frame.ts, so there is one
+ * chrome rather than three.
+ */
+export function renderBrowser(o: RenderOptions): string[] {
+	if (o.width < MIN_WIDTH) return [o.truncate(o.ink("muted", "too narrow"), o.width)];
+
+	// Two columns for the border, one gutter each side, so nothing sits against
+	// the frame: content flush to a border reads as content that overflowed it.
+	const contentW = contentWidth(o.width);
+	const co: RenderOptions = { ...o, width: contentW };
+	const { tally, body, total } = parts(co);
+
+	// An empty state returns one prose line; `total` is the row count the view
+	// would have had. Pass both so the marker is only drawn over real rows.
+	const isEmpty = total === 0 || body.length === 0
+		|| (body.length === 1 && total > 1 && o.state.scroll === 0 && !body[0]?.includes("▸"));
+	const more = overflow(co, total, isEmpty ? 0 : body.length);
+	const keys = footer(co)[0] ?? "";
+	const legend = more
+		? pad(keys, Math.max(0, contentW - co.measure(more)), co.measure) + more
+		: keys;
+
+	// Chrome is two borders, the tally, two rules and the legend.
+	const CHROME = 6;
+	const budget = o.maxLines ?? Number.MAX_SAFE_INTEGER;
+	if (budget < CHROME + 1) {
+		// Too short to box. A bare list beats a frame with its bottom sliced off.
+		return body.slice(0, Math.max(1, budget)).map((l) => o.truncate(l, o.width));
+	}
+	const rows = Math.max(1, Math.min(body.length, budget - CHROME));
+
+	const lines = [
+		...header(tally, co),
+		...body.slice(0, rows),
+		RULE,
+		legend,
+	].map((l) => (l.startsWith(RULE) ? l : ` ${l}`));
+
+	return frameLines(lines, frameTitle(o), o.width, (t, x) => o.ink(t, x), o.measure, o.truncate);
 }

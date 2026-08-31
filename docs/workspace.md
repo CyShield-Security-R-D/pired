@@ -53,7 +53,7 @@ Nothing derived is ever stored. Coverage, gaps, `recall next`, and the panel's n
 ## Evidence and artifacts
 
 - `evidence/` — raw tool output and request/response dumps backing a finding or hypothesis. Created with `record kind=evidence`, which returns the path to cite.
-- `artifacts/` — screenshots, dumped files, PoC scripts, and the Markdown report written by `/findings`.
+- `artifacts/` — screenshots, dumped files, PoC scripts, and the Markdown report written by `/report`.
 
 Records reference these by **workspace-relative path**, and the path is verified on write — a citation that does not resolve is rejected. There is no index file: the referencing record *is* the index.
 

@@ -147,10 +147,17 @@ describe("the welcome screen's copy", () => {
 
 	it("draws itself in the rail's box, with the heading in the border", () => {
 		const lines = boxed(60, 20);
+		// `⦿ view · engagement`, the same shape the rail and the browser use.
 		expect(lines[0]).toContain("⦿ coverage");
-		expect(lines[0]).toContain("%");
+		expect(lines[0]).toContain("acme");
 		// The heading row and the blank under it go back to the matrix.
 		expect(lines[1]).toContain("authz");
+	});
+
+	it("keeps the percentage, on the summary row rather than the title", () => {
+		const lines = boxed(60, 20);
+		expect(lines[0]).not.toContain("%");
+		expect(lines.join("\n")).toMatch(/\d+% · \d+ cells/);
 	});
 
 	it("never exceeds the rows it was given, and says what it dropped", () => {

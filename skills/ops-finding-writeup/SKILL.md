@@ -56,7 +56,7 @@ Field-by-field:
 ## After recording
 - Confirm the coverage cell flipped to `vulnerable` (`recall coverage`).
 - Keep testing: one finding doesn't end the class — `recall gaps` / `recall next`.
-- Export with `/findings` when asked; secrets are auto-masked at export (see `ops-loot-credentials`).
+- Export with `/report` when asked (`/findings` browses them); secrets are auto-masked at export (see `ops-loot-credentials`).
 
 ## References
 - PTES — Reporting — Penetration Testing Execution Standard — https://pentest-standard.readthedocs.io/en/latest/reporting.html (report-grade finding structure: impact, reproduction, remediation)

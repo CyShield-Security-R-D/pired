@@ -96,7 +96,7 @@ export interface BannerOptions {
 	minLines?: number;
 }
 
-const COMMANDS = ["/surface", "/hypotheses", "/coverage", "/panel"];
+const COMMANDS = ["/surface", "/hypotheses", "/findings", "/coverage", "/panel"];
 
 function pad(s: string, to: number, measure: (x: string) => number): string {
 	const gap = to - measure(s);

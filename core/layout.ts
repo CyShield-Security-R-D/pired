@@ -64,3 +64,22 @@ export function bannerColumns(terminalCols: number, railCols: number): number {
 	const free = terminalCols - railCols - 2;
 	return free >= BANNER_MIN ? free : terminalCols;
 }
+
+/**
+ * The overlay geometry, kept here rather than as a literal at the call site —
+ * which is the drift this module exists to stop. One entry, because /coverage,
+ * /surface, /hypotheses and /findings are now one browser wearing one chrome;
+ * a second geometry would make the same view resize as you tab through it.
+ */
+export const OVERLAY = {
+	browser: { width: "90%", minWidth: 48, maxHeight: "80%", anchor: "center" },
+} as const;
+
+/** The share of the terminal an overlay gets, as OVERLAY.maxHeight promises. */
+export const OVERLAY_HEIGHT_SHARE = 0.8;
+
+/**
+ * Chrome an overlay spends before the first body row: the box's two edges, the
+ * tally, two section rules and the key legend.
+ */
+export const BROWSER_CHROME = 6;

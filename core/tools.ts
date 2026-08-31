@@ -10,7 +10,10 @@
  * maps them onto its harness. Runtime services (clock/ids) come from `ToolContext`.
  */
 
+import { buildBrowserModel } from "./browser.ts";
 import { computeCoverage, findGaps, selectNext } from "./coverage.ts";
+import { computeCoverageView, computeEngagementStats } from "./stats.ts";
+import { CELL_GLYPH, renderCoveragePanel } from "./coverage-panel.ts";
 import {
 	BLOCKER_STATUSES,
 	BLOCKER_TYPES,
@@ -41,8 +44,23 @@ type RecordKind = (typeof RECORD_KINDS)[number];
 type LedgerKind = Exclude<RecordKind, "note" | "evidence">;
 
 const RECALL_QUERIES = [
-	"next", "coverage", "gaps", "inventory", "hypotheses", "findings", "loot", "blockers", "notes",
+	"status", "next", "coverage", "surface", "gaps", "inventory", "hypotheses", "findings", "loot", "blockers", "notes",
 ] as const;
+
+/**
+ * Plain-text rendering of the views the operator sees.
+ *
+ * The panel, the matrix and the surface list are pure renderers with colour and
+ * width injected, so the agent can be handed the SAME view rather than a second
+ * summary written beside it. Two derivations of "how far along are we" is how
+ * the number on screen and the number the agent reasons from drift apart.
+ */
+const PLAIN = {
+	ink: (_tone: string, text: string): string => text,
+	measure: (x: string): number => x.length,
+	truncate: (x: string, w: number): string => (x.length > w ? x.slice(0, w) : x),
+	width: 100,
+};
 
 const STORE_FOR_KIND: Record<LedgerKind, StoreName> = {
 	host: "inventory", service: "inventory", endpoint: "inventory", param: "inventory", tech: "inventory",
@@ -301,6 +319,80 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 				return text(`Recorded ${ids.length} hypotheses (${targets.length} target(s) x ${classes.length} class(es)), outcome=${outcome}.`, { kind, ids });
 			}
 
+			// A class the checklist does not know is silent data loss.
+			//
+			// `class` is a free string, and the valid ids live in the engagement's
+			// checklist, which the tool schema cannot show. So the model guesses:
+			// measured on a live run it tried `code-injection` against a checklist
+			// spelling it `codeinj`, then `traversal` against `pathtrav`, and spent a
+			// third of the session working the difference out from coverage numbers
+			// that would not move. Nothing rejected those records — they were written
+			// to a cell no checklist class matched, so they simply never counted.
+			//
+			// Reject instead, and name the ids. One round trip beats an hour of
+			// inference from a stuck percentage.
+			if (kind === "hypothesis" || kind === "finding") {
+				const checklist = await deps.workspace.readChecklist();
+				const valid = checklist?.classes.map((c) => c.id) ?? [];
+				if (valid.length > 0) {
+					const wanted = asList(a.class).filter((c): c is string => typeof c === "string" && c.length > 0);
+					const unknown = wanted.filter((c) => !valid.includes(c));
+					if (unknown.length > 0) {
+						// Suggest by normalised comparison. The observed misses differ by
+						// punctuation and truncation ("code-injection" vs "codeinj") but
+						// also by which end got dropped ("traversal" vs "pathtrav"), so
+						// match on the longest shared run of characters rather than on a
+						// shared prefix, which catches the first pair and not the second.
+						const norm = (x: string) => x.toLowerCase().replace(/[^a-z0-9]/g, "");
+						const shared = (a2: string, b: string): number => {
+							let best = 0;
+							for (let i = 0; i < a2.length; i++) {
+								for (let j = i + best + 1; j <= a2.length; j++) {
+									if (b.includes(a2.slice(i, j))) best = j - i;
+									else break;
+								}
+							}
+							return best;
+						};
+						const near = (x: string): string | undefined => {
+							const n = norm(x);
+							const exact = valid.find((v) => norm(v) === n);
+							if (exact) return exact;
+							// An id that is an abbreviation of the guess, or vice versa:
+							// "sqli" inside "sqlinjection", "codeinj" inside "codeinjection".
+							// Checked first because a shared-run score alone prefers the
+							// common English suffix — "sql-injection" scores higher against
+							// "reflection" ("ection") than against "sqli".
+							const prefix = valid
+								.filter((v) => n.startsWith(norm(v)) || norm(v).startsWith(n))
+								.sort((p, q) => norm(q).length - norm(p).length)[0];
+							if (prefix) return prefix;
+							let bestId: string | undefined;
+							let bestLen = 3;   // below four characters the "match" is noise
+							for (const v of valid) {
+								const nv = norm(v);
+								const len = shared(n, nv);
+								// The run has to be most of the id AND a real part of the
+								// guess, or a shared suffix suggests an unrelated class.
+								if (len > bestLen && len / nv.length >= 0.5 && len / n.length >= 0.4) {
+									bestLen = len; bestId = v;
+								}
+							}
+							return bestId;
+						};
+						const hints = unknown.map((u) => {
+							const guess = near(u);
+							return guess ? `${u} (did you mean '${guess}'?)` : u;
+						});
+						throw new Error(
+							`record ${kind}: unknown checklist class: ${hints.join(", ")}. ` +
+								`Valid ids for this engagement: ${valid.join(", ")}. ` +
+								"A class the checklist does not list settles no coverage cell.",
+						);
+					}
+				}
+			}
+
 			// Evidence must resolve before a claim citing it is accepted.
 			//
 			// Adding `record kind=evidence` gave the model a way to create evidence
@@ -384,6 +476,20 @@ function briefInventory(records: Awaited<ReturnType<Workspace["read"]>>): string
 		.join("\n");
 }
 
+/**
+ * Say what was left out.
+ *
+ * Every list here is capped, and a capped list rendered without a notice reads
+ * as the whole answer: `gaps` on a 500-endpoint engagement showed fifty lines of
+ * 2,250 and looked complete. That is the same failure as reporting an empty
+ * matrix as "coverage complete" — a view that silently understates the work
+ * remaining is worse than one that admits it cannot show it all.
+ */
+function truncated(shown: number, total: number, noun: string, order?: string): string {
+	if (shown >= total) return "";
+	return `\n… showing ${shown} of ${total} ${noun}${order ? ` (${order})` : ""}. Raise 'limit' for more.`;
+}
+
 export function createRecallTool(deps: ToolDeps): ToolDefinition {
 	const surfaceKinds = deps.surfaceKinds ?? DEFAULT_SURFACE_KINDS;
 
@@ -403,7 +509,14 @@ export function createRecallTool(deps: ToolDeps): ToolDefinition {
 		name: "recall",
 		label: "recall",
 		description:
-			"Read engagement state back. query: next (next untested/actionable cell), coverage, gaps (untested/blocked cells), inventory, hypotheses, findings, loot (handles only), blockers, notes. Use 'next'/'gaps' to stay systematic and avoid quitting early.",
+			"Read engagement state back — the same views the operator sees. query: " +
+			"status (the rollup: surface, coverage %, findings by severity, blockers), " +
+			"coverage (the full checklist x surface matrix, one row per class), " +
+			"surface (one row per recorded element with its coverage bar), " +
+			"next (next untested/actionable cell), gaps (untested/blocked cells), " +
+			"inventory, hypotheses, findings, loot (handles only), blockers, notes. " +
+			"Use 'status' to see where the engagement stands, 'coverage'/'surface' to see WHERE the holes are, " +
+			"and 'next'/'gaps' to stay systematic and avoid quitting early.",
 		parameters: {
 			type: "object",
 			required: ["query"],
@@ -425,44 +538,111 @@ export function createRecallTool(deps: ToolDeps): ToolDefinition {
 				}
 				case "inventory": {
 					const inv = await deps.workspace.read("inventory");
-					return text(inv.length ? briefInventory(inv.slice(0, limit)) : "(no inventory)");
+					return text(inv.length ? briefInventory(inv.slice(0, limit)) + truncated(Math.min(limit, inv.length), inv.length, "records") : "(no inventory)");
 				}
 				case "hypotheses": {
 					const hyps = await deps.workspace.read("hypotheses");
-					return text(hyps.length ? hyps.slice(0, limit).map((h) => `${h.id} [${h.outcome}] ${h.class} on ${h.target}: ${h.statement}`).join("\n") : "(no hypotheses)");
+					return text(hyps.length ? hyps.slice(0, limit).map((h) => `${h.id} [${h.outcome}] ${h.class} on ${h.target}: ${h.statement}`).join("\n") + truncated(Math.min(limit, hyps.length), hyps.length, "hypotheses") : "(no hypotheses)");
 				}
 				case "findings": {
 					const fs = await deps.workspace.read("findings");
-					return text(fs.length ? fs.slice(0, limit).map((f) => `${f.id} [${f.severity}/${f.status}] ${f.title} (${f.target})`).join("\n") : "(no findings)");
+					return text(fs.length ? fs.slice(0, limit).map((f) => `${f.id} [${f.severity}/${f.status}] ${f.title} (${f.target})`).join("\n") + truncated(Math.min(limit, fs.length), fs.length, "findings", "worst first") : "(no findings)");
 				}
 				case "blockers": {
 					const bs = (await deps.workspace.read("blockers")).filter((b) => b.status === "open");
-					return text(bs.length ? bs.slice(0, limit).map((b) => `${b.id} [${b.priority}] ${b.question}`).join("\n") : "(no open blockers)");
+					return text(bs.length ? bs.slice(0, limit).map((b) => `${b.id} [${b.priority}] ${b.question}`).join("\n") + truncated(Math.min(limit, bs.length), bs.length, "open blockers") : "(no open blockers)");
 				}
 				case "loot": {
 					const loot = await deps.workspace.read("loot");
-					return text(loot.length ? loot.slice(0, limit).map((l) => `${l.handle} (${l.type}${l.username ? ` ${l.username}` : ""}${l.target ? ` @ ${l.target}` : ""})`).join("\n") : "(no loot)");
+					return text(loot.length ? loot.slice(0, limit).map((l) => `${l.handle} (${l.type}${l.username ? ` ${l.username}` : ""}${l.target ? ` @ ${l.target}` : ""})`).join("\n") + truncated(Math.min(limit, loot.length), loot.length, "loot handles") : "(no loot)");
 				}
 				case "coverage": {
+					// The same matrix the operator opens with /coverage, rendered as
+					// text. It used to be a counts line plus the vulnerable cells, which
+					// told the agent how much was left but never WHERE — so the one view
+					// that answers "what have I not looked at" was operator-only.
+					const view = await computeCoverageView(deps.workspace, surfaceKinds);
+					if (!view) return text("No checklist loaded; cannot compute coverage. Record a checklist or surface elements first.");
+					const lines = renderCoveragePanel({
+						view, engagement: "", width: PLAIN.width,
+						ink: PLAIN.ink, measure: PLAIN.measure, truncate: PLAIN.truncate,
+					});
+					return text(lines.join("\n"));
+				}
+				case "surface": {
+					// One row per recorded element with its coverage bar across the
+					// checklist — the /surface view. `inventory` lists what exists;
+					// this says how far each one has actually been taken.
+					const view = await computeCoverageView(deps.workspace, surfaceKinds);
+					const model = buildBrowserModel({
+						engagement: "",
+						classes: view?.classes ?? [],
+						cells: view?.matrix.cells ?? [],
+						inventory: await deps.workspace.read("inventory"),
+						hypotheses: await deps.workspace.read("hypotheses"),
+						findings: await deps.workspace.read("findings"),
+					});
+					if (model.surface.length === 0) {
+						return text("no surface recorded yet — run recon, or record inventory");
+					}
+					// reduce, not Math.max(...spread): a spread of a very large surface
+					// exceeds the argument limit and throws instead of rendering.
+					const wide = model.surface.reduce((a, r) => Math.max(a, r.label.length), 0);
+					const rows = model.surface.slice(0, limit).map((r) => {
+						const bar = r.statuses.map((st) => CELL_GLYPH[st]).join("");
+						const flag = r.findings > 0 ? `  ${r.findings} finding(s)` : "";
+						return `${r.id.padEnd(8)} ${r.label.padEnd(Math.min(wide, 48))}  ${bar}  ${r.settled}/${r.askable}${flag}`;
+					});
+					const legend = `legend: ${Object.entries(CELL_GLYPH).map(([k, g]) => `${g} ${k}`).join("  ")}`;
+					const order = model.classes.map((c) => c.id).join(", ");
+					const note = truncated(rows.length, model.surface.length, "elements", "least-settled first");
+					return text([...rows, "", `bar columns, in order: ${order}`, legend].join("\n") + note);
+				}
+				case "status": {
+					// The engagement rollup the panel shows: how much surface, how much
+					// of it settled, what has been found, what is parked.
+					const stats = await computeEngagementStats(deps.workspace, surfaceKinds);
+					const sev = Object.entries(stats.findings)
+						.filter(([, n]) => n > 0)
+						.map(([k, n]) => `${k} ${n}`)
+						.join(" · ");
 					const m = await coverageMatrix();
-					if (!m) return text("No checklist loaded; cannot compute coverage. Record a checklist or surface elements first.");
-					const counts = Object.entries(m.counts).filter(([, n]) => n > 0).map(([s, n]) => `${s}: ${n}`).join(", ");
-					const notable = m.cells.filter((c) => c.status === "vulnerable" || c.status === "blocked").map((c) => `${c.element}/${c.class}: ${c.status}`);
-					return text([`Coverage (${counts || "empty"})`, ...notable].join("\n"));
+					const gaps = m ? m.counts["not-tested"] + m.counts.blocked : 0;
+					return text([
+						`surface    ${stats.surface} element(s)`,
+						`coverage   ${stats.coveragePct ?? 0}%${m ? ` · ${m.applicable} askable cells · ${gaps} gap(s)` : " (no checklist)"}`,
+						`findings   ${stats.findingsTotal}${sev ? ` (${sev})` : ""}`,
+						`blockers   ${stats.blockers} open`,
+					].join("\n"));
 				}
 				case "gaps": {
 					const m = await coverageMatrix();
 					if (!m) return text("No checklist loaded; cannot compute gaps.");
-					const gaps = findGaps(m).slice(0, limit);
-					return text(gaps.length ? gaps.map((g) => `${g.element}/${g.class}: ${g.reason}`).join("\n") : "No gaps: coverage complete.");
+					// An empty matrix has no gaps because it has no cells — which is the
+					// opposite of complete. Coverage is over the surface you RECORDED, so
+					// a review that recorded none has a denominator of zero, and saying
+					// "complete" certifies as finished exactly the run that never
+					// started. The panel has said this since it was written; the agent,
+					// which is the one that can act on it, was told it was done.
+					if (m.applicable === 0) {
+						return text("No surface recorded yet, so there is nothing to cover and nothing to report as covered. Record inventory (hosts/endpoints/params) first — coverage is measured over what you have recorded.");
+					}
+					const all = findGaps(m);
+					const gaps = all.slice(0, limit);
+					return text(gaps.length
+						? gaps.map((g) => `${g.element}/${g.class}: ${g.reason}`).join("\n") + truncated(gaps.length, all.length, "gaps")
+						: "No gaps: every askable cell is settled.");
 				}
 				case "next": {
 					const m = await coverageMatrix();
 					if (!m) return text("No checklist loaded; cannot pick next work.");
+					if (m.applicable === 0) {
+						return text("No surface recorded yet, so there is no next cell to pick. Record inventory (hosts/endpoints/params) first — the matrix is checklist classes x the surface you recorded.");
+					}
 					const next = selectNext(m);
 					if (!next) {
 						const blocked = m.counts.blocked;
-						return text(blocked > 0 ? `No unblocked work: ${blocked} cell(s) blocked pending the operator.` : "No actionable work: coverage complete.");
+						return text(blocked > 0 ? `No unblocked work: ${blocked} cell(s) blocked pending the operator.` : "No actionable work: every askable cell is settled.");
 					}
 					return text(`Next: test ${next.element} for ${next.class}.`);
 				}

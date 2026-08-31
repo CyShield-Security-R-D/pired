@@ -16,6 +16,8 @@ Coverage is **derived, never stored**. It is recomputed from the ledgers on ever
 
 An endpoint the agent never recorded has no cells at all. It cannot show as tested, it cannot show as a gap, and `recall gaps` cannot route to it. A review that records only findings leaves the matrix empty and its own coverage unmeasurable.
 
+So an empty matrix is reported as empty, never as finished. `recall gaps` and `recall next` on a zero-denominator matrix say *"no surface recorded yet"* and name the fix, because "no gaps" and "coverage complete" are true of a completed engagement and of one that never started, and the agent is the party that can tell them apart.
+
 This is a deliberate trade. pired cannot know what it was not told about — so the number it reports is honest about its own denominator rather than pretending to a completeness it cannot verify. It is why the system prompt pushes the agent to record inventory as it discovers it, and why the coverage view's empty state says *"no surface recorded yet — run recon, or record inventory"* rather than showing 100%.
 
 ## Cell statuses
@@ -105,10 +107,10 @@ See [Skills and checklists](skills.md) and [`FORMAT.md` §7](../FORMAT.md).
 
 ## Seeing it
 
-- **`/coverage`** — the full matrix, one row per class. See [The interface](ui.md#the-coverage-view).
+- **`/coverage`** — the full matrix, one row per class, with `⏎` into a class to see it down the whole surface. See [The interface](ui.md#the-coverage-view).
 - **`alt+p`** — the [panel](panel.md), for the summary and gap count.
 - **`pired-state --json`** — the numbers, for a status bar or a script.
-- **`recall coverage` / `recall gaps`** — what the agent sees.
+- **`recall status` / `recall coverage` / `recall surface` / `recall gaps`** — what the agent sees, and it is the *same* view: `recall coverage` renders the matrix through the renderer `/coverage` uses, so the operator and the agent cannot be looking at two different numbers.
 
 ## Engagement types
 

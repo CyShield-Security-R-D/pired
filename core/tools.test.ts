@@ -63,6 +63,55 @@ describe("record tool", () => {
 		const { ctx, record } = await setup();
 		await expect(record.execute({ kind: "nope" }, ctx)).rejects.toThrow(/kind/i);
 	});
+
+	describe("a class the checklist does not know", () => {
+		// The valid ids live in the engagement's checklist, which the tool schema
+		// cannot show, so the model guesses. On a live run it guessed
+		// "code-injection" for `codeinj` and "traversal" for `pathtrav`; nothing
+		// rejected either, they settled no cell, and a third of the session went on
+		// inferring that from a coverage percentage that would not move.
+		async function withChecklist(): Promise<{ ctx: ToolContext; record: ToolDefinition }> {
+			const { ws, ctx, record } = await setup();
+			await ws.writeChecklist({
+				v: 1, targetType: "code-review",
+				classes: [{ id: "codeinj", title: "Code injection" }, { id: "pathtrav", title: "Path traversal" }],
+			} as Checklist);
+			return { ctx, record };
+		}
+
+		it("is rejected rather than written to a cell nothing matches", async () => {
+			const { ctx, record } = await withChecklist();
+			await expect(record.execute(
+				{ kind: "hypothesis", statement: "eval on user input", target: "e1", class: "code-injection" }, ctx,
+			)).rejects.toThrow(/unknown checklist class/i);
+		});
+
+		it("names the valid ids and the closest match", async () => {
+			const { ctx, record } = await withChecklist();
+			await expect(record.execute(
+				{ kind: "hypothesis", statement: "s", target: "e1", class: "traversal" }, ctx,
+			)).rejects.toThrow(/did you mean 'pathtrav'/);
+			await expect(record.execute(
+				{ kind: "hypothesis", statement: "s", target: "e1", class: "code-injection" }, ctx,
+			)).rejects.toThrow(/codeinj, pathtrav/);
+		});
+
+		it("accepts the real id", async () => {
+			const { ctx, record } = await withChecklist();
+			const out = await record.execute(
+				{ kind: "hypothesis", statement: "s", target: "e1", class: "codeinj" }, ctx,
+			);
+			expect(JSON.stringify(out)).toMatch(/Recorded/i);
+		});
+
+		it("stays out of the way when no checklist is seeded", async () => {
+			const { ctx, record } = await setup();
+			const out = await record.execute(
+				{ kind: "hypothesis", statement: "s", target: "e1", class: "whatever" }, ctx,
+			);
+			expect(JSON.stringify(out)).toMatch(/Recorded/i);
+		});
+	});
 });
 
 describe("recall tool", () => {
@@ -82,12 +131,43 @@ describe("recall tool", () => {
 		expect(out).toContain("/api/user");
 	});
 
-	it("computes coverage from checklist × surface × hypotheses", async () => {
+	it("hands the agent the matrix the operator sees, not a count line", async () => {
 		const { ws, ctx, recall } = await seed();
 		await ws.append("hypotheses", { v: 1, id: "y1", kind: "hypothesis", createdAt: "t", statement: "s", target: "e1", class: "authz", outcome: "confirmed" });
 		const out = textOf(await recall.execute({ query: "coverage" }, ctx));
+		// One row per class, named — the old output said how many cells were
+		// untested but never which, so "where are the holes" was operator-only.
+		expect(out).toContain("Access control");
+		expect(out).toContain("SQL injection");
+		// The settled cell renders as its glyph, and the legend explains it.
+		expect(out).toContain("▲");
 		expect(out).toMatch(/vulnerable/i);
-		expect(out).toMatch(/not-tested/i);
+		expect(out).toMatch(/untested/i);
+	});
+
+	it("reports the engagement rollup the panel shows", async () => {
+		const { ws, ctx, recall } = await seed();
+		await ws.append("findings", { v: 1, id: "f1", kind: "finding", createdAt: "t", title: "IDOR", severity: "high", target: "e1", status: "open" });
+		const out = textOf(await recall.execute({ query: "status" }, ctx));
+		expect(out).toMatch(/surface\s+1 element/);
+		expect(out).toMatch(/coverage\s+\d+%/);
+		expect(out).toMatch(/findings\s+1 \(high 1\)/);
+		expect(out).toMatch(/blockers\s+0 open/);
+	});
+
+	it("shows per-element coverage, with the class order the bar is in", async () => {
+		const { ws, ctx, recall } = await seed();
+		await ws.append("hypotheses", { v: 1, id: "y1", kind: "hypothesis", createdAt: "t", statement: "s", target: "e1", class: "authz", outcome: "refuted" });
+		const out = textOf(await recall.execute({ query: "surface" }, ctx));
+		expect(out).toContain("/api/user");
+		expect(out).toContain("●");                      // the refuted cell
+		expect(out).toMatch(/bar columns, in order: authz, sqli/);
+		expect(out).toMatch(/legend:/);
+	});
+
+	it("says plainly when there is no surface to cover", async () => {
+		const { ctx, recall } = await setup();
+		expect(textOf(await recall.execute({ query: "surface" }, ctx))).toMatch(/no surface recorded yet/);
 	});
 
 	it("lists gaps", async () => {
@@ -191,7 +271,11 @@ describe("record hypothesis in bulk", () => {
 		);
 		// One call, a whole row of the matrix settled — the ergonomics fix exists
 		// because doing this per-cell is hundreds of calls on a real engagement.
-		expect(textOf(await recall.execute({ query: "coverage" }, ctx))).toContain("clear: 2");
+		// Both cells now read as settled in the rendered matrix (● is "clear").
+		const matrix = textOf(await recall.execute({ query: "coverage" }, ctx));
+		expect(matrix).toMatch(/XSS\s+●/);
+		expect(matrix).toMatch(/SSTI\s+●/);
+		expect(textOf(await recall.execute({ query: "status" }, ctx))).toMatch(/coverage\s+100%/);
 	});
 
 	it("still requires a statement when recording in bulk", async () => {
@@ -365,5 +449,67 @@ describe("a missing target tells the agent how to resolve it", () => {
 			.rejects.toThrow(/raw string|Record the surface element first/);
 		await expect(record.execute({ kind: "hypothesis", statement: "x", class: "injection" }, ctx))
 			.rejects.toThrow(/Do not ask the operator/);
+	});
+});
+
+describe("an empty ledger is not a finished engagement", () => {
+	// Coverage is measured over the surface that was RECORDED, so a run that
+	// recorded none has a denominator of zero. `gaps` and `next` used to read that
+	// as "coverage complete" and "no actionable work" — certifying as done the one
+	// run that never started. The operator's panel has always said "no surface
+	// recorded yet"; the agent, the only party that can act on it, was told the
+	// opposite.
+	async function withChecklistOnly(): Promise<{ ctx: ToolContext; recall: ToolDefinition }> {
+		const { ws, ctx, recall } = await setup();
+		await ws.writeChecklist({
+			v: 1, targetType: "web", classes: [{ id: "authz", title: "Access control" }],
+		} as Checklist);
+		return { ctx, recall };
+	}
+
+	it("does not call an unrecorded surface 'complete'", async () => {
+		const { ctx, recall } = await withChecklistOnly();
+		const gaps = textOf(await recall.execute({ query: "gaps" }, ctx));
+		expect(gaps).not.toMatch(/complete/i);
+		expect(gaps).toMatch(/no surface recorded yet/i);
+	});
+
+	it("does not offer 'no actionable work' when nothing was ever recorded", async () => {
+		const { ctx, recall } = await withChecklistOnly();
+		const next = textOf(await recall.execute({ query: "next" }, ctx));
+		expect(next).not.toMatch(/complete|no actionable work/i);
+		expect(next).toMatch(/record inventory/i);
+	});
+
+	it("still reports genuine completion once a surface exists and is settled", async () => {
+		const { ws, ctx, recall, record } = await setup();
+		await ws.writeChecklist({ v: 1, targetType: "web", classes: [{ id: "authz", title: "Access control" }] } as Checklist);
+		await ws.append("inventory", { v: 1, id: "e1", kind: "endpoint", createdAt: "t", host: "h1", method: "GET", path: "/x" });
+		await record.execute({ kind: "hypothesis", statement: "checked", target: "e1", class: "authz", outcome: "refuted" }, ctx);
+		expect(textOf(await recall.execute({ query: "gaps" }, ctx))).toMatch(/every askable cell is settled/i);
+	});
+});
+
+describe("a capped list says what it left out", () => {
+	// Every recall list is capped. Rendered without a notice a capped list reads
+	// as the whole answer: on a 500-endpoint engagement `gaps` returned fifty
+	// lines of 2,250 and looked like a complete, short list of remaining work.
+	it("names the total and the ordering when it truncates", async () => {
+		const { ws, ctx, recall } = await setup();
+		await ws.writeChecklist({ v: 1, targetType: "web", classes: [{ id: "authz", title: "Access control" }] } as Checklist);
+		for (let i = 0; i < 12; i++) {
+			await ws.append("inventory", { v: 1, id: `e${i}`, kind: "endpoint", createdAt: "t", host: "h", method: "GET", path: `/r/${i}` });
+		}
+		const surface = textOf(await recall.execute({ query: "surface", limit: 5 }, ctx));
+		expect(surface).toMatch(/showing 5 of 12 elements \(least-settled first\)/);
+
+		const gaps = textOf(await recall.execute({ query: "gaps", limit: 4 }, ctx));
+		expect(gaps).toMatch(/showing 4 of 12 gaps/);
+	});
+
+	it("stays quiet when nothing was left out", async () => {
+		const { ws, ctx, recall } = await setup();
+		await ws.append("inventory", { v: 1, id: "e1", kind: "endpoint", createdAt: "t", host: "h", method: "GET", path: "/x" });
+		expect(textOf(await recall.execute({ query: "inventory" }, ctx))).not.toMatch(/showing/);
 	});
 });

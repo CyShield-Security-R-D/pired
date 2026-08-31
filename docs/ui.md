@@ -110,24 +110,39 @@ Full reference, including the other two placements and rendering it outside the 
 
 ## The coverage view
 
-`/coverage` opens a centred overlay with the full matrix: one row per vulnerability class, with a bar of per-element cells.
+`/coverage` opens the matrix as a browsable view: one row per vulnerability class, with a bar of per-element cells.
 
 ```
-⦿ coverage · acme-webapp                                   51%
-
-Broken access cont  ●●●▲●●········                        6/14
-SQL injection       ●●●●●●●●●●····                       10/14
-SSRF                ●●●···········                        3/14
-Cross-site scripti  ●●●●●●●●●●●●●●                       14/14
-Exposed secrets     ●●●⊘··········                        3/14
-
-● clear  ▲ vulnerable  ◐ testing  ⊘ blocked  · untested
-70 cells · 34 gaps                                esc to close
+╭─ ⦿ coverage · acme-webapp ─────────────────────────────────────────╮
+│                                           51% · 5 classes · 34 gaps │
+├─────────────────────────────────────────────────────────────────────┤
+│ ▸ Broken access control          ●●●▲●●········  6/14               │
+│   SQL injection                  ●●●●●●●●●●····  10/14              │
+│   SSRF                           ●●●···········  3/14               │
+│   Cross-site scripting           ●●●●●●●●●●●●●●  14/14              │
+│   Exposed secrets                ●●●⊘··········  3/14               │
+├─────────────────────────────────────────────────────────────────────┤
+│ ↑↓ move · ⏎ open class · tab surface · R reload · q close           │
+╰─────────────────────────────────────────────────────────────────────╯
 ```
 
 A bar rather than a true grid, because a bar simply shortens as the surface grows while a grid would have to drop whole columns. Each row ends in *settled / askable* for that class — `n/a` cells hold their slot in the bar so columns stay aligned, but they are out of the denominator, exactly as they are out of the coverage percentage.
 
-When the surface is wider than the bar, the overflow is marked inside the bar (`+18`) rather than past it. When the terminal is too narrow for bars at all, rows fall back to counts alone. Press `q`, `Esc`, or `Enter` to close.
+Press `⏎` on a class to open it **down the surface**: one row per element, that class's cell, and the hypothesis that settled it — or `no hypothesis recorded` where a cell is settled with nothing behind it, which is worth seeing.
+
+```
+╭─ ⦿ Broken access control · acme-webapp ────────────────────────────╮
+│                                     4/4 settled across 4 elements  │
+├─────────────────────────────────────────────────────────────────────┤
+│ ▸ ▲ POST /api/admin/report    admin report accepts any bearer token │
+│   ● POST /api/profile/import  clear · no hypothesis recorded        │
+│   ▲ GET /api/transactions     user_id is not scoped to the caller   │
+├─────────────────────────────────────────────────────────────────────┤
+│ ↑↓ move · ⏎ open · esc back · tab surface · q close                 │
+╰─────────────────────────────────────────────────────────────────────╯
+```
+
+`tab` cycles coverage → surface → hypotheses → findings, so all four are one view with one chrome. The same matrix, laid out to fit a fixed number of rows and counting what it dropped, is what fills the [welcome screen](#the-welcome-screen) and what `pired-state` prints.
 
 Two empty states are worth knowing, because they are diagnostic:
 
@@ -201,7 +216,7 @@ Colour carries meaning only — severity and outcome — never decoration. Every
 - The status line is not installed; state is published through pi's `setStatus` instead, which is what pi's own footer renders.
 - `/coverage` prints a one-line summary (`coverage 62% · 170 cells · 65 gaps`) instead of opening an overlay.
 - Blocker dialogs do not fire. Blockers accumulate in the ledger and can be read with `recall blockers`, or with `pired-state --json`.
-- `/findings` behaves identically — it writes Markdown to the workspace either way.
+- `/report` behaves identically — it writes Markdown to the workspace either way.
 
 ## The engagement browser
 
@@ -230,7 +245,7 @@ Rows are ordered **least-settled first** — the reason to open this view is to 
 
 A row never contradicts its glyph. Where a cell is settled but no hypothesis is recorded behind it, the row says so rather than reporting the cell untested.
 
-`/report` lists the findings, worst severity first — recording order buries a critical under six info rows. `⏎` opens one in full: severity, CWE, class, target, status, description, repro steps and every evidence path. `Tab` cycles the three lists: surface → hypotheses → findings.
+`/findings` lists them worst severity first — recording order buries a critical under six info rows. `⏎` opens one in full: the title, then severity, CWE, class, target, status, description, repro steps and every evidence path, scrolling with `↑↓` when it runs past a screenful. `Tab` cycles the four views: coverage → surface → hypotheses → findings.
 
 From the maximized panel, `⏎` hands off here. The panel is a dashboard — it tells you there are twelve findings; reading one properly is this view's job, and building a second selectable list inside a fixed layout would only duplicate it.
 
@@ -280,7 +295,7 @@ A session opens with the wordmark, the engagement it is about to work on, and th
   model        qwen3.8-27b
   recorded     41 surface · 12% covered · 2 findings
 
-  /surface   /hypotheses   /coverage   /panel
+  /surface   /hypotheses   /findings   /coverage   /panel
 ```
 
 Three rows of half blocks, not six of full ones. Block capitals are 34 columns wide and the space beside the panel is 27, so a full-height font could not sit next to the rail at all — and it reads as retro besides. The two tones are not decoration: the name is literally "pi" + "red", so the accent lands on the second half and the wordmark explains itself. The tagline is set against the art's **baseline** rather than its top, where it reads as a lockup instead of two unrelated things sharing a line.
@@ -304,7 +319,9 @@ So the banner takes only the columns left of the panel, and drops what does not 
   4 surface · 7 findings     │  ● authorized off             │
 
   /surface  /hypotheses      ├─ surface ─────────────────────┤
-  /coverage  /panel          │  host        1  endpoint   3  │
+  /surface   /hypotheses        │  host   1  endpoint   3  │
+  /findings  /coverage          │                          │
+  /panel                        │                          │
 ```
 
 The label column goes first — `engagement` beside `pired` spends eleven of twenty-seven columns explaining what the value already says. Coverage goes next, because the panel is rendering the same number three columns to the right. The commands wrap rather than running off the edge.
@@ -321,7 +338,7 @@ The reservation is the height the panel *actually draws*, not the height it is a
 
 ### What goes in those rows
 
-The banner sits at the top of them, and the rows under it hold **the coverage matrix** — the same `checklist × surface` view `/coverage` opens, in the same box the rail is drawn in, indented to the wordmark's margin and ending where the banner's rule ends.
+The banner sits at the top of them, and the rows under it hold **the coverage matrix** — the same `checklist × surface` matrix `/coverage` browses, laid out to fit a fixed number of rows, in the same box the rail is drawn in, indented to the wordmark's margin and ending where the banner's rule ends.
 
 Blank rows were the wrong answer to a question the layout was already asking. The reservation exists whatever we do, the matrix is the harness's whole thesis, and a welcome screen that shows where the work stands is worth more than one that shows a wordmark and a hole. On an engagement with no surface yet it says so in the same box — *no surface recorded yet — run recon, or record inventory* — which is the one thing a new engagement needs told.
 

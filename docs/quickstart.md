@@ -90,10 +90,11 @@ While it works, three things are worth watching:
 When you want the report:
 
 ```
-/findings
+/report
 ```
 
-which writes Markdown into the engagement workspace.
+which writes Markdown into the engagement workspace. `/findings` browses them on
+screen instead — worst first, with drill-down into each one's evidence.
 
 ## A blackbox engagement
 
