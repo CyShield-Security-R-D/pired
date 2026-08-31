@@ -307,7 +307,10 @@ function elementNameIn(raw: string): string | undefined {
 	// A route first — it is unambiguous — then a filename with an extension.
 	const route = /^([A-Z]+\s+)?(\/[\w./{}<>:-]*)/.exec(t);
 	if (route?.[2] && route[2].length > 1) return route[2];
-	const file = /^([\w./-]+\.[A-Za-z]{1,6})/.exec(t);
+	// A real source or config extension, not any dotted token: "app.run(debug=True)"
+	// and "logger.info" both look like filenames to a naive pattern and would be
+	// recorded as surface, putting function calls in the coverage matrix.
+	const file = /^([\w./-]+\.(?:py|pyi|js|jsx|ts|tsx|mjs|cjs|go|rb|php|java|cs|rs|kt|kts|scala|swift|c|h|cpp|hpp|sql|sh|bash|zsh|ya?ml|json|toml|ini|cfg|conf|env|tf|tfvars|xml|html|htm|css|scss|md|txt|lock|gradle|properties))\b/i.exec(t);
 	return file?.[1];
 }
 
