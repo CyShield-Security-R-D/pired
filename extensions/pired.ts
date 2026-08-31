@@ -1331,12 +1331,29 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		// wrote nothing is the failure this exists for.
 		const review = assistantText(event.message);
 		if (review.length > 0) lastReview = review;
-		// Inventory alone does not count. What is missing when this fires is the
-		// tested-ness: the hypotheses that settle cells and the findings that reach
-		// the report.
+		// Two reasons to run the second pass, and only one of them is a rescue.
+		//
+		// A turn that settled nothing needs rescuing. But a turn that recorded
+		// plenty still leaves the checklist unanswered: the agent records what it
+		// FINDS, and nothing prompts it to say what it examined and ruled out. Take
+		// nine wrote 242 hypotheses, every one of them confirmed, and coverage read
+		// 2% — the matrix showed vulnerable cells and untested ones and no cleared
+		// ones at all, which is the half of an engagement a findings list already
+		// gives you for free.
+		//
+		// The class roll-call is what asks the question, and gating it on "recorded
+		// nothing" meant a run that went well was never asked.
 		void wrote;
-		if (claims === 0 && review.length >= EXTRACT_MIN_REVIEW) {
-			await runExtraction(ctx, review, "auto");
+		if (review.length >= EXTRACT_MIN_REVIEW) {
+			const settledClasses = new Set(
+				(await workspace?.read("hypotheses") ?? [])
+					.filter((h) => h.outcome === "confirmed" || h.outcome === "refuted")
+					.map((h) => h.class),
+			);
+			const checklist = await workspace?.readChecklist();
+			const unanswered = (checklist?.classes ?? []).filter((c) => !settledClasses.has(c.id)).length;
+			// Rescue, or a checklist still carrying unanswered classes.
+			if (claims === 0 || unanswered > 0) await runExtraction(ctx, review, "auto");
 		}
 		await refreshStatus(ctx);
 	});
