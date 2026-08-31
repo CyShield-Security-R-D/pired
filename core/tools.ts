@@ -425,7 +425,14 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 			// tool imposing its bookkeeping on the work. So the element is created
 			// from the target: recording that something was examined is not
 			// invention, it is the claim the hypothesis already makes.
-			if (kind === "hypothesis" || kind === "finding") {
+			// HYPOTHESES ONLY. A hypothesis's target must be an element id, because that
+			// is what a coverage cell is keyed on. A finding's target must NOT be
+			// touched: it carries the location the report and the grader need, and
+			// resolving it destroys that. Applying this to both cost take nine its
+			// deliverable — "auth_routes.py:22" became element id "53d145", the line
+			// number was gone, and 164 findings graded as 5 (recall 0.08) against a key
+			// the same run had genuinely found dozens of entries for.
+			if (kind === "hypothesis") {
 				const wanted = asList(a.target).filter((t): t is string => typeof t === "string" && t.trim().length > 0);
 				if (wanted.length > 0) {
 					let index = targetIndex(await deps.workspace.read("inventory"));
@@ -438,7 +445,7 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 						// 17" are both about app.py. Resolve the extracted name before
 						// creating anything, or the second hypothesis about a file makes
 						// a second copy of it and splits its coverage across two rows.
-						const name = kind === "hypothesis" ? elementNameIn(t) : undefined;
+						const name = elementNameIn(t);
 						if (!name) { resolved.push(t); continue; }
 						const byName = resolveTarget(name, index);
 						if (byName !== name) { resolved.push(byName); continue; }
