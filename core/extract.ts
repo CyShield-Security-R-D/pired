@@ -214,8 +214,50 @@ export function parseExtraction(reply: string): ParseResult {
  * finding's description does not truncate the document.
  */
 function sliceJsonObject(text: string): string | undefined {
-	const start = text.indexOf("{");
-	if (start < 0) return undefined;
+	// Every balanced top-level object, not just the first.
+	//
+	// A reply is routinely a wall of reasoning followed by the answer, and that
+	// reasoning discusses the very schema being asked for — so it is full of
+	// braces. Taking the first one parsed a fragment of the model thinking aloud
+	// and reported an empty extraction, while a complete, correct roll-call sat
+	// at the end of the same reply. Prefer the candidate that actually looks like
+	// the document; among equals, the last, because the answer follows the
+	// working.
+	const candidates: string[] = [];
+	for (let start = text.indexOf("{"); start >= 0; start = text.indexOf("{", start + 1)) {
+		const end = matchBrace(text, start);
+		if (end === undefined) continue;
+		candidates.push(text.slice(start, end + 1));
+		start = end;   // a nested object is not a separate candidate
+	}
+	if (candidates.length === 0) return undefined;
+
+	let best: string | undefined;
+	let bestScore = -1;
+	for (const c of candidates) {
+		let doc: unknown;
+		try {
+			doc = JSON.parse(c);
+		} catch {
+			continue;
+		}
+		if (typeof doc !== "object" || doc === null) continue;
+		const o = doc as Record<string, unknown>;
+		// Score by how much of the asked-for shape is present, so a stray object
+		// from the reasoning cannot outrank the real one.
+		const score = (Array.isArray(o.classes) ? 2 : 0)
+			+ (Array.isArray(o.findings) ? 2 : 0)
+			+ (Array.isArray(o.surface) ? 1 : 0)
+			+ (Array.isArray(o.hypotheses) ? 1 : 0);
+		if (score >= bestScore) { bestScore = score; best = c; }
+	}
+	// Nothing parsed: hand back the longest, so the caller reports a JSON error
+	// against the most plausible candidate rather than a random early brace.
+	return best ?? candidates.reduce((a, b) => (b.length > a.length ? b : a));
+}
+
+/** Index of the `}` closing the `{` at `start`, or undefined if unbalanced. */
+function matchBrace(text: string, start: number): number | undefined {
 	let depth = 0;
 	let inStr = false;
 	let escaped = false;
@@ -231,7 +273,7 @@ function sliceJsonObject(text: string): string | undefined {
 		else if (c === "{") depth++;
 		else if (c === "}") {
 			depth--;
-			if (depth === 0) return text.slice(start, i + 1);
+			if (depth === 0) return i;
 		}
 	}
 	return undefined;
@@ -316,4 +358,103 @@ export function trimReview(review: string, limit = 40000): string {
 /** A terser second ask, for when the first reply came back as prose. */
 export function retryNudge(): string {
 	return "Your previous reply was not JSON. Reply with the JSON object only: no explanation, no preamble, no markdown fence. Start your reply with { and end it with }.";
+}
+
+/** One `record` call the adapter should make, in order. */
+export interface PlannedRecord {
+	args: Record<string, unknown>;
+	/** Set when this row creates a surface element, so the adapter can map its new id. */
+	createsLabel?: string;
+}
+
+export interface PlanInput {
+	extraction: Extraction;
+	/** Labels already in the ledger, so nothing is recorded twice. */
+	known: Set<string>;
+	/** Every recorded surface id, for a refutation that names no target. */
+	allSurface: string[];
+	/** Checklist classes and their CWEs, for recovering an omitted class. */
+	classes: Array<{ id: string; cwe?: string[] }>;
+}
+
+/**
+ * Turn an extraction into the exact sequence of `record` calls it implies.
+ *
+ * Pure, and separated from the adapter deliberately: this is where the decisions
+ * live — which cells a verdict settles, when a class is recovered from a CWE,
+ * whether a finding also implies a hypothesis, what is a duplicate — and every
+ * one of those was a bug that hid in the extension where nothing could test it.
+ *
+ * `target` values are LABELS. The adapter resolves them to ids, because ids for
+ * rows this plan creates do not exist until it has run.
+ */
+export function planExtraction(input: PlanInput): { records: PlannedRecord[]; notes: string[] } {
+	const { extraction, known, allSurface, classes } = input;
+	const records: PlannedRecord[] = [];
+	const notes: string[] = [];
+	const ids = classes.map((c) => c.id);
+
+	for (const el of extraction.surface) {
+		if (known.has(el.label)) continue;
+		records.push({ args: elementArgs(el), createsLabel: el.label });
+	}
+
+	for (const v of extraction.classes) {
+		if (v.verdict === "not-considered") continue;
+		if (!ids.includes(v.class)) { notes.push(`class "${v.class}" is not in the checklist`); continue; }
+		const outcome = v.verdict === "confirmed" ? "confirmed" : "refuted";
+		// A refutation that names no target applies across everything reviewed —
+		// what a consultant means by "we checked for SSTI and it is clean". A
+		// CONFIRMATION with no target settles nothing: "it is present somewhere" is
+		// not a cell, and spreading it over the whole surface would be a lie.
+		const targets = v.targets.length > 0 ? v.targets : outcome === "refuted" ? allSurface : [];
+		if (targets.length === 0) {
+			if (outcome === "confirmed") notes.push(`class "${v.class}" confirmed but named no target`);
+			continue;
+		}
+		records.push({
+			args: {
+				kind: "hypothesis", class: v.class, target: targets, outcome,
+				statement: v.why ?? `${v.class}: ${outcome === "refuted" ? "examined and found clean" : "confirmed"} during review`,
+			},
+		});
+	}
+
+	for (const h of extraction.hypotheses) {
+		if (!ids.includes(h.class)) { notes.push(`hypothesis class "${h.class}" is not in the checklist`); continue; }
+		records.push({ args: { kind: "hypothesis", statement: h.statement, class: h.class, target: h.target, outcome: h.outcome } });
+	}
+
+	for (const f of extraction.findings) {
+		const cls = (f.class && ids.includes(f.class) ? f.class : undefined) ?? classFromCwe(f.cwe, classes);
+		if (f.class && !ids.includes(f.class)) notes.push(`finding "${f.title.slice(0, 30)}…" had class "${f.class}", not in the checklist`);
+		const target = f.file ? `${f.file}${f.line ? `:${f.line}` : ""}` : undefined;
+		records.push({
+			args: {
+				kind: "finding", title: f.title, severity: f.severity,
+				...(cls ? { class: cls } : {}), ...(f.cwe ? { cwe: f.cwe } : {}),
+				...(target ? { target } : {}), ...(f.description ? { description: f.description } : {}),
+			},
+		});
+		// Coverage is settled by a hypothesis outcome, never by a finding. Without
+		// this a run produces a full report beside an empty matrix.
+		const alreadySettled = extraction.classes.some((v) => v.class === cls && v.verdict === "confirmed")
+			|| extraction.hypotheses.some((h) => h.class === cls && h.target === target);
+		if (cls && target && !alreadySettled) {
+			const h = hypothesisForFinding(f, cls, target);
+			records.push({ args: { kind: "hypothesis", statement: h.statement, class: h.class, target: h.target, outcome: h.outcome } });
+		}
+	}
+
+	return { records, notes };
+}
+
+/** One extracted element as `record` arguments. */
+export function elementArgs(el: ExtractedElement): Record<string, unknown> {
+	if (el.kind === "endpoint") {
+		const m = /^([A-Z]+)\s+(.+)$/.exec(el.label);
+		return m ? { kind: "endpoint", method: m[1], path: m[2] } : { kind: "endpoint", path: el.label };
+	}
+	if (el.kind === "host") return { kind: "host", value: el.label };
+	return { kind: el.kind, name: el.label };
 }
