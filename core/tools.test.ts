@@ -513,3 +513,73 @@ describe("a capped list says what it left out", () => {
 		expect(textOf(await recall.execute({ query: "inventory" }, ctx))).not.toMatch(/showing/);
 	});
 });
+
+describe("a hypothesis creates the surface it names", () => {
+	// Coverage is classes x RECORDED surface, so a hypothesis targeting something
+	// nobody declared settles nothing. Take eight recorded three tech tags and
+	// then wrote seventeen hypotheses against files — the matrix had no cells at
+	// all and the panel read 0% beside a full ledger. Requiring the agent to
+	// pre-declare a thing before it may test it is the tool imposing its
+	// bookkeeping on the work.
+	async function seeded(): Promise<{ ws: Workspace; ctx: ToolContext; record: ToolDefinition; recall: ToolDefinition }> {
+		const { ws, ctx, record, recall } = await setup();
+		await ws.writeChecklist({
+			v: 1, targetType: "code-review",
+			classes: [{ id: "secrets", title: "Hardcoded secrets" }, { id: "authn", title: "Broken authentication" }],
+		} as Checklist);
+		return { ws, ctx, record, recall };
+	}
+
+	it("records the file a prose target names, and points the hypothesis at it", async () => {
+		const { ws, ctx, record } = await seeded();
+		await record.execute(
+			{ kind: "hypothesis", statement: "hardcoded key", class: "secrets", outcome: "confirmed",
+				target: "app.py line 17 SECRET_KEY = 'supersecret'" }, ctx,
+		);
+		const inv = await ws.read("inventory");
+		expect(inv.map((r) => (r as unknown as { path?: string }).path)).toContain("app.py");
+		const hyp = await ws.read("hypotheses");
+		// The target is now an id, which is what settles a cell.
+		expect(inv.some((r) => r.id === hyp[0]?.target)).toBe(true);
+	});
+
+	it("reuses the element on the next hypothesis rather than duplicating it", async () => {
+		const { ws, ctx, record } = await seeded();
+		for (const cls of ["secrets", "authn"]) {
+			await record.execute(
+				{ kind: "hypothesis", statement: `${cls} check`, class: cls, outcome: "refuted", target: "app.py the login flow" }, ctx,
+			);
+		}
+		const paths = (await ws.read("inventory")).map((r) => (r as unknown as { path?: string }).path);
+		expect(paths.filter((p) => p === "app.py")).toHaveLength(1);
+	});
+
+	it("resolves a route written with a method and trailing noise", async () => {
+		const { ws, ctx, record } = await seeded();
+		await record.execute({ kind: "endpoint", method: "POST", path: "/api/login" }, ctx);
+		await record.execute(
+			{ kind: "hypothesis", statement: "f-string SQL", class: "authn", outcome: "confirmed", target: "POST /api/login (line 30)" }, ctx,
+		);
+		const inv = await ws.read("inventory");
+		// One endpoint, not two: the existing element was matched, not recreated.
+		expect(inv).toHaveLength(1);
+		expect((await ws.read("hypotheses"))[0]?.target).toBe(inv[0]?.id);
+	});
+
+	it("leaves a target that names nothing as written, rather than inventing an element", async () => {
+		const { ws, ctx, record } = await seeded();
+		await record.execute(
+			{ kind: "hypothesis", statement: "s", class: "authn", outcome: "inconclusive", target: "the login flow generally" }, ctx,
+		);
+		expect(await ws.read("inventory")).toHaveLength(0);
+		expect((await ws.read("hypotheses"))[0]?.target).toBe("the login flow generally");
+	});
+
+	it("does not create surface for a finding, which may point at anything", async () => {
+		const { ws, ctx, record } = await seeded();
+		await record.execute(
+			{ kind: "finding", title: "hardcoded key", severity: "high", target: "config/settings.py:4" }, ctx,
+		);
+		expect(await ws.read("inventory")).toHaveLength(0);
+	});
+});

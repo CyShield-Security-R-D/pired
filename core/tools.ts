@@ -21,6 +21,7 @@ import {
 	HYPOTHESIS_OUTCOMES,
 	type HypothesisRecord,
 	type InventoryKind,
+	type InventoryRecord,
 	type LedgerRecord,
 	LOOT_TYPES,
 	PRIORITIES,
@@ -293,6 +294,50 @@ function targetIndex(inventory: Awaited<ReturnType<Workspace["read"]>>): Map<str
 	return index;
 }
 
+/**
+ * The element a free-form target names, if any.
+ *
+ * Targets arrive as prose: "app.py line 17 SECRET_KEY = 'supersecret'",
+ * "auth.py `_decode_token`", "POST /api/login (line 30)". The thing being tested
+ * is the file or the route at the front; the rest is where in it. Pull that out
+ * so a hypothesis can be attached to something, rather than to a sentence.
+ */
+function elementNameIn(raw: string): string | undefined {
+	const t = raw.trim();
+	// A route first — it is unambiguous — then a filename with an extension.
+	const route = /^([A-Z]+\s+)?(\/[\w./{}<>:-]*)/.exec(t);
+	if (route?.[2] && route[2].length > 1) return route[2];
+	const file = /^([\w./-]+\.[A-Za-z]{1,6})/.exec(t);
+	return file?.[1];
+}
+
+/**
+ * Write one inventory element straight to the store and return its id.
+ *
+ * A small direct write rather than a recursive tool call: the caller is already
+ * inside execute(), and re-entering it would re-run the target resolution that
+ * asked for this element in the first place.
+ */
+async function writeRecord(
+	deps: ToolDeps,
+	ctx: ToolContext,
+	kind: "endpoint",
+	fields: Record<string, unknown>,
+): Promise<string | undefined> {
+	try {
+		const id = ctx.services.ids.newId();
+		// Same defaults `record kind=endpoint` applies, so an element created here is
+		// indistinguishable from one the agent declared itself.
+		await deps.workspace.append("inventory", {
+			v: RECORD_VERSION, id, kind, createdAt: ctx.services.clock.nowIso(),
+			...(DEFAULTS[kind] ?? {}), ...fields,
+		} as unknown as InventoryRecord);
+		return id;
+	} catch {
+		return undefined;
+	}
+}
+
 /** Resolve one target to an element id, or leave it as written. */
 function resolveTarget(raw: string, index: Map<string, string>): string {
 	const k = raw.trim().toLowerCase().replace(/\/+$/, "");
@@ -368,14 +413,37 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 
 			// Targets are resolved before anything is written: the model names what it
 			// is looking at, and the ledger keys on ids.
+			//
+			// A hypothesis whose target resolves to nothing settles no cell, and a
+			// review that tested a file it never separately declared as surface is
+			// the common case — take eight recorded three tech tags and then wrote
+			// seventeen hypotheses against files, so the matrix had no cells at all.
+			// Requiring the agent to pre-declare a thing before it may test it is the
+			// tool imposing its bookkeeping on the work. So the element is created
+			// from the target: recording that something was examined is not
+			// invention, it is the claim the hypothesis already makes.
 			if (kind === "hypothesis" || kind === "finding") {
-				const index = targetIndex(await deps.workspace.read("inventory"));
-				if (index.size > 0) {
-					const wanted = asList(a.target).filter((t): t is string => typeof t === "string");
-					if (wanted.length > 0) {
-						const resolved = wanted.map((t) => resolveTarget(t, index));
-						a.target = Array.isArray(a.target) ? resolved : resolved[0];
+				const wanted = asList(a.target).filter((t): t is string => typeof t === "string" && t.trim().length > 0);
+				if (wanted.length > 0) {
+					let index = targetIndex(await deps.workspace.read("inventory"));
+					const resolved: string[] = [];
+					for (const t of wanted) {
+						const hit = resolveTarget(t, index);
+						if (hit !== t) { resolved.push(hit); continue; }
+						// The whole target did not match, but the thing it NAMES might
+						// already be recorded — "app.py the login flow" and "app.py line
+						// 17" are both about app.py. Resolve the extracted name before
+						// creating anything, or the second hypothesis about a file makes
+						// a second copy of it and splits its coverage across two rows.
+						const name = kind === "hypothesis" ? elementNameIn(t) : undefined;
+						if (!name) { resolved.push(t); continue; }
+						const byName = resolveTarget(name, index);
+						if (byName !== name) { resolved.push(byName); continue; }
+						const created = await writeRecord(deps, ctx, "endpoint", { path: name });
+						index = targetIndex(await deps.workspace.read("inventory"));
+						resolved.push(created ?? t);
 					}
+					a.target = Array.isArray(a.target) ? resolved : resolved[0];
 				}
 			}
 
