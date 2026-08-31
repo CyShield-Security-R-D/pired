@@ -256,8 +256,21 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	 */
 	const EXTRACT_MIN_REVIEW = 1200;
 	let recordTool: ToolDefinition | undefined;
-	/** The last turn's prose, so `/extract` can be run again by hand. */
-	let lastReview = "";
+	/**
+	 * The engagement's review so far, not just the last turn's.
+	 *
+	 * An engagement is many turns, and the analysis is spread across them: take
+	 * nine ended on a short endpoint listing, so extraction was handed that and
+	 * correctly answered "the review only lists endpoints; it does not examine
+	 * this class" for all nineteen — a right answer to the wrong question, while
+	 * 242 hypotheses' worth of analysis sat in earlier turns it never saw.
+	 *
+	 * Bounded, because a long engagement would otherwise grow without limit;
+	 * trimReview() keeps the tail, which is where conclusions live.
+	 */
+	const reviewTurns: string[] = [];
+	const REVIEW_BUFFER_MAX = 160_000;
+	const reviewSoFar = (): string => reviewTurns.join("\n\n---\n\n");
 	/** Reviews already extracted, so a quiet turn does not duplicate a previous pass. */
 	const extractedAlready = new Set<string>();
 
@@ -1330,7 +1343,11 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		// recorded as it went needs nothing; a turn that reviewed at length and
 		// wrote nothing is the failure this exists for.
 		const review = assistantText(event.message);
-		if (review.length > 0) lastReview = review;
+		if (review.length > 0) {
+			reviewTurns.push(review);
+			// Drop from the front: the newest turns carry the conclusions.
+			while (reviewSoFar().length > REVIEW_BUFFER_MAX && reviewTurns.length > 1) reviewTurns.shift();
+		}
 		// Two reasons to run the second pass, and only one of them is a rescue.
 		//
 		// A turn that settled nothing needs rescuing. But a turn that recorded
@@ -1344,7 +1361,9 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		// The class roll-call is what asks the question, and gating it on "recorded
 		// nothing" meant a run that went well was never asked.
 		void wrote;
-		if (review.length >= EXTRACT_MIN_REVIEW) {
+		// Measured against everything recorded so far, not this turn alone: a short
+		// closing turn must still be able to trigger the checklist pass.
+		if (reviewSoFar().length >= EXTRACT_MIN_REVIEW) {
 			const settledClasses = new Set(
 				(await workspace?.read("hypotheses") ?? [])
 					.filter((h) => h.outcome === "confirmed" || h.outcome === "refuted")
@@ -1353,7 +1372,7 @@ export default function piredExtension(pi: ExtensionAPI): void {
 			const checklist = await workspace?.readChecklist();
 			const unanswered = (checklist?.classes ?? []).filter((c) => !settledClasses.has(c.id)).length;
 			// Rescue, or a checklist still carrying unanswered classes.
-			if (claims === 0 || unanswered > 0) await runExtraction(ctx, review, "auto");
+			if (claims === 0 || unanswered > 0) await runExtraction(ctx, reviewSoFar(), "auto");
 		}
 		await refreshStatus(ctx);
 	});
@@ -1764,11 +1783,11 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	pi.registerCommand("extract", {
 		description: "Convert the last review into ledger records (runs automatically when a turn records nothing)",
 		handler: async (_args, ctx) => {
-			if (!lastReview) {
+			if (reviewTurns.length === 0) {
 				ctx.ui.notify("pired: nothing to extract — no review in this session yet", "warning");
 				return;
 			}
-			await runExtraction(ctx, lastReview, "manual");
+			await runExtraction(ctx, reviewSoFar(), "manual");
 		},
 	});
 
