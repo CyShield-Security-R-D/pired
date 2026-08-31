@@ -26,10 +26,23 @@ describe("the extractor's instructions", () => {
 		expect(extractionSystemPrompt([])).toMatch(/NOT reviewing/);
 	});
 
-	it("asks for refutations, not only findings", () => {
-		// A class checked and found clean is the evidence the class was examined at
-		// all, and it is the thing a findings list cannot express.
-		expect(extractionSystemPrompt(["sqli"])).toMatch(/RULED OUT/);
+	it("asks for a verdict on every class, not a free-form list of refutations", () => {
+		// Asking for "hypotheses, including the ones you ruled out" returned none on
+		// the first live run: absence is not something a model volunteers. A
+		// roll-call is a form to fill in, and every row demands an answer.
+		const p = extractionSystemPrompt(["sqli", "ssti", "xxe"]);
+		for (const id of ["sqli", "ssti", "xxe"]) expect(p).toContain(`"class": "${id}"`);
+		expect(p).toMatch(/EVERY row/);
+		expect(p).toMatch(/no rows added or removed/);
+	});
+
+	it("makes 'not considered' a legitimate answer", () => {
+		// Without it the model invents a refutation or drops the row. A class the
+		// review never touched must stay an untested cell — inferring "clean" from
+		// silence is how a coverage number becomes a lie.
+		const p = extractionSystemPrompt(["sqli"]);
+		expect(p).toContain("not-considered");
+		expect(p).toMatch(/silence is not a clean bill of health/);
 	});
 
 	it("carries the review verbatim", () => {
@@ -143,5 +156,33 @@ describe("the hypothesis a finding already implies", () => {
 	it("still reads as a statement with no description to add", () => {
 		const h = hypothesisForFinding({ title: "MD5 hashing", severity: "medium" }, "crypto", "backend/auth.py:12");
 		expect(h.statement).toBe("MD5 hashing");
+	});
+});
+
+describe("the class roll-call", () => {
+	const doc = `{
+	  "surface": [], "findings": [],
+	  "classes": [
+	    {"class":"sqli","verdict":"confirmed","why":"f-string SQL in login","targets":["POST /api/login"]},
+	    {"class":"ssti","verdict":"refuted","why":"no template rendering of user input anywhere","targets":[]},
+	    {"class":"xxe","verdict":"not-considered"},
+	    {"class":"authz","verdict":"sort of","why":"unclear"}
+	  ]
+	}`;
+
+	it("reads each verdict, and keeps a refutation that names no target", () => {
+		const { extraction, errors } = parseExtraction(doc);
+		expect(extraction.classes).toHaveLength(3);
+		expect(extraction.classes[0]).toMatchObject({ class: "sqli", verdict: "confirmed", targets: ["POST /api/login"] });
+		// An empty targets list on a refutation means "across everything reviewed",
+		// which is what a consultant means by "we checked for SSTI and it is clean".
+		expect(extraction.classes[1]).toMatchObject({ class: "ssti", verdict: "refuted", targets: [] });
+		expect(extraction.classes[2]?.verdict).toBe("not-considered");
+		expect(errors.join(" ")).toMatch(/verdict missing/);
+	});
+
+	it("keeps the reasoning, because a refutation has to be auditable", () => {
+		const { extraction } = parseExtraction(doc);
+		expect(extraction.classes[1]?.why).toContain("no template rendering");
 	});
 });

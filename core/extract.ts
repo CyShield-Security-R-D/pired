@@ -47,10 +47,33 @@ export interface ExtractedHypothesis {
 	outcome: "confirmed" | "refuted" | "inconclusive";
 }
 
+/**
+ * A verdict on one checklist class across the reviewed surface.
+ *
+ * Asking for "hypotheses, including the ones you ruled out" returned none on the
+ * first live run: a free-form list of absences is not a thing a model volunteers.
+ * Enumerating the checklist and asking for a verdict per class is a different
+ * question — a form to fill in rather than a memory to search — and absence is
+ * the answer to a question nobody was asking.
+ *
+ * `not-considered` is a first-class answer. A class the review never touched must
+ * stay an untested cell; inferring "clean" from silence is how a coverage number
+ * becomes a lie.
+ */
+export interface ClassVerdict {
+	class: string;
+	verdict: "confirmed" | "refuted" | "not-considered";
+	/** The reasoning, which becomes the recorded hypothesis statement. */
+	why?: string;
+	/** Specific elements. Empty on a refutation means "across the reviewed surface". */
+	targets: string[];
+}
+
 export interface Extraction {
 	surface: ExtractedElement[];
 	findings: ExtractedFinding[];
 	hypotheses: ExtractedHypothesis[];
+	classes: ClassVerdict[];
 }
 
 export interface ParseResult {
@@ -62,6 +85,7 @@ export interface ParseResult {
 const SEVERITIES: Severity[] = ["critical", "high", "medium", "low", "info"];
 const KINDS: ExtractedElement["kind"][] = ["endpoint", "host", "param", "tech", "service"];
 const OUTCOMES: ExtractedHypothesis["outcome"][] = ["confirmed", "refuted", "inconclusive"];
+const VERDICTS: ClassVerdict["verdict"][] = ["confirmed", "refuted", "not-considered"];
 
 /**
  * The extractor's instructions.
@@ -72,22 +96,31 @@ const OUTCOMES: ExtractedHypothesis["outcome"][] = ["confirmed", "refuted", "inc
  */
 export function extractionSystemPrompt(classes: string[]): string {
 	const list = classes.length > 0 ? classes.join(", ") : "(no checklist loaded — omit the class field)";
+	const roll = classes.length > 0
+		? classes.map((c) => `  {"class": "${c}", "verdict": "confirmed|refuted|not-considered", "why": "...", "targets": []}`).join(",\n")
+		: '  // no checklist loaded — return an empty array';
 	return `You convert a finished security review into structured data. You are NOT reviewing anything: the analysis is complete and correct as written. Do not add findings, do not re-judge severity, do not investigate further. Transcribe what the review already concluded.
 
 Reply with ONE JSON object and nothing else — no prose before or after, no markdown fence:
 
 {
-  "surface":     [{"kind": "endpoint|host|param|tech|service", "label": "POST /api/login"}],
-  "findings":    [{"title": "...", "severity": "critical|high|medium|low|info", "class": "<id>", "cwe": "CWE-89", "file": "backend/routes/auth.py", "line": 42, "description": "one or two sentences"}],
-  "hypotheses":  [{"statement": "what was tested", "class": "<id>", "target": "POST /api/login", "outcome": "confirmed|refuted|inconclusive"}]
+  "surface":  [{"kind": "endpoint|host|param|tech|service", "label": "POST /api/login"}],
+  "findings": [{"title": "...", "severity": "critical|high|medium|low|info", "class": "<id>", "cwe": "CWE-89", "file": "backend/routes/auth.py", "line": 42, "description": "one or two sentences"}],
+  "classes": [
+${roll}
+  ]
 }
 
-Rules:
-- "class" must be one of exactly these ids: ${list}
+The "classes" array is a checklist and you must return EVERY row above, in order, with no rows added or removed. For each one, say what the review concluded:
+- "confirmed" — the review found this class present. List the places in "targets".
+- "refuted" — the review examined this class and found it clean. Put the reason in "why" ("no template rendering of user input anywhere in the reviewed code"). Leave "targets" empty if it applies across everything reviewed.
+- "not-considered" — the review did not examine this class. This is a normal, correct answer and you must use it rather than guessing. Never mark a class "refuted" because the review did not mention it; silence is not a clean bill of health.
+
+Other rules:
+- "class" on a finding must be one of exactly these ids: ${list}
 - "target" and "label" are the review's own words for the thing (a route, a file, a host) — not an id.
-- Include a hypothesis for every class the review RULED OUT as well as every one it confirmed. A class checked and found clean is outcome "refuted", and it is as important as a finding: it is the evidence that the class was actually examined.
 - "file" and "line" must come from the review. Never guess a line number; omit the field instead.
-- Empty arrays are fine. Invent nothing.`;
+- Invent nothing. Every row must be traceable to something the review actually says.`;
 }
 
 /** The review text, as the extractor's single user message. */
@@ -105,7 +138,7 @@ export function extractionUserMessage(review: string): string {
  */
 export function parseExtraction(reply: string): ParseResult {
 	const errors: string[] = [];
-	const empty: Extraction = { surface: [], findings: [], hypotheses: [] };
+	const empty: Extraction = { surface: [], findings: [], hypotheses: [], classes: [] };
 
 	const raw = sliceJsonObject(reply);
 	if (!raw) return { extraction: empty, errors: ["no JSON object found in the reply"] };
@@ -159,7 +192,19 @@ export function parseExtraction(reply: string): ParseResult {
 		hypotheses.push({ statement, class: cls, target, outcome });
 	}
 
-	return { extraction: { surface, findings, hypotheses }, errors };
+	const verdicts: ClassVerdict[] = [];
+	for (const [i, row] of arr(obj.classes).entries()) {
+		const cls = str(row.class);
+		const verdict = VERDICTS.find((v) => v === str(row.verdict)?.toLowerCase());
+		if (!cls) { errors.push(`classes[${i}]: no class id`); continue; }
+		if (!verdict) { errors.push(`classes[${i}] "${cls}": verdict missing or not confirmed/refuted/not-considered`); continue; }
+		const targets = Array.isArray(row.targets)
+			? row.targets.map((t) => (typeof t === "string" ? t.trim() : "")).filter((t) => t.length > 0)
+			: [];
+		verdicts.push({ class: cls, verdict, why: str(row.why), targets });
+	}
+
+	return { extraction: { surface, findings, hypotheses, classes: verdicts }, errors };
 }
 
 /**
@@ -249,4 +294,26 @@ export function hypothesisForFinding(f: ExtractedFinding, cls: string, target: s
 		target,
 		outcome: "confirmed",
 	};
+}
+
+/**
+ * The slice of a review to hand the extractor.
+ *
+ * A long engagement produces a review far past the point where a 27B model
+ * tracks a formatting instruction, and the first live attempt answered a
+ * "return JSON" instruction with prose. The conclusions live at the END — the
+ * severity calls, the summary list, the ruled-out classes — so when it has to be
+ * cut, the tail is what to keep.
+ */
+export function trimReview(review: string, limit = 40000): string {
+	if (review.length <= limit) return review;
+	const kept = review.slice(review.length - limit);
+	// Start at a line boundary so the extractor is not handed half a sentence.
+	const nl = kept.indexOf("\n");
+	return `[earlier analysis omitted — ${review.length - limit} characters]\n${nl > 0 ? kept.slice(nl + 1) : kept}`;
+}
+
+/** A terser second ask, for when the first reply came back as prose. */
+export function retryNudge(): string {
+	return "Your previous reply was not JSON. Reply with the JSON object only: no explanation, no preamble, no markdown fence. Start your reply with { and end it with }.";
 }

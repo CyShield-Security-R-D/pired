@@ -139,3 +139,35 @@ export function mirrorProvidersToPi(
 		// only subagent delegation degrades, and never fatally.
 	}
 }
+
+/**
+ * The API key for a provider, as pired configured it.
+ *
+ * `pi.registerProvider` hands the key to pi's own request pipeline, but a direct
+ * `complete()` call from an extension goes around that pipeline and must supply
+ * its own — and pi-ai does NOT throw when it is missing: the call returns a
+ * message with stopReason "error", which reads downstream as "the model replied
+ * with nothing useful". A whole recording was misdiagnosed that way.
+ *
+ * Falls back to pi's mirrored copy, then to "local", which is what an
+ * unauthenticated LM Studio or Ollama expects.
+ */
+export function apiKeyForProvider(
+	providerId: string,
+	paths = [join(homedir(), ".pired", "models.json"), join(homedir(), ".pi", "agent", "models.json")],
+): string {
+	for (const path of paths) {
+		try {
+			const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
+			const providers = (parsed as { providers?: unknown }).providers;
+			// pired's file is an array; pi's mirror is keyed by provider id.
+			const list: LocalProviderConfig[] = Array.isArray(providers)
+				? (providers as LocalProviderConfig[])
+				: Object.entries((providers ?? {}) as Record<string, LocalProviderConfig>)
+					.map(([id, cfg]) => ({ ...cfg, id }));
+			const hit = list.find((c) => c.id === providerId);
+			if (hit?.apiKey) return hit.apiKey;
+		} catch { /* try the next location */ }
+	}
+	return "local";
+}

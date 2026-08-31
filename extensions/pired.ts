@@ -22,8 +22,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { type Component, Key, matchesKey, truncateToWidth, type TUI, visibleWidth } from "@earendil-works/pi-tui";
 import {
-	type BrowserKey, type BrowserModel, type BrowserState, type BrowserTone, type BrowserView, buildBrowserModel,
-	detailRowCount, initialState, reduceBrowser, renderBrowser,
+	buildBrowserModel, detailRowCount, elementLabel, initialState, reduceBrowser, renderBrowser, type BrowserKey, type BrowserModel, type BrowserState, type BrowserTone, type BrowserView,
 } from "../core/browser.ts";
 import { type BannerTone, renderBanner } from "../core/banner.ts";
 import { exportFindingsMarkdown } from "../core/export.ts";
@@ -34,7 +33,7 @@ import { buildSystemPrompt, PIRED_PROFILES, type PiredProfile } from "../core/pr
 import { createScopeGate } from "../core/scope.ts";
 import { renderCoveragePanel, type Tone } from "../core/coverage-panel.ts";
 import { complete } from "@earendil-works/pi-ai/compat";
-import { classFromCwe, extractionSystemPrompt, extractionUserMessage, hypothesisForFinding, parseExtraction } from "../core/extract.ts";
+import { classFromCwe, extractionSystemPrompt, extractionUserMessage, hypothesisForFinding, parseExtraction, retryNudge, trimReview } from "../core/extract.ts";
 import { dismissHint, PANEL_MODES, renderFindingDetail, renderPanel, scrollFramed, type PanelData, type PanelMode, type PanelTone } from "../core/panel.ts";
 import { computeCoverageView, computeEngagementStats, coveragePercent, type CoverageView, type EngagementStats } from "../core/stats.ts";
 import { layoutStatusLine, type Segment } from "../core/statusline.ts";
@@ -42,7 +41,7 @@ import { createCoreTools } from "../core/tools.ts";
 import { Workspace } from "../core/workspace.ts";
 import { execFile } from "node:child_process";
 import { makeHostServices } from "./lib/host.ts";
-import { registerPiredProviders } from "./lib/providers.ts";
+import { apiKeyForProvider, registerPiredProviders } from "./lib/providers.ts";
 import { toPiTool } from "./lib/tools.ts";
 
 /** Package root (this file lives in extensions/). Bundled skills + checklists sit beside it. */
@@ -243,6 +242,15 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	 */
 	let recordsThisTurn = 0;
 	/**
+	 * Of those, the ones that settle a coverage cell or reach the report.
+	 *
+	 * Counting every record is not enough: a turn can map forty-four endpoints and
+	 * settle nothing, which is a map with no testing on it — coverage 0%, findings
+	 * none. Take five did exactly that and sailed past a `recordsThisTurn === 0`
+	 * check.
+	 */
+	let claimsThisTurn = 0;
+	/**
 	 * Below this many characters a turn is an exchange, not a review, and running
 	 * a second model call over "ok, done" wastes a minute of a consultant's time.
 	 */
@@ -250,6 +258,8 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	let recordTool: ToolDefinition | undefined;
 	/** The last turn's prose, so `/extract` can be run again by hand. */
 	let lastReview = "";
+	/** Reviews already extracted, so a quiet turn does not duplicate a previous pass. */
+	const extractedAlready = new Set<string>();
 
 	// The panel rides in the footer, so showing and hiding it is a boolean and a
 	// re-render — no window management, no modal to dismiss. Off by default: the
@@ -1066,36 +1076,129 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	 */
 	const runExtraction = async (ctx: ExtensionContext, review: string, trigger: "auto" | "manual"): Promise<void> => {
 		if (!workspace || !recordTool) return;
+		// Bound once: `workspace` is a mutable module-level binding, so the guard's
+		// narrowing does not survive into the awaits below.
+		const ws = workspace;
 		const model = ctx.model;
 		if (!model) {
 			if (trigger === "manual") ctx.ui.notify("pired: no model available to extract with", "warning");
 			return;
 		}
 
-		const checklist = await workspace.readChecklist();
+		// A long engagement ends many turns without settling anything, and each one
+		// would re-extract overlapping prose into duplicate rows. Fingerprint what
+		// was extracted and skip a repeat.
+		const fingerprint = `${review.length}:${review.slice(0, 200)}:${review.slice(-200)}`;
+		if (trigger === "auto" && extractedAlready.has(fingerprint)) return;
+		extractedAlready.add(fingerprint);
+
+		const checklist = await ws.readChecklist();
 		const classList = checklist?.classes ?? [];
 		const classes = classList.map((c) => c.id);
-		ctx.ui.notify(`pired: review recorded nothing — extracting${trigger === "manual" ? "" : " automatically"}…`, "info");
+		// "recorded nothing" was a lie whenever phase one had mapped the surface and
+		// settled none of it, which is the common case.
+		ctx.ui.notify(
+			trigger === "manual"
+				? "pired: extracting records from the last review…"
+				: "pired: the review settled nothing — extracting findings and coverage…",
+			"info",
+		);
+
+		const systemPrompt = extractionSystemPrompt(classes);
+		const body = extractionUserMessage(trimReview(review));
+
+		// Thinking is off for this call. It is a transcription, not a judgement —
+		// and a reasoning budget spent deliberating is a budget not spent emitting
+		// the object, which is the failure being worked around.
+		const ask = async (content: string): Promise<string> => {
+			const answer = await complete(
+				model,
+				{ systemPrompt, messages: [{ role: "user", content, timestamp: Date.now() }] },
+				// A direct complete() bypasses pi's request pipeline, so the key it
+				// would have attached has to be supplied here.
+				{ reasoning: "off", apiKey: apiKeyForProvider(model.provider) },
+			);
+			// complete() does NOT throw on a failed call: it returns a message with
+			// stopReason "error" and an empty content array. Treating that as a reply
+			// turns "the provider rejected the request" into "no JSON object found in
+			// the reply" — which is what a whole take was misdiagnosed as.
+			if (answer.stopReason === "error") {
+				throw new Error(answer.errorMessage ?? "model call failed with no message");
+			}
+			// TEXT only, never thinking. assistantText() folds thinking in — right for
+			// reading a review, wrong here: reasoning about a JSON object routinely
+			// contains a brace, and the parser takes the first one it sees.
+			const parts = (answer as { content?: unknown }).content;
+			const text = Array.isArray(parts)
+				? parts
+					.filter((c): c is { type: "text"; text: string } => (c as { type?: string }).type === "text")
+					.map((c) => c.text)
+					.join("\n")
+				: "";
+			if (text.trim().length === 0) {
+				throw new Error(`model returned no text (stopReason: ${answer.stopReason})`);
+			}
+			return text;
+		};
 
 		let reply: string;
 		try {
-			const answer = await complete(model, {
-				systemPrompt: extractionSystemPrompt(classes),
-				messages: [{ role: "user", content: extractionUserMessage(review), timestamp: Date.now() }],
-			});
-			reply = assistantText(answer);
+			reply = await ask(body);
 		} catch (err) {
 			ctx.ui.notify(`pired: extraction call failed — ${err instanceof Error ? err.message : String(err)}`, "warning");
 			return;
 		}
 
-		const { extraction, errors } = parseExtraction(reply);
+		let parsed = parseExtraction(reply);
+		let retryError: string | undefined;
+		if (parsed.extraction.findings.length === 0 && parsed.extraction.classes.length === 0) {
+			// One retry, with the reply in context so the model can see what it did.
+			// The first live attempt answered a "return JSON" instruction with prose.
+			try {
+				const second = await ask(`${retryNudge()}\n\n${body}`);
+				if (second.trim().length > 0) {
+					const reparsed = parseExtraction(second);
+					// Only take the retry if it actually did better; a second helping of
+					// prose should not overwrite a first attempt that half-worked.
+					const gain = reparsed.extraction.findings.length + reparsed.extraction.classes.length;
+					if (gain > 0) { reply = second; parsed = reparsed; }
+				}
+			} catch (err) {
+				retryError = err instanceof Error ? err.message : String(err);
+			}
+		}
+
+		// Keep the raw reply whatever happened: an extraction that produced nothing
+		// is undiagnosable without seeing what the model actually said, and this is
+		// the one artifact that explains it.
+		try {
+			await ws.writeEvidence(`extraction-${Date.now()}.txt`, reply);
+		} catch { /* diagnostics must never break the run */ }
+
+		const { extraction, errors } = parsed;
+		if (retryError) errors.push(`retry failed: ${retryError}`);
 		const toolCtx: ToolContext = { services, mode: ctx.mode } as unknown as ToolContext;
 
 		// Surface first: hypotheses and findings target elements by label, so the
 		// elements have to exist before anything can point at them.
+		//
+		// Seeded from what is ALREADY recorded, not only from what this pass writes.
+		// Phase one usually maps the surface itself — take five recorded fifty-three
+		// endpoints — and a target that resolves to no element settles no cell, so
+		// mapping only newly-written rows silently produced a coverage number of
+		// zero beside a full ledger. The labels come from the same elementLabel()
+		// the surface browser displays, so what the extractor echoes back from the
+		// review matches what is stored.
 		const idFor = new Map<string, string>();
+		const existing = await ws.read("inventory");
+		for (const rec of existing) {
+			const label = elementLabel(rec as Parameters<typeof elementLabel>[0]);
+			if (label) idFor.set(label, rec.id);
+		}
 		for (const el of extraction.surface) {
+			// Already mapped by phase one: recording it again would duplicate the
+			// element and split its coverage across two rows.
+			if (idFor.has(el.label)) continue;
 			try {
 				const out = await recordTool.execute(elementArgs(el), toolCtx);
 				const id = (out as { details?: { ids?: string[] } }).details?.ids?.[0];
@@ -1104,6 +1207,42 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		}
 
 		let wrote = 0;
+		let settled = 0;
+
+		// The class roll-call is what produces a coverage number. A verdict that
+		// names targets settles those cells; a refutation that names none settles
+		// the class across everything recorded — which is what a consultant means by
+		// "we checked for SSTI and it is clean", and what `record` already supports
+		// by taking lists and writing the cross product.
+		//
+		// The honesty boundary is `not-considered`: it writes nothing, so a class
+		// the review never examined stays an untested cell rather than being quietly
+		// counted as clean.
+		const inventory = await ws.read("inventory");
+		const allSurface = inventory
+			.filter((r: { kind: string }) => (["endpoint", "host", "service", "param", "tech"] as string[]).includes(r.kind))
+			.map((r: { id: string }) => r.id);
+		for (const v of extraction.classes) {
+			if (v.verdict === "not-considered") continue;
+			const outcome = v.verdict === "confirmed" ? "confirmed" : "refuted";
+			const targets = v.targets.length > 0
+				? v.targets.map((t) => idFor.get(t) ?? t)
+				: outcome === "refuted" ? allSurface : [];
+			if (targets.length === 0) continue;
+			// The reason travels with the record: a refutation nobody can audit is
+			// worth no more than a blank cell.
+			const statement = v.why ?? `${v.class} ${outcome === "refuted" ? "examined and found clean" : "confirmed"} during review`;
+			try {
+				const out = await recordTool.execute(
+					{ kind: "hypothesis", statement, class: v.class, target: targets, outcome }, toolCtx,
+				);
+				const ids = (out as { details?: { ids?: string[] } }).details?.ids;
+				settled += Array.isArray(ids) ? ids.length : targets.length;
+			} catch (err) {
+				errors.push(`class "${v.class}": ${err instanceof Error ? err.message : String(err)}`);
+			}
+		}
+
 		for (const h of extraction.hypotheses) {
 			try {
 				await recordTool.execute({
@@ -1146,9 +1285,12 @@ export default function piredExtension(pi: ExtensionAPI): void {
 
 		await refreshStatus(ctx);
 		const dropped = errors.length > 0 ? ` · ${errors.length} row(s) dropped` : "";
+		const notConsidered = extraction.classes.filter((v) => v.verdict === "not-considered").length;
+		const untouched = notConsidered > 0 ? ` · ${notConsidered} class(es) not considered` : "";
+		wrote += settled;
 		ctx.ui.notify(
 			wrote > 0
-				? `pired: extracted ${extraction.surface.length} surface, ${extraction.hypotheses.length + derived} hypotheses, ${extraction.findings.length} findings${dropped}`
+				? `pired: extracted ${extraction.surface.length} surface, ${settled + extraction.hypotheses.length + derived} cells settled, ${extraction.findings.length} findings${untouched}${dropped}`
 				: `pired: extraction produced nothing${dropped ? ` (${errors[0]})` : ""}`,
 			wrote > 0 ? "info" : "warning",
 		);
@@ -1167,6 +1309,13 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	pi.on("tool_execution_end", async (event, ctx) => {
 		if (event.toolName === "record" && !event.isError) {
 			recordsThisTurn += 1;
+			// `record` reports what it wrote in its result details; the event carries
+			// no input. A bulk hypothesis call settles several cells in one go, so
+			// count the ids rather than the call.
+			const details = (event.result as { details?: { kind?: unknown; ids?: unknown[] } } | undefined)?.details;
+			if (details?.kind === "hypothesis" || details?.kind === "finding") {
+				claimsThisTurn += Array.isArray(details.ids) ? Math.max(1, details.ids.length) : 1;
+			}
 			await refreshStatus(ctx);
 			await promptForNewBlockers(ctx);
 		}
@@ -1174,13 +1323,19 @@ export default function piredExtension(pi: ExtensionAPI): void {
 
 	pi.on("turn_end", async (event, ctx) => {
 		const wrote = recordsThisTurn;
+		const claims = claimsThisTurn;
 		recordsThisTurn = 0;
+		claimsThisTurn = 0;
 		// Phase two, and only when phase one skipped the ledger. A turn that
 		// recorded as it went needs nothing; a turn that reviewed at length and
 		// wrote nothing is the failure this exists for.
 		const review = assistantText(event.message);
 		if (review.length > 0) lastReview = review;
-		if (wrote === 0 && review.length >= EXTRACT_MIN_REVIEW) {
+		// Inventory alone does not count. What is missing when this fires is the
+		// tested-ness: the hypotheses that settle cells and the findings that reach
+		// the report.
+		void wrote;
+		if (claims === 0 && review.length >= EXTRACT_MIN_REVIEW) {
 			await runExtraction(ctx, review, "auto");
 		}
 		await refreshStatus(ctx);
