@@ -1,10 +1,10 @@
 # The Development of pired
 
-*pired — an engagement harness for security consultants, built on the pi coding agent*
+*pired — a security assessment harness for consultants, built on the pi coding agent*
 
 ## 1. Goal and motivation
 
-**pired** is an engagement harness for security consultants doing authorized work —
+**pired** is a security assessment harness for consultants doing authorized work —
 whitebox code review and blackbox testing in one workspace. The design goal was a
 *handy, minimal* security layer that runs well on **local / open-weight models**
 (e.g. Qwen3.8 27B, Gemma 3 27B, DeepSeek), so client code never leaves the

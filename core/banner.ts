@@ -36,7 +36,7 @@ const ART: Array<[pi: string, red: string]> = [
 	["▀   ▀", " ▀ ▀ ▀▀▀ ▀▀ "],
 ];
 const ART_WIDTH = 17;
-const TAGLINE = "security engagement harness";
+const TAGLINE = "security assessment harness";
 /**
  * The banner is a lockup, not a stretch.
  *

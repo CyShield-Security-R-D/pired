@@ -287,7 +287,7 @@ A session opens with the wordmark, the engagement it is about to work on, and th
 ```
   █▀█ █ █▀█ █▀▀ █▀▄
   █▀▀ █ █▀▄ █▀▀ █ █
-  ▀   ▀ ▀ ▀ ▀▀▀ ▀▀                          security engagement harness
+  ▀   ▀ ▀ ▀ ▀▀▀ ▀▀                          security assessment harness
   ──────────────────────────────────────────────────────────
 
   engagement   airflow-ftxin0

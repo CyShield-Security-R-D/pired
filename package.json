@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Engagement harness for security consultants, as a pi package: engagement workspace, scope gate, security prompt, and record/recall tools, reusing a harness-agnostic core.",
+  "description": "Security assessment harness for consultants, as a pi package: engagement workspace, scope gate, security prompt, and record/recall tools, reusing a harness-agnostic core.",
   "license": "MIT",
   "bin": {
     "pired": "./bin/pired.mjs",

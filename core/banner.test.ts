@@ -55,8 +55,8 @@ describe("renderBanner", () => {
 	it("drops the tagline rather than overflowing a narrow terminal", () => {
 		const wide = renderBanner(opts(88)).join("\n");
 		const narrow = renderBanner(opts(34)).join("\n");
-		expect(wide).toContain("security engagement harness");
-		expect(narrow).not.toContain("security engagement harness");
+		expect(wide).toContain("security assessment harness");
+		expect(narrow).not.toContain("security assessment harness");
 	});
 
 	it("lists the commands that open the views", () => {
@@ -156,7 +156,7 @@ describe("a wide terminal", () => {
 
 	it("pairs the tagline with the commands on the rule's baseline", () => {
 		const lines = renderBanner(opts(160));
-		const tag = lines.find((l) => l.includes("security engagement harness")) as string;
+		const tag = lines.find((l) => l.includes("security assessment harness")) as string;
 		// Both edges of the block are the rule's edges, which is what makes the
 		// whole thing read as one shape.
 		expect(tag).toContain("/panel");
@@ -183,7 +183,7 @@ describe("the wordmark", () => {
 		// Stacked — the layout for a terminal without the columns to stand the
 		// facts beside the wordmark.
 		const lines = renderBanner(opts(72));
-		const tagLine = lines.findIndex((l) => l.includes("security engagement harness"));
+		const tagLine = lines.findIndex((l) => l.includes("security assessment harness"));
 		expect(lines[tagLine]).toContain("▀   ▀"); // the art's last row
 	});
 });

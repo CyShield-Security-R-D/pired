@@ -1,8 +1,8 @@
 <div align="center">
 
-<img src="docs/banner.svg" alt="pired — engagement harness for security consultants: review, recon and pentest profiles, with a live coverage panel" width="100%">
+<img src="docs/banner.svg" alt="pired — security assessment harness: review, recon and pentest profiles, with a live coverage panel" width="100%">
 
-**An engagement harness for security consultants — whitebox review and blackbox testing in one workspace, with coverage tracking that won't let an engagement end early.**
+**A security assessment harness for consultants — whitebox review and blackbox testing in one workspace, with coverage tracking that won't let an engagement end early.**
 
 *Runs on your own hardware, so client code never leaves the box. An AI agent, not a toolbox: it ships no scanners; it drives the ones you already have.*
 

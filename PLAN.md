@@ -30,7 +30,7 @@
 
 ## 1. Goal
 
-An engagement harness — "pired" — for **security consultants** doing authorized
+A security assessment harness — "pired" — for **security consultants** doing authorized
 work: whitebox code review and blackbox testing in one workspace, tuned to run on
 local models (~30B class: Qwen3-32B / Qwen3-30B-A3B, Gemma 3 27B, DeepSeek) so
 client code never leaves the engagement box. It adds a rigor/anti-amnesia state
