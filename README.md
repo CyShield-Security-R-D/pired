@@ -83,10 +83,16 @@ Full methodology, per-category breakdown, exact token/cost accounting, and threa
 **No [pi](https://pi.dev) yet?** One line installs pi, pired, and the extension registration:
 
 ```bash
+# macOS and Linux
 curl -fsSL https://raw.githubusercontent.com/mamgad/pired/main/install.sh | sh
 ```
 
-Needs Node.js >= 22.19. No sudo, no daemon, no state outside `~/.pi` and `~/.pired`.
+```powershell
+# Windows
+powershell -c "irm https://raw.githubusercontent.com/mamgad/pired/main/install.ps1 | iex"
+```
+
+Needs Node.js >= 22.19. No sudo or elevation, no daemon, no state outside `~/.pi` and `~/.pired`. Windows gets its own script because npm lays a global install out differently there and PATH is a registry value, not a line in a dotfile — it offers to add the npm prefix to your user PATH, and points you at Git for Windows if the box has no `bash`, since that is what pi runs the tools through.
 
 ```bash
 pired          # review the current directory
@@ -108,7 +114,7 @@ That registers it in `~/.pi/agent/settings.json`, and every later `pi` starts wi
 | `pi install <src>` | user-wide: every `pi` session loads the security layer | `~/.pi/agent/settings.json` |
 | `pi install -l <src>` | this project only — commit `.pi/settings.json` and a teammate's first trusted `pi` installs it for them | `.pi/settings.json` |
 | `pi -e <src>` | one session, from a temporary clone | nothing |
-| `install.sh` | the `pired` and `pired-state` launchers on top of the package | npm global + settings |
+| `install.sh` / `install.ps1` | the `pired` and `pired-state` launchers on top of the package | npm global + settings |
 
 `<src>` is any pi package source: `git:github.com/mamgad/pired`, an npm spec, or a path to a checkout (`pi install ~/src/pired` — recorded as a path, not copied, so your edits are live on the next start).
 
@@ -131,6 +137,11 @@ pi install git:git@github.com:mamgad/pired
 git clone git@github.com:mamgad/pired.git && cd pired && ./install.sh
 ```
 
+```powershell
+# the same, on Windows
+git clone git@github.com:mamgad/pired.git; cd pired; .\install.ps1
+```
+
 Both need `ssh -T git@github.com` to authenticate. Over HTTPS instead, use `pi install https://github.com/mamgad/pired` or `npm install -g git+https://github.com/mamgad/pired.git` with a credential helper or token.
 
 <details>
@@ -148,7 +159,7 @@ pi install -l git:github.com/mamgad/pired
 pi -e ./extensions/pired.ts --pired-profile review
 ```
 
-`install.sh` detects an existing pi and leaves it alone; `PIRED_SKIP_PI=1` forces the skip, and `NPM_PREFIX` picks the install prefix.
+Both installers detect an existing pi and leave it alone; `PIRED_SKIP_PI=1` forces the skip, `PIRED_SOURCE` chooses what to install from, and `NPM_PREFIX` picks the prefix.
 
 </details>
 

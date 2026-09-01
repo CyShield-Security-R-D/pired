@@ -1,7 +1,12 @@
 #!/bin/sh
-# pired installer — one command for the launcher and the pi extension.
+# pired installer for macOS and Linux — the launcher and the pi extension.
 #
 #   curl -fsSL https://raw.githubusercontent.com/mamgad/pired/main/install.sh | sh
+#
+# Windows has its own script, because npm lays a global install out differently
+# there and PATH lives in the registry:
+#
+#   powershell -c "irm https://raw.githubusercontent.com/mamgad/pired/main/install.ps1 | iex"
 #
 # Installs, in order: pi (if missing), pired, and pired's extension registration
 # so a plain `pi` also loads the security layer. Everything is npm-global; there
@@ -24,7 +29,11 @@ die()  { printf '%b\n' "${RED}pired:${OFF} $*" >&2; exit 1; }
 
 # npm's own output is captured rather than discarded. An installer that says
 # only "could not install" leaves the user with nothing to act on.
-LOG=$(mktemp 2>/dev/null || echo "/tmp/pired-install.$$.log")
+#
+# The template is explicit because BSD mktemp (macOS) rejects the bare form that
+# GNU mktemp accepts — and a predictable /tmp name is a world-writable path this
+# script then writes to.
+LOG=$(mktemp "${TMPDIR:-/tmp}/pired-install.XXXXXX") || die "could not create a temporary file."
 trap 'rm -f "$LOG"' EXIT
 spill() { sed -e 's/^/    /' "$LOG" | tail -12 >&2; }
 
