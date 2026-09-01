@@ -28,7 +28,7 @@ import { execFile } from "node:child_process";
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { COMMIT_RE, osvQuery, keyFromPatch, PULL_RE, refineKey, resolveSha, shaFromPull, stripLeakage } from "./lib.ts";
+import { COMMIT_RE, fixReference, osvQuery, keyFromPatch, PULL_RE, refineKey, resolveSha, shaFromPull, stripLeakage } from "./lib.ts";
 import type { Advisory } from "./lib.ts";
 
 const run = promisify(execFile);
@@ -98,11 +98,13 @@ for (const adv of advisories.slice(0, limit)) {
 	let owner = "";
 	let repo = "";
 	let shortSha = "";
-	const commitRef = (adv.references ?? []).map((r) => COMMIT_RE.exec(r.url)).find(Boolean);
+	// Prefer the reference the advisory explicitly types FIX; an untyped commit
+	// reference is often a release commit, whose diff contains no vulnerability.
+	const commitRef = fixReference(adv.references, COMMIT_RE)?.match;
 	if (commitRef) {
 		[, owner, repo, shortSha] = commitRef as unknown as [string, string, string, string];
 	} else {
-		const pullRef = (adv.references ?? []).map((r) => PULL_RE.exec(r.url)).find(Boolean);
+		const pullRef = fixReference(adv.references, PULL_RE)?.match;
 		if (!pullRef) continue;
 		const [, o, rp, num] = pullRef as unknown as [string, string, string, string];
 		const merged = await shaFromPull(o, rp, num);

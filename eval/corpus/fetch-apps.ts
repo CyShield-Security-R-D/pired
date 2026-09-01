@@ -42,7 +42,7 @@
 
 import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { COMMIT_RE, deriveScope, walk, keyFromPatch, osvQuery, refineKey, resolveSha, run, stripLeakage } from "./lib.ts";
+import { COMMIT_RE, fixReference, deriveScope, walk, keyFromPatch, osvQuery, refineKey, resolveSha, run, stripLeakage } from "./lib.ts";
 import type { Advisory, Walk } from "./lib.ts";
 
 function arg(name: string, def?: string): string | undefined {
@@ -306,7 +306,11 @@ for (const ecosystem of ecosystems) {
 
 		for (const adv of advisories.slice(0, limit)) {
 			if (maxTargets > 0 && stats.built >= maxTargets) break;
-			const ref = (adv.references ?? []).map((r) => COMMIT_RE.exec(r.url)).find(Boolean);
+			// Prefer the reference the advisory explicitly types FIX. An untyped
+			// commit reference is often a release commit, and a release diff makes an
+			// answer key with no vulnerability in it.
+			const picked = fixReference(adv.references, COMMIT_RE);
+			const ref = picked?.match;
 			if (!ref) continue;
 			const [, owner, repo, shortSha] = ref as unknown as [string, string, string, string];
 			// Same reasoning as fetch.ts: the directory name is rendered in pired's

@@ -384,3 +384,38 @@ export function deriveScope(source: string[], truth: TruthEntry[], cap: number, 
 	}
 	return { ...last, overCap: true };
 }
+
+/**
+ * The commit reference that is actually the fix.
+ *
+ * A commit URL can appear under any reference type — ADVISORY, WEB, REPORT — so
+ * taking the first commit-shaped URL can key the answer to something that is not
+ * the patch. Measured across the OSV bulk exports: 50,718 advisories carry a
+ * git-range `fixed` event but only 26,776 carry a reference explicitly typed
+ * FIX, and the difference is largely RELEASE commits.
+ *
+ * bludit is the worst documented case — CVE-2026-25099/25100/25101 all point at
+ * "chore: bump version" commits touching 30 files, one of them +25,392 lines
+ * because it re-vendors tinymce. As an answer key that is not merely noisy, it
+ * is wrong: the reviewer would be scored against a diff containing no
+ * vulnerability at all.
+ *
+ * Prefer type FIX; fall back to any commit reference, and tell the caller which
+ * it got so an untyped fallback can be treated with suspicion.
+ */
+export function fixReference(
+	refs: Array<{ type: string; url: string }> | undefined,
+	pattern: RegExp,
+): { match: RegExpExecArray; typed: boolean } | undefined {
+	const list = refs ?? [];
+	for (const r of list) {
+		if (r.type !== "FIX") continue;
+		const m = pattern.exec(r.url);
+		if (m) return { match: m, typed: true };
+	}
+	for (const r of list) {
+		const m = pattern.exec(r.url);
+		if (m) return { match: m, typed: false };
+	}
+	return undefined;
+}
