@@ -115,6 +115,10 @@ function stubHost(available: unknown[] = [{ id: "already-configured" }]) {
 		command: (args: string, steps: Step[] = []) => inHome(steps, async () => {
 			await seen.commands.get("provider")?.(args, ctx);
 		}),
+		/** Wait past the deferred last word, without knowing its timer. */
+		settle: async () => {
+			await new Promise((r) => setTimeout(r, 800));
+		},
 		/** What pi does when the operator picks our row in /login. */
 		login: (steps: Step[]) => inHome(steps, async () => {
 			const entry = seen.providers.get("add-provider") as { oauth?: { login: (cb: unknown) => Promise<unknown> } };
@@ -187,6 +191,23 @@ describe("the /login entry", () => {
 		await host.login([...A_HOST.slice(0, -1), ["Switch to my-model now?", true]]);
 		expect(host.seen.models).toEqual([{ provider: "lab", id: "my-model" }]);
 		expect(host.said.join("\n")).toContain("model is now lab/my-model");
+	});
+
+	/**
+	 * The first-run ending. pi closes a login it began with no model by printing,
+	 * in red, that the row that was logged into has no default model — after the
+	 * model that was actually added is already selected. It cannot be suppressed
+	 * from here, so pired waits for it and answers it.
+	 */
+	it("has the last word when the session began with no model at all", async () => {
+		const host = stubHost([]);
+		await host.login([...A_HOST.slice(0, -1), ["Switch to my-model now?", true]]);
+		expect(host.seen.models).toEqual([{ provider: "lab", id: "my-model" }]);
+		// Nothing yet: saying it now would be buried under pi's own two lines.
+		expect(host.said.join("\n")).not.toContain("model is now");
+		await host.settle();
+		expect(host.said.join("\n")).toContain("model is now lab/my-model");
+		expect(host.said.join("\n")).toContain("about the /login row");
 	});
 
 	it("reads a dismissal as a cancelled login rather than half a host", async () => {

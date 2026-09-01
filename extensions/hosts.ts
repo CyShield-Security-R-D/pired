@@ -32,6 +32,12 @@ import {
  * method on every provider, and the one it offers is this flow.
  */
 const ADD_PROVIDER_ID = "add-provider";
+/**
+ * How long to wait before having the last word after a `/login` that began with
+ * no model. Long enough for pi's own closing status and error, short enough
+ * that it still reads as part of the same moment.
+ */
+const LAST_WORD_MS = 600;
 const ADD_PROVIDER_LABEL = "Add a custom provider…";
 
 /**
@@ -127,9 +133,21 @@ export default function hostsExtension(pi: ExtensionAPI): void {
 	 * dialog is still open.
 	 */
 	let seen: ExtensionContext | undefined;
+	/**
+	 * Whether this session started with nothing to talk to.
+	 *
+	 * It decides how the flow ends. pi takes a snapshot of the current model
+	 * before a login begins and, when there wasn't one, closes by complaining
+	 * that the provider it just logged into has no default model — which for
+	 * this row is both true and beside the point, since the provider that was
+	 * actually added is already selected by then. The complaint is drawn in red,
+	 * after everything worked, and it is the last thing a first-time operator
+	 * sees. It cannot be suppressed from an extension, so it gets answered.
+	 */
+	let startedModelless = false;
 	pi.on("session_start", (_event, ctx) => {
 		seen = ctx;
-		announceIfModelless(ctx);
+		startedModelless = announceIfModelless(ctx);
 	});
 
 	pi.registerProvider(ADD_PROVIDER_ID, {
@@ -149,7 +167,10 @@ export default function hostsExtension(pi: ExtensionAPI): void {
 				// The wizard has already said what it saved, inside the dialog. All
 				// that is left is the switch, which needs a context /login never hands
 				// out — hence the one captured at session start.
-				if (added.useModelId && seen) await useModel(pi, seen, added.config.id, added.useModelId);
+				const switched = added.useModelId && seen
+					? await useModel(pi, seen, added.config.id, added.useModelId, startedModelless)
+					: false;
+				if (switched) startedModelless = false;
 				// A login has to return a credential; this flow's secret went to the
 				// host's own entry, so what is stored here is a marker with an expiry
 				// far enough out that pi never tries to refresh it.
@@ -234,35 +255,66 @@ export default function hostsExtension(pi: ExtensionAPI): void {
  * a new operator sees, and until it is answered nothing else in the harness can
  * run, so it is worth a line of its own.
  */
-function announceIfModelless(ctx: ExtensionContext): void {
+function announceIfModelless(ctx: ExtensionContext): boolean {
 	try {
-		if (ctx.modelRegistry.getAvailable().length > 0) return;
+		if (ctx.modelRegistry.getAvailable().length > 0) return false;
 	} catch {
 		// A host without a registry snapshot: say nothing rather than guess.
-		return;
+		return false;
 	}
 	ctx.ui.notify(
 		"pired: no model yet — `/provider` adds one you are already running (LM Studio, Ollama, llama.cpp, vLLM), `/login` signs in to a hosted one",
 		"warning",
 	);
+	return true;
 }
 
-/** Switch to what was just added, which is why it was added. */
-async function useModel(pi: ExtensionAPI, ctx: ExtensionContext, provider: string, modelId: string): Promise<void> {
+/**
+ * Switch to what was just added, which is why it was added. Returns whether it
+ * took.
+ *
+ * `hadNoModel` is the `/login` case, and it changes only *when* the confirmation
+ * is said. pi prints its own closing lines after this returns — a status, and
+ * on a session that began with no model, a red error about the login row having
+ * no default model. Saying anything before those would be buried under them, so
+ * the line is scheduled to land after instead, and it answers the error rather
+ * than ignoring it.
+ */
+async function useModel(
+	pi: ExtensionAPI,
+	ctx: ExtensionContext,
+	provider: string,
+	modelId: string,
+	hadNoModel = false,
+): Promise<boolean> {
 	const model = ctx.modelRegistry.find(provider, modelId);
 	if (!model) {
 		ctx.ui.notify(`pired: ${modelId} is registered but pi did not resolve it — pick it from /model`, "warning");
-		return;
+		return false;
 	}
 	// setModel reports false when there is no usable key rather than throwing,
 	// and is absent altogether on a pi older than the model-switching API.
 	const switched = await pi.setModel?.(model);
-	ctx.ui.notify(
-		switched === true
-			? `pired: model is now ${provider}/${modelId}`
-			: switched === false
-				? `pired: ${modelId} needs a key pi can resolve — check the token and try /model`
-				: `pired: ${modelId} is registered — pick it from /model`,
-		switched === true ? "info" : "warning",
-	);
+	const line = switched === true
+		? `pired: model is now ${provider}/${modelId}`
+		: switched === false
+			? `pired: ${modelId} needs a key pi can resolve — check the token and try /model`
+			: `pired: ${modelId} is registered — pick it from /model`;
+	const tone = switched === true ? "info" : "warning";
+	if (switched === true && hadNoModel) {
+		// After pi's own two lines, and phrased to settle the one that is red.
+		// A delay rather than a tick because those lines are written from an
+		// awaited call of pi's own; landing early would only mean landing where
+		// the plain case already puts it, which is harmless.
+		setTimeout(() => {
+			try {
+				ctx.ui.notify(`${line} — ready. The note above is about the /login row, not your model.`, "info");
+			} catch {
+				// The session went away while we were waiting. Nothing to say to.
+			}
+		}, LAST_WORD_MS).unref?.();
+	} else {
+		ctx.ui.notify(line, tone);
+	}
+	return switched === true;
 }
