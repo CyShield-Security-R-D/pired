@@ -3,15 +3,12 @@
  * ~/.pired/models.json into pi, so they appear in pi's own /model picker.
  */
 
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-/** pi's own provider-config shape, taken from the API rather than restated. */
-export type PiProviderConfig = Parameters<ExtensionAPI["registerProvider"]>[1];
-
-export interface LocalModelDef {
+interface LocalModelDef {
 	id: string;
 	name?: string;
 	contextWindow?: number;
@@ -27,14 +24,14 @@ export interface LocalModelDef {
  * `thinkingFormat: "qwen"` the agent receives an empty message, prints nothing
  * and exits 0 — a total failure that looks like a successful no-op run.
  */
-export interface ProviderCompat {
+interface ProviderCompat {
 	supportsDeveloperRole?: boolean;
 	supportsReasoningEffort?: boolean;
 	thinkingFormat?: string;
 	[key: string]: unknown;
 }
 
-export interface LocalProviderConfig {
+interface LocalProviderConfig {
 	id: string;
 	name?: string;
 	baseUrl: string;
@@ -60,40 +57,27 @@ export function registerPiredProviders(pi: ExtensionAPI, path = join(homedir(), 
 
 	for (const cfg of configs) {
 		if (!cfg.id || !cfg.baseUrl) continue;
-		pi.registerProvider(cfg.id, toPiProvider(cfg));
+		pi.registerProvider(cfg.id, {
+			name: cfg.name ?? cfg.id,
+			baseUrl: cfg.baseUrl,
+			apiKey: cfg.apiKey ?? "local",
+			api: cfg.api ?? "openai-completions",
+			// Pass compat through at both levels. It is optional in the config and
+			// absent for most providers, but for a reasoning model it is the
+			// difference between working and silently producing nothing.
+			...(cfg.compat ? { compat: cfg.compat } : {}),
+			models: cfg.models.map((m) => ({
+				id: m.id,
+				name: m.name ?? m.id,
+				reasoning: m.reasoning ?? false,
+				input: m.input ?? ["text"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: m.contextWindow ?? 32768,
+				maxTokens: m.maxTokens ?? 8192,
+				...(m.compat ?? cfg.compat ? { compat: m.compat ?? cfg.compat } : {}),
+			})),
+		});
 	}
-}
-
-/**
- * pired's config shape as pi's `registerProvider` wants it.
- *
- * Shared with the `/provider` command, which registers a host the operator has
- * just added without waiting for a restart. Two mappings would mean a host
- * added mid-session could behave differently from the same host after a
- * restart, and the difference would show up as a model that answers today and
- * silently returns nothing tomorrow.
- */
-export function toPiProvider(cfg: LocalProviderConfig): PiProviderConfig {
-	return {
-		name: cfg.name ?? cfg.id,
-		baseUrl: cfg.baseUrl,
-		apiKey: cfg.apiKey ?? "local",
-		api: cfg.api ?? "openai-completions",
-		// Pass compat through at both levels. It is optional in the config and
-		// absent for most providers, but for a reasoning model it is the
-		// difference between working and silently producing nothing.
-		...(cfg.compat ? { compat: cfg.compat } : {}),
-		models: cfg.models.map((m) => ({
-			id: m.id,
-			name: m.name ?? m.id,
-			reasoning: m.reasoning ?? false,
-			input: m.input ?? ["text"],
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-			contextWindow: m.contextWindow ?? 32768,
-			maxTokens: m.maxTokens ?? 8192,
-			...(m.compat ?? cfg.compat ? { compat: m.compat ?? cfg.compat } : {}),
-		})),
-	};
 }
 
 /**
@@ -182,106 +166,8 @@ export function apiKeyForProvider(
 				: Object.entries((providers ?? {}) as Record<string, LocalProviderConfig>)
 					.map(([id, cfg]) => ({ ...cfg, id }));
 			const hit = list.find((c) => c.id === providerId);
-			if (hit?.apiKey) return resolveKeyRef(hit.apiKey);
+			if (hit?.apiKey) return hit.apiKey;
 		} catch { /* try the next location */ }
 	}
 	return "local";
-}
-
-/**
- * Resolve a `$VAR` / `${VAR}` reference in a configured key.
- *
- * pi resolves these itself in its request pipeline, so a host whose key is
- * `$OPENROUTER_KEY` works in the picker. A direct `complete()` from an
- * extension goes around that pipeline, and would otherwise send the seven
- * characters `$OPENR…` as the bearer token — a 401 the operator reads as "the
- * extraction pass is broken" rather than "the variable is not exported".
- *
- * An unset variable is left as written rather than blanked: the reference then
- * appears in the provider's own error, which is the one thing that names the
- * cause. `!command` keys are pi's and are passed through untouched — pired does
- * not run commands out of a config file.
- */
-export function resolveKeyRef(value: string, env: NodeJS.ProcessEnv = process.env): string {
-	if (value.startsWith("!")) return value;
-	return value.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g, (whole, braced?: string, bare?: string) => {
-		const name = braced ?? bare ?? "";
-		return env[name] ?? whole;
-	});
-}
-
-/** Where pired keeps the hosts it contributes to pi's picker. */
-export const PIRED_MODELS_PATH = join(homedir(), ".pired", "models.json");
-
-/**
- * The hosts in pired's own file, and whatever else that file holds.
- *
- * Read and write are a pair: `/provider` edits one entry of a file the operator
- * may also have hand-written, so everything outside `providers` is carried
- * through untouched rather than rewritten from pired's model of it.
- */
-export function readProviderFile(path = PIRED_MODELS_PATH): { providers: LocalProviderConfig[]; rest: Record<string, unknown> } {
-	try {
-		const parsed = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
-		const { providers, ...rest } = parsed ?? {};
-		return { providers: Array.isArray(providers) ? (providers as LocalProviderConfig[]) : [], rest };
-	} catch {
-		// Missing or malformed: the same silence registerPiredProviders keeps. A
-		// caller that then writes replaces a file nobody could read anyway, and
-		// `/provider` shows what it will write before it writes it.
-		return { providers: [], rest: {} };
-	}
-}
-
-/**
- * Write pired's file back, with the permissions a file holding tokens deserves.
- *
- * The mode argument to writeFileSync only applies when the file is created, so
- * an existing 0644 file — one written by hand, or by an older pired — stays
- * world-readable unless it is chmod'd explicitly. On a consultant's box that
- * file can hold a client's API token.
- */
-export function writeProviderFile(
-	providers: LocalProviderConfig[],
-	path = PIRED_MODELS_PATH,
-	rest: Record<string, unknown> = {},
-): void {
-	mkdirSync(dirname(path), { recursive: true });
-	writeFileSync(path, `${JSON.stringify({ ...rest, providers }, null, 2)}\n`, { mode: 0o600 });
-	try {
-		chmodSync(path, 0o600);
-	} catch {
-		// Windows, or a file we do not own. The content is written either way.
-	}
-}
-
-/** Replace the entry with this id, or append it. Order is otherwise preserved. */
-export function upsertProvider(providers: LocalProviderConfig[], cfg: LocalProviderConfig): LocalProviderConfig[] {
-	const at = providers.findIndex((p) => p.id === cfg.id);
-	if (at < 0) return [...providers, cfg];
-	return providers.map((p, i) => (i === at ? cfg : p));
-}
-
-/** Drop the entry with this id. */
-export function removeProvider(providers: LocalProviderConfig[], id: string): LocalProviderConfig[] {
-	return providers.filter((p) => p.id !== id);
-}
-
-/**
- * Drop a mirrored host from pi's own file too.
- *
- * Without this, removing a host in pired leaves it resolvable to every
- * extension-less pi process — including the subagent children mirrorProvidersToPi
- * exists for — so `/model` would keep offering a host the operator deleted.
- * Only ids pired mirrored are touched; anything else in the file is left alone.
- */
-export function removeProviderFromPi(id: string, piModelsPath = join(homedir(), ".pi", "agent", "models.json")): void {
-	try {
-		const doc = JSON.parse(readFileSync(piModelsPath, "utf8")) as { providers?: Record<string, unknown> };
-		if (!doc?.providers || !(id in doc.providers)) return;
-		const { [id]: _dropped, ...kept } = doc.providers;
-		writeFileSync(piModelsPath, `${JSON.stringify({ ...doc, providers: kept }, null, 2)}\n`, { mode: 0o600 });
-	} catch {
-		// Same best-effort contract as the mirror itself.
-	}
 }
