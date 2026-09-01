@@ -80,14 +80,43 @@ Full methodology, per-category breakdown, exact token/cost accounting, and threa
 
 ## Install
 
+**No [pi](https://pi.dev) yet?** One line installs pi, pired, and the extension registration:
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/mamgad/pired/main/install.sh | sh
 ```
 
-Installs [pi](https://pi.dev) if it is missing, installs pired, and registers the extension so a bare `pi` loads the security layer too. Needs Node.js >= 22.19. No sudo, no daemon, no state outside `~/.pi` and `~/.pired`.
+Needs Node.js >= 22.19. No sudo, no daemon, no state outside `~/.pi` and `~/.pired`.
 
 ```bash
 pired          # review the current directory
+```
+
+**Already have pi?** pired is an ordinary pi package — one command, no npm global, no launcher:
+
+```bash
+pi install git:github.com/mamgad/pired
+pi                                       # the security layer is loaded
+```
+
+That registers it in `~/.pi/agent/settings.json`, and every later `pi` starts with the security layer. It pulls no dependencies of its own — pi supplies the modules the extension imports — and `pi config` lists what it contributed (the extension and the `pired` theme) if you ever want to switch either off. `pi remove git:github.com/mamgad/pired` undoes it.
+
+### Which route
+
+| | what it gives you | writes |
+|---|---|---|
+| `pi install <src>` | user-wide: every `pi` session loads the security layer | `~/.pi/agent/settings.json` |
+| `pi install -l <src>` | this project only — commit `.pi/settings.json` and a teammate's first trusted `pi` installs it for them | `.pi/settings.json` |
+| `pi -e <src>` | one session, from a temporary clone | nothing |
+| `install.sh` | the `pired` and `pired-state` launchers on top of the package | npm global + settings |
+
+`<src>` is any pi package source: `git:github.com/mamgad/pired`, an npm spec, or a path to a checkout (`pi install ~/src/pired` — recorded as a path, not copied, so your edits are live on the next start).
+
+The launcher is the only behavioural difference. `pired` starts pi with the profile, thinking level, `--approve`, the `pired` theme and the target directory already set; from a package install you pass what you want yourself:
+
+```bash
+pired --profile pentest                                                 # launcher
+pi --pired-profile pentest --thinking high --use-theme pired --approve   # bare pi
 ```
 
 ### Beta access
@@ -95,30 +124,31 @@ pired          # review the current directory
 The repository is private for now, so the `curl` line above cannot fetch anonymously — it starts working when the repo goes public. **If you have been granted repository access**, both of these work today over your GitHub SSH key:
 
 ```bash
-# one command, if you already have pi
-npm install -g --ignore-scripts github:mamgad/pired
-pi install "$(npm root -g)/pired"        # so a bare `pi` loads it too
+# already have pi — install straight from the private repo
+pi install git:git@github.com:mamgad/pired
 
-# or clone — ./install.sh installs the checkout it is sitting in
+# no pi yet, or you want the launchers — clone and run the installer
 git clone git@github.com:mamgad/pired.git && cd pired && ./install.sh
 ```
 
-Both need `ssh -T git@github.com` to authenticate. Over HTTPS instead, use `npm install -g git+https://github.com/mamgad/pired.git` with a credential helper or token.
+Both need `ssh -T git@github.com` to authenticate. Over HTTPS instead, use `pi install https://github.com/mamgad/pired` or `npm install -g git+https://github.com/mamgad/pired.git` with a credential helper or token.
 
 <details>
 <summary>Other ways to install</summary>
 
 ```bash
-# npm, directly
+# npm global — the launchers, without the installer script
 npm install -g --ignore-scripts github:mamgad/pired
-pi install "$(npm root -g)/pired"        # optional: auto-load in plain `pi`
+pi install "$(npm root -g)/pired"        # so a bare `pi` loads it too
 
-# as a pi package only (no `pired` launcher)
-pi install git:github.com/mamgad/pired
+# project-local, for one engagement
+pi install -l git:github.com/mamgad/pired
 
 # one session, from a clone, installing nothing
 pi -e ./extensions/pired.ts --pired-profile review
 ```
+
+`install.sh` detects an existing pi and leaves it alone; `PIRED_SKIP_PI=1` forces the skip, and `NPM_PREFIX` picks the install prefix.
 
 </details>
 

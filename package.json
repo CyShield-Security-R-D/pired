@@ -17,7 +17,9 @@
     "checklists/",
     "themes/",
     "FORMAT.md",
-    "README.md"
+    "README.md",
+    "!**/*.test.ts",
+    "!core/testing/"
   ],
   "keywords": [
     "pi-package"
@@ -25,6 +27,9 @@
   "pi": {
     "extensions": [
       "./extensions/pired.ts"
+    ],
+    "themes": [
+      "./themes"
     ]
   },
   "engines": {
@@ -45,8 +50,23 @@
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-tui": "*",
     "typebox": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    },
+    "@earendil-works/pi-ai": {
+      "optional": true
+    },
+    "@earendil-works/pi-tui": {
+      "optional": true
+    },
+    "typebox": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "^0.84.2",
