@@ -7,7 +7,13 @@ It is a **security layer on top of [pi](https://pi.dev)** — an engagement work
 ## Quick start
 
 ```bash
+# macOS and Linux
 curl -fsSL https://raw.githubusercontent.com/mamgad/pired/main/install.sh | sh
+```
+
+```powershell
+# Windows
+powershell -c "irm https://raw.githubusercontent.com/mamgad/pired/main/install.ps1 | iex"
 ```
 
 Then, in the project you want reviewed:

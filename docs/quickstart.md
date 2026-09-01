@@ -3,12 +3,20 @@
 ## Install
 
 ```bash
+# macOS and Linux
 curl -fsSL https://raw.githubusercontent.com/mamgad/pired/main/install.sh | sh
 ```
 
-That installs [pi](https://pi.dev) if it is missing, installs pired, and registers pired's extension with pi so a bare `pi` loads the security layer too. No sudo, no daemon, no state outside `~/.pi` and `~/.pired`.
+```powershell
+# Windows
+powershell -c "irm https://raw.githubusercontent.com/mamgad/pired/main/install.ps1 | iex"
+```
+
+Either one installs [pi](https://pi.dev) if it is missing, installs pired, and registers pired's extension with pi so a bare `pi` loads the security layer too. No sudo or elevation, no daemon, no state outside `~/.pi` and `~/.pired`.
 
 Requires **Node.js ≥ 22.19** — pired's extension is TypeScript that pi type-strips at load.
+
+Windows has its own script because npm puts its global shims in the prefix itself rather than `prefix/bin`, and PATH there is a registry value rather than a line in a dotfile — so it offers to add the prefix to your user PATH instead of printing an `export` line for you to paste. It also checks for `bash`: pired drives the tools already on the box and pi runs them through `bash`, which a bare Windows install does not have, so the script points you at Git for Windows when none is found.
 
 ### Beta access
 
@@ -21,6 +29,11 @@ pi install "$(npm root -g)/pired"        # so a bare `pi` loads it too
 
 # or clone — ./install.sh installs the checkout it is sitting in
 git clone git@github.com:mamgad/pired.git && cd pired && ./install.sh
+```
+
+```powershell
+# the same clone route on Windows — .\install.ps1 installs the checkout beside it
+git clone git@github.com:mamgad/pired.git; cd pired; .\install.ps1
 ```
 
 Both authenticate with your GitHub SSH key; check it with `ssh -T git@github.com`. Over HTTPS instead, use `npm install -g git+https://github.com/mamgad/pired.git` with a credential helper or token.
