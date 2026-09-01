@@ -4,7 +4,7 @@
  */
 
 import { computeCoverage, coveragePercent } from "./coverage.ts";
-import type { CoverageMatrix, InventoryKind, Severity } from "./ontology.ts";
+import { DISPOSED_STATUSES, type CoverageMatrix, type InventoryKind, type Severity } from "./ontology.ts";
 import type { Workspace } from "./workspace.ts";
 
 const DEFAULT_SURFACE_KINDS: InventoryKind[] = ["endpoint", "host"];
@@ -48,18 +48,30 @@ export async function computeCoverageView(
 export { coveragePercent };
 
 export interface EngagementStats {
+	/** By severity, open work only — disposed findings are not counted here. */
 	findings: Record<Severity, number>;
 	findingsTotal: number;
+	/** Accepted, dismissed or set aside: still in the ledger, out of the count. */
+	disposed: number;
 	coveragePct?: number;
 	surface: number;
 	blockers: number;
+}
+
+/** Is this finding settled — accepted, dismissed or set aside — rather than open work? */
+export function isDisposed(status: string | undefined): boolean {
+	return (DISPOSED_STATUSES as readonly string[]).includes(status ?? "");
 }
 
 export async function computeEngagementStats(
 	ws: Workspace,
 	surfaceKinds: InventoryKind[] = DEFAULT_SURFACE_KINDS,
 ): Promise<EngagementStats> {
-	const findings = await ws.read("findings");
+	// Disposed findings leave the count without leaving the ledger. An accepted
+	// risk and a dismissed false positive are decisions, not open work, and a
+	// header number that can only ever go up is one the operator stops reading.
+	const all = await ws.read("findings");
+	const findings = all.filter((f) => !isDisposed(f.status));
 	const bySeverity: Record<Severity, number> = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
 	for (const f of findings) bySeverity[f.severity] += 1;
 
@@ -71,6 +83,7 @@ export async function computeEngagementStats(
 	return {
 		findings: bySeverity,
 		findingsTotal: findings.length,
+		disposed: all.length - findings.length,
 		coveragePct: view ? coveragePercent(view.matrix) : undefined,
 		surface: surfaceElements.length,
 		blockers: openBlockers.length,

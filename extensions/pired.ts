@@ -35,6 +35,7 @@ import { createScopeGate } from "../core/scope.ts";
 import { renderCoveragePanel, type Tone } from "../core/coverage-panel.ts";
 import { complete } from "@earendil-works/pi-ai/compat";
 import type { AssistantMessage, Message, UserMessage } from "@earendil-works/pi-ai/compat";
+import { describePlan, type Ledgers, planCompaction } from "../core/dedupe.ts";
 import { applyPlan, extractionSystemPrompt, extractionUserMessage, parseExtraction, planExtraction, retryNudge, reviewEviction, reviewWindow } from "../core/extract.ts";
 import { dismissHint, PANEL_MODES, renderFindingDetail, renderPanel, scrollFramed, type PanelData, type PanelMode, type PanelTone } from "../core/panel.ts";
 import { computeCoverageView, computeEngagementStats, coveragePercent, type CoverageView, type EngagementStats } from "../core/stats.ts";
@@ -1900,6 +1901,60 @@ export default function piredExtension(pi: ExtensionAPI): void {
 				return;
 			}
 			await runExtraction(ctx, reviewSoFar(), "manual");
+		},
+	});
+
+	/**
+	 * Repair a ledger that already holds duplicates.
+	 *
+	 * `record` stopped new ones, which does nothing for an engagement carried out
+	 * before it. This is deliberately the operator's command and not a tool the
+	 * agent can reach: it retires rows, and the one thing a model must not be able
+	 * to do quietly is remove a finding from a client's report. It shows what it
+	 * would fold and writes only when told twice.
+	 */
+	pi.registerCommand("dedupe", {
+		description: "Find rows recorded more than once and fold them into one — `apply` to write, otherwise a preview",
+		handler: async (args, ctx) => {
+			if (!workspace) {
+				ctx.ui.notify("pired: no engagement workspace yet", "warning");
+				return;
+			}
+			const ws = workspace;
+			const read = async (): Promise<Ledgers> => ({
+				inventory: await ws.read("inventory"), hypotheses: await ws.read("hypotheses"),
+				findings: await ws.read("findings"), blockers: await ws.read("blockers"), loot: await ws.read("loot"),
+			});
+			const plan = planCompaction(await read(), services.clock.nowIso());
+			const apply = (args ?? "").trim().toLowerCase() === "apply";
+			if (plan.groups.length === 0) {
+				ctx.ui.notify("pired: no duplicates — every row in this workspace is already one thing", "info");
+				return;
+			}
+			if (!apply) {
+				// Shown before anything is written, and shown as a list: "12 rows will
+				// be folded" is not a thing anyone can check, and this is the only
+				// command in pired that retires a row someone may still want.
+				const preview = describePlan(plan);
+				const shown = preview.slice(0, 40);
+				if (preview.length > shown.length) shown.push(`… and ${preview.length - shown.length} more line(s)`);
+				const ok = await ctx.ui.confirm(
+					`Fold ${plan.removed} duplicate row(s) into ${plan.groups.length}?`,
+					shown.join("\n"),
+				);
+				if (!ok) {
+					ctx.ui.notify("pired: nothing written", "info");
+					return;
+				}
+			}
+			for (const write of plan.writes) await ws.upsert(write.store, () => write.records);
+			await refreshStatus(ctx);
+			ctx.ui.notify(
+				`pired: folded ${plan.removed} duplicate row(s) into ${plan.groups.length}` +
+				(plan.retargeted > 0 ? `, moved ${plan.retargeted} reference(s)` : "") +
+				" — the originals are still in the ledger",
+				"info",
+			);
 		},
 	});
 

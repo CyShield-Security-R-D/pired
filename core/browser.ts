@@ -37,6 +37,7 @@ import type {
 	HypothesisRecord,
 	InventoryKind,
 	InventoryRecord,
+	LedgerRecord,
 } from "./ontology.ts";
 
 /** The coverage tones plus the one this view adds for the cursor row. */
@@ -157,6 +158,22 @@ export function elementLabel(rec: InventoryRecord): string {
 		case "tech": return rec.name + (rec.version ? ` ${rec.version}` : "");
 		default: return (rec as { id: string }).id;
 	}
+}
+
+/**
+ * How any ledger record names itself to a person.
+ *
+ * Every view that has to say "this one" — a tool result reporting what a repeat
+ * matched, the duplicate sweep listing what it would fold — needs the same
+ * answer, and an id is not it. Kept beside elementLabel so there is one place
+ * where a record's human name is decided.
+ */
+export function recordLabel(rec: LedgerRecord): string {
+	if (rec.kind === "finding") return rec.title;
+	if (rec.kind === "hypothesis") return `${rec.class} on ${rec.target}`;
+	if (rec.kind === "blocker") return rec.question;
+	if (rec.kind === "loot") return rec.handle;
+	return elementLabel(rec);
 }
 
 // --- model -----------------------------------------------------------------

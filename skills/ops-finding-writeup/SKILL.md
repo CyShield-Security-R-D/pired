@@ -41,12 +41,14 @@ Field-by-field:
 - **repro** — numbered, copy-pasteable steps a third party can follow to reproduce, including preconditions (which account, which cookie). Reproducibility is what separates a finding from a guess.
 - **evidence** — workspace-relative paths to the request/response captures and screenshots that prove it (see `ops-evidence`). Every finding should have at least one.
 - **remediation** — put the fix in the description (or a note): the concrete change (add an ownership check / parameterize the query / disable the method), not "sanitize input".
-- **status** — `open` → `confirmed` → `triaged` → `reported` (or `false-positive` if it later fails to hold).
+- **status** — `open` → `confirmed` → `triaged` → `reported`. Three statuses settle a finding instead: `false-positive` when it fails to hold, `accepted-risk` when the client accepts it, `ignored` when the operator sets it aside. All three keep the row and the history and take a `reason` — record the operator's words, not your paraphrase — and take the finding out of the open count. Use them when the operator says so; do not settle a finding on your own judgement.
 
 ## De-dupe before you record
 - `recall findings` first. If the same root cause already exists (e.g. IDOR on several endpoints of one API from one missing check), prefer **one** finding describing the class with multiple affected endpoints over N near-identical findings.
 - Genuinely distinct root causes = distinct findings, even if similar-looking.
 - To correct/enrich an existing finding, pass its `id` to `record` to update it in place rather than creating a duplicate (last-write-wins on the id).
+- `record` checks identity before it creates anything, so re-recording something already in the ledger updates it rather than adding a row. It will tell you which id it matched; that id is what you pass to change it further.
+- `record id=<id> delete=true reason="..."` retires a row for good. It is for what should never have been recorded — a mistake, or something the operator asked you to remove. A finding that is real but will not be acted on is a *status*, never a deletion: deleting it takes it out of the report the client reads. The operator's own `/dedupe` sweep is what repairs a workspace that already accumulated duplicates.
 
 ## Confirmation gate (avoid false positives)
 - Never promote on a scanner/SAST hit alone — reproduce it by hand and save the evidence first. Raw tool output is a lead, not a finding — but don't drop the lead either: keep it as a hypothesis (`outcome=inconclusive`) so it survives to be retested.

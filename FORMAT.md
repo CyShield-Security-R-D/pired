@@ -54,6 +54,23 @@ Every line in a `*.jsonl` store is one JSON object sharing this base:
 Read semantics: group by `id`, keep the record with the latest `createdAt`/`updatedAt`.
 A record with `"deleted": true` (soft-delete tombstone) hides the id from reads.
 
+Two optional fields travel with a tombstone, because a deletion is the one write
+that leaves no visible trace and the file has to explain itself:
+
+```jsonc
+{
+  "v":1, "id":"f3a9", "kind":"finding", "createdAt":"...", "updatedAt":"...",
+  "deleted": true,
+  "deletedReason": "recorded against the wrong engagement",
+  "duplicateOf": "f2b1"        // set by the duplicate sweep: the id this row became
+}
+```
+
+Nothing is removed from the file: every superseded line is still above the
+tombstone, so a wrong deletion is undone by anyone who can open the ledger.
+`record kind=<k> id=<id> delete=true reason="..."` writes one; the operator's
+`/dedupe` sweep writes them for rows it folds together.
+
 ## 5. `manifest.json`
 
 Single JSON object at the workspace root.
@@ -161,10 +178,20 @@ Refuted and inconclusive hypotheses are **retained** (no-retest + report rigor).
   "description":"...",
   "repro":"1. Log in as user A ... 2. GET /api/user?id=<B> ...",
   "evidence":["evidence/f3a9-req.http","artifacts/f3a9-screenshot.png"],
-  "status":"confirmed",          // "open" | "confirmed" | "triaged" | "reported" | "false-positive"
+  "status":"confirmed",          // see below
+  "reason":"client accepted; compensating control in the WAF",  // why it carries that status
   "hypothesisId":"y7"
 }
 ```
+
+`status` is one of `open`, `confirmed`, `triaged`, `reported`, `false-positive`,
+`accepted-risk`, `ignored`. The last three are *disposed*: the finding stays in
+the ledger and in the report, keeps its history, and leaves the open-findings
+count that the header, the statusline and `recall status` show. They are how a
+decision — the client accepted the risk, the operator judged it not real, it was
+set aside — is recorded without deleting anything, and `reason` is what a client
+asks about three months later. Deleting is the separate act, and it is for a row
+that should never have been recorded at all.
 
 Findings are a subset of confirmed hypotheses. `cwe`/`cvss` align with the stable
 standards named in `PLAN.md` §3.1; findings export can render SARIF from these.

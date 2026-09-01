@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Checklist, EndpointRecord } from "./ontology.ts";
 import type { ToolContext, ToolDefinition } from "./ports.ts";
 import { makeFakeServices, type FakeServices } from "./testing/fakes.ts";
+import { computeEngagementStats } from "./stats.ts";
 import { createRecallTool, createRecordTool } from "./tools.ts";
 import { Workspace } from "./workspace.ts";
 
@@ -830,5 +831,96 @@ describe("notes are compared block by block", () => {
 		await record.execute({ kind: "note", text: "three problems on the login flow: no rate limiting, no lockout, no logging" }, ctx);
 		await record.execute({ kind: "note", text: "no rate limiting" }, ctx);
 		expect((await ws.readNotes()).match(/no rate limiting/g)).toHaveLength(2);
+	});
+});
+
+describe("settling a finding without losing it", () => {
+	// Three things an operator says about a finding — it is not real, the client
+	// accepts the risk, set it aside — and before this the only one the ledger
+	// could hear was "false-positive", which still counted as open work.
+	it("takes a finding out of the open count while keeping the row", async () => {
+		const { ws, ctx, record } = await setup();
+		const made = await record.execute({ kind: "finding", title: "Weak TLS ciphers", severity: "medium", target: "nginx.conf:12" }, ctx);
+		const id = (made.details as { id: string }).id;
+		await record.execute({ kind: "finding", id, status: "accepted-risk", reason: "client accepted, compensating WAF rule in place" }, ctx);
+		const findings = await ws.read("findings");
+		expect(findings).toHaveLength(1);
+		expect(findings[0]).toMatchObject({ status: "accepted-risk", reason: "client accepted, compensating WAF rule in place" });
+		const stats = await computeEngagementStats(ws);
+		expect(stats.findingsTotal).toBe(0);
+		expect(stats.disposed).toBe(1);
+	});
+
+	it("says how many are disposed of in the status rollup", async () => {
+		const { ctx, record, recall } = await setup();
+		const made = await record.execute({ kind: "finding", title: "Weak TLS ciphers", severity: "medium", target: "nginx.conf:12" }, ctx);
+		await record.execute({ kind: "finding", id: (made.details as { id: string }).id, status: "ignored" }, ctx);
+		expect(textOf(await recall.execute({ query: "status" }, ctx))).toMatch(/findings\s+0.*1 disposed/);
+	});
+
+	it("lists open findings before settled ones, with the reason attached", async () => {
+		const { ctx, record, recall } = await setup();
+		const made = await record.execute({ kind: "finding", title: "Weak TLS ciphers", severity: "medium", target: "nginx.conf:12" }, ctx);
+		await record.execute({ kind: "finding", id: (made.details as { id: string }).id, status: "false-positive", reason: "cipher list is overridden downstream" }, ctx);
+		await record.execute({ kind: "finding", title: "IDOR on share", severity: "high", target: "share.go:88" }, ctx);
+		const lines = textOf(await recall.execute({ query: "findings" }, ctx)).split("\n");
+		expect(lines[0]).toContain("IDOR on share");
+		expect(lines[1]).toContain("cipher list is overridden downstream");
+	});
+});
+
+describe("retiring a record", () => {
+	// The format has carried a tombstone since v1 and nothing could write one, so
+	// a row recorded by mistake stayed in the count and in the report forever.
+	it("removes it from every view", async () => {
+		const { ws, ctx, record } = await setup();
+		const made = await record.execute({ kind: "finding", title: "IDOR", severity: "high", target: "share.go:88" }, ctx);
+		const id = (made.details as { id: string }).id;
+		const gone = await record.execute({ kind: "finding", id, delete: true, reason: "recorded against the wrong engagement" }, ctx);
+		expect(await ws.read("findings")).toHaveLength(0);
+		expect(textOf(gone)).toMatch(/Deleted finding/);
+		expect((await computeEngagementStats(ws)).findingsTotal).toBe(0);
+	});
+
+	it("keeps the line, so a wrong deletion is recoverable", async () => {
+		const { svc, ws, ctx, record } = await setup();
+		const made = await record.execute({ kind: "finding", title: "IDOR", severity: "high", target: "share.go:88" }, ctx);
+		await record.execute({ kind: "finding", id: (made.details as { id: string }).id, delete: true, reason: "duplicate of the one above" }, ctx);
+		const raw = (await svc.fs.readFileIfExists(ws.storePath("findings"))) ?? "";
+		expect(raw.split("\n").filter(Boolean)).toHaveLength(2);
+		expect(raw).toContain("\"deletedReason\":\"duplicate of the one above\"");
+		expect(raw).toContain("\"title\":\"IDOR\"");
+	});
+
+	it("retires surface, and the coverage that surface carried goes with it", async () => {
+		const { ws, ctx, record } = await setup();
+		const made = await record.execute({ kind: "endpoint", method: "GET", path: "/a" }, ctx);
+		await record.execute({ kind: "endpoint", id: (made.details as { id: string }).id, delete: true }, ctx);
+		expect(await ws.read("inventory")).toHaveLength(0);
+	});
+
+	it("refuses to delete without naming what to delete", async () => {
+		const { ctx, record } = await setup();
+		await expect(record.execute({ kind: "finding", delete: true }, ctx)).rejects.toThrow(/'id' is required/);
+	});
+
+	it("refuses to delete something that is not there", async () => {
+		const { ctx, record } = await setup();
+		await expect(record.execute({ kind: "finding", id: "nope", delete: true }, ctx)).rejects.toThrow(/no live finding/);
+	});
+
+	it("refuses to delete a note or an evidence file, which have no id", async () => {
+		const { ctx, record } = await setup();
+		await expect(record.execute({ kind: "note", delete: true, id: "x" }, ctx)).rejects.toThrow(/not a ledger row/);
+	});
+
+	it("lets a deleted id be recorded again as something new", async () => {
+		// A tombstone hides an id; it does not reserve the thing. Re-recording the
+		// same route after deleting it has to work, or a mistaken delete is fatal.
+		const { ws, ctx, record } = await setup();
+		const made = await record.execute({ kind: "endpoint", method: "GET", path: "/a" }, ctx);
+		await record.execute({ kind: "endpoint", id: (made.details as { id: string }).id, delete: true }, ctx);
+		await record.execute({ kind: "endpoint", method: "GET", path: "/a" }, ctx);
+		expect(await ws.read("inventory")).toHaveLength(1);
 	});
 });

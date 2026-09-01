@@ -42,8 +42,26 @@ export type HypothesisOutcome = (typeof HYPOTHESIS_OUTCOMES)[number];
 export const SEVERITIES = ["info", "low", "medium", "high", "critical"] as const;
 export type Severity = (typeof SEVERITIES)[number];
 
-export const FINDING_STATUSES = ["open", "confirmed", "triaged", "reported", "false-positive"] as const;
+export const FINDING_STATUSES = [
+	"open", "confirmed", "triaged", "reported", "false-positive", "accepted-risk", "ignored",
+] as const;
 export type FindingStatus = (typeof FINDING_STATUSES)[number];
+
+/**
+ * Statuses that settle a finding without deleting it.
+ *
+ * An engagement produces three kinds of finding nobody should be counting as
+ * open work, and all three are decisions rather than mistakes: the client has
+ * accepted the risk, the operator has judged it not real, or it has been set
+ * aside deliberately. The row stays — it is still in the report, still in the
+ * history, still auditable — but it leaves the count the header and the
+ * statusline show, because a number that never falls is a number nobody reads.
+ *
+ * Deleting is the separate act, and it is for something that should never have
+ * been recorded at all.
+ */
+export const DISPOSED_STATUSES = ["false-positive", "accepted-risk", "ignored"] as const;
+export type DisposedStatus = (typeof DISPOSED_STATUSES)[number];
 
 export const BLOCKER_TYPES = [
 	"decision",
@@ -98,6 +116,17 @@ export interface RecordBase {
 	updatedAt?: IsoTimestamp;
 	/** Soft-delete tombstone: the latest record for an id with this set hides the id. */
 	deleted?: true;
+	/**
+	 * Why an id was retired, written on the tombstone.
+	 *
+	 * A deletion is the one write that leaves no visible trace — the row simply
+	 * stops existing for every reader — so the line that does it says why. The
+	 * superseded lines are all still in the file above it, which is what makes a
+	 * wrong deletion recoverable rather than merely regrettable.
+	 */
+	deletedReason?: string;
+	/** Set by the duplicate sweep on the rows it folded away: the id they became. */
+	duplicateOf?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -258,6 +287,14 @@ export interface FindingRecord extends RecordBase {
 	/** Workspace-relative evidence/artifact paths. */
 	evidence?: string[];
 	status: FindingStatus;
+	/**
+	 * Why the finding carries the status it does.
+	 *
+	 * "Accepted risk" and "false positive" are decisions somebody made, and a
+	 * client reading the report three months later asks who decided and on what
+	 * grounds. A status with no reason beside it cannot answer that.
+	 */
+	reason?: string;
 	hypothesisId?: string;
 }
 

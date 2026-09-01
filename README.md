@@ -189,6 +189,8 @@ pi -e ./extensions/pired.ts --pired-profile review -p "audit ./src for injection
 
 - **Findings** — `/findings` browses them and `/report` exports a Markdown report; engagement state lives in `~/.pired/engagements/<name>/` (see [`FORMAT.md`](./FORMAT.md)).
 
+- **Correcting the ledger** — tell the agent a finding is not real, that the client has accepted the risk, or to set it aside, and it records the decision as a status with your reason; the finding keeps its place in the report and leaves the open count. A row that should never have been recorded can be retired outright. Nothing is erased: the ledger is append-only, so every version is still in the file above the tombstone. `/dedupe` folds duplicates an older engagement already accumulated into one row each, moving every reference onto the surviving id so no coverage is lost — it shows what it would do and writes only when you say so.
+
 ## The interface
 
 The transcript is the conversation; the ledger is the artifact. Coverage you can only learn by asking the model to `recall gaps` is coverage you will not check — so pired renders it itself, from disk, and puts it on screen **by default**:

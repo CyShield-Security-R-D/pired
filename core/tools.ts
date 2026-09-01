@@ -10,10 +10,10 @@
  * maps them onto its harness. Runtime services (clock/ids) come from `ToolContext`.
  */
 
-import { buildBrowserModel, elementLabel } from "./browser.ts";
+import { buildBrowserModel, recordLabel } from "./browser.ts";
 import { computeCoverage, findGaps, selectNext } from "./coverage.ts";
 import { type Fields, findDuplicate, findNearDuplicate, type IdentityKind, isNoOp, mergeRecord } from "./identity.ts";
-import { computeCoverageView, computeEngagementStats } from "./stats.ts";
+import { computeCoverageView, computeEngagementStats, isDisposed } from "./stats.ts";
 import { CELL_GLYPH, renderCoveragePanel } from "./coverage-panel.ts";
 import {
 	BLOCKER_STATUSES,
@@ -180,7 +180,7 @@ function extractFields(kind: LedgerKind, a: Record<string, unknown>): Record<str
 		case "hypothesis":
 			return defined({ statement: str(a.statement), target: asList(a.target)[0], class: asList(a.class)[0], method: str(a.approach) ?? str(a.method), outcome: oneOf(a.outcome, HYPOTHESIS_OUTCOMES), evidence: str(a.evidence), findingId: str(a.findingId) });
 		case "finding":
-			return defined({ title: str(a.title), severity: oneOf(a.severity, SEVERITIES), target: str(a.target), class: str(a.class), cwe: str(a.cwe), cvss: str(a.cvss), description: str(a.description), repro: str(a.repro), evidence: strArr(a.evidence), status: oneOf(a.status, FINDING_STATUSES), hypothesisId: str(a.hypothesisId) });
+			return defined({ title: str(a.title), severity: oneOf(a.severity, SEVERITIES), target: str(a.target), class: str(a.class), cwe: str(a.cwe), cvss: str(a.cvss), description: str(a.description), repro: str(a.repro), evidence: strArr(a.evidence), status: oneOf(a.status, FINDING_STATUSES), reason: str(a.reason), hypothesisId: str(a.hypothesisId) });
 		case "blocker":
 			return defined({ type: oneOf(a.blockerType, BLOCKER_TYPES), question: str(a.question), context: str(a.context), options: strArr(a.options), blocks: strArr(a.blocks), priority: oneOf(a.priority, PRIORITIES), status: oneOf(a.status, BLOCKER_STATUSES), answer: str(a.answer) });
 		case "loot":
@@ -213,26 +213,17 @@ function recordDetails(record: LedgerRecord, outcome: WriteOutcome): Record<stri
 	return base;
 }
 
-/** How the operator would recognise a record: what it is, not which id it got. */
-function labelOf(record: LedgerRecord): string {
-	if (record.kind === "finding") return record.title;
-	if (record.kind === "hypothesis") return `${record.class} on ${record.target}`;
-	if (record.kind === "blocker") return record.question;
-	if (record.kind === "loot") return record.handle;
-	return elementLabel(record as InventoryRecord);
-}
-
 function recordSummary(kind: string, record: LedgerRecord, outcome: WriteOutcome): string {
 	// A repeat is told plainly what it matched, and that nothing was lost. The
 	// agent that re-recorded something usually did it because the first call
 	// scrolled out of context; "already there, as this id" is the answer to the
 	// question it was actually asking.
 	if (outcome === "merged") {
-		return `Already recorded as ${kind} ${record.id} (${labelOf(record)}) — updated it in place rather than adding a second row. ` +
+		return `Already recorded as ${kind} ${record.id} (${recordLabel(record)}) — updated it in place rather than adding a second row. ` +
 			`Pass id=${record.id} to change it further.`;
 	}
 	if (outcome === "unchanged") {
-		return `Already recorded as ${kind} ${record.id} (${labelOf(record)}) — nothing new in this call, so nothing was written. ` +
+		return `Already recorded as ${kind} ${record.id} (${recordLabel(record)}) — nothing new in this call, so nothing was written. ` +
 			`Pass id=${record.id} to change it.`;
 	}
 	if (record.kind === "finding") return `Recorded finding ${record.id} [${record.severity}] ${record.title}`;
@@ -249,9 +240,10 @@ const RECORD_DESCRIPTION = `Record engagement state to the durable workspace. On
 - hypothesis: statement, target (surface id), class (checklist id) (+approach, outcome[proposed|testing|confirmed|refuted|inconclusive], evidence). 'target' and 'class' also accept lists, recording the cross product in one call — use it when one piece of reasoning settles several cells at once.
 - finding: title, severity[info|low|medium|high|critical] (+target, class, cwe, cvss, description, repro, evidence[], status)
   A finding is anything worth carrying into the report, not only a proven vulnerability. Use severity=info for an observation that costs nothing now but may matter later — a missing dependency pin, an unpinned base image, a permissive default, a lead you could not finish. 'target' is optional and accepts a recorded element id OR a raw string (a file path, a module, a component) when no element fits; give one when you can, and record the finding either way rather than leaving it in notes.
+  status[open|confirmed|triaged|reported|false-positive|accepted-risk|ignored] is how a finding is settled without losing it. When the operator says a finding is not real, set status=false-positive; when they say the risk is accepted, status=accepted-risk; when they want it set aside, status=ignored. All three keep the row and its history, drop it out of the open-findings count, and take a 'reason' — which is what a client asks for three months later. Prefer them to deleting.
 - blocker: question (+blockerType, priority[low|medium|high], options[], blocks[] (work ids this gates))
 - loot: handle (e.g. cred:web-admin), secret (+lootType, username, target, source)
-Pass 'id' to update an existing record.
+Pass 'id' to update an existing record. Pass 'id' with delete=true (and a 'reason') to retire one: it disappears from every view, the superseded lines stay in the file, and the tombstone records why. Delete only what should never have been recorded — a mistake, a row the operator asked you to remove. A finding that is real but will not be acted on is a status, not a deletion; deleting it removes it from the report the client reads.
 
 Recording something twice is safe. Every kind has an identity — an endpoint is its method and path, a hypothesis is its (target, class) cell, a finding is its title and location — and a second recording of the same thing updates the first instead of creating a second row: fields you add are kept, a severity is never lowered, evidence and params are merged. So when you are not sure whether something is already recorded, record it. The reply names the id it matched, and 'id=<that>' is how you change it afterwards.
 
@@ -298,6 +290,8 @@ const RECORD_PARAMETERS: JsonSchema = {
 		title: { type: "string" }, severity: { enum: SEVERITIES }, cwe: { type: "string" }, cvss: { type: "string" }, description: { type: "string" }, repro: { type: "string" }, status: { type: "string" }, evidence: { type: "array", items: { type: "string" }, description: "Workspace-relative paths to evidence files you wrote (e.g. [\"evidence/sqli-login.txt\"]). Not inline text." },
 		question: { type: "string" }, blockerType: { enum: BLOCKER_TYPES }, priority: { enum: PRIORITIES }, options: { type: "array", items: { type: "string" } }, blocks: { type: "array", items: { type: "string" } }, context: { type: "string" },
 		handle: { type: "string" }, lootType: { enum: LOOT_TYPES }, username: { type: "string" }, secret: { type: "string" }, source: { type: "string" }, notes: { type: "string" },
+		delete: { type: "boolean", description: "With 'id': retire that record. For something that should never have been recorded — ask the operator first." },
+		reason: { type: "string", description: "Why a record is being deleted or its status changed. Stored on the record." },
 	},
 };
 
@@ -410,6 +404,45 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 			const a = asRecord(args);
 			const kind = oneOf(a.kind, RECORD_KINDS);
 			if (!kind) throw new Error(`record: 'kind' must be one of ${RECORD_KINDS.join(", ")}`);
+
+			// Retiring a record.
+			//
+			// The format has carried a tombstone since the first version — `read`
+			// drops any id whose latest line says deleted — and nothing could write
+			// one, so a row recorded by mistake stayed in the count and in the report
+			// forever. The only workaround was to re-record it with a status nobody
+			// believed, which is how a findings list stops being read.
+			//
+			// It is deliberately append-only: the tombstone is one more line, every
+			// superseded version is still above it in the file, and `deletedReason`
+			// says why. A wrong deletion is recoverable by anyone who opens the
+			// ledger, which is the property that makes it safe to expose at all.
+			if (a.delete === true || str(a.delete) === "true") {
+				if (kind === "note" || kind === "evidence") {
+					throw new Error(`record delete: '${kind}' is not a ledger row and has no id to retire. Notes and evidence files are edited on disk.`);
+				}
+				const id = required(str(a.id), "record delete: 'id' is required — name the record to retire.");
+				const store = STORE_FOR_KIND[kind];
+				const why = str(a.reason);
+				let gone: LedgerRecord | undefined;
+				await deps.workspace.upsert(store, (current) => {
+					const existing = current.find((r) => r.id === id);
+					if (!existing) return undefined;
+					gone = defined({
+						...existing, v: RECORD_VERSION, deleted: true,
+						updatedAt: ctx.services.clock.nowIso(), deletedReason: why,
+					}) as unknown as LedgerRecord;
+					return [gone];
+				});
+				if (!gone) {
+					throw new Error(`record delete: no live ${kind} with id ${id}. Check 'recall ${STORE_FOR_KIND[kind]}' — it may already be deleted.`);
+				}
+				return text(
+					`Deleted ${kind} ${id} (${recordLabel(gone)})${why ? `: ${why}` : ""}. ` +
+					"It is gone from every view and every count; the ledger keeps the line, so this is reversible by hand.",
+					{ kind, id, deleted: true, ids: [id], created: [] },
+				);
+			}
 
 			if (kind === "note") {
 				const body = required(str(a.text), "record note: 'text' is required");
@@ -796,9 +829,9 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 
 			const written = record as LedgerRecord;
 			const warning = near
-				? `\nPossible duplicate of ${near.id} (${labelOf(near)}) — same location, similar wording, nothing that settles it. ` +
+				? `\nPossible duplicate of ${near.id} (${recordLabel(near)}) — same location, similar wording, nothing that settles it. ` +
 					`Recorded separately rather than risk losing one of them. If they are the same issue, fold the detail into ` +
-					`${near.id} with record id=${near.id}, then record id=${written.id} status=false-positive.`
+					`${near.id} with record id=${near.id}, then retire this one with record id=${written.id} delete=true reason="duplicate of ${near.id}".`
 				: "";
 			return text(recordSummary(kind, written, outcome) + warning, recordDetails(written, outcome));
 		},
@@ -889,8 +922,17 @@ export function createRecallTool(deps: ToolDeps): ToolDefinition {
 					return text(hyps.length ? hyps.slice(0, limit).map((h) => `${h.id} [${h.outcome}] ${h.class} on ${h.target}: ${h.statement}`).join("\n") + truncated(Math.min(limit, hyps.length), hyps.length, "hypotheses") : "(no hypotheses)");
 				}
 				case "findings": {
-					const fs = await deps.workspace.read("findings");
-					return text(fs.length ? fs.slice(0, limit).map((f) => `${f.id} [${f.severity}/${f.status}] ${f.title} (${f.target})`).join("\n") + truncated(Math.min(limit, fs.length), fs.length, "findings", "worst first") : "(no findings)");
+					// Open work first, then what was disposed of. A finding the client
+					// accepted or the operator dismissed still belongs in the list — it
+					// is in the report and someone will ask about it — but it is not
+					// what to look at first, and its reason travels with it.
+					const all = await deps.workspace.read("findings");
+					const fs = [...all.filter((f) => !isDisposed(f.status)), ...all.filter((f) => isDisposed(f.status))];
+					return text(fs.length
+						? fs.slice(0, limit).map((f) =>
+							`${f.id} [${f.severity}/${f.status}] ${f.title} (${f.target})${f.reason ? ` — ${f.reason}` : ""}`,
+						).join("\n") + truncated(Math.min(limit, fs.length), fs.length, "findings", "open first")
+						: "(no findings)");
 				}
 				case "blockers": {
 					const bs = (await deps.workspace.read("blockers")).filter((b) => b.status === "open");
@@ -955,7 +997,7 @@ export function createRecallTool(deps: ToolDeps): ToolDefinition {
 					return text([
 						`surface    ${stats.surface} element(s)`,
 						`coverage   ${stats.coveragePct ?? 0}%${m ? ` · ${m.applicable} askable cells · ${gaps} gap(s)` : " (no checklist)"}`,
-						`findings   ${stats.findingsTotal}${sev ? ` (${sev})` : ""}`,
+						`findings   ${stats.findingsTotal}${sev ? ` (${sev})` : ""}${stats.disposed > 0 ? ` · ${stats.disposed} disposed` : ""}`,
 						`blockers   ${stats.blockers} open`,
 					].join("\n"));
 				}
