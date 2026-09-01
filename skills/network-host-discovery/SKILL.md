@@ -18,11 +18,11 @@ Tools run via `bash` and may be missing. If absent: try an alternative below, el
 ## 1. Alive-host sweep (breadth)
 ```bash
 # nmap ping/discovery sweep, no port scan yet
-nmap -sn -PE -PP -PS443,80,22 -PA3389 --min-rate 1000 10.10.20.0/24 -oA evidence/hostsweep
+nmap -sn -PE -PP -PS443,80,22 -PA3389 --min-rate 1000 10.10.20.0/24 -oA "$PIRED_WORKSPACE/evidence/hostsweep"
 # fast alternative for big ranges:
-fping -a -g 10.10.20.0/24 2>/dev/null | tee evidence/alive_fping.txt
+fping -a -g 10.10.20.0/24 2>/dev/null | tee "$PIRED_WORKSPACE/evidence/alive_fping.txt"
 # collect live IPs
-grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' evidence/hostsweep.gnmap | sort -u > evidence/live_ips.txt
+grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' "$PIRED_WORKSPACE/evidence/hostsweep.gnmap" | sort -u > "$PIRED_WORKSPACE/evidence/live_ips.txt"
 ```
 Note: hosts often drop ICMP but answer on TCP; **an empty ping sweep is not proof a range is dead.** Before concluding, do a light top-ports TCP scan (§2), or on a hardened segment scan the whole CIDR directly with `-Pn` (skip host discovery, treat every IP as up) so filtered-but-live hosts are not lost.
 
@@ -30,12 +30,12 @@ Note: hosts often drop ICMP but answer on TCP; **an empty ping sweep is not proo
 Cover the **full 1-65535 TCP range** in the breadth pass — a top-ports sweep alone will miss services parked on odd ports (admin panels, DBs, backdoors love high ports). Use top-ports only as a first look, then widen.
 ```bash
 # masscan: fast, whole-range, TCP SYN — tune --rate to the network
-masscan -iL evidence/live_ips.txt -p1-65535 --rate 2000 -oL evidence/masscan.txt
+masscan -iL "$PIRED_WORKSPACE/evidence/live_ips.txt" -p1-65535 --rate 2000 -oL "$PIRED_WORKSPACE/evidence/masscan.txt"
 # nmap-only alternative — first look (fast top ports), THEN full range so nothing is lost:
-nmap -sS -T4 --top-ports 1000 --min-rate 1500 -iL evidence/live_ips.txt -oA evidence/nmap_top --open
-nmap -sS -T4 -p- --min-rate 1500 -iL evidence/live_ips.txt -oA evidence/nmap_allports --open
+nmap -sS -T4 --top-ports 1000 --min-rate 1500 -iL "$PIRED_WORKSPACE/evidence/live_ips.txt" -oA "$PIRED_WORKSPACE/evidence/nmap_top" --open
+nmap -sS -T4 -p- --min-rate 1500 -iL "$PIRED_WORKSPACE/evidence/live_ips.txt" -oA "$PIRED_WORKSPACE/evidence/nmap_allports" --open
 # distill open host:port pairs (masscan -oL: "open <proto> <port> <ip> <ts>")
-awk '/^open/{print $4":"$3}' evidence/masscan.txt | sort -u > evidence/openports.txt
+awk '/^open/{print $4":"$3}' "$PIRED_WORKSPACE/evidence/masscan.txt" | sort -u > "$PIRED_WORKSPACE/evidence/openports.txt"
 ```
 `masscan` needs raw-socket privileges (root/cap_net_raw); if it errors on permissions, `record kind=blocker` asking the operator, or fall back to nmap `-sT` (TCP connect scan, no privileges — slower but complete). masscan can drop packets at high `--rate`; on a critical target re-confirm with an nmap `-p-` pass rather than trusting a single fast sweep.
 
@@ -43,10 +43,10 @@ awk '/^open/{print $4":"$3}' evidence/masscan.txt | sort -u > evidence/openports
 Only on the open ports found above — this is the slow, accurate pass:
 ```bash
 # feed masscan's open ports back into nmap for -sV -sC on exactly those ports
-ports=$(awk '/^open/{print $3}' evidence/masscan.txt | sort -un | paste -sd,)
-nmap -sV -sC -p"$ports" --min-rate 1000 -iL evidence/live_ips.txt -oA evidence/nmap_sv
+ports=$(awk '/^open/{print $3}' "$PIRED_WORKSPACE/evidence/masscan.txt" | sort -un | paste -sd,)
+nmap -sV -sC -p"$ports" --min-rate 1000 -iL "$PIRED_WORKSPACE/evidence/live_ips.txt" -oA "$PIRED_WORKSPACE/evidence/nmap_sv"
 # or per-host full detail:
-nmap -sV -sC -O -p- --min-rate 2000 -oA evidence/nmap_HOST 10.10.20.7
+nmap -sV -sC -O -p- --min-rate 2000 -oA "$PIRED_WORKSPACE/evidence/nmap_HOST" 10.10.20.7
 ```
 - `-sV` confirms the actual service (don't trust the port number — 8080 may be anything). Add `--version-all` (`-sV --version-intensity 9`) on a stubborn/unknown port before calling it unidentified.
 - `-sC` runs the *safe* default script category; add targeted `--script` per service in `network-service-enum`, not blanket intrusive scripts here.
@@ -56,7 +56,7 @@ nmap -sV -sC -O -p- --min-rate 2000 -oA evidence/nmap_HOST 10.10.20.7
 ## 4. UDP notes (selective, slow) — where misses hide
 UDP scans are slow and lossy, but skipping UDP entirely loses whole services (DNS, SNMP, TFTP, IKE, NetBIOS). Don't blanket `-sU -p-`; target the high-value UDP ports and confirm with a real probe.
 ```bash
-nmap -sU -sV --top-ports 100 --min-rate 800 -oA evidence/nmap_udp 10.10.20.7
+nmap -sU -sV --top-ports 100 --min-rate 800 -oA "$PIRED_WORKSPACE/evidence/nmap_udp" 10.10.20.7
 # key ports: 53 DNS, 67/68 DHCP, 69 TFTP, 123 NTP, 137/138 NetBIOS, 161/162 SNMP,
 #            500 IKE/VPN, 514 syslog, 623 IPMI, 1900 SSDP, 5353 mDNS
 ```

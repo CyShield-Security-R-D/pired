@@ -13,11 +13,11 @@ Tools run via `bash` and may be absent. If a scanner is missing, use the grep re
 ```bash
 mkdir -p evidence
 checkov -d . -o sarif --output-file-path evidence 2>/dev/null || true          # multi-IaC: TF, CFN, K8s, Dockerfile, Helm, ARM, GitHub Actions
-trivy config --format sarif -o evidence/trivy-config.sarif . 2>/dev/null || true # misconfig: TF/CFN/K8s/Dockerfile/Helm (tfsec's engine — tfsec is EOL, merged into Trivy)
-tfsec . --format sarif --out evidence/tfsec.sarif 2>/dev/null || true            # legacy Terraform-only (if trivy absent)
-hadolint Dockerfile --format sarif > evidence/hadolint.sarif 2>/dev/null || true
-kube-linter lint . --format sarif > evidence/kube-linter.sarif 2>/dev/null || true
-actionlint -format '{{json .}}' > evidence/actionlint.json 2>/dev/null || true   # GitHub Actions
+trivy config --format sarif -o "$PIRED_WORKSPACE/evidence/trivy-config.sarif" . 2>/dev/null || true # misconfig: TF/CFN/K8s/Dockerfile/Helm (tfsec's engine — tfsec is EOL, merged into Trivy)
+tfsec . --format sarif --out "$PIRED_WORKSPACE/evidence/tfsec.sarif" 2>/dev/null || true            # legacy Terraform-only (if trivy absent)
+hadolint Dockerfile --format sarif > "$PIRED_WORKSPACE/evidence/hadolint.sarif" 2>/dev/null || true
+kube-linter lint . --format sarif > "$PIRED_WORKSPACE/evidence/kube-linter.sarif" 2>/dev/null || true
+actionlint -format '{{json .}}' > "$PIRED_WORKSPACE/evidence/actionlint.json" 2>/dev/null || true   # GitHub Actions
 ```
 `tfsec` is end-of-life and folded into **Trivy** (`trivy config`) — prefer Trivy, keep `tfsec` only as a fallback. Every hit is a **lead** — open the file:line and confirm it's a real deployed config, not an example/test fixture.
 

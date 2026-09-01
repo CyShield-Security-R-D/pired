@@ -15,13 +15,13 @@ Tools run via `bash` and may be absent. If `gitleaks`/`trufflehog` are missing, 
 ```bash
 mkdir -p evidence
 # gitleaks — v8.19+ subcommands: `dir` scans a filesystem, `git` scans commit history
-gitleaks dir . --report-format sarif --report-path evidence/gitleaks-fs.sarif || true
-gitleaks git . --report-format sarif --report-path evidence/gitleaks-history.sarif || true   # every commit
+gitleaks dir . --report-format sarif --report-path "$PIRED_WORKSPACE/evidence/gitleaks-fs.sarif" || true
+gitleaks git . --report-format sarif --report-path "$PIRED_WORKSPACE/evidence/gitleaks-history.sarif" || true   # every commit
 # older gitleaks (detect is deprecated but still works as a fallback):
-gitleaks detect --no-git -f sarif -r evidence/gitleaks-fs.sarif . || true
+gitleaks detect --no-git -f sarif -r "$PIRED_WORKSPACE/evidence/gitleaks-fs.sarif" . || true
 # trufflehog — verifies many key types against their live API (only if authorized & network-ok)
-trufflehog filesystem . --json > evidence/trufflehog.json 2>/dev/null || true
-trufflehog git file://. --results=verified --json > evidence/th-verified.json 2>/dev/null || true
+trufflehog filesystem . --json > "$PIRED_WORKSPACE/evidence/trufflehog.json" 2>/dev/null || true
+trufflehog git file://. --results=verified --json > "$PIRED_WORKSPACE/evidence/th-verified.json" 2>/dev/null || true
 ```
 `--results=verified` (older: `--only-verified`) is high-signal but performs an outbound check — confirm the engagement allows it before running; otherwise stay offline and keep every *unverified* hit as a lead.
 
@@ -54,7 +54,7 @@ rg -nI '["\x27][A-Za-z0-9+/]{40,}={0,2}["\x27]|["\x27][0-9a-f]{32,}["\x27]' -g '
 ```bash
 git log --all --oneline | head                                   # is it a git repo?
 git log -p --all -S 'password' -- . | head -200                  # pickaxe: when a literal was added/removed
-gitleaks git . --report-format json --report-path evidence/gitleaks-history.json   # every commit
+gitleaks git . --report-format json --report-path "$PIRED_WORKSPACE/evidence/gitleaks-history.json"   # every commit
 ```
 A secret deleted in HEAD but present in history is still exposed — record it with the commit hash.
 

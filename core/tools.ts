@@ -396,6 +396,35 @@ function resolveTarget(raw: string, index: Map<string, string>): string {
 	return index.get(noLine) ?? index.get(noLine.split("/").pop() ?? "") ?? raw;
 }
 
+
+/**
+ * Pull a cited evidence file into the workspace from the run's working directory.
+ *
+ * Returns the workspace-relative path it now lives at, or undefined when there is
+ * nothing there to adopt. A path that tries to leave the working directory is
+ * refused rather than resolved: record content is agent-authored, and "evidence"
+ * is not a licence to copy /etc/shadow into a document a client reads.
+ *
+ * Binaries are left alone. The Fs port moves text, so copying a screenshot
+ * through it would corrupt it silently — the caller reports it as unresolved and
+ * names the directory to write it to instead, which is recoverable, while a
+ * mangled PNG cited as proof is not.
+ */
+async function adoptFromCwd(deps: ToolDeps, ctx: ToolContext, rel: string): Promise<string | undefined> {
+	if (rel.startsWith("/") || rel.includes("\\")) return undefined;
+	if (rel.split("/").some((seg) => seg === "..")) return undefined;
+	if (!ctx.cwd) return undefined;
+	try {
+		const body = await ctx.services.fs.readFileIfExists(`${ctx.cwd.replace(/\/+$/, "")}/${rel}`);
+		if (body === undefined || body.includes("\u0000")) return undefined;
+		// Strip a leading "evidence/" so the common case round-trips to the very
+		// path the agent cited, and the record it is stored on is unchanged.
+		return await deps.workspace.writeEvidence(rel.replace(/^evidence\//, ""), body);
+	} catch {
+		return undefined;
+	}
+}
+
 export function createRecordTool(deps: ToolDeps): ToolDefinition {
 	return {
 		name: "record",
@@ -764,18 +793,49 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 			// A finding is a claim in a document a client reads. Citing an artifact
 			// that does not exist is a fabrication, so the tool refuses rather than
 			// hoping the prompt is persuasive. The error names the fix.
+			// Evidence files pulled into the workspace by this call, reported back so
+			// the agent learns where its own artifacts actually live.
+			const adopted: string[] = [];
+
+			// ...but "does not resolve" was, often enough, the tool and the workspace
+			// disagreeing about one word.
+			//
+			// `evidence/` means two different directories. The workspace's is
+			// ~/.pired/engagements/<name>/evidence, and that is what a cited path is
+			// resolved against. The agent's SHELL sits in the target — a repo, a scan
+			// directory — so `nmap -oA evidence/h7` or `curl > evidence/y7.txt`, which
+			// is what ops-evidence taught for months, writes a real file somewhere the
+			// check never looks. The agent then cited a path it had genuinely just
+			// written and was told it was a fabrication.
+			//
+			// So resolve before refusing: workspace first, then the run's own working
+			// directory, and adopt what is found there. Copying it in is the point —
+			// the workspace is what survives the session and the report is written
+			// from it, while the target directory is someone else's and may be gone
+			// tomorrow. The citation is rewritten to where the file now lives, so the
+			// record is true when it is stored rather than true when it was typed.
 			const claimed = kind === "finding" ? strArr(a.evidence) ?? [] : kind === "hypothesis" ? [str(a.evidence)].filter((x): x is string => !!x) : [];
 			if (claimed.length > 0) {
 				const missing: string[] = [];
+				const resolved: string[] = [];
 				for (const rel of claimed) {
-					if ((await deps.workspace.readRelative(rel)) === undefined) missing.push(rel);
+					if ((await deps.workspace.readRelative(rel)) !== undefined) { resolved.push(rel); continue; }
+					const adoptedAs = await adoptFromCwd(deps, ctx, rel);
+					if (adoptedAs) { resolved.push(adoptedAs); adopted.push(`${rel} -> ${adoptedAs}`); continue; }
+					missing.push(rel);
+					resolved.push(rel);
 				}
 				if (missing.length > 0) {
 					throw new Error(
 						`record ${kind}: evidence path(s) do not resolve: ${missing.join(", ")}. ` +
-							"Create each with record kind=evidence (it returns the path to cite), or omit the evidence field. " +
+							`Looked in the engagement workspace (${deps.workspace.dir}) and under the working directory (${ctx.cwd}). ` +
+							"Create each with record kind=evidence (it returns the path to cite), write it into " +
+							`"${deps.workspace.dir}/evidence/" from bash, or omit the evidence field. ` +
 							"Citing a file that does not exist is an unsupported claim.",
 					);
+				}
+				if (adopted.length > 0) {
+					a.evidence = kind === "hypothesis" ? resolved[0] : resolved;
 				}
 			}
 
@@ -854,6 +914,10 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 			});
 
 			const written = record as LedgerRecord;
+			const pulled = adopted.length > 0
+				? `\nEvidence copied into the engagement workspace so it outlives this session: ${adopted.join(", ")}. ` +
+					"Cite the workspace path from now on, or write straight into it."
+				: "";
 			// What the report will be missing, said at the moment it can still be
 			// fixed cheaply.
 			//
@@ -876,7 +940,7 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 					`Recorded separately rather than risk losing one of them. If they are the same issue, fold the detail into ` +
 					`${near.id} with record id=${near.id}, then retire this one with record id=${written.id} delete=true reason="duplicate of ${near.id}".`
 				: "";
-			return text(recordSummary(kind, written, outcome) + warning + incomplete, recordDetails(written, outcome));
+			return text(recordSummary(kind, written, outcome) + warning + pulled + incomplete, recordDetails(written, outcome));
 		},
 	};
 }

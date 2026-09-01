@@ -29,7 +29,7 @@ Send a unique canary through **every** input and see where it lands — reflect 
 - Sinks — **HTML**: `innerHTML`, `outerHTML`, `insertAdjacentHTML`, `document.write`/`writeln`, `DOMParser`, `Range.createContextualFragment`, jQuery `.html()`/`.append()`/`.prepend()`/`.after()`/`.before()`. **JS-exec**: `eval`, `Function`, `setTimeout`/`setInterval`(string), `script.src`/`.text`, jQuery `.globalEval()`. **URL**: `location`/`.href`/`.assign()`/`.replace()`, `a.href`, `iframe.src`, `window.open`. **Framework**: React `dangerouslySetInnerHTML`, Angular `[innerHTML]`/`bypassSecurityTrust*`, Vue `v-html`, Svelte `{@html}`.
 ```bash
 # pull JS and grep for sinks; trace each back to a source
-katana -u https://TARGET -jc -o evidence/js-urls.txt
+katana -u https://TARGET -jc -o "$PIRED_WORKSPACE/evidence/js-urls.txt"
 curl -s https://TARGET/app.js | grep -nE 'innerHTML|outerHTML|insertAdjacentHTML|document\.write|eval\(|Function\(|setTimeout|location\.(hash|search|href)|postMessage|dangerouslySetInnerHTML|v-html'
 ```
 Confirm in a browser/headless (mitmproxy or claude-in-chrome) since DOM XSS never appears in the raw HTTP response: `https://TARGET/#<img src=x onerror=confirm(1)>`.

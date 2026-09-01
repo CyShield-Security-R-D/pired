@@ -14,9 +14,9 @@ Record a `hypothesis` with the mapped `class` before each test. Use `recall next
 ## BOLA — broken object level authorization (API1:2023 · class=idor · CWE-639) — #1 API bug
 Test **every** endpoint that carries an object reference — not a sample. Walk the whole inventory with `recall next`; each `{id}`/`?id=`/body-id/nested-reference route gets its own BOLA hypothesis so `recall gaps` tracks coverage per endpoint. With account **B**, request **A**'s object:
 ```bash
-curl -s -H 'Authorization: Bearer <B>' https://TARGET/api/v1/users/<A_id>/orders -o evidence/bola-B.json
-curl -s -H 'Authorization: Bearer <A>' https://TARGET/api/v1/users/<A_id>/orders -o evidence/bola-A.json
-diff evidence/bola-A.json evidence/bola-B.json     # same data => BOLA
+curl -s -H 'Authorization: Bearer <B>' https://TARGET/api/v1/users/<A_id>/orders -o "$PIRED_WORKSPACE/evidence/bola-B.json"
+curl -s -H 'Authorization: Bearer <A>' https://TARGET/api/v1/users/<A_id>/orders -o "$PIRED_WORKSPACE/evidence/bola-A.json"
+diff "$PIRED_WORKSPACE/evidence/bola-A.json" "$PIRED_WORKSPACE/evidence/bola-B.json"     # same data => BOLA
 ```
 - Confirm B **receives A's data** (or the write lands), not merely a 200. Test the id in path, query, JSON body, and nested references. Try guessable ids (sequential ints, leaked/enumerable UUIDs, base64/hashids). Cover every object type (orders, invoices, messages, files), not just users.
 - **Don't drop a maybe:** a 403/empty for B but a suspicious partial leak, or an id you couldn't get a second account to compare — record an `inconclusive` hypothesis (or a `status=open` finding at reduced severity) so `recall gaps` re-routes it, rather than marking the endpoint clear.

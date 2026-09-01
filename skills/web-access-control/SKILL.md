@@ -16,9 +16,9 @@ Record a `hypothesis` (`class=authz` or `idor` or `massassign`) per target befor
 ## 1. IDOR / object-id tampering (WSTG-ATHZ-04 · CWE-639)
 ```bash
 # request A's object using B's session — least intrusive is a READ (GET)
-curl -s -b 'session=<B>' https://TARGET/api/order/1001 -o evidence/idor-B.json
-curl -s -b 'session=<A>' https://TARGET/api/order/1001 -o evidence/idor-A.json
-diff evidence/idor-A.json evidence/idor-B.json      # identical body = B read A's data = IDOR
+curl -s -b 'session=<B>' https://TARGET/api/order/1001 -o "$PIRED_WORKSPACE/evidence/idor-B.json"
+curl -s -b 'session=<A>' https://TARGET/api/order/1001 -o "$PIRED_WORKSPACE/evidence/idor-A.json"
+diff "$PIRED_WORKSPACE/evidence/idor-A.json" "$PIRED_WORKSPACE/evidence/idor-B.json"      # identical body = B read A's data = IDOR
 ```
 - Confirm, don't guess: **B receives A's data** (or the write takes effect), not just a 200. A 200 with an empty/"forbidden" body is not confirmed IDOR — but a response that looks like it may leak and you can't yet prove stays an `inconclusive` hypothesis (surfaced by `recall gaps`), not a discard.
 - Try id formats: sequential ints, UUIDs (predictable/v1-timestamped? leaked elsewhere?), hashids, GUIDs, base64/hex, composite keys, negative/`0` ids. Tamper the id in **every** location: path, query, POST/PUT body, JSON, cookie, custom header, `Referer`, and batch/GraphQL node ids.
@@ -39,7 +39,7 @@ A page reachable without the intended role = access-control gap.
 ```bash
 curl -s -b 'session=<B>' -H 'Content-Type: application/json' \
   -d '{"email":"b@x.com","role":"admin","isAdmin":true,"verified":true}' \
-  https://TARGET/api/profile -o evidence/massassign.json
+  https://TARGET/api/profile -o "$PIRED_WORKSPACE/evidence/massassign.json"
 ```
 Confirm the privileged field actually stuck (re-fetch the profile, check `role`). Source field names from the GET response, API docs, or JS.
 

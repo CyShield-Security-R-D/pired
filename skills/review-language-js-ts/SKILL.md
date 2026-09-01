@@ -107,7 +107,7 @@ Logging full request bodies, tokens, or `Authorization` headers writes secrets t
 
 ## Dependency risk (hand off to SCA)
 ```bash
-npm audit --json > evidence/npm-audit.json 2>/dev/null || pnpm audit --json > evidence/pnpm-audit.json 2>/dev/null || yarn npm audit --json > evidence/yarn-audit.json 2>/dev/null || true
+npm audit --json > "$PIRED_WORKSPACE/evidence/npm-audit.json" 2>/dev/null || pnpm audit --json > "$PIRED_WORKSPACE/evidence/pnpm-audit.json" 2>/dev/null || yarn npm audit --json > "$PIRED_WORKSPACE/evidence/yarn-audit.json" 2>/dev/null || true
 rg -n "\"(node-serialize|serialize-to-js|vm2|lodash|event-stream|flatmap-stream)\"" package.json   # historically-risky
 ```
 `vm2` sandbox escapes, unmaintained/typo-squatted packages, malicious `postinstall` scripts. **Do not drop a vulnerable-dependency lead** even if reachability is unclear — map each CVE to actual usage but still record it (see `review-dependencies-sca`). → class `sca`.

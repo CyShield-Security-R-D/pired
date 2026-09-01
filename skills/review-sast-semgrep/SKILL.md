@@ -15,17 +15,17 @@ Tools run via `bash` and may be absent. If neither `semgrep` nor `opengrep` is i
 ```bash
 mkdir -p evidence
 # broad, auto-detects languages (fetches the registry the first time → needs network)
-semgrep --config auto --sarif -o evidence/semgrep.sarif . 2>evidence/semgrep.err
+semgrep --config auto --sarif -o "$PIRED_WORKSPACE/evidence/semgrep.sarif" . 2>"$PIRED_WORKSPACE/evidence/semgrep.err"
 # curated security packs (verified registry slugs):
 semgrep --config p/default --config p/security-audit --config p/owasp-top-ten \
-        --config p/secrets --config p/ci --sarif -o evidence/semgrep-sec.sarif .
+        --config p/secrets --config p/ci --sarif -o "$PIRED_WORKSPACE/evidence/semgrep-sec.sarif" .
 # language / framework packs (registry slugs; run only those matching §1 orient):
 semgrep --config p/javascript --config p/typescript --config p/react --config p/nodejsscan .
 semgrep --config p/python --config p/django --config p/flask .
 semgrep --config p/java --config p/spring .
 semgrep --config p/golang --config p/gosec --config p/php --config p/ruby --config p/csharp .
 # offline / registry blocked → run local rule dirs only:
-semgrep --config ./rules --sarif -o evidence/semgrep.sarif .
+semgrep --config ./rules --sarif -o "$PIRED_WORKSPACE/evidence/semgrep.sarif" .
 ```
 Confirm a slug exists before asserting a finding from it (`semgrep --config p/<slug> --dryrun .` errors on an unknown pack); never invent a ruleset name. Handy flags: `--severity ERROR` (drop noise), `--exclude 'test/**' --exclude '*.min.js'`, `--json`/`--sarif`/`--gitlab-sast` output, `--metrics off`, `--max-target-bytes 2000000`, `--dataflow-traces` (show the taint path in output).
 
@@ -47,8 +47,8 @@ rules:
       - pattern: db.escape(...)
 ```
 ```bash
-semgrep --config evidence/rules/rawquery.yml --sarif -o evidence/rawquery.sarif .
-semgrep --test evidence/rules/    # validate a rule's own logic quickly
+semgrep --config "$PIRED_WORKSPACE/evidence/rules/rawquery.yml" --sarif -o "$PIRED_WORKSPACE/evidence/rawquery.sarif" .
+semgrep --test "$PIRED_WORKSPACE/evidence/rules/"    # validate a rule's own logic quickly
 ```
 `mode: taint` with `pattern-sources`/`pattern-sinks`/`pattern-sanitizers` is the highest-signal way to encode a source→sink question. Write one per project-specific sink you find in the class skills.
 
@@ -56,7 +56,7 @@ semgrep --test evidence/rules/    # validate a rule's own logic quickly
 ```bash
 # rank by rule, see counts before opening files
 jq -r '.runs[].results[] | [.ruleId, .locations[0].physicalLocation.artifactLocation.uri, (.locations[0].physicalLocation.region.startLine|tostring)] | @tsv' \
-  evidence/semgrep.sarif | sort | uniq -c | sort -rn | head -40
+  "$PIRED_WORKSPACE/evidence/semgrep.sarif" | sort | uniq -c | sort -rn | head -40
 # or human view:
 semgrep --config auto --severity ERROR .
 ```

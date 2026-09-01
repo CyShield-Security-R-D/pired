@@ -1021,6 +1021,11 @@ export default function piredExtension(pi: ExtensionAPI): void {
 
 		const dir = scope.workspace ? expandHome(scope.workspace) : join(homedir(), ".pired", "engagements", scope.engagement);
 		workspace = await Workspace.open(dir, scope.engagement, services);
+		// Every bash call the agent makes inherits this process's environment, so
+		// exporting the workspace here is what makes `> "$PIRED_WORKSPACE/evidence/x"`
+		// work in a shell whose cwd is the target. Without it the only way to write
+		// evidence where the ledger looks for it is to paste an absolute path.
+		process.env.PIRED_WORKSPACE = dir;
 		await seedChecklist(workspace, pickTargetType(profile, scope));
 		const checklist = await workspace.readChecklist();
 		checklistClasses = checklist?.classes.map((c) => c.title || c.id) ?? [];
@@ -1082,7 +1087,7 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	// Skills are already advertised in the base prompt via resources_discover, so we
 	// do not re-list them here — the overlay stays small for local models.
 	pi.on("before_agent_start", (event) => ({
-		systemPrompt: `${event.systemPrompt}\n\n${buildSystemPrompt({ profile, scope, checklist: checklistClasses })}`,
+		systemPrompt: `${event.systemPrompt}\n\n${buildSystemPrompt({ profile, scope, checklist: checklistClasses, workspace: workspace?.dir })}`,
 	}));
 
 	pi.on("tool_call", async (event, ctx) => {

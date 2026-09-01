@@ -1015,3 +1015,88 @@ describe("a finding written for the report", () => {
 		expect(textOf(await recall.execute({ query: "finding", id: "nope" }, ctx))).toMatch(/No live finding nope/);
 	});
 });
+
+describe("evidence written where the shell was standing", () => {
+	// `evidence/` names two directories. The workspace's is what a citation is
+	// resolved against; the agent's shell sits in the target, so `curl >
+	// evidence/y7.txt` writes a real file the check never looked at — and the
+	// agent was told its own artifact was a fabrication.
+
+	it("adopts a file from the working directory and cites where it now lives", async () => {
+		const { svc, ws, ctx, record } = await setup();
+		await svc.fs.writeFile("/target/evidence/y7-idor.txt", "HTTP/1.1 200 OK — user 1001 leaked");
+		const made = await record.execute({
+			kind: "finding", title: "IDOR", severity: "high", target: "share.go:88",
+			evidence: ["evidence/y7-idor.txt"],
+		}, ctx);
+		// Copied into the workspace, which is what outlives the session.
+		expect(await ws.readRelative("evidence/y7-idor.txt")).toContain("user 1001 leaked");
+		expect((await ws.read("findings"))[0]?.evidence).toEqual(["evidence/y7-idor.txt"]);
+		expect(textOf(made)).toMatch(/Evidence copied into the engagement workspace/);
+	});
+
+	it("rewrites the citation when the path it was written under differs", async () => {
+		const { svc, ws, ctx, record } = await setup();
+		await svc.fs.writeFile("/target/out/scan.txt", "open 6379/tcp redis");
+		await record.execute({
+			kind: "finding", title: "Unauth Redis", severity: "high", target: "10.0.0.4:6379",
+			evidence: ["out/scan.txt"],
+		}, ctx);
+		const cited = (await ws.read("findings"))[0]?.evidence ?? [];
+		expect(cited).toEqual(["evidence/out_scan.txt"]);
+		expect(await ws.readRelative(cited[0] as string)).toBe("open 6379/tcp redis");
+	});
+
+	it("leaves a path that already resolves in the workspace alone", async () => {
+		const { ctx, record } = await setup();
+		const saved = await record.execute({ kind: "evidence", name: "y7.txt", content: "proof" }, ctx);
+		const rel = (saved.details as { path: string }).path;
+		const made = await record.execute({
+			kind: "finding", title: "IDOR", severity: "high", target: "share.go:88", evidence: [rel],
+		}, ctx);
+		expect(textOf(made)).not.toMatch(/copied into the engagement workspace/);
+	});
+
+	it("adopts the single path a hypothesis cites", async () => {
+		const { svc, ws, ctx, record } = await setup();
+		await svc.fs.writeFile("/target/evidence/probe.txt", "no template rendering observed");
+		await record.execute({
+			kind: "hypothesis", target: "e1", class: "ssti", outcome: "refuted",
+			statement: "no template rendering of user input anywhere on this route",
+			evidence: "evidence/probe.txt",
+		}, ctx);
+		expect((await ws.read("hypotheses"))[0]?.evidence).toBe("evidence/probe.txt");
+		expect(await ws.readRelative("evidence/probe.txt")).toContain("no template rendering");
+	});
+
+	it("still refuses a path that exists in neither place, and says where it looked", async () => {
+		const { ctx, record } = await setup();
+		await expect(record.execute({
+			kind: "finding", title: "IDOR", severity: "high", target: "share.go:88",
+			evidence: ["evidence/never-written.txt"],
+		}, ctx)).rejects.toThrow(/Looked in the engagement workspace \(\/ws\/acme\)/);
+	});
+
+	it("will not adopt its way out of the working directory", async () => {
+		// "evidence" is not a licence to copy an arbitrary file into a document a
+		// client reads.
+		const { svc, ctx, record } = await setup();
+		await svc.fs.writeFile("/etc/shadow", "root:x");
+		await expect(record.execute({
+			kind: "finding", title: "x", severity: "low", target: "a.py:1", evidence: ["../../etc/shadow"],
+		}, ctx)).rejects.toThrow(/do not resolve/);
+		await expect(record.execute({
+			kind: "finding", title: "x", severity: "low", target: "a.py:1", evidence: ["/etc/shadow"],
+		}, ctx)).rejects.toThrow(/do not resolve/);
+	});
+
+	it("does not copy a binary through a text port", async () => {
+		// The Fs port moves text; a screenshot round-tripped through it is a
+		// corrupted screenshot cited as proof. Better refused and named.
+		const { svc, ctx, record } = await setup();
+		await svc.fs.writeFile("/target/shot.png", `PNG${String.fromCharCode(0)}IHDR`);
+		await expect(record.execute({
+			kind: "finding", title: "x", severity: "low", target: "a.py:1", evidence: ["shot.png"],
+		}, ctx)).rejects.toThrow(/do not resolve/);
+	});
+});

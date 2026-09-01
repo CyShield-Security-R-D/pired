@@ -12,7 +12,7 @@ Record a `hypothesis` with the mapped `class` before each test.
 ## 1. Introspection (map the whole schema)
 ```bash
 curl -s https://TARGET/graphql -H 'Content-Type: application/json' \
-  --data-binary @- <<'JSON' | tee evidence/gql-schema.json
+  --data-binary @- <<'JSON' | tee "$PIRED_WORKSPACE/evidence/gql-schema.json"
 {"query":"query{__schema{queryType{name} mutationType{name} types{name kind fields{name args{name type{name}} type{name kind ofType{name}}}}}}"}
 JSON
 ```

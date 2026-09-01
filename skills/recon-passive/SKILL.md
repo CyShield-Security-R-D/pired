@@ -16,12 +16,12 @@ Tools run via `bash` and may be missing. If one is absent: try an alternative be
 
 ## 1. Subdomain enumeration (passive sources only)
 ```bash
-subfinder -d TARGET -all -silent -o evidence/subs_subfinder.txt
-amass enum -passive -d TARGET -o evidence/subs_amass.txt          # passive flag = no brute, no resolution
+subfinder -d TARGET -all -silent -o "$PIRED_WORKSPACE/evidence/subs_subfinder.txt"
+amass enum -passive -d TARGET -o "$PIRED_WORKSPACE/evidence/subs_amass.txt"          # passive flag = no brute, no resolution
 # crt.sh certificate-transparency pull (no target traffic)
-curl -s "https://crt.sh/?q=%25.TARGET&output=json" | jq -r '.[].name_value' | sed 's/\*\.//g' | sort -u > evidence/subs_crtsh.txt
+curl -s "https://crt.sh/?q=%25.TARGET&output=json" | jq -r '.[].name_value' | sed 's/\*\.//g' | sort -u > "$PIRED_WORKSPACE/evidence/subs_crtsh.txt"
 # merge + dedupe
-cat evidence/subs_*.txt | sort -u > evidence/subs_all.txt && wc -l evidence/subs_all.txt
+cat "$PIRED_WORKSPACE/evidence/subs_"*.txt | sort -u > "$PIRED_WORKSPACE/evidence/subs_all.txt" && wc -l "$PIRED_WORKSPACE/evidence/subs_all.txt"
 ```
 - `amass enum -passive` and `subfinder` never touch the target; `amass enum -active`/`-brute` DO — do not use them in a passive pass.
 - Run **several** sources and merge — no single source is complete, so breadth here directly bounds how much surface downstream testing can cover. Alternatives / additions if a tool is missing: `assetfinder --subs-only TARGET`, `github-subdomains -d TARGET`, `subfinder -all` (all sources), or crt.sh alone. A name you can't confirm yet still gets recorded as a lead — never drop it just because one source missed it.
@@ -29,7 +29,7 @@ cat evidence/subs_*.txt | sort -u > evidence/subs_all.txt && wc -l evidence/subs
 ## 2. DNS records (resolvers, not the target)
 ```bash
 # resolve names against public resolvers — queries hit DNS infra, not the app
-dnsx -l evidence/subs_all.txt -a -aaaa -cname -resp -silent -o evidence/dns_resolved.txt
+dnsx -l "$PIRED_WORKSPACE/evidence/subs_all.txt" -a -aaaa -cname -resp -silent -o "$PIRED_WORKSPACE/evidence/dns_resolved.txt"
 # per-record types for the apex
 dig +noall +answer TARGET ANY; dig +short MX TARGET; dig +short TXT TARGET   # SPF/DMARC/DKIM, verification tokens
 ```
@@ -41,17 +41,17 @@ Record resolved hosts: `record kind=host value=api.TARGET ip=203.0.113.10`. TXT 
 whois -h whois.radb.net -- "-i origin AS12345" | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]+' | sort -u
 amass intel -org "Acme Corp"                 # org name -> ASN candidates
 # reverse-DNS a netblock passively via the resolver
-dnsx -ptr -l evidence/netblock_ips.txt -resp -silent
+dnsx -ptr -l "$PIRED_WORKSPACE/evidence/netblock_ips.txt" -resp -silent
 ```
 Cross-check owned IP ranges against scope CIDRs. An ASN belonging to a shared cloud provider is NOT authorization to scan the whole ASN — only the scoped CIDRs/IPs.
 
 ## 4. Historical endpoints & content (Wayback / urlscan)
 ```bash
-gau TARGET > evidence/urls_gau.txt ; waybackurls TARGET > evidence/urls_wayback.txt   # archived URLs, no target hit
-cat evidence/urls_*.txt | sort -u > evidence/urls_all.txt
+gau TARGET > "$PIRED_WORKSPACE/evidence/urls_gau.txt" ; waybackurls TARGET > "$PIRED_WORKSPACE/evidence/urls_wayback.txt"   # archived URLs, no target hit
+cat "$PIRED_WORKSPACE/evidence/urls_"*.txt | sort -u > "$PIRED_WORKSPACE/evidence/urls_all.txt"
 # mine params + interesting paths from archives
-grep -oE '\?[^ ]+' evidence/urls_all.txt | grep -oE '[?&][a-zA-Z0-9_]+=' | sort -u   # candidate params
-grep -iE '\.(json|xml|bak|old|zip|sql|env|config)' evidence/urls_all.txt | sort -u
+grep -oE '\?[^ ]+' "$PIRED_WORKSPACE/evidence/urls_all.txt" | grep -oE '[?&][a-zA-Z0-9_]+=' | sort -u   # candidate params
+grep -iE '\.(json|xml|bak|old|zip|sql|env|config)' "$PIRED_WORKSPACE/evidence/urls_all.txt" | sort -u
 # urlscan.io historical scans of the domain (passive, from their DB)
 curl -s "https://urlscan.io/api/v1/search/?q=domain:TARGET" | jq -r '.results[].page.url' | sort -u
 ```

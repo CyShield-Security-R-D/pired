@@ -17,18 +17,18 @@ Tools run via `bash` and may be missing. If absent: try an alternative, else `re
 ## 1. Resolve, then probe liveness
 ```bash
 # resolve first so you only probe things that exist
-dnsx -l evidence/subs_all.txt -a -resp-only -silent -o evidence/resolved.txt
+dnsx -l "$PIRED_WORKSPACE/evidence/subs_all.txt" -a -resp-only -silent -o "$PIRED_WORKSPACE/evidence/resolved.txt"
 # probe HTTP/HTTPS: status, title, tech, server, redirects, content-length (JSONL output)
-httpx -l evidence/subs_all.txt -sc -title -td -server -location -ip -cl -json -o evidence/httpx.json
-# drop -json for a quick human-readable table to evidence/httpx.txt instead
+httpx -l "$PIRED_WORKSPACE/evidence/subs_all.txt" -sc -title -td -server -location -ip -cl -json -o "$PIRED_WORKSPACE/evidence/httpx.json"
+# drop -json for a quick human-readable table to "$PIRED_WORKSPACE/evidence/httpx.txt" instead
 ```
 `httpx` sends 1–2 requests per host — light, but it IS traffic; only run it against in-scope names. Probe **every** in-scope name (don't sample) so no live host is missed. Filter to live: `jq -r 'select(.status_code)|.url' evidence/httpx.json | sort -u`.
 
 ## 2. Fingerprint the stack
 ```bash
-whatweb -a3 --color=never -i evidence/resolved.txt --log-brief evidence/whatweb.txt
+whatweb -a3 --color=never -i "$PIRED_WORKSPACE/evidence/resolved.txt" --log-brief "$PIRED_WORKSPACE/evidence/whatweb.txt"
 # or per-host, richer:
-whatweb -a3 https://HOST | tee -a evidence/whatweb.txt
+whatweb -a3 https://HOST | tee -a "$PIRED_WORKSPACE/evidence/whatweb.txt"
 curl -sSD - https://HOST -o /dev/null        # raw response headers (Server, X-Powered-By, Set-Cookie flags)
 ```
 Record one tech record per stack element:
@@ -39,9 +39,9 @@ record kind=tech name=nginx version=1.25 host=h1
 
 ## 3. Screenshot & visual triage
 ```bash
-gowitness scan file -f evidence/resolved.txt --screenshot-path evidence/shots/ --write-db
-# alternatives: aquatone < evidence/resolved.txt -out evidence/aquatone/
-#               httpx -l evidence/resolved.txt -ss -srd evidence/shots/
+gowitness scan file -f "$PIRED_WORKSPACE/evidence/resolved.txt" --screenshot-path "$PIRED_WORKSPACE/evidence/shots/" --write-db
+# alternatives: aquatone < "$PIRED_WORKSPACE/evidence/resolved.txt" -out "$PIRED_WORKSPACE/evidence/aquatone/"
+#               httpx -l "$PIRED_WORKSPACE/evidence/resolved.txt" -ss -srd "$PIRED_WORKSPACE/evidence/shots/"
 ```
 Skim the gallery to cluster: default/parked pages, login portals, admin panels, dev/staging banners, error pages leaking versions. A dev/staging or admin panel exposed to the internet is a lead worth an `info` finding and a hypothesis.
 
@@ -57,7 +57,7 @@ for p in robots.txt sitemap.xml .well-known/security.txt .git/HEAD .env actuator
 ```bash
 # establish a baseline size for a bogus Host, then look for hosts that differ
 curl -s -o /dev/null -w "%{size_download}\n" -H "Host: nonexistent.TARGET" https://IP
-ffuf -u https://IP -H "Host: FUZZ.TARGET" -w SUBWORDLIST -fs <baseline-size> -o evidence/vhosts.json -of json
+ffuf -u https://IP -H "Host: FUZZ.TARGET" -w SUBWORDLIST -fs <baseline-size> -o "$PIRED_WORKSPACE/evidence/vhosts.json" -of json
 ```
 A vhost that renders a different app than the default is new surface — record it as a host and note the IP it shares.
 

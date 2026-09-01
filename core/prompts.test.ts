@@ -135,4 +135,22 @@ describe("buildSystemPrompt", () => {
 			expect(p).toMatch(/blocked/i);
 		}
 	});
+
+	describe("where the engagement's files are", () => {
+		// The agent's shell starts in the target, and `evidence/` means the
+		// workspace — two different directories, and it only ever saw one of them.
+		// Redirecting a scan to `evidence/h7.txt` wrote a real file the ledger had
+		// never heard of, and citing it back read as "path does not resolve".
+		it("names the absolute path and the variable the shell already has", () => {
+			const p = buildSystemPrompt({ profile: "pentest", workspace: "/home/x/.pired/engagements/acme" });
+			expect(p).toContain("/home/x/.pired/engagements/acme/evidence/");
+			expect(p).toContain("$PIRED_WORKSPACE");
+			expect(p).toMatch(/NOT in the directory your shell starts in/);
+			expect(p).toMatch(/WORKSPACE-relative path/);
+		});
+
+		it("says nothing at all when there is no workspace yet", () => {
+			expect(buildSystemPrompt({ profile: "pentest" })).not.toContain("PIRED_WORKSPACE");
+		});
+	});
 });

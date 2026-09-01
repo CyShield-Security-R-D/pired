@@ -17,23 +17,23 @@ Tools run via `bash` and may be absent. If a needed tool is missing: try an alte
 ## 1. Fingerprint tech (WSTG-INFO-02 · WSTG-INFO-08)
 ```bash
 # fast probe + tech + status/title
-httpx -u https://TARGET -sc -title -td -server -ip -o evidence/httpx.txt
-whatweb -a3 https://TARGET | tee evidence/whatweb.txt
+httpx -u https://TARGET -sc -title -td -server -ip -o "$PIRED_WORKSPACE/evidence/httpx.txt"
+whatweb -a3 https://TARGET | tee "$PIRED_WORKSPACE/evidence/whatweb.txt"
 curl -sSD - https://TARGET -o /dev/null        # response headers only
 ```
 Record: `record kind=tech name=nginx version=1.25 host=h1`, one per stack element (server, framework, CMS, WAF, language).
 
 ## 2. Headers & TLS (WSTG-CONF-07 · WSTG-CRYP-01)
 ```bash
-curl -sSI https://TARGET | tee evidence/headers.txt   # missing CSP/HSTS/X-Frame-Options/X-Content-Type-Options/Referrer-Policy/Permissions-Policy; verbose Server/X-Powered-By
-testssl.sh --quiet --color 0 https://TARGET | tee evidence/tls.txt   # or: sslscan / nmap --script ssl-enum-ciphers
+curl -sSI https://TARGET | tee "$PIRED_WORKSPACE/evidence/headers.txt"   # missing CSP/HSTS/X-Frame-Options/X-Content-Type-Options/Referrer-Policy/Permissions-Policy; verbose Server/X-Powered-By
+testssl.sh --quiet --color 0 https://TARGET | tee "$PIRED_WORKSPACE/evidence/tls.txt"   # or: sslscan / nmap --script ssl-enum-ciphers
 ```
 Missing security headers → low/info findings (`class=misconfig`). Weak TLS/cipher/protocol (SSLv3, TLS 1.0/1.1, weak/NULL ciphers, expired/self-signed cert) → `class=misconfig`, note the specific weakness.
 
 ## 3. Content discovery (WSTG-CONF-04)
 ```bash
 ffuf -u https://TARGET/FUZZ -w /usr/share/seclists/Discovery/Web-Content/raft-medium-directories.txt \
-  -mc all -fc 404 -recursion -recursion-depth 2 -t 40 -o evidence/ffuf-dirs.json -of json
+  -mc all -fc 404 -recursion -recursion-depth 2 -t 40 -o "$PIRED_WORKSPACE/evidence/ffuf-dirs.json" -of json
 # extension sweep
 ffuf -u https://TARGET/FUZZ -w /usr/share/seclists/Discovery/Web-Content/raft-medium-files.txt \
   -e .php,.bak,.old,.zip,.txt,.json -mc 200,301,302,401,403 -t 40
@@ -55,8 +55,8 @@ for p in robots.txt sitemap.xml .well-known/security.txt .git/HEAD .git/config .
 
 ## 5. Spider & JS endpoint harvest (WSTG-INFO-05 · WSTG-INFO-06)
 ```bash
-katana -u https://TARGET -jc -d 3 -o evidence/katana.txt          # crawl + parse JS
-gau TARGET >> evidence/urls.txt ; waybackurls TARGET >> evidence/urls.txt   # historical URLs (passive)
+katana -u https://TARGET -jc -d 3 -o "$PIRED_WORKSPACE/evidence/katana.txt"          # crawl + parse JS
+gau TARGET >> "$PIRED_WORKSPACE/evidence/urls.txt" ; waybackurls TARGET >> "$PIRED_WORKSPACE/evidence/urls.txt"   # historical URLs (passive)
 # pull endpoints/secrets out of JS bundles
 linkfinder -i "https://TARGET/main.js" -o cli
 ```
@@ -64,9 +64,9 @@ Grep harvested URLs for params: `grep -oE '[?&][a-zA-Z0-9_]+=' evidence/urls.txt
 
 ## 6. Virtual hosts & subdomains (WSTG-INFO-04)
 ```bash
-subfinder -d TARGET -all -o evidence/subs.txt          # passive subdomain enum (in-scope root only)
+subfinder -d TARGET -all -o "$PIRED_WORKSPACE/evidence/subs.txt"          # passive subdomain enum (in-scope root only)
 ffuf -u https://TARGET -H "Host: FUZZ.TARGET" -w SUBWORDLIST -fs <baseline-size>   # vhost brute
-dnsx -l evidence/subs.txt -a -resp -o evidence/resolved.txt
+dnsx -l "$PIRED_WORKSPACE/evidence/subs.txt" -a -resp -o "$PIRED_WORKSPACE/evidence/resolved.txt"
 ```
 Only probe subdomains that fall inside the authorized scope.
 

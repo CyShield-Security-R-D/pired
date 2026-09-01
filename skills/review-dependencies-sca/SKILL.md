@@ -23,23 +23,23 @@ Lockfiles pin the **exact installed version** — that's what you match against 
 ```bash
 mkdir -p evidence
 # --- Node (pick by the lockfile that exists) ---
-npm audit --json > evidence/npm-audit.json 2>/dev/null || true
-pnpm audit --json > evidence/pnpm-audit.json 2>/dev/null || true
-yarn npm audit --json > evidence/yarn-audit.json 2>/dev/null || yarn audit --json > evidence/yarn-audit.json 2>/dev/null || true
-npx --yes retire --outputformat json --outputpath evidence/retire.json 2>/dev/null || true   # also flags vendored/bundled libs
+npm audit --json > "$PIRED_WORKSPACE/evidence/npm-audit.json" 2>/dev/null || true
+pnpm audit --json > "$PIRED_WORKSPACE/evidence/pnpm-audit.json" 2>/dev/null || true
+yarn npm audit --json > "$PIRED_WORKSPACE/evidence/yarn-audit.json" 2>/dev/null || yarn audit --json > "$PIRED_WORKSPACE/evidence/yarn-audit.json" 2>/dev/null || true
+npx --yes retire --outputformat json --outputpath "$PIRED_WORKSPACE/evidence/retire.json" 2>/dev/null || true   # also flags vendored/bundled libs
 # --- Python ---
-pip-audit -r requirements.txt -f json -o evidence/pip-audit.json 2>/dev/null || true
-pip-audit -f json -o evidence/pip-audit-env.json 2>/dev/null || true    # audits the installed env (also reads pyproject/poetry)
+pip-audit -r requirements.txt -f json -o "$PIRED_WORKSPACE/evidence/pip-audit.json" 2>/dev/null || true
+pip-audit -f json -o "$PIRED_WORKSPACE/evidence/pip-audit-env.json" 2>/dev/null || true    # audits the installed env (also reads pyproject/poetry)
 # --- Go (call-graph reachability built in) ---
-govulncheck -json ./... > evidence/govulncheck.json 2>/dev/null || govulncheck ./... > evidence/govulncheck.txt 2>/dev/null || true
+govulncheck -json ./... > "$PIRED_WORKSPACE/evidence/govulncheck.json" 2>/dev/null || govulncheck ./... > "$PIRED_WORKSPACE/evidence/govulncheck.txt" 2>/dev/null || true
 # --- Ruby / PHP / Java ---
-bundle audit check --update 2>/dev/null > evidence/bundler-audit.txt || bundle-audit check --update 2>/dev/null > evidence/bundler-audit.txt || true
-composer audit --format=json > evidence/composer-audit.json 2>/dev/null || true
+bundle audit check --update 2>/dev/null > "$PIRED_WORKSPACE/evidence/bundler-audit.txt" || bundle-audit check --update 2>/dev/null > "$PIRED_WORKSPACE/evidence/bundler-audit.txt" || true
+composer audit --format=json > "$PIRED_WORKSPACE/evidence/composer-audit.json" 2>/dev/null || true
 mvn -q org.owasp:dependency-check-maven:check 2>/dev/null || gradle dependencyCheckAnalyze 2>/dev/null || true
 # --- Cross-ecosystem: OSV (reads most lockfiles) and Trivy (SBOM + advisories) ---
-osv-scanner --lockfile=package-lock.json --format json --output evidence/osv.json 2>/dev/null || true
-osv-scanner -r --format json --output evidence/osv-all.json . 2>/dev/null || osv-scanner scan source -r . --format json --output evidence/osv-all.json 2>/dev/null || true
-trivy fs --scanners vuln --format json -o evidence/trivy-fs.json . 2>/dev/null || true
+osv-scanner --lockfile=package-lock.json --format json --output "$PIRED_WORKSPACE/evidence/osv.json" 2>/dev/null || true
+osv-scanner -r --format json --output "$PIRED_WORKSPACE/evidence/osv-all.json" . 2>/dev/null || osv-scanner scan source -r . --format json --output "$PIRED_WORKSPACE/evidence/osv-all.json" 2>/dev/null || true
+trivy fs --scanners vuln --format json -o "$PIRED_WORKSPACE/evidence/trivy-fs.json" . 2>/dev/null || true
 ```
 - **`govulncheck`** does Go call-graph analysis and surfaces only vulns your code transitively calls — treat its hits as **high-confidence, reachable**. (`npm/pnpm/yarn audit`, `pip-audit`, `osv-scanner`, `trivy`, `composer audit`, `bundler-audit` report by **version presence**, so they feed step 4/5.)
 - `osv-scanner` flags: `--lockfile=<file>` for one lockfile, `-r` (recursive) to walk the tree; v2 also exposes `osv-scanner scan source`. `--format json`.
@@ -48,10 +48,10 @@ trivy fs --scanners vuln --format json -o evidence/trivy-fs.json . 2>/dev/null |
 ## 3. Triage: enumerate every advisory
 ```bash
 # OSV / trivy: pull the advisory ids
-jq -r '.results[]?.packages[]?.vulnerabilities[]?.id' evidence/osv-all.json 2>/dev/null | sort -u
-jq -r '.. | objects | select(.id and (.id|test("^(CVE|GHSA|PYSEC|RUSTSEC|GO)-"))) | .id' evidence/osv.json 2>/dev/null | sort -u
+jq -r '.results[]?.packages[]?.vulnerabilities[]?.id' "$PIRED_WORKSPACE/evidence/osv-all.json" 2>/dev/null | sort -u
+jq -r '.. | objects | select(.id and (.id|test("^(CVE|GHSA|PYSEC|RUSTSEC|GO)-"))) | .id' "$PIRED_WORKSPACE/evidence/osv.json" 2>/dev/null | sort -u
 # npm audit: package -> severity -> advisory
-jq -r '.vulnerabilities | to_entries[] | "\(.key)\t\(.value.severity)"' evidence/npm-audit.json 2>/dev/null | sort -u
+jq -r '.vulnerabilities | to_entries[] | "\(.key)\t\(.value.severity)"' "$PIRED_WORKSPACE/evidence/npm-audit.json" 2>/dev/null | sort -u
 ```
 List **each** advisory with its package, installed version, fixed version, severity, and the **affected function/feature** (the vuln is usually one API, not the whole package). Do not pre-filter by severity here — a low-severity advisory is still a finding.
 

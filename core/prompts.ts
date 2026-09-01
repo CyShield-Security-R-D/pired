@@ -24,6 +24,8 @@ export interface BuildPromptOptions {
 	scope?: EngagementScope;
 	/** Standard weakness-class labels to cover as a floor (from the engagement checklist). */
 	checklist?: string[];
+	/** Absolute path of the engagement workspace, so bash can write into it. */
+	workspace?: string;
 	skills?: Array<{ name: string; description: string }>;
 	/** Extra instructions appended verbatim (e.g. from --append-system-prompt or a context file). */
 	extra?: string;
@@ -110,10 +112,32 @@ Before finishing, briefly note what you did not get to and would investigate wit
 </methodology>`;
 }
 
+/**
+ * Where the engagement's files actually are.
+ *
+ * `evidence/` names two different directories and the agent only ever saw one of
+ * them. Its shell sits in the target — a repo, a scan directory — so redirecting
+ * a scan to `evidence/h7.txt` writes a real file the workspace has never heard
+ * of, and citing it back came out as "evidence path does not resolve" on a file
+ * that genuinely existed. The absolute path, plus a variable the shell already
+ * has, is the whole fix on the model's side; `record` adopts a stray file into
+ * the workspace on the tool's side.
+ */
+function workspaceBlock(dir: string | undefined): string {
+	if (!dir) return "";
+	return `<workspace path="${dir}">
+Your durable engagement state lives here, NOT in the directory your shell starts in. It survives compaction, restarts and sessions; the working directory is the target's and is not yours to write to.
+- Evidence and artifacts: \`${dir}/evidence/\` and \`${dir}/artifacts/\`. \`$PIRED_WORKSPACE\` is set in your shell, so redirect there: \`nmap -oA "$PIRED_WORKSPACE/evidence/h7" ...\`, \`curl -sSv URL > "$PIRED_WORKSPACE/evidence/y7-idor.txt" 2>&1\`.
+- Or hand the text to \`record kind=evidence name=... content=...\`, which writes the file and returns the path to cite.
+- Records cite evidence by WORKSPACE-relative path — \`evidence/y7-idor.txt\` — never an absolute one.
+</workspace>`;
+}
+
 export function buildSystemPrompt(opts: BuildPromptOptions): string {
 	const blocks = [
 		IDENTITY,
 		PROFILE_BLOCKS[opts.profile],
+		workspaceBlock(opts.workspace),
 		methodologyBlock(opts.checklist),
 		scopeBlock(opts.scope),
 		skillsBlock(opts.skills),

@@ -17,24 +17,24 @@ for p in openapi.json swagger.json swagger.yaml v2/api-docs v3/api-docs \
   echo "== $p =="; curl -s -o /dev/null -w "%{http_code}\n" https://TARGET/$p; done
 # GraphQL introspection (see api-graphql for the full query):
 curl -s https://TARGET/graphql -H 'Content-Type: application/json' \
-  -d '{"query":"{__schema{types{name}}}"}' | tee evidence/gql-introspect.json
+  -d '{"query":"{__schema{types{name}}}"}' | tee "$PIRED_WORKSPACE/evidence/gql-introspect.json"
 # SOAP/WSDL:
-curl -s "https://TARGET/service?wsdl" | tee evidence/service.wsdl
+curl -s "https://TARGET/service?wsdl" | tee "$PIRED_WORKSPACE/evidence/service.wsdl"
 ```
 
 ## 2. Parse the spec into endpoints/params
 ```bash
 # list every path + method from an OpenAPI doc
-jq -r '.paths | to_entries[] | .key as $p | .value | keys[] as $m | "\($m|ascii_upcase) \($p)"' evidence/openapi.json
+jq -r '.paths | to_entries[] | .key as $p | .value | keys[] as $m | "\($m|ascii_upcase) \($p)"' "$PIRED_WORKSPACE/evidence/openapi.json"
 # params per operation
-jq -r '.paths[][].parameters[]?.name' evidence/openapi.json | sort -u
+jq -r '.paths[][].parameters[]?.name' "$PIRED_WORKSPACE/evidence/openapi.json" | sort -u
 ```
 Record each: `record kind=endpoint host=h1 method=POST path=/api/v1/orders params=["status"] auth=bearer`. Note which operations the spec marks as admin/privileged — those are prime BOLA/BFLA targets.
 
 ## 3. Harvest endpoints without a spec
 ```bash
-katana -u https://TARGET -jc -d 3 -o evidence/api-urls.txt          # crawl + JS
-gau TARGET | grep -E '/api/|/v[0-9]/|\.json' >> evidence/api-urls.txt
+katana -u https://TARGET -jc -d 3 -o "$PIRED_WORKSPACE/evidence/api-urls.txt"          # crawl + JS
+gau TARGET | grep -E '/api/|/v[0-9]/|\.json' >> "$PIRED_WORKSPACE/evidence/api-urls.txt"
 curl -s https://TARGET/app.js | grep -oE '/(api|v[0-9])/[a-zA-Z0-9/_{}.-]+' | sort -u
 # brute API paths / params
 ffuf -u https://TARGET/api/FUZZ -w /usr/share/seclists/Discovery/Web-Content/api/api-endpoints.txt -mc all -fc 404
