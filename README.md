@@ -184,7 +184,11 @@ The panel also renders outside the TUI — `pired-state --watch` for a tmux pane
 
 ### The same thing, running
 
-A whitebox `review` of **DVBank** — the ground-truth-labeled vulnerable banking app from the benchmark above — driven by a 27B model on the local box. The agent greps for sinks and settles checklist cells while the panel counts surface, hypotheses and findings as they land:
+A whitebox `review` of **DVBank** — the ground-truth-labeled vulnerable banking app from the benchmark above — driven by a 27B model on the local box. It opens on the engagement it is about to run, and the brief that sets the rule the rest of the session is judged against: *anything not in the ledger does not count.*
+
+<img src="docs/demo-prompt.gif" alt="pired opening on the dvbank engagement: the review profile, the local 27B model, an empty coverage panel, and the operator typing the brief" width="100%">
+
+Then it works. The agent greps for sinks and settles checklist cells while the panel counts surface, hypotheses and findings as they land:
 
 <img src="docs/demo-review.gif" alt="pired reviewing DVBank: a grep for injection sinks, with the engagement panel counting surface, hypotheses and findings as they are recorded" width="100%">
 
@@ -192,7 +196,7 @@ And the artifact it leaves behind — hypotheses browsable by class, including t
 
 <img src="docs/demo-ledger.gif" alt="the pired ledger: the hypotheses browser filtered by class, and a critical finding opened to CWE-640, class authn and target auth_routes.py" width="100%">
 
-The counters in both are the agent's own claims, recorded as it worked. What survives an independent grader is a separate question, and the honest answer is [the benchmark](#the-benchmark-result) — not the panel.
+The counters are the agent's own claims, recorded as it worked. What survives an independent grader is a separate question, and the honest answer is [the benchmark](#the-benchmark-result) — not the panel.
 
 ## Documentation
 
@@ -204,7 +208,7 @@ Model selection is pi's — use **`/model`** (and Ctrl+P). pired registers any c
 
 ```json
 { "providers": [ { "id": "openrouter", "baseUrl": "https://openrouter.ai/api/v1", "apiKey": "sk-or-…",
-  "models": [ { "id": "qwen/qwen3.8-27b", "contextWindow": 1000000, "reasoning": true } ] } ] }
+  "models": [ { "id": "qwen/qwen3.8-27b", "contextWindow": 265000, "reasoning": true } ] } ] }
 ```
 
 ---
