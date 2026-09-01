@@ -25,6 +25,7 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+const WINDOWS = process.platform === "win32";
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const EXT = join(ROOT, "extensions", "pired.ts");
 const THEME = join(ROOT, "themes", "pired.json");
@@ -103,13 +104,51 @@ function findPi() {
 		// Not resolvable from here (a linked checkout, an unusual layout): fall
 		// through to the sibling-binary and PATH lookups below.
 	}
-	// Installed layout: <prefix>/bin/pired next to <prefix>/bin/pi.
-	for (const dir of [dirname(process.argv[1] || ""), join(ROOT, "..", "..", "..", "bin")]) {
+	// Installed layout: <prefix>/bin/pired next to <prefix>/bin/pi. Windows puts
+	// the shims in the prefix itself, names them .cmd, and does not symlink them
+	// — so neither the directory to look in nor the file to look for carries
+	// over, and searching for a bare "pi" there always came up empty.
+	const dirs = WINDOWS
+		? [join(ROOT, "..", ".."), dirname(process.argv[1] || "")]
+		: [dirname(process.argv[1] || ""), join(ROOT, "..", "..", "..", "bin")];
+	for (const dir of dirs) {
 		if (!dir) continue;
-		const sibling = join(dir, "pi");
-		if (existsSync(sibling)) return sibling;
+		for (const name of WINDOWS ? ["pi.cmd", "pi.exe"] : ["pi"]) {
+			const sibling = join(dir, name);
+			if (existsSync(sibling)) return sibling;
+		}
 	}
 	return "pi";
+}
+
+/**
+ * Quote one argument the way CommandLineToArgvW reads it back.
+ *
+ * Only needed for the cmd.exe hop below. Node's own `shell: true` joins the
+ * arguments with spaces and quotes none of them, which loses every path holding
+ * one — and "C:\Users\Jane Doe" is not an exotic home directory.
+ */
+function quoteForWindows(value) {
+	const text = String(value);
+	// Quoting is skipped only for a conservative safe set, never merely for the
+	// absence of a space: cmd.exe reads a bare & | < > ^ as syntax, so a prompt
+	// or a passthrough flag carrying one would run as a second command.
+	if (/^[A-Za-z0-9_\-.:\\/=+@,]+$/.test(text)) return text;
+
+	let quoted = '"';
+	let backslashes = 0;
+	for (const char of text) {
+		if (char === "\\") {
+			backslashes++;
+		} else if (char === '"') {
+			quoted += "\\".repeat(backslashes * 2 + 1) + '"';
+			backslashes = 0;
+		} else {
+			quoted += "\\".repeat(backslashes) + char;
+			backslashes = 0;
+		}
+	}
+	return quoted + "\\".repeat(backslashes * 2) + '"';
 }
 
 const piBin = findPi();
@@ -132,9 +171,22 @@ piArgs.push(...passthrough);
 // not control, so it is handed to the node that is already running us. A bare
 // "pi" from PATH is a real command and is spawned as one.
 const viaNode = piBin !== "pi" && /\.[cm]?js$/.test(piBin);
-const child = viaNode
-	? spawn(process.execPath, [piBin, ...piArgs], { cwd: target, stdio: "inherit" })
-	: spawn(piBin, piArgs, { cwd: target, stdio: "inherit" });
+const options = { cwd: target, stdio: "inherit" };
+
+function launch() {
+	if (viaNode) return spawn(process.execPath, [piBin, ...piArgs], options);
+	if (!WINDOWS || /\.exe$/i.test(piBin)) return spawn(piBin, piArgs, options);
+	// Everything left on Windows is a .cmd shim, which node refuses to spawn
+	// without a shell (CVE-2024-27980), including the bare "pi". Build the
+	// command line here rather than take node's unquoted `shell: true`.
+	const line = [piBin, ...piArgs].map(quoteForWindows).join(" ");
+	return spawn(process.env.ComSpec || "cmd.exe", ["/d", "/s", "/c", `"${line}"`], {
+		...options,
+		windowsVerbatimArguments: true,
+	});
+}
+
+const child = launch();
 child.on("exit", (code) => process.exit(code ?? 0));
 child.on("error", (err) => {
 	process.stderr.write(`pired: failed to launch pi at ${piBin} (${err?.message || err}).\n`);
