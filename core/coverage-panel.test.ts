@@ -125,7 +125,7 @@ describe("renderCoveragePanel with n/a cells", () => {
 		const lines = render(scoped, 60).map(strip);
 		// 1 settled of 2 askable; the raw 4-cell grid would read 25% / "4 cells".
 		expect(lines[0]).toContain("50%");
-		expect(lines.at(-1)).toContain("2 cells");
+		expect(lines.at(-1)).toContain("2 test cases");
 	});
 
 	it("shows the n/a key in the legend only when one exists", () => {
@@ -157,7 +157,7 @@ describe("the welcome screen's copy", () => {
 	it("keeps the percentage, on the summary row rather than the title", () => {
 		const lines = boxed(60, 20);
 		expect(lines[0]).not.toContain("%");
-		expect(lines.join("\n")).toMatch(/\d+% · \d+ cells/);
+		expect(lines.join("\n")).toMatch(/\d+% · \d+ test cases/);
 	});
 
 	it("never exceeds the rows it was given, and says what it dropped", () => {

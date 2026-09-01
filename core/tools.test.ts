@@ -487,7 +487,7 @@ describe("an empty ledger is not a finished engagement", () => {
 		await ws.writeChecklist({ v: 1, targetType: "web", classes: [{ id: "authz", title: "Access control" }] } as Checklist);
 		await ws.append("inventory", { v: 1, id: "e1", kind: "endpoint", createdAt: "t", host: "h1", method: "GET", path: "/x" });
 		await record.execute({ kind: "hypothesis", statement: "no HTML sink: every response is JSON encoded by the framework", target: "e1", class: "authz", outcome: "refuted" }, ctx);
-		expect(textOf(await recall.execute({ query: "gaps" }, ctx))).toMatch(/every askable cell is settled/i);
+		expect(textOf(await recall.execute({ query: "gaps" }, ctx))).toMatch(/every applicable test case has a verdict/i);
 	});
 });
 
@@ -505,7 +505,7 @@ describe("a capped list says what it left out", () => {
 		expect(surface).toMatch(/showing 5 of 12 elements \(least-settled first\)/);
 
 		const gaps = textOf(await recall.execute({ query: "gaps", limit: 4 }, ctx));
-		expect(gaps).toMatch(/showing 4 of 12 gaps/);
+		expect(gaps).toMatch(/showing 4 of 12 outstanding test cases/);
 	});
 
 	it("stays quiet when nothing was left out", async () => {
@@ -1013,6 +1013,39 @@ describe("a finding written for the report", () => {
 	it("says plainly when the id is not there", async () => {
 		const { ctx, recall } = await setup();
 		expect(textOf(await recall.execute({ query: "finding", id: "nope" }, ctx))).toMatch(/No live finding nope/);
+	});
+});
+
+describe("the matrix, described as a test plan", () => {
+	// "Cell" is pired's private jargon; a test plan and its cases are vocabulary a
+	// consultant and a model both already have. The tools say both, so the agent
+	// can connect what it is being asked to record to what it already knows a
+	// security engagement is made of.
+	it("tells record that a cell is a test case a hypothesis executes", async () => {
+		const { record } = await setup();
+		const d = record.description ?? "";
+		expect(d).toMatch(/TEST PLAN/);
+		expect(d).toMatch(/Each cell of it is one test case/);
+		expect(d).toMatch(/A hypothesis IS that test case, executed/);
+		expect(d).toMatch(/Ruling a class out is a result, not a non-event/);
+	});
+
+	it("tells recall that gaps are the cases not run yet", async () => {
+		const { recall } = await setup();
+		const d = recall.description ?? "";
+		expect(d).toMatch(/Coverage is a TEST PLAN/);
+		expect(d).toMatch(/one cell per test case/);
+		expect(d).toMatch(/gaps \(test cases not run yet/);
+	});
+
+	it("says it in the views too, not only in the schema", async () => {
+		const { ws, ctx, recall } = await setup();
+		await ws.writeChecklist({ v: 1, targetType: "web", classes: [{ id: "authz", title: "Access control" }] } as Checklist);
+		await ws.append("inventory", { v: 1, id: "e1", kind: "endpoint", createdAt: "t", host: "h", method: "GET", path: "/x" });
+		expect(textOf(await recall.execute({ query: "gaps" }, ctx))).toMatch(/Test cases not yet settled/);
+		expect(textOf(await recall.execute({ query: "next" }, ctx))).toMatch(/Next test case: e1 for authz/);
+		// And the nudge that the whole mechanism depends on.
+		expect(textOf(await recall.execute({ query: "next" }, ctx))).toMatch(/a refutation counts/);
 	});
 });
 

@@ -207,7 +207,11 @@ export function renderPanel(opts: PanelOptions): string[] {
 		if (d.coveragePct !== undefined) {
 			section("coverage");
 			const pct = `${d.coveragePct}%`;
-			const counts = `${d.settled ?? 0} of ${d.cells ?? 0} cells · ${d.gaps ?? 0} gaps`;
+			// The operator's unit is a test case, not a matrix cell. Kept to exactly
+			// the width the old wording had: this string decides whether the bar and
+			// its numbers share a row, so a longer synonym costs a panel row on a
+			// narrow terminal. The /coverage overlay has room to spell it out.
+			const counts = `${d.settled ?? 0} of ${d.cells ?? 0} cases · ${d.gaps ?? 0} gaps`;
 			// A bar and the numbers it draws are one fact, and two rows for one fact
 			// is how a panel gets tall. So they share a row, and the bar gives up the
 			// columns to make that work — down to twelve, under which it stops being

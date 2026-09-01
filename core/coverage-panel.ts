@@ -141,7 +141,9 @@ export function renderCoveragePanel(opts: CoveragePanelOptions): string[] {
 	// It is the only text telling a reader how to close the overlay, so when it
 	// will not share a line it takes one — and the class budget must know that
 	// before it decides how many rows it can spend.
-	const summaryText = `${pct}% · ${matrix.applicable} cells · ${matrix.counts["not-tested"] + matrix.counts.blocked} gaps`;
+	// "cells" and "gaps" are the matrix's own words; "test cases" is the operator's.
+	// The panel is read by someone who thinks in a test plan, so it says both.
+	const summaryText = `${pct}% · ${matrix.applicable} test cases · ${matrix.counts["not-tested"] + matrix.counts.blocked} gaps`;
 	const hintText = opts.hint ?? "";
 	const hintInline = hintText.length === 0
 		|| width - measure(summaryText) - measure(hintText) >= 1;

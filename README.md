@@ -19,7 +19,7 @@ A consultant under NDA often *cannot* paste client source into a frontier API �
 Three claims:
 
 - **It runs on your hardware.** Tuned for ~30B open-weight models (Qwen3.8 27B, Gemma 3 27B, DeepSeek), so client code never leaves the engagement box — and it still beats a frontier agent on recall and critical coverage (below). Frontier and subscription models work too, where the engagement allows them.
-- **Coverage discipline, not vibes.** `checklist × inventory = coverage → hypotheses → findings`, with `recall gaps` keeping the agent testing while gaps remain — and *ruling a class out* recorded as real work, which a findings list cannot express. What the benchmark shows is the security prompt lifting a 27B model past a frontier agent on recall; whether the ledger compounds on top of that is stated as open, below.
+- **Coverage discipline, not vibes.** `checklist × inventory = coverage → hypotheses → findings`. That matrix is a **test plan**: one cell — one weakness class asked of one recorded element — is one test case, a hypothesis is that case run and given a verdict, and `recall gaps` is the list still outstanding, keeping the agent testing while any remain — and *ruling a class out* recorded as real work, which a findings list cannot express. What the benchmark shows is the security prompt lifting a 27B model past a frontier agent on recall; whether the ledger compounds on top of that is stated as open, below.
 - **One workspace, both halves of the engagement.** `review` for whitebox, `recon`/`pentest` for blackbox, over a single engagement ontology, so findings, evidence, and coverage correlate across the whole job instead of living in two disconnected tools.
 
 **What pired is not.** Not a scanner: it owns no detection engines and makes no claim to reproducible, rule-count-comparable output. Not the assessment: it drafts findings for an operator to verify, and the operator signs the report. Two principles keep it that way:
@@ -210,7 +210,7 @@ The transcript is the conversation; the ledger is the artifact. Coverage you can
 │                                                      │
 ├─ coverage ───────────────────────────────────────────┤
 │  ███████████████░░░░░░░░░ 62%                        │
-│  105 of 170 cells · 65 gaps                          │
+│  105 of 170 cases · 65 gaps                          │
 │  ▲ 7  ● 98  ◐ 3  ⊘ 2                                 │
 │                                                      │
 ├─ scope ──────────────────────────────────────────────┤
@@ -237,7 +237,7 @@ A whitebox `review` of **DVBank** — the ground-truth-labeled vulnerable bankin
 
 <img src="docs/demo-prompt.gif" alt="pired opening on the dvbank engagement: the review profile, the local 27B model, an empty coverage panel, and the operator typing the brief" width="100%">
 
-Then it works. The agent greps for sinks and settles checklist cells while the panel counts surface, hypotheses and findings as they land:
+Then it works. The agent greps for sinks and settles test cases while the panel counts surface, hypotheses and findings as they land:
 
 <img src="docs/demo-review.gif" alt="pired reviewing DVBank: a grep for injection sinks, with the engagement panel counting surface, hypotheses and findings as they are recorded" width="100%">
 

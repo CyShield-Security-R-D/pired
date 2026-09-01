@@ -16,7 +16,7 @@ Tools run via `bash` and may be absent. If a needed scanner is missing: try an a
 ## 0. Frame it in the loop
 - Seed the surface as inventory so `recall gaps` has something to reason over: `record kind=host value=repo:<name>`; record entrypoints as `endpoint` and config files as `tech`/`note`.
 - Record a `hypothesis` (tagged with its checklist `class`) before each deep-dive; mark `outcome` confirmed/refuted/inconclusive; promote confirmed ones to `finding`.
-- Use `recall next` / `recall gaps` to stay systematic. **Do not conclude the audit while `recall gaps` is non-empty** — every untested class×surface cell is a potential missed bug.
+- Use `recall next` / `recall gaps` to stay systematic. The matrix is a **test plan**: one cell — one class asked of one surface element — is one test case, and `recall gaps` is the list you have not run yet. **Do not conclude the audit while `recall gaps` is non-empty** — every outstanding test case is a potential missed bug.
 
 ## 1. Orient — map the codebase
 ```bash
@@ -33,7 +33,7 @@ find . \( -name Dockerfile -o -name '*.tf' -o -name '*.yml' -o -name '*.yaml' \)
 Record each stack element: `record kind=tech name=express version=4.18`. Note the framework — it dictates the source/sink APIs (see the `review-language-*` skills).
 
 ## 2. Enumerate EVERY entrypoint & trust boundary (the coverage backbone)
-The coverage matrix can only protect you from missing a bug if every surface element is in it. **Enumerate exhaustively — routes, handlers, controllers, CLI commands, cron/queue consumers, event/webhook handlers, GraphQL resolvers, gRPC/RPC methods, IPC, deserializers, template renders, and DB/file readers — then `record` each one as an `endpoint`** so it becomes a row in coverage. Missing surface = a class that never gets tested there.
+The coverage matrix can only protect you from missing a bug if every surface element is in it. **Enumerate exhaustively — routes, handlers, controllers, CLI commands, cron/queue consumers, event/webhook handlers, GraphQL resolvers, gRPC/RPC methods, IPC, deserializers, template renders, and DB/file readers — then `record` each one as an `endpoint`** so it becomes a row in coverage. Every element you record multiplies out into one test case per applicable class; missing surface = a class that never gets tested there.
 ```bash
 # HTTP route/handler entrypoints (adjust per framework)
 rg -n "@(Get|Post|Put|Delete|Patch|RequestMapping|GetMapping|PostMapping|RequestParam|RequestBody|PathVariable)" -g '*.java'
@@ -92,7 +92,7 @@ Record each as a `hypothesis` tagged `class=logic` (business-logic / insecure-de
 Verification **sets confidence and severity; it does not delete candidates.** Three outcomes only:
 - **Confirmed** (source attacker-controlled, sink reachable, no real sanitizer) → `record kind=finding status=confirmed` with severity.
 - **Genuinely refuted** (a real parameterization/allowlist/ownership check sits in the path) → `hypothesis outcome=refuted` with the *specific* reason. Refuted ≠ "I ran out of time."
-- **Cannot fully confirm** (plausible but you couldn't trace the whole path, or reachability is uncertain) → **keep it**: either `record kind=finding status=open` at your best-estimate severity noting "unconfirmed/low-confidence", **or** `hypothesis outcome=inconclusive` with a note, and leave the cell open in `recall gaps`. Never delete a plausible real issue.
+- **Cannot fully confirm** (plausible but you couldn't trace the whole path, or reachability is uncertain) → **keep it**: either `record kind=finding status=open` at your best-estimate severity noting "unconfirmed/low-confidence", **or** `hypothesis outcome=inconclusive` with a note, and leave the test case open in `recall gaps`. Never delete a plausible real issue.
 
 ## 9. Record coverage so you don't quit early
 ```

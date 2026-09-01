@@ -136,6 +136,27 @@ describe("buildSystemPrompt", () => {
 		}
 	});
 
+	describe("the coverage matrix, in words a tester already has", () => {
+		// "Cell" and "gap" are pired's private jargon. The mechanism was explained
+		// in them and never bridged to the vocabulary a consultant and a model both
+		// have deep priors for — a test plan, a test case, the cases still to run.
+		// Naming the equivalence is a stronger instruction than "untested cell",
+		// especially for the behaviour the whole mechanism depends on and which the
+		// code comments say never happens on its own: recording a refutation.
+		it("says a cell is one test case and gaps are the ones not run yet", () => {
+			const p = buildSystemPrompt({ profile: "review" });
+			expect(p).toMatch(/A cell of that matrix is one test case/);
+			expect(p).toMatch(/test plan/);
+			expect(p).toMatch(/is the list of test cases you have not run yet/);
+		});
+
+		it("says a hypothesis is that test case executed, refutation included", () => {
+			const p = buildSystemPrompt({ profile: "review" });
+			expect(p).toMatch(/A hypothesis IS a test case/);
+			expect(p).toMatch(/Ruling a class out is a result, not a non-event/);
+		});
+	});
+
 	describe("where the engagement's files are", () => {
 		// The agent's shell starts in the target, and `evidence/` means the
 		// workspace — two different directories, and it only ever saw one of them.

@@ -238,7 +238,7 @@ const RECORD_DESCRIPTION = `Record engagement state to the durable workspace. On
 - note: text
 - evidence: name, content — saves raw output to the workspace and returns the path to cite (this is how you create the file that 'evidence' fields reference)
 - host: value (+ip, tech[]); service: host, port (+proto, name); endpoint: path (+host, method, params[], auth); param: name (+endpoint, location); tech: name (+host, version)
-- hypothesis: statement, target (surface id), class (checklist id) (+approach, outcome[proposed|testing|confirmed|refuted|inconclusive], evidence). 'target' and 'class' also accept lists, recording the cross product in one call — use it when one piece of reasoning settles several cells at once.
+- hypothesis: statement, target (surface id), class (checklist id) (+approach, outcome[proposed|testing|confirmed|refuted|inconclusive], evidence). One test case: the class you tested, the element you tested it against, and what came back. 'target' and 'class' also accept lists, recording the cross product in one call — use it when one piece of reasoning settles several test cases at once.
 - finding: title, severity[info|low|medium|high|critical] (+target, class, cwe, cvss, description, repro, evidence[], status)
   A finding is anything worth carrying into the report, not only a proven vulnerability. Use severity=info for an observation that costs nothing now but may matter later — a missing dependency pin, an unpinned base image, a permissive default, a lead you could not finish. 'target' is optional and accepts a recorded element id OR a raw string (a file path, a module, a component) when no element fits; give one when you can, and record the finding either way rather than leaving it in notes.
   A finding is a section of a document a client pays for, so it is written as one: 'description' says what the flaw is and where, 'impact' says what it costs THEM — the records exposed, the money moved, the service lost, the obligation breached — and 'remediation' says the concrete change that fixes it (the control to add, the call to replace; never "sanitize input"). 'repro' is numbered steps a third party can follow. Write impact in the client's terms, not the tool's: "any logged-in customer can read all 40k customer records, including national IDs" beats "confidentiality impact is high".
@@ -250,9 +250,9 @@ Pass 'id' to update an existing record. Pass 'id' with delete=true (and a 'reaso
 Recording something twice is safe. Every kind has an identity — an endpoint is its method and path, a hypothesis is its (target, class) cell, a finding is its title and location — and a second recording of the same thing updates the first instead of creating a second row: fields you add are kept, a severity is never lowered, evidence and params are merged. So when you are not sure whether something is already recorded, record it. The reply names the id it matched, and 'id=<that>' is how you change it afterwards.
 
 How these connect (this is what makes coverage work, not ceremony):
-- Coverage is your checklist's classes x the surface *you have recorded*. A host or endpoint you never recorded has no cells at all, so it can never show as tested and 'recall gaps' cannot route you to it. Record the surface as you discover it.
-- A cell is settled by a hypothesis outcome, not by a finding: outcome 'confirmed' marks it vulnerable, 'refuted' marks it clear. Ruling a class out is real work and only counts if you record the refutation — otherwise the cell stays untested no matter how carefully you looked. Settling one cell per call would be hundreds of calls, so record refutations in the shape you reasoned in: one call with a list of classes (and/or targets) and the single reason they share.
-- A confirmed hypothesis should also be recorded as a finding, tagged with the same 'class' so the finding maps back to its cell.
+- Coverage is your checklist's classes x the surface *you have recorded* — a TEST PLAN. Each cell of it is one test case: this weakness class, asked of this element ("is POST /api/login vulnerable to SQL injection?"). A host or endpoint you never recorded has no test cases at all, so it can never show as tested and 'recall gaps' cannot route you to it. Record the surface as you discover it.
+- A hypothesis IS that test case, executed and given a verdict — which is why a cell is settled by a hypothesis outcome and never by a finding: 'confirmed' marks it vulnerable, 'refuted' marks it clear. Ruling a class out is a result, not a non-event: an unrecorded refutation leaves the test case looking un-run no matter how carefully you looked. Running one case per call would be hundreds of calls, so record refutations in the shape you reasoned in: one call with a list of classes (and/or targets) and the single reason they share.
+- A confirmed hypothesis should also be recorded as a finding, tagged with the same 'class' so the finding maps back to the test case that proved it.
 - 'evidence' is a workspace-relative PATH, not inline text. Create it with record kind=evidence (which returns the path), then cite that exact path. Paths are verified on write: a finding or hypothesis citing a path that does not resolve is rejected, so cite only what you actually saved, or omit the field.`;
 
 const RECORD_PARAMETERS: JsonSchema = {
@@ -993,15 +993,17 @@ export function createRecallTool(deps: ToolDeps): ToolDefinition {
 		name: "recall",
 		label: "recall",
 		description:
-			"Read engagement state back — the same views the operator sees. query: " +
+			"Read engagement state back — the same views the operator sees. " +
+			"Coverage is a TEST PLAN: checklist classes x the surface you recorded, one cell per test case " +
+			"(this class, asked of this element). query: " +
 			"status (the rollup: surface, coverage %, findings by severity, blockers), " +
-			"coverage (the full checklist x surface matrix, one row per class), " +
+			"coverage (the full test plan as a matrix, one row per class), " +
 			"surface (one row per recorded element with its coverage bar), " +
-			"next (next untested/actionable cell), gaps (untested/blocked cells), " +
+			"next (the next test case to run), gaps (test cases not run yet, plus the ones blocked), " +
 			"inventory, hypotheses, findings, loot (handles only), blockers, notes, " +
 			"finding (ONE finding in full — pass id — every field as recorded: description, impact, remediation, repro, evidence, cwe, cvss). " +
 			"Use 'status' to see where the engagement stands, 'coverage'/'surface' to see WHERE the holes are, " +
-			"and 'next'/'gaps' to stay systematic and avoid quitting early.",
+			"and 'next'/'gaps' to work the outstanding test cases and avoid quitting early.",
 		parameters: {
 			type: "object",
 			required: ["query"],
@@ -1084,7 +1086,7 @@ export function createRecallTool(deps: ToolDeps): ToolDefinition {
 					// told the agent how much was left but never WHERE — so the one view
 					// that answers "what have I not looked at" was operator-only.
 					const view = await computeCoverageView(deps.workspace, surfaceKinds);
-					if (!view) return text("No checklist loaded; cannot compute coverage. Record a checklist or surface elements first.");
+					if (!view) return text("No checklist loaded; cannot compute coverage — the test plan is built from one. Record a checklist or surface elements first.");
 					const lines = renderCoveragePanel({
 						view, engagement: "", width: PLAIN.width,
 						ink: PLAIN.ink, measure: PLAIN.measure, truncate: PLAIN.truncate,
@@ -1147,26 +1149,27 @@ export function createRecallTool(deps: ToolDeps): ToolDefinition {
 					// started. The panel has said this since it was written; the agent,
 					// which is the one that can act on it, was told it was done.
 					if (m.applicable === 0) {
-						return text("No surface recorded yet, so there is nothing to cover and nothing to report as covered. Record inventory (hosts/endpoints/params) first — coverage is measured over what you have recorded.");
+						return text("No surface recorded yet, so there are no test cases and nothing to report as covered. Record inventory (hosts/endpoints/params) first — the test plan is checklist classes x the surface you have recorded.");
 					}
 					const all = findGaps(m);
 					const gaps = all.slice(0, limit);
 					return text(gaps.length
-						? gaps.map((g) => `${g.element}/${g.class}: ${g.reason}`).join("\n") + truncated(gaps.length, all.length, "gaps")
-						: "No gaps: every askable cell is settled.");
+						? `Test cases not yet settled (element/class):\n${gaps.map((g) => `${g.element}/${g.class}: ${g.reason}`).join("\n")}`
+							+ truncated(gaps.length, all.length, "outstanding test cases")
+						: "No gaps: every applicable test case has a verdict.");
 				}
 				case "next": {
 					const m = await coverageMatrix();
 					if (!m) return text("No checklist loaded; cannot pick next work.");
 					if (m.applicable === 0) {
-						return text("No surface recorded yet, so there is no next cell to pick. Record inventory (hosts/endpoints/params) first — the matrix is checklist classes x the surface you recorded.");
+						return text("No surface recorded yet, so there is no next test case to pick. Record inventory (hosts/endpoints/params) first — the test plan is checklist classes x the surface you recorded.");
 					}
 					const next = selectNext(m);
 					if (!next) {
 						const blocked = m.counts.blocked;
-						return text(blocked > 0 ? `No unblocked work: ${blocked} cell(s) blocked pending the operator.` : "No actionable work: every askable cell is settled.");
+						return text(blocked > 0 ? `No unblocked work: ${blocked} test case(s) blocked pending the operator.` : "No actionable work: every applicable test case has a verdict.");
 					}
-					return text(`Next: test ${next.element} for ${next.class}.`);
+					return text(`Next test case: ${next.element} for ${next.class}. Record the verdict as a hypothesis either way — a refutation counts.`);
 				}
 			}
 		},

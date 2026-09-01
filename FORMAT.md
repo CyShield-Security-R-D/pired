@@ -147,7 +147,7 @@ Drives the coverage matrix (§9 of this doc, `PLAN.md` §6).
 `kind` ∈ `host` | `service` | `endpoint` | `param` | `tech`. Endpoints/params are
 the surface elements coverage is computed over.
 
-### 8.2 `hypotheses.jsonl` — test cases (what was DONE)
+### 8.2 `hypotheses.jsonl` — test cases, executed (what was DONE)
 
 ```jsonc
 {
@@ -271,7 +271,7 @@ Login uses a legacy session cookie without SameSite. Worth an CSRF pass on state
 
 ## 11. Derived data (never stored)
 
-- **Coverage matrix** = `checklist.classes` × inventory surface elements, with each cell's status derived from `hypotheses` outcomes (`not-tested` | `testing` | `clear` | `vulnerable` | `blocked` | `n/a`). A cell is `blocked` when an open blocker in `blockers.jsonl` gates it. Coverage is recomputed on read so it can never drift from the ledgers.
+- **Coverage matrix** = `checklist.classes` × inventory surface elements — a **test plan**, where one cell is one test case (this class, asked of this element), a hypothesis is that case executed, and a gap is a case not yet run. Each cell's status is derived from `hypotheses` outcomes (`not-tested` | `testing` | `clear` | `vulnerable` | `blocked` | `n/a`). A cell is `blocked` when an open blocker in `blockers.jsonl` gates it. Coverage is recomputed on read so it can never drift from the ledgers.
 - **`recall` summaries** (coverage, gaps, next, …) are projections over these files, not stored artifacts.
 
 ## 12. Migration log

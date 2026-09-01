@@ -53,7 +53,7 @@ describe("engagement panel", () => {
 
 	it("reports coverage against askable cells with a proportional bar", () => {
 		expect(render("state").find((l) => l.includes("42%"))).toBeDefined();
-		expect(render("state").join("\n")).toContain("42 of 100 cells");
+		expect(render("state").join("\n")).toContain("42 of 100 cases");
 		expect(render("state").join("\n")).toContain("58 gaps");
 	});
 
@@ -386,14 +386,14 @@ describe("rows a compact panel does not spend", () => {
 
 	it("puts the coverage bar and its counts on one row when they fit", () => {
 		const row = framed(56).find((l) => l.includes("%")) as string;
-		expect(row).toContain("cells");
+		expect(row).toContain("cases");
 	});
 
 	it("splits them again when the panel is too narrow to share", () => {
 		const lines = framed(34);
 		const bar = lines.find((l) => l.includes("%")) as string;
-		expect(bar).not.toContain("cells");
-		expect(lines.join("\n")).toContain("cells");
+		expect(bar).not.toContain("cases");
+		expect(lines.join("\n")).toContain("cases");
 	});
 
 	it("shares the last row between the evidence count and the dismiss hint", () => {
