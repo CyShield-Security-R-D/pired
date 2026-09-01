@@ -1,6 +1,6 @@
 <div align="center">
 
-# pi(red)
+<img src="docs/banner.svg" alt="pi(red) — engagement harness for security consultants: review, recon and pentest profiles, with a live coverage panel" width="100%">
 
 **An engagement harness for security consultants — whitebox review and blackbox testing in one workspace, with coverage tracking that won't let an engagement end early.**
 
