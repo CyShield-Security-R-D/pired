@@ -782,7 +782,15 @@ NPM_ROOT=$(npm root --global 2>/dev/null || true)
 if [ -n "$PI" ] && [ -n "$NPM_ROOT" ] && [ -d "$NPM_ROOT/pired" ]; then
 	STEP_HINT="registering with pi"
 	if step "extension" quiet_label "$PI" install "$NPM_ROOT/pired"; then
-		done_line "extension" "registered — a bare \`pi\` loads the security layer"
+		# Trust, then check. `pi install` can report success and leave pi without
+		# the package, and the difference is invisible: a bare `pi` starts
+		# perfectly well with no security layer in it. `pi list` is what an
+		# operator would look at, so it is what this looks at.
+		if "$PI" list 2>/dev/null | grep -q pired; then
+			done_line "extension" "registered — a bare \`pi\` loads the security layer"
+		else
+			warn_line "extension" "pi did not record it — a bare \`pi\` runs without the security layer; retry: pi install $NPM_ROOT/pired"
+		fi
 	else
 		warn_line "extension" "not registered — run: pi install $NPM_ROOT/pired"
 	fi
@@ -829,8 +837,13 @@ if ! on_path "$BIN_DIR"; then
 	say "    $PATH_LINE"
 	say ""
 fi
+# `/provider` comes first because nothing else here works without it. A box
+# that has just been installed has no model at all, and what pi says about
+# that points at its own documentation rather than at the model already
+# running on this machine.
 say "  ${DIM}next${OFF}"
 say "    pired                    ${DIM}review the current directory${OFF}"
+say "    /provider                ${DIM}add the model you are already running ${ARROW} do this first${OFF}"
 say "    pired --profile pentest  ${DIM}blackbox testing (needs an authorized scope)${OFF}"
 say "    /panel                   ${DIM}the engagement panel ${ARROW} alt+p toggles it${OFF}"
 say ""

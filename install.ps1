@@ -562,6 +562,15 @@ function Invoke-PiredInstaller {
 				Write-Step "registering the extension with pi"
 				if (-not (Invoke-Logged -Command $pi -Arguments @("install", $piredRoot))) {
 					Write-Note "skipped - run: pi install $piredRoot"
+				} else {
+					# Trust, then check: `pi install` can report success and leave pi
+					# without the package, and a bare `pi` then starts perfectly well
+					# with no security layer in it.
+					$listed = & $pi list 2>$null | Out-String
+					if ($listed -notmatch "pired") {
+						Write-Note "pi did not record it - a plain 'pi' runs without the security layer."
+						Write-Note "retry with: pi install $piredRoot"
+					}
 				}
 			} else {
 				Write-Note "pi not found: a plain 'pi' will not load the security layer."
@@ -608,6 +617,7 @@ function Invoke-PiredInstaller {
 		Write-Say
 		Write-Note "next"
 		Write-Host "    pired                    $($script:Dim)review the current directory$($script:Off)"
+		Write-Host "    /provider                $($script:Dim)add the model you are already running - do this first$($script:Off)"
 		Write-Host "    pired --profile pentest  $($script:Dim)blackbox testing (needs an authorized scope)$($script:Off)"
 		Write-Host "    /panel                   $($script:Dim)the engagement panel - alt+p toggles it$($script:Off)"
 		Write-Say
