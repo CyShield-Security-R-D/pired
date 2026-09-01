@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classFromCwe, extractionSystemPrompt, extractionUserMessage, hypothesisForFinding, parseExtraction, REVIEW_SEPARATOR, reviewEviction, reviewWindow } from "./extract.ts";
+import { applyPlan, classFromCwe, elementArgs, extractionSystemPrompt, extractionUserMessage, hypothesisForFinding, parseExtraction, planExtraction, REVIEW_SEPARATOR, reviewEviction, reviewWindow, type Extraction, type PlannedRecord } from "./extract.ts";
 
 const GOOD = `{
   "surface": [{"kind":"endpoint","label":"POST /api/login"},{"kind":"endpoint","label":"GET /api/transactions"}],
@@ -237,5 +237,306 @@ describe("the review window the extractor is handed", () => {
 
 	it("adds no header while nothing has been dropped", () => {
 		expect(reviewWindow([turn(1, 100)])).not.toContain("omitted");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// The plan: which record calls an extraction implies, and in what order.
+// ---------------------------------------------------------------------------
+
+const CLASSES = [
+	{ id: "sqli", cwe: ["CWE-89"] },
+	{ id: "authz", cwe: ["CWE-639", "CWE-862"] },
+	{ id: "ssti", cwe: ["CWE-1336"] },
+];
+
+function extraction(over: Partial<Extraction> = {}): Extraction {
+	return { surface: [], findings: [], hypotheses: [], classes: [], ...over };
+}
+
+function plan(over: Partial<Extraction> = {}, opts: { known?: string[]; allSurface?: string[] } = {}) {
+	return planExtraction({
+		extraction: extraction(over),
+		known: new Set(opts.known ?? []),
+		allSurface: opts.allSurface ?? [],
+		classes: CLASSES,
+	});
+}
+
+describe("planning the surface", () => {
+	it("records an element the ledger has never seen", () => {
+		const { records } = plan({ surface: [{ kind: "endpoint", label: "POST /api/login" }] });
+		expect(records).toHaveLength(1);
+		expect(records[0]?.args).toEqual({ kind: "endpoint", method: "POST", path: "/api/login" });
+		expect(records[0]?.createsLabel).toBe("POST /api/login");
+	});
+
+	it("skips one phase one already mapped, so coverage is not split across two rows", () => {
+		const { records } = plan(
+			{ surface: [{ kind: "endpoint", label: "POST /api/login" }] },
+			{ known: ["POST /api/login"] },
+		);
+		expect(records).toHaveLength(0);
+	});
+
+	it("puts every surface row before anything that could point at one", () => {
+		const { records } = plan({
+			surface: [{ kind: "endpoint", label: "GET /a" }],
+			findings: [{ title: "bug", severity: "high", class: "sqli", file: "a.py", line: 1 }],
+		});
+		expect(records[0]?.createsLabel).toBe("GET /a");
+	});
+});
+
+describe("planning the class roll-call", () => {
+	it("settles the named targets when a class is confirmed", () => {
+		const { records } = plan({
+			classes: [{ class: "sqli", verdict: "confirmed", targets: ["POST /api/login"], why: "f-string SQL" }],
+		});
+		expect(records[0]?.args).toMatchObject({
+			kind: "hypothesis", class: "sqli", outcome: "confirmed", target: ["POST /api/login"], statement: "f-string SQL",
+		});
+	});
+
+	it("fans a targetless refutation across everything recorded — the consultant's 'we checked, it is clean'", () => {
+		const { records } = plan(
+			{ classes: [{ class: "ssti", verdict: "refuted", targets: [], why: "no template rendering" }] },
+			{ allSurface: ["id1", "id2", "id3"] },
+		);
+		expect(records[0]?.args).toMatchObject({ outcome: "refuted", target: ["id1", "id2", "id3"] });
+	});
+
+	it("refuses to fan a targetless CONFIRMATION anywhere — 'present somewhere' is not a cell", () => {
+		const { records, notes } = plan(
+			{ classes: [{ class: "sqli", verdict: "confirmed", targets: [] }] },
+			{ allSurface: ["id1", "id2"] },
+		);
+		expect(records).toHaveLength(0);
+		expect(notes.join(" ")).toContain("named no target");
+	});
+
+	it("writes nothing at all for not-considered, which is the honesty boundary", () => {
+		const { records } = plan(
+			{ classes: [{ class: "sqli", verdict: "not-considered", targets: [] }] },
+			{ allSurface: ["id1"] },
+		);
+		expect(records).toHaveLength(0);
+	});
+
+	it("carries the reason, because a refutation nobody can audit is a blank cell", () => {
+		const { records } = plan(
+			{ classes: [{ class: "ssti", verdict: "refuted", targets: [], why: "no template rendering of user input" }] },
+			{ allSurface: ["id1"] },
+		);
+		expect(records[0]?.args.statement).toBe("no template rendering of user input");
+	});
+
+	it("falls back to a statement of its own when the extractor gives no reason", () => {
+		const { records } = plan(
+			{ classes: [{ class: "ssti", verdict: "refuted", targets: [] }] },
+			{ allSurface: ["id1"] },
+		);
+		expect(String(records[0]?.args.statement)).toContain("examined and found clean");
+	});
+
+	it("drops a class the checklist does not have, with a note rather than silently", () => {
+		const { records, notes } = plan({ classes: [{ class: "telepathy", verdict: "refuted", targets: ["x"] }] });
+		expect(records).toHaveLength(0);
+		expect(notes.join(" ")).toContain("not in the checklist");
+	});
+});
+
+describe("planning findings", () => {
+	it("recovers the class the extractor omitted, from the CWE the checklist maps", () => {
+		const { records } = plan({ findings: [{ title: "SQLi", severity: "critical", cwe: "CWE-89", file: "a.py", line: 4 }] });
+		expect(records[0]?.args).toMatchObject({ kind: "finding", class: "sqli", target: "a.py:4" });
+	});
+
+	it("omits the class rather than inventing one when nothing maps", () => {
+		const { records } = plan({ findings: [{ title: "odd", severity: "low", cwe: "CWE-0000", file: "a.py" }] });
+		expect(records[0]?.args).not.toHaveProperty("class");
+	});
+
+	it("notes a class the extractor invented instead of passing it through", () => {
+		const { notes } = plan({ findings: [{ title: "x", severity: "low", class: "telepathy", cwe: "CWE-89", file: "a.py" }] });
+		expect(notes.join(" ")).toContain("not in the checklist");
+	});
+
+	it("targets file:line, and file alone when there is no line to trust", () => {
+		const withLine = plan({ findings: [{ title: "x", severity: "low", class: "sqli", file: "a.py", line: 9 }] });
+		const without = plan({ findings: [{ title: "x", severity: "low", class: "sqli", file: "a.py" }] });
+		expect(withLine.records[0]?.args.target).toBe("a.py:9");
+		expect(without.records[0]?.args.target).toBe("a.py");
+	});
+
+	it("writes the confirmed hypothesis a finding already represents, or the matrix reads zero beside a full report", () => {
+		const { records } = plan({ findings: [{ title: "SQLi", severity: "critical", class: "sqli", file: "a.py", line: 4 }] });
+		expect(records).toHaveLength(2);
+		expect(records[1]?.args).toMatchObject({ kind: "hypothesis", class: "sqli", target: "a.py:4", outcome: "confirmed" });
+		expect(records[1]?.dependsOnPrevious).toBe(true);
+	});
+
+	it("does not double-settle a cell the extractor already gave a hypothesis for", () => {
+		const { records } = plan({
+			findings: [{ title: "SQLi", severity: "critical", class: "sqli", file: "a.py", line: 4 }],
+			hypotheses: [{ statement: "already", class: "sqli", target: "a.py:4", outcome: "confirmed" }],
+		});
+		expect(records.filter((r) => r.args.kind === "hypothesis")).toHaveLength(1);
+	});
+
+	it("does not double-settle a cell the class roll-call already named", () => {
+		const { records } = plan({
+			findings: [{ title: "SQLi", severity: "critical", class: "sqli", file: "a.py", line: 4 }],
+			classes: [{ class: "sqli", verdict: "confirmed", targets: ["a.py:4"] }],
+		});
+		expect(records.filter((r) => r.args.kind === "hypothesis")).toHaveLength(1);
+	});
+
+	it("still settles a second cell the roll-call did NOT name", () => {
+		// The roll-call confirmed sqli in auth.py. A second sqli in orders.py is a
+		// different cell, and suppressing it would leave a reported bug untested.
+		const { records } = plan({
+			findings: [{ title: "SQLi in orders", severity: "high", class: "sqli", file: "orders.py", line: 7 }],
+			classes: [{ class: "sqli", verdict: "confirmed", targets: ["auth.py:2"] }],
+		});
+		expect(records.some((r) => r.args.kind === "hypothesis" && r.args.target === "orders.py:7")).toBe(true);
+	});
+
+	it("settles nothing from a finding with no location, since there is no cell to settle", () => {
+		const { records } = plan({ findings: [{ title: "vague", severity: "low", class: "sqli" }] });
+		expect(records).toHaveLength(1);
+	});
+});
+
+describe("one extracted element as record arguments", () => {
+	it("splits a method off an endpoint label", () => {
+		expect(elementArgs({ kind: "endpoint", label: "POST /api/login" }))
+			.toEqual({ kind: "endpoint", method: "POST", path: "/api/login" });
+	});
+
+	it("keeps a bare path whole when there is no method", () => {
+		expect(elementArgs({ kind: "endpoint", label: "/api/login" })).toEqual({ kind: "endpoint", path: "/api/login" });
+	});
+
+	it("uses the field each kind is keyed by", () => {
+		expect(elementArgs({ kind: "host", label: "10.0.0.1" })).toEqual({ kind: "host", value: "10.0.0.1" });
+		expect(elementArgs({ kind: "tech", label: "nginx" })).toEqual({ kind: "tech", name: "nginx" });
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Running the plan.
+// ---------------------------------------------------------------------------
+
+/** A `record` that hands back one id per target, and can be told to fail. */
+function fakeRecord(failOn: (args: Record<string, unknown>) => boolean = () => false) {
+	const calls: Array<Record<string, unknown>> = [];
+	let n = 0;
+	const record = async (args: Record<string, unknown>): Promise<string[]> => {
+		calls.push(args);
+		if (failOn(args)) throw new Error("rejected by the ledger");
+		const t = args.target;
+		const count = Array.isArray(t) ? t.length : 1;
+		return Array.from({ length: count }, () => `id${++n}`);
+	};
+	return { record, calls };
+}
+
+describe("running the plan", () => {
+	it("resolves a label to the id the ledger already holds", async () => {
+		const { record, calls } = fakeRecord();
+		const rows: PlannedRecord[] = [{ args: { kind: "hypothesis", class: "sqli", target: "POST /api/login", outcome: "confirmed" } }];
+		await applyPlan(rows, record, new Map([["POST /api/login", "id7"]]));
+		expect(calls[0]?.target).toBe("id7");
+	});
+
+	it("resolves every label in a bulk target", async () => {
+		const { record, calls } = fakeRecord();
+		const rows: PlannedRecord[] = [{ args: { kind: "hypothesis", class: "ssti", target: ["a", "b"], outcome: "refuted" } }];
+		await applyPlan(rows, record, new Map([["a", "id1"], ["b", "id2"]]));
+		expect(calls[0]?.target).toEqual(["id1", "id2"]);
+	});
+
+	it("passes an unknown label through rather than dropping the row", async () => {
+		const { record, calls } = fakeRecord();
+		const rows: PlannedRecord[] = [{ args: { kind: "hypothesis", class: "sqli", target: "a.py:4", outcome: "confirmed" } }];
+		await applyPlan(rows, record, new Map());
+		expect(calls[0]?.target).toBe("a.py:4");
+	});
+
+	it("maps the id of an element it has just created, so later rows can point at it", async () => {
+		const { record, calls } = fakeRecord();
+		const rows: PlannedRecord[] = [
+			{ args: { kind: "endpoint", method: "GET", path: "/a" }, createsLabel: "GET /a" },
+			{ args: { kind: "hypothesis", class: "sqli", target: "GET /a", outcome: "confirmed" } },
+		];
+		await applyPlan(rows, record, new Map());
+		expect(calls[1]?.target).toBe("id1");
+	});
+
+	it("counts cells by the ids written, never by the calls made", async () => {
+		const { record } = fakeRecord();
+		const rows: PlannedRecord[] = [{ args: { kind: "hypothesis", class: "ssti", target: ["a", "b", "c"], outcome: "refuted" } }];
+		const out = await applyPlan(rows, record, new Map());
+		expect(out.settled).toBe(3);
+	});
+
+	it("counts what it wrote, by kind", async () => {
+		const { record } = fakeRecord();
+		const rows: PlannedRecord[] = [
+			{ args: { kind: "endpoint", path: "/a" }, createsLabel: "/a" },
+			{ args: { kind: "hypothesis", class: "sqli", target: "/a", outcome: "confirmed" } },
+			{ args: { kind: "finding", title: "x", severity: "low" } },
+		];
+		const out = await applyPlan(rows, record, new Map());
+		expect(out).toMatchObject({ surface: 1, settled: 1, findings: 1 });
+	});
+
+	it("lets one rejected row cost only itself", async () => {
+		const { record, calls } = fakeRecord((a) => a.title === "bad");
+		const rows: PlannedRecord[] = [
+			{ args: { kind: "finding", title: "bad", severity: "low" } },
+			{ args: { kind: "finding", title: "good", severity: "low" } },
+		];
+		const out = await applyPlan(rows, record, new Map());
+		expect(calls).toHaveLength(2);
+		expect(out.findings).toBe(1);
+		expect(out.errors.join(" ")).toContain("bad");
+	});
+
+	it("skips the hypothesis a rejected finding would have justified", async () => {
+		// Otherwise the matrix gains a confirmed cell with nothing in the report
+		// behind it — a coverage claim backed by a row that was never written.
+		const { record, calls } = fakeRecord((a) => a.kind === "finding");
+		const rows: PlannedRecord[] = [
+			{ args: { kind: "finding", title: "x", severity: "low" } },
+			{ args: { kind: "hypothesis", class: "sqli", target: "a.py:1", outcome: "confirmed" }, dependsOnPrevious: true },
+		];
+		const out = await applyPlan(rows, record, new Map());
+		expect(calls).toHaveLength(1);
+		expect(out.settled).toBe(0);
+	});
+
+	it("writes the dependent row when the one before it landed", async () => {
+		const { record } = fakeRecord();
+		const rows: PlannedRecord[] = [
+			{ args: { kind: "finding", title: "x", severity: "low" } },
+			{ args: { kind: "hypothesis", class: "sqli", target: "a.py:1", outcome: "confirmed" }, dependsOnPrevious: true },
+		];
+		expect((await applyPlan(rows, record, new Map())).settled).toBe(1);
+	});
+
+	it("keeps quiet about a surface row that fails — the rows pointing at it report themselves", async () => {
+		const { record } = fakeRecord((a) => a.kind === "endpoint");
+		const rows: PlannedRecord[] = [{ args: { kind: "endpoint", path: "/a" }, createsLabel: "/a" }];
+		expect((await applyPlan(rows, record, new Map())).errors).toHaveLength(0);
+	});
+
+	it("names the row in the error, so a dropped one can be chased", async () => {
+		const { record } = fakeRecord(() => true);
+		const rows: PlannedRecord[] = [{ args: { kind: "finding", title: "SQL injection in login", severity: "critical" } }];
+		const out = await applyPlan(rows, record, new Map());
+		expect(out.errors[0]).toContain("SQL injection in login");
+		expect(out.errors[0]).toContain("rejected by the ledger");
 	});
 });

@@ -35,7 +35,7 @@ import { createScopeGate } from "../core/scope.ts";
 import { renderCoveragePanel, type Tone } from "../core/coverage-panel.ts";
 import { complete } from "@earendil-works/pi-ai/compat";
 import type { AssistantMessage, Message, UserMessage } from "@earendil-works/pi-ai/compat";
-import { classFromCwe, extractionSystemPrompt, extractionUserMessage, hypothesisForFinding, parseExtraction, retryNudge, reviewEviction, reviewWindow } from "../core/extract.ts";
+import { applyPlan, extractionSystemPrompt, extractionUserMessage, parseExtraction, planExtraction, retryNudge, reviewEviction, reviewWindow } from "../core/extract.ts";
 import { dismissHint, PANEL_MODES, renderFindingDetail, renderPanel, scrollFramed, type PanelData, type PanelMode, type PanelTone } from "../core/panel.ts";
 import { computeCoverageView, computeEngagementStats, coveragePercent, type CoverageView, type EngagementStats } from "../core/stats.ts";
 import { layoutStatusLine, type Segment } from "../core/statusline.ts";
@@ -1141,6 +1141,7 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		// Bound once: `workspace` is a mutable module-level binding, so the guard's
 		// narrowing does not survive into the awaits below.
 		const ws = workspace;
+		const writeRecord = recordTool;
 		const model = ctx.model;
 		if (!model) {
 			if (trigger === "manual") ctx.ui.notify("pired: no model available to extract with", "warning");
@@ -1286,120 +1287,50 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		// the surface browser displays, so what the extractor echoes back from the
 		// review matches what is stored.
 		const idFor = new Map<string, string>();
-		const existing = await ws.read("inventory");
-		for (const rec of existing) {
+		const inventory = await ws.read("inventory");
+		for (const rec of inventory) {
 			const label = elementLabel(rec as Parameters<typeof elementLabel>[0]);
 			if (label) idFor.set(label, rec.id);
 		}
-		for (const el of extraction.surface) {
-			// Already mapped by phase one: recording it again would duplicate the
-			// element and split its coverage across two rows.
-			if (idFor.has(el.label)) continue;
-			try {
-				const out = await recordTool.execute(elementArgs(el), toolCtx);
-				const id = (out as { details?: { ids?: string[] } }).details?.ids?.[0];
-				if (id) idFor.set(el.label, id);
-			} catch { /* one bad row must not stop the rest */ }
-		}
-
-		let wrote = 0;
-		let settled = 0;
-
-		// The class roll-call is what produces a coverage number. A verdict that
-		// names targets settles those cells; a refutation that names none settles
-		// the class across everything recorded — which is what a consultant means by
-		// "we checked for SSTI and it is clean", and what `record` already supports
-		// by taking lists and writing the cross product.
-		//
-		// The honesty boundary is `not-considered`: it writes nothing, so a class
-		// the review never examined stays an untested cell rather than being quietly
-		// counted as clean.
-		const inventory = await ws.read("inventory");
+		// A refutation that names no target settles the class across everything
+		// recorded — what a consultant means by "we checked for SSTI and it is
+		// clean", and what `record` already supports by taking lists.
 		const allSurface = inventory
 			.filter((r: { kind: string }) => (["endpoint", "host", "service", "param", "tech"] as string[]).includes(r.kind))
 			.map((r: { id: string }) => r.id);
-		for (const v of extraction.classes) {
-			if (v.verdict === "not-considered") continue;
-			const outcome = v.verdict === "confirmed" ? "confirmed" : "refuted";
-			const targets = v.targets.length > 0
-				? v.targets.map((t) => idFor.get(t) ?? t)
-				: outcome === "refuted" ? allSurface : [];
-			if (targets.length === 0) continue;
-			// The reason travels with the record: a refutation nobody can audit is
-			// worth no more than a blank cell.
-			const statement = v.why ?? `${v.class} ${outcome === "refuted" ? "examined and found clean" : "confirmed"} during review`;
-			try {
-				const out = await recordTool.execute(
-					{ kind: "hypothesis", statement, class: v.class, target: targets, outcome }, toolCtx,
-				);
+
+		// Which rows to write is decided in core, where it can be tested, and this
+		// is all that is left here: hand it the ledger's state, run what comes back.
+		// The decisions — which cells a verdict settles, when a class is recovered
+		// from a CWE, whether a finding also implies a hypothesis, what is a
+		// duplicate — used to live in a hundred lines of loop right here, where
+		// nothing could reach them.
+		const { records, notes } = planExtraction({
+			extraction, known: new Set(idFor.keys()), allSurface, classes: classList,
+		});
+		errors.push(...notes);
+		const applied = await applyPlan(
+			records,
+			async (args: Record<string, unknown>) => {
+				const out = await writeRecord.execute(args, toolCtx);
 				const ids = (out as { details?: { ids?: string[] } }).details?.ids;
-				settled += Array.isArray(ids) ? ids.length : targets.length;
-			} catch (err) {
-				errors.push(`class "${v.class}": ${err instanceof Error ? err.message : String(err)}`);
-			}
-		}
-
-		for (const h of extraction.hypotheses) {
-			try {
-				await recordTool.execute({
-					kind: "hypothesis", statement: h.statement, class: h.class,
-					target: idFor.get(h.target) ?? h.target, outcome: h.outcome,
-				}, toolCtx);
-				wrote += 1;
-			} catch (err) { errors.push(`hypothesis "${h.statement.slice(0, 40)}…": ${err instanceof Error ? err.message : String(err)}`); }
-		}
-		let derived = 0;
-		for (const f of extraction.findings) {
-			// The extractor is given the vocabulary and still omits `class`; the
-			// checklist maps classes to CWEs, so recover it rather than lose the cell.
-			const cls = (f.class && classes.includes(f.class) ? f.class : undefined)
-				?? classFromCwe(f.cwe, classList);
-			const target = f.file ? `${f.file}${f.line ? `:${f.line}` : ""}` : undefined;
-			try {
-				await recordTool.execute({
-					kind: "finding", title: f.title, severity: f.severity,
-					class: cls, cwe: f.cwe, target, description: f.description,
-				}, toolCtx);
-				wrote += 1;
-			} catch (err) { errors.push(`finding "${f.title.slice(0, 40)}…": ${err instanceof Error ? err.message : String(err)}`); continue; }
-
-			// Coverage is settled by a hypothesis outcome, never by a finding. A run
-			// that produces only findings leaves every cell untested and the matrix at
-			// zero while the report fills up — so the confirmation the finding already
-			// represents is written as one. Bookkeeping, not inference.
-			if (cls && target && !extraction.hypotheses.some((h) => h.class === cls && h.target === target)) {
-				try {
-					const h = hypothesisForFinding(f, cls, target);
-					await recordTool.execute({
-						kind: "hypothesis", statement: h.statement, class: h.class,
-						target: h.target, outcome: h.outcome,
-					}, toolCtx);
-					derived += 1;
-				} catch { /* the finding is already written; the cell is the bonus */ }
-			}
-		}
+				return Array.isArray(ids) ? ids : [];
+			},
+			idFor,
+		);
+		errors.push(...applied.errors);
+		const wrote = applied.settled + applied.findings;
 
 		await refreshStatus(ctx);
 		const dropped = errors.length > 0 ? ` · ${errors.length} row(s) dropped` : "";
 		const notConsidered = extraction.classes.filter((v) => v.verdict === "not-considered").length;
 		const untouched = notConsidered > 0 ? ` · ${notConsidered} class(es) not considered` : "";
-		wrote += settled;
 		ctx.ui.notify(
 			wrote > 0
-				? `pired: extracted ${extraction.surface.length} surface, ${settled + extraction.hypotheses.length + derived} cells settled, ${extraction.findings.length} findings${untouched}${dropped}`
+				? `pired: extracted ${applied.surface} surface, ${applied.settled} cells settled, ${applied.findings} findings${untouched}${dropped}`
 				: `pired: extraction produced nothing${dropped ? ` (${errors[0]})` : ""}`,
 			wrote > 0 ? "info" : "warning",
 		);
-	};
-
-	/** One extracted element as `record` arguments. */
-	const elementArgs = (el: { kind: string; label: string }): Record<string, unknown> => {
-		if (el.kind === "endpoint") {
-			const m = /^([A-Z]+)\s+(.+)$/.exec(el.label);
-			return m ? { kind: "endpoint", method: m[1], path: m[2] } : { kind: "endpoint", path: el.label };
-		}
-		if (el.kind === "host") return { kind: "host", value: el.label };
-		return { kind: el.kind, name: el.label };
 	};
 
 	pi.on("tool_execution_end", async (event, ctx) => {

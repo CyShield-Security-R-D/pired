@@ -445,6 +445,14 @@ export interface PlannedRecord {
 	args: Record<string, unknown>;
 	/** Set when this row creates a surface element, so the adapter can map its new id. */
 	createsLabel?: string;
+	/**
+	 * Set when this row is only worth writing if the one before it landed.
+	 *
+	 * The derived hypothesis is the case: it settles a cell as confirmed on the
+	 * strength of a finding, so writing it after that finding was rejected would
+	 * put a coverage claim in the matrix with nothing in the report behind it.
+	 */
+	dependsOnPrevious?: boolean;
 }
 
 export interface PlanInput {
@@ -518,15 +526,104 @@ export function planExtraction(input: PlanInput): { records: PlannedRecord[]; no
 		});
 		// Coverage is settled by a hypothesis outcome, never by a finding. Without
 		// this a run produces a full report beside an empty matrix.
-		const alreadySettled = extraction.classes.some((v) => v.class === cls && v.verdict === "confirmed")
-			|| extraction.hypotheses.some((h) => h.class === cls && h.target === target);
+		// Settled only if something already claims THIS cell. Testing the class
+		// alone was too broad: one confirmed sqli verdict naming auth.py would
+		// suppress the hypothesis for an sqli finding in orders.py, and that second
+		// cell would stay untested next to a reported bug.
+		const alreadySettled = extraction.classes.some(
+			(v) => v.class === cls && v.verdict === "confirmed" && target !== undefined && v.targets.includes(target),
+		) || extraction.hypotheses.some((h) => h.class === cls && h.target === target);
 		if (cls && target && !alreadySettled) {
 			const h = hypothesisForFinding(f, cls, target);
-			records.push({ args: { kind: "hypothesis", statement: h.statement, class: h.class, target: h.target, outcome: h.outcome } });
+			records.push({
+				args: { kind: "hypothesis", statement: h.statement, class: h.class, target: h.target, outcome: h.outcome },
+				dependsOnPrevious: true,
+			});
 		}
 	}
 
 	return { records, notes };
+}
+
+/** What running a plan produced, for the line the operator is shown. */
+export interface ApplyResult {
+	/** Surface elements created by this pass. */
+	surface: number;
+	/** Coverage cells settled — one per id a hypothesis row wrote. */
+	settled: number;
+	/** Findings written. */
+	findings: number;
+	/** One line per row that was dropped, and why. */
+	errors: string[];
+}
+
+/**
+ * Run a plan against a `record` implementation.
+ *
+ * The other half of the split, and the half that actually broke things. It owns
+ * three rules, none of which are obvious and all of which were once wrong:
+ *
+ *   - **Labels become ids.** The plan speaks the review's own words ("POST
+ *     /api/login"); the ledger speaks ids. A target that resolves to no element
+ *     settles no cell, so a pass that mapped only the rows it had just written —
+ *     rather than everything already recorded — produced a coverage number of
+ *     zero beside a full ledger.
+ *   - **One bad row must not stop the rest.** A rejected finding costs that
+ *     finding, not the nineteen behind it.
+ *   - **Except where a row depends on the one before it.** See
+ *     `dependsOnPrevious`.
+ *
+ * `record` returns the ids it wrote — a bulk hypothesis settles several cells in
+ * one call, so the count comes from the ids, never from the number of calls.
+ */
+export async function applyPlan(
+	records: PlannedRecord[],
+	record: (args: Record<string, unknown>) => Promise<string[]>,
+	idFor: Map<string, string>,
+): Promise<ApplyResult> {
+	const out: ApplyResult = { surface: 0, settled: 0, findings: 0, errors: [] };
+	let previousFailed = false;
+	for (const row of records) {
+		if (row.dependsOnPrevious && previousFailed) continue;
+		const kind = row.args.kind;
+		const args = row.createsLabel ? row.args : { ...row.args, target: resolveTarget(row.args.target, idFor) };
+		try {
+			const ids = await record(args);
+			previousFailed = false;
+			if (row.createsLabel) {
+				out.surface += 1;
+				const id = ids[0];
+				if (id) idFor.set(row.createsLabel, id);
+			} else if (kind === "hypothesis") {
+				out.settled += ids.length;
+			} else if (kind === "finding") {
+				out.findings += 1;
+			}
+		} catch (err) {
+			previousFailed = true;
+			const why = err instanceof Error ? err.message : String(err);
+			// A surface row that fails is not worth a line: the elements it would
+			// have created are usually already there, and the rows that point at it
+			// report their own failure.
+			if (!row.createsLabel) out.errors.push(`${describeRow(row)}: ${why}`);
+		}
+	}
+	return out;
+}
+
+/** A target is one label or a list of them; ids and unknown labels pass through. */
+function resolveTarget(target: unknown, idFor: Map<string, string>): unknown {
+	if (typeof target === "string") return idFor.get(target) ?? target;
+	if (Array.isArray(target)) return target.map((t) => (typeof t === "string" ? idFor.get(t) ?? t : t));
+	return target;
+}
+
+/** Name a row in an error line the way the operator would recognise it. */
+function describeRow(row: PlannedRecord): string {
+	const a = row.args;
+	if (a.kind === "finding") return `finding "${String(a.title ?? "").slice(0, 40)}…"`;
+	if (a.kind === "hypothesis") return `${String(a.class ?? "hypothesis")} "${String(a.statement ?? "").slice(0, 40)}…"`;
+	return String(a.kind ?? "row");
 }
 
 /** One extracted element as `record` arguments. */

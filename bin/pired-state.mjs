@@ -20,6 +20,7 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { buildPanelData, stripAnsi, truncateToWidth, pickNewest } from "./state.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const ENG = join(homedir(), ".pired", "engagements");
@@ -64,12 +65,11 @@ const has = (n) => process.argv.includes(`--${n}`);
 
 async function newestEngagement() {
   const dirs = await readdir(ENG).catch(() => []);
-  let best, bestT = -1;
-  for (const d of dirs) {
-    const t = await stat(join(ENG, d)).then((s) => s.mtimeMs).catch(() => -1);
-    if (t > bestT) { bestT = t; best = d; }
-  }
-  return best;
+  const entries = await Promise.all(dirs.map(async (name) => ({
+    name,
+    mtimeMs: await stat(join(ENG, name)).then((s) => s.mtimeMs).catch(() => -1),
+  })));
+  return pickNewest(entries);
 }
 
 async function main() {
@@ -95,29 +95,15 @@ async function main() {
   const inv = await ws.read("inventory");
   const hyp = await ws.read("hypotheses");
   const fnd = await ws.read("findings");
-  const blk = (await ws.read("blockers")).filter((b) => b.status === "open");
+  const blk = await ws.read("blockers");
   const checklist = await ws.readChecklist();
   const scope = await ws.readScope();
   const evidence = await readdir(join(dir, "evidence")).then((x) => x.length).catch(() => 0);
 
-  const tally = (xs) => xs.reduce((m, x) => ((m[x] = (m[x] ?? 0) + 1), m), {});
-  const TYPE = { "code-review": "review · source audit", web: "pentest · web application", api: "pentest · API", network: "pentest · network" };
-
-  const data = {
-    engagement: name,
-    engagementType: checklist ? (TYPE[checklist.targetType] ?? checklist.targetType) : undefined,
-    scope: scope ? { mode: scope.mode, authorized: scope.authorized === true, targets: scope.targets ?? {} } : undefined,
-    coveragePct: stats.coveragePct,
-    cells: view?.matrix.applicable,
-    settled: view ? view.matrix.counts.clear + view.matrix.counts.vulnerable : undefined,
-    gaps: view ? view.matrix.counts["not-tested"] + view.matrix.counts.blocked : undefined,
-    surface: tally(inv.map((r) => r.kind)),
-    hypotheses: tally(hyp.map((h) => h.outcome)),
-    findings: stats.findings,
-    recentFindings: fnd.slice(-6).reverse().map((f) => ({ severity: f.severity, title: f.title })),
-    openBlockers: blk.map((b) => ({ question: b.question, priority: b.priority })),
-    evidence,
-  };
+  const data = buildPanelData({
+    name, checklist, scope, stats, view,
+    inventory: inv, hypotheses: hyp, findings: fnd, blockers: blk, evidence,
+  });
 
   if (has("json")) {
     process.stdout.write(`${JSON.stringify(data, null, 2)}\n`);
@@ -125,7 +111,6 @@ async function main() {
   }
 
   const C = { title: "\x1b[1m", body: "", label: "\x1b[2m", muted: "\x1b[2m", accent: "\x1b[36m", good: "\x1b[32m", warn: "\x1b[33m", bad: "\x1b[31m" };
-  const strip = (s) => s.replace(/\x1b\[[0-9;]*m/g, "");
   const width = Number(arg("width", process.env.COLUMNS || "44"));
   const lines = renderPanel({
     mode: arg("mode", "state"),
@@ -133,10 +118,8 @@ async function main() {
     width,
     maxLines: Number(arg("lines", "24")),
     ink: (tone, text) => `${C[tone] ?? ""}${text}\x1b[0m`,
-    measure: (s) => strip(s).length,
-    // The ellipsis is the difference between "this line was cut" and "the title
-    // ends mid-word", which reads as corrupted data rather than as a narrow pane.
-    truncate: (s, w) => (strip(s).length <= w ? s : `${strip(s).slice(0, Math.max(0, w - 1))}…`),
+    measure: (s) => stripAnsi(s).length,
+    truncate: truncateToWidth,
     frame: !has("no-frame"),
   });
   process.stdout.write(`${lines.join("\n")}\n`);

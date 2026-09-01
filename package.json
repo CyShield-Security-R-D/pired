@@ -39,7 +39,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "check": "tsc --noEmit && vitest run && npm run --silent assay",
+    "test:coverage": "vitest run --coverage",
+    "check": "tsc --noEmit && vitest run --coverage && npm run --silent assay",
     "assay": "node --experimental-strip-types eval/run.ts",
     "assay:grade": "node --experimental-strip-types eval/grade-cli.ts",
     "assay:experiment": "node --experimental-strip-types eval/experiment-cli.ts",
@@ -49,8 +50,8 @@
     "assay:progress": "node --experimental-strip-types eval/progress.ts"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*",
     "typebox": "*"
   },
@@ -72,6 +73,7 @@
     "@earendil-works/pi-coding-agent": "^0.84.2",
     "@earendil-works/pi-tui": "^0.84.2",
     "@types/node": "^26.2.0",
+    "@vitest/coverage-v8": "^4.1.11",
     "typescript": "5.9.3",
     "vitest": "^4.1.11"
   }
