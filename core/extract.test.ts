@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classFromCwe, extractionSystemPrompt, extractionUserMessage, hypothesisForFinding, parseExtraction } from "./extract.ts";
+import { classFromCwe, extractionSystemPrompt, extractionUserMessage, hypothesisForFinding, parseExtraction, REVIEW_SEPARATOR, reviewEviction, reviewWindow } from "./extract.ts";
 
 const GOOD = `{
   "surface": [{"kind":"endpoint","label":"POST /api/login"},{"kind":"endpoint","label":"GET /api/transactions"}],
@@ -184,5 +184,58 @@ describe("the class roll-call", () => {
 	it("keeps the reasoning, because a refutation has to be auditable", () => {
 		const { extraction } = parseExtraction(doc);
 		expect(extraction.classes[1]?.why).toContain("no template rendering");
+	});
+});
+
+describe("the review window the extractor is handed", () => {
+	const turn = (n: number, size: number): string => `turn${n} ${"x".repeat(size - 7)}`;
+
+	it("keeps the buffer whole while it fits, so appending is all that changes", () => {
+		const turns = [turn(1, 5000), turn(2, 5000)];
+		expect(reviewEviction(turns, 40000, 24000)).toBe(0);
+		const before = reviewWindow(turns);
+		turns.push(turn(3, 5000));
+		// The point of the whole exercise: the previous prompt is a prefix of the
+		// next one, so the provider re-reads it for free.
+		expect(reviewWindow(turns).startsWith(before)).toBe(true);
+	});
+
+	it("cuts back to the target, not to the budget, so the anchor stays put for a while", () => {
+		const turns = Array.from({ length: 9 }, (_, i) => turn(i, 5000));
+		const drop = reviewEviction(turns, 40000, 24000);
+		expect(drop).toBeGreaterThan(0);
+		const kept = turns.slice(drop);
+		expect(kept.join(REVIEW_SEPARATOR).length).toBeLessThanOrEqual(24000);
+		// Headroom left over: the next few turns append without moving the start.
+		expect(reviewEviction([...kept, turn(99, 5000)], 40000, 24000)).toBe(0);
+	});
+
+	it("evicts at a turn boundary, never mid-sentence", () => {
+		const turns = Array.from({ length: 9 }, (_, i) => turn(i, 5000));
+		const kept = turns.slice(reviewEviction(turns, 40000, 24000));
+		expect(kept[0]).toBe(turns[turns.length - kept.length]);
+	});
+
+	it("never drops the newest turn, which carries the conclusions", () => {
+		const huge = [turn(1, 90000)];
+		expect(reviewEviction(huge, 40000, 24000)).toBe(0);
+		const many = Array.from({ length: 4 }, (_, i) => turn(i, 30000));
+		expect(reviewEviction(many, 40000, 24000)).toBe(many.length - 1);
+	});
+
+	it("falls back to the tail when one turn alone exceeds the budget", () => {
+		const text = reviewWindow([`${"a".repeat(50000)}\nthe conclusion`], { turns: 0, chars: 0 }, 40000);
+		expect(text).toContain("the conclusion");
+		expect(text).toContain("earlier analysis omitted");
+		expect(text.length).toBeLessThan(41000);
+	});
+
+	it("says what was dropped, counting the whole engagement and not just this cut", () => {
+		const text = reviewWindow([turn(9, 100)], { turns: 4, chars: 20000 });
+		expect(text).toContain("4 turn(s), 20000 characters");
+	});
+
+	it("adds no header while nothing has been dropped", () => {
+		expect(reviewWindow([turn(1, 100)])).not.toContain("omitted");
 	});
 });

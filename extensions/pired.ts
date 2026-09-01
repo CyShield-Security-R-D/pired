@@ -7,6 +7,7 @@
  * skills, and a seeded vuln-class checklist that drives the coverage matrix.
  */
 
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -33,7 +34,8 @@ import { buildSystemPrompt, PIRED_PROFILES, type PiredProfile } from "../core/pr
 import { createScopeGate } from "../core/scope.ts";
 import { renderCoveragePanel, type Tone } from "../core/coverage-panel.ts";
 import { complete } from "@earendil-works/pi-ai/compat";
-import { classFromCwe, extractionSystemPrompt, extractionUserMessage, hypothesisForFinding, parseExtraction, retryNudge, trimReview } from "../core/extract.ts";
+import type { AssistantMessage, Message, UserMessage } from "@earendil-works/pi-ai/compat";
+import { classFromCwe, extractionSystemPrompt, extractionUserMessage, hypothesisForFinding, parseExtraction, retryNudge, reviewEviction, reviewWindow } from "../core/extract.ts";
 import { dismissHint, PANEL_MODES, renderFindingDetail, renderPanel, scrollFramed, type PanelData, type PanelMode, type PanelTone } from "../core/panel.ts";
 import { computeCoverageView, computeEngagementStats, coveragePercent, type CoverageView, type EngagementStats } from "../core/stats.ts";
 import { layoutStatusLine, type Segment } from "../core/statusline.ts";
@@ -266,13 +268,32 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	 * 242 hypotheses' worth of analysis sat in earlier turns it never saw.
 	 *
 	 * Bounded, because a long engagement would otherwise grow without limit;
-	 * trimReview() keeps the tail, which is where conclusions live.
+	 * reviewEviction() drops whole turns off the front, keeping the tail, which is
+	 * where the conclusions live.
 	 */
 	const reviewTurns: string[] = [];
-	const REVIEW_BUFFER_MAX = 160_000;
-	const reviewSoFar = (): string => reviewTurns.join("\n\n---\n\n");
+	/**
+	 * What eviction has already thrown away, so the extractor's header can say so.
+	 *
+	 * There used to be a second, looser cap here (160k) on top of the 40k the
+	 * extractor was actually handed, so 120k of buffer was retained and then
+	 * discarded before every call. One threshold now, and it means one thing: the
+	 * buffer IS the window, bounded by REVIEW_BUDGET at a turn boundary.
+	 */
+	let reviewDropped = { turns: 0, chars: 0 };
+	const reviewSoFar = (): string => reviewWindow(reviewTurns, reviewDropped);
 	/** Reviews already extracted, so a quiet turn does not duplicate a previous pass. */
 	const extractedAlready = new Set<string>();
+	/**
+	 * Whether the second pass runs on its own at turn end.
+	 *
+	 * `/extract off` for the operator who wants the transcript left alone — a
+	 * demo, a slow provider, an engagement being driven by hand. It gates only the
+	 * automatic pass; `/extract` on its own still runs one on demand, because
+	 * turning off the reviewer and losing the ability to ask for it is not what
+	 * anyone means. Session-scoped: a new session starts it back on.
+	 */
+	let autoExtract = true;
 
 	// The panel rides in the footer, so showing and hiding it is a boolean and a
 	// re-render — no window management, no modal to dismiss. Off by default: the
@@ -698,16 +719,28 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	 */
 	let coverageView: CoverageView | undefined;
 	const promptedBlockers = new Set<string>();
-	const promptForNewBlockers = async (ctx: ExtensionContext): Promise<void> => {
-		if (!workspace || ctx.mode !== "tui") return;
+	/**
+	 * Walk the open blockers and ask.
+	 *
+	 * `onlyNew` is what separates the two callers. The automatic pass asks once
+	 * per blocker and never again — a dialog that reappears every time the agent
+	 * records something is a dialog the operator learns to dismiss. `/blockers`
+	 * asks about all of them: someone who typed the command is asking to be
+	 * asked, including about the ones they waved away an hour ago.
+	 *
+	 * Returns how many were answered, so a caller can say so.
+	 */
+	const answerBlockers = async (ctx: ExtensionContext, onlyNew: boolean): Promise<number> => {
+		if (!workspace || ctx.mode !== "tui") return 0;
 		let open: BlockerRecord[];
 		try {
 			open = (await workspace.read("blockers")).filter((b) => b.status === "open");
 		} catch {
-			return;
+			return 0;
 		}
+		let answered = 0;
 		for (const b of open) {
-			if (promptedBlockers.has(b.id)) continue;
+			if (onlyNew && promptedBlockers.has(b.id)) continue;
 			promptedBlockers.add(b.id);
 			const title = `pired · ${b.type.replace(/-/g, " ")}`;
 			const detail = b.context ? `${b.question}\n\n${b.context}` : b.question;
@@ -732,12 +765,17 @@ export default function piredExtension(pi: ExtensionAPI): void {
 					answeredAt: new Date().toISOString(),
 					answeredBy: "operator",
 				});
+				answered += 1;
 				await refreshStatus(ctx);
 				ctx.ui.notify(`pired: blocker answered — ${b.question.slice(0, 48)}`, "info");
 			} catch {
 				// A dialog that fails must never take the session with it.
 			}
 		}
+		return answered;
+	};
+	const promptForNewBlockers = async (ctx: ExtensionContext): Promise<void> => {
+		await answerBlockers(ctx, true);
 	};
 
 	/**
@@ -1081,6 +1119,17 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	};
 
 	/**
+	 * A cache identity for the extraction stream.
+	 *
+	 * Hashed rather than passed raw: it travels as a header value and a
+	 * prompt_cache_key, and a workspace path can hold spaces or non-ASCII. Stable
+	 * for the life of an engagement, which is exactly the span over which these
+	 * prompts share a prefix.
+	 */
+	const extractionCacheKey = (dir: string): string =>
+		`pired-extract-${createHash("sha256").update(dir).digest("hex").slice(0, 16)}`;
+
+	/**
 	 * Phase two: a fresh single-turn call that converts the review into records.
 	 *
 	 * Deliberately NOT a tool call. The failure being worked around is that the
@@ -1118,18 +1167,36 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		);
 
 		const systemPrompt = extractionSystemPrompt(classes);
-		const body = extractionUserMessage(trimReview(review));
+		// Already bounded at a turn boundary by the review window; trimming again
+		// here would shave characters off the FRONT of a prefix built to stay put.
+		const body = extractionUserMessage(review);
+		const user = (content: string): UserMessage => ({ role: "user", content, timestamp: Date.now() });
 
 		// Thinking is off for this call. It is a transcription, not a judgement —
 		// and a reasoning budget spent deliberating is a budget not spent emitting
 		// the object, which is the failure being worked around.
-		const ask = async (content: string): Promise<string> => {
+		const ask = async (messages: Message[]): Promise<{ text: string; message: AssistantMessage }> => {
 			const answer = await complete(
 				model,
-				{ systemPrompt, messages: [{ role: "user", content, timestamp: Date.now() }] },
-				// A direct complete() bypasses pi's request pipeline, so the key it
-				// would have attached has to be supplied here.
-				{ reasoning: "off", apiKey: apiKeyForProvider(model.provider) },
+				{ systemPrompt, messages },
+				// A direct complete() bypasses pi's request pipeline, so what that
+				// pipeline would have attached has to be supplied here: the key, and
+				// the cache identity. Without a sessionId an OpenAI-compatible provider
+				// sends no prompt_cache_key and no affinity headers, so a prefix built
+				// to be reused is offered to whichever replica answers.
+				//
+				// Keyed on the engagement, not the pi session: this is one long series
+				// of near-identical prompts spanning every turn of the engagement, and
+				// it is deliberately a different stream from the conversation's own.
+				// "long" retention because the gap between two passes is a whole agent
+				// turn — file reads, scans, tool loops — which routinely outlives a
+				// five-minute cache entry. The provider ignores it where unsupported.
+				{
+					reasoning: "off",
+					apiKey: apiKeyForProvider(model.provider),
+					sessionId: extractionCacheKey(ws.dir),
+					cacheRetention: "long",
+				},
 			);
 			// complete() does NOT throw on a failed call: it returns a message with
 			// stopReason "error" and an empty content array. Treating that as a reply
@@ -1151,24 +1218,40 @@ export default function piredExtension(pi: ExtensionAPI): void {
 			if (text.trim().length === 0) {
 				throw new Error(`model returned no text (stopReason: ${answer.stopReason})`);
 			}
-			return text;
+			return { text, message: answer };
 		};
 
-		let reply: string;
+		let first: { text: string; message: AssistantMessage };
 		try {
-			reply = await ask(body);
+			first = await ask([user(body)]);
 		} catch (err) {
 			ctx.ui.notify(`pired: extraction call failed — ${err instanceof Error ? err.message : String(err)}`, "warning");
 			return;
 		}
+		let reply = first.text;
 
 		let parsed = parseExtraction(reply);
 		let retryError: string | undefined;
 		if (parsed.extraction.findings.length === 0 && parsed.extraction.classes.length === 0) {
-			// One retry, with the reply in context so the model can see what it did.
+			// One retry, as a third message rather than a second prompt. The comment
+			// here used to promise "with the reply in context so the model can see
+			// what it did" while the code sent a lone user message with the nudge
+			// PREPENDED — which put changed text at offset zero and threw away the
+			// prefix the first call had just paid to cache. Appending the exchange
+			// instead makes the promise true and leaves the body byte-identical, so
+			// the retry re-reads it for free.
 			// The first live attempt answered a "return JSON" instruction with prose.
 			try {
-				const second = await ask(`${retryNudge()}\n\n${body}`);
+				// Text only on the way back too, for the reason given above and one
+				// more: a thinking block replayed into a request is at best noise and
+				// at worst a signature the provider rejects. The prose is the point —
+				// it is what the model produced instead of the object.
+				const echoed: AssistantMessage = {
+					...first.message,
+					content: first.message.content.filter((c) => c.type === "text"),
+				};
+				const retry = await ask([user(body), echoed, user(retryNudge())]);
+				const second = retry.text;
 				if (second.trim().length > 0) {
 					const reparsed = parseExtraction(second);
 					// Only take the retry if it actually did better; a second helping of
@@ -1345,8 +1428,18 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		const review = assistantText(event.message);
 		if (review.length > 0) {
 			reviewTurns.push(review);
-			// Drop from the front: the newest turns carry the conclusions.
-			while (reviewSoFar().length > REVIEW_BUFFER_MAX && reviewTurns.length > 1) reviewTurns.shift();
+			// Drop from the front, at a turn boundary, and in one chunk: the newest
+			// turns carry the conclusions, and the start of the window is the one
+			// place a byte may not move if the prefix cache is to hold. See
+			// reviewEviction().
+			const drop = reviewEviction(reviewTurns);
+			if (drop > 0) {
+				const gone = reviewTurns.splice(0, drop);
+				reviewDropped = {
+					turns: reviewDropped.turns + gone.length,
+					chars: reviewDropped.chars + gone.reduce((n, t) => n + t.length, 0),
+				};
+			}
 		}
 		// Two reasons to run the second pass, and only one of them is a rescue.
 		//
@@ -1363,7 +1456,10 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		void wrote;
 		// Measured against everything recorded so far, not this turn alone: a short
 		// closing turn must still be able to trigger the checklist pass.
-		if (reviewSoFar().length >= EXTRACT_MIN_REVIEW) {
+		//
+		// The `autoExtract` guard is first so that `/extract off` also spares the
+		// ledger reads below, not just the model call.
+		if (autoExtract && reviewSoFar().length >= EXTRACT_MIN_REVIEW) {
 			const settledClasses = new Set(
 				(await workspace?.read("hypotheses") ?? [])
 					.filter((h) => h.outcome === "confirmed" || h.outcome === "refuted")
@@ -1780,9 +1876,81 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		handler: async (_args, ctx) => { await openBrowser(ctx, "findings"); },
 	});
 
-	pi.registerCommand("extract", {
-		description: "Convert the last review into ledger records (runs automatically when a turn records nothing)",
+	/**
+	 * What needs you, on demand.
+	 *
+	 * The blocker dialog fires when the agent parks one, and an operator who is
+	 * mid-thought dismisses it — correctly, since the blocker stays open. What was
+	 * missing was the way back: the panel's "needs you" section could show three
+	 * open blockers with no way to answer them short of waiting for the agent to
+	 * record something and re-trigger the prompt for the NEXT one. This is that
+	 * way back, and it re-asks the dismissed ones too.
+	 */
+	pi.registerCommand("blockers", {
+		description: "Answer what needs you — walk the open blockers, one dialog at a time",
 		handler: async (_args, ctx) => {
+			if (!workspace) {
+				ctx.ui.notify("pired: no engagement workspace yet", "warning");
+				return;
+			}
+			let open: BlockerRecord[];
+			try {
+				open = (await workspace.read("blockers")).filter((b) => b.status === "open");
+			} catch (err) {
+				ctx.ui.notify(`pired: could not read blockers — ${err instanceof Error ? err.message : String(err)}`, "warning");
+				return;
+			}
+			if (open.length === 0) {
+				ctx.ui.notify("pired: nothing needs you — no open blockers", "info");
+				return;
+			}
+			// Outside the TUI there are no dialogs to walk, so say what is waiting
+			// rather than silently doing nothing.
+			if (ctx.mode !== "tui") {
+				const list = open.map((b) => `· ${b.type.replace(/-/g, " ")}: ${b.question}`).join("\n");
+				ctx.ui.notify(`pired: ${open.length} open blocker(s) — answering needs the terminal UI\n${list}`, "warning");
+				return;
+			}
+			const answered = await answerBlockers(ctx, false);
+			ctx.ui.notify(
+				answered > 0
+					? `pired: ${answered} of ${open.length} blocker(s) answered`
+					: `pired: ${open.length} blocker(s) still open`,
+				answered > 0 ? "info" : "warning",
+			);
+		},
+	});
+
+	/**
+	 * `/extract` runs the second pass now; `/extract off` stops it running itself.
+	 *
+	 * One command rather than two, for the same reason `/panel` is one command:
+	 * the verb and the switch are the same subject, and a second name for the
+	 * switch is a second thing to remember. `off` disables only the automatic
+	 * pass — asking for one by hand keeps working, which is the difference
+	 * between turning a reviewer off and taking it away.
+	 */
+	pi.registerCommand("extract", {
+		description: "Convert the review into ledger records now — `off` | `on` | `status` control the automatic pass",
+		handler: async (args, ctx) => {
+			const arg = (args ?? "").trim().toLowerCase();
+			if (arg === "off" || arg === "on") {
+				autoExtract = arg === "on";
+				ctx.ui.notify(
+					autoExtract
+						? "pired: automatic extraction on — a turn that leaves the checklist unanswered runs a second pass"
+						: "pired: automatic extraction off for this session — `/extract` still runs one on demand",
+					"info",
+				);
+				return;
+			}
+			if (arg === "status") {
+				ctx.ui.notify(
+					`pired: automatic extraction is ${autoExtract ? "on" : "off"} · ${reviewTurns.length} turn(s) buffered, ${reviewSoFar().length} chars`,
+					"info",
+				);
+				return;
+			}
 			if (reviewTurns.length === 0) {
 				ctx.ui.notify("pired: nothing to extract — no review in this session yet", "warning");
 				return;

@@ -33,6 +33,8 @@ describe("pired extension registration", () => {
 			"panel", "coverage", "findings", "maximize",
 			// The browser: the surface and the hypotheses behind the panel's counts.
 			"surface", "hypotheses", "report",
+			// The second pass, and the way back to a dismissed blocker.
+			"extract", "blockers",
 		]));
 	});
 
@@ -136,10 +138,65 @@ function railHost() {
 		ctx,
 		maximize: async () => await seen.shortcuts.get("alt+m")?.(ctx),
 		panel: async (arg = "") => await seen.commands.get("panel")?.(arg, ctx),
+		run: async (name: string, arg = "", on: unknown = ctx) => await seen.commands.get(name)?.(arg, on),
 		shortcuts: [...seen.shortcuts.keys()],
 		overlay: () => overlay as Overlay,
 	};
 }
+
+describe("/extract as a switch", () => {
+	/** The notify text is the only thing the operator sees, so it is what is asserted. */
+	function noisyHost() {
+		const said: string[] = [];
+		const host = railHost();
+		const ctx = { ...host.ctx, ui: { ...host.ctx.ui, notify: (m: string) => said.push(m) } };
+		return { host, ctx, said };
+	}
+
+	it("reports its state without needing an engagement", async () => {
+		const { host, ctx, said } = noisyHost();
+		await host.run("extract", "status", ctx);
+		expect(said.join(" ")).toContain("automatic extraction is on");
+	});
+
+	it("turns the automatic pass off and says so, and status agrees afterwards", async () => {
+		const { host, ctx, said } = noisyHost();
+		await host.run("extract", "off", ctx);
+		expect(said.join(" ")).toContain("off for this session");
+		said.length = 0;
+		await host.run("extract", "status", ctx);
+		expect(said.join(" ")).toContain("automatic extraction is off");
+	});
+
+	it("turns it back on", async () => {
+		const { host, ctx, said } = noisyHost();
+		await host.run("extract", "off", ctx);
+		await host.run("extract", "on", ctx);
+		said.length = 0;
+		await host.run("extract", "status", ctx);
+		expect(said.join(" ")).toContain("automatic extraction is on");
+	});
+
+	it("still runs a pass by hand — off disables the automatic one, not the command", async () => {
+		const { host, ctx, said } = noisyHost();
+		await host.run("extract", "off", ctx);
+		said.length = 0;
+		// No engagement and no buffered review, so it stops at "nothing to
+		// extract" — the point is that `off` did not swallow the request.
+		await host.run("extract", "", ctx);
+		expect(said.join(" ")).toContain("nothing to extract");
+	});
+});
+
+describe("/blockers", () => {
+	it("says so plainly when there is no engagement to read", async () => {
+		const said: string[] = [];
+		const host = railHost();
+		const ctx = { ...host.ctx, ui: { ...host.ctx.ui, notify: (m: string) => said.push(m) } };
+		await host.run("blockers", "", ctx);
+		expect(said.join(" ")).toContain("no engagement workspace");
+	});
+});
 
 describe("alt+m", () => {
 	it("is bound", () => {

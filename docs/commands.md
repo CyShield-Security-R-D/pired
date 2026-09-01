@@ -17,7 +17,9 @@ Everything pired adds to pi. pi's own commands (`/model`, `/login`, `/reload`, s
 | `/hypotheses` | Browse every hypothesis — confirmed, refuted and open — with outcome filters and full detail. |
 | `/findings` | Browse findings, worst first; select one to read its description, repro and evidence. |
 | `/report` | Write findings to Markdown in the engagement workspace. |
-| `/extract` | Convert the last review into ledger records. Runs automatically when a turn reviews at length and records nothing. |
+| `/blockers` | Walk the open blockers — what needs you — one dialog at a time, including ones already dismissed. |
+| `/extract` | Convert the review into ledger records now. Runs automatically when a turn leaves the checklist unanswered. |
+| `/extract off` \| `on` \| `status` | Turn the automatic second pass off or on for this session, or report its state. |
 
 ### Extraction, and why it exists
 
@@ -44,7 +46,31 @@ represents** is written alongside it — coverage is settled by hypothesis
 outcomes, never by findings, so without it the matrix reads zero while the report
 fills up.
 
-`/extract` runs the same pass by hand.
+`/extract` runs the same pass by hand, and `/extract off` stops it running
+itself — for a demo, a slow provider, or an engagement being driven by hand. It
+disables only the *automatic* pass: asking for one by name keeps working, which
+is the difference between turning a reviewer off and taking it away. The setting
+is session-scoped; a new session starts it back on, and `/extract status`
+reports it along with how much review is buffered.
+
+The pass re-reads the same buffer every turn, so it is built to be cheap to
+re-send: the window it hands the model is cut **at a turn boundary and in
+chunks**, never slid character by character, so appending a turn leaves every
+byte before it identical and the provider re-reads the prefix from its cache. The
+retry, when a reply comes back as prose, is appended as a third message rather
+than prepended as a new prompt, for the same reason. The call carries a cache key
+of its own, derived from the engagement, so it does not share a stream with the
+conversation.
+
+### `/blockers` — what needs you
+
+The agent is built to never stall: it parks a question as a blocker and routes
+around it. The dialog fires the moment one is recorded, which is also the moment
+the operator has the context — but an operator who is mid-thought dismisses it,
+and the blocker correctly stays open. `/blockers` is the way back to it. It walks
+every open blocker, including the ones already waved away, and writes each answer
+onto the same record, so the ledger stays the single source of truth and a
+resumed session sees the decision.
 
 `/findings` reads, `/report` writes. It used to be the other way about — `/report`
 browsed while `/findings` exported — so the noun did the verb's job. `/export` is

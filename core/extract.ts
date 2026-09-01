@@ -338,6 +338,27 @@ export function hypothesisForFinding(f: ExtractedFinding, cls: string, target: s
 	};
 }
 
+/** How the review buffer joins one turn to the next. */
+export const REVIEW_SEPARATOR = "\n\n---\n\n";
+
+/**
+ * The most review the extractor is handed, and the size the window is cut back
+ * to when it overflows.
+ *
+ * Two numbers rather than one, and the gap between them is the point — see
+ * reviewEviction().
+ */
+export const REVIEW_BUDGET = 40000;
+export const REVIEW_TARGET = 24000;
+
+/** The tail of a text, started at a line boundary so no sentence is halved. */
+function tailFrom(text: string, limit: number): string {
+	if (text.length <= limit) return text;
+	const kept = text.slice(text.length - limit);
+	const nl = kept.indexOf("\n");
+	return nl > 0 ? kept.slice(nl + 1) : kept;
+}
+
 /**
  * The slice of a review to hand the extractor.
  *
@@ -347,12 +368,71 @@ export function hypothesisForFinding(f: ExtractedFinding, cls: string, target: s
  * severity calls, the summary list, the ruled-out classes — so when it has to be
  * cut, the tail is what to keep.
  */
-export function trimReview(review: string, limit = 40000): string {
+export function trimReview(review: string, limit = REVIEW_BUDGET): string {
 	if (review.length <= limit) return review;
-	const kept = review.slice(review.length - limit);
-	// Start at a line boundary so the extractor is not handed half a sentence.
-	const nl = kept.indexOf("\n");
-	return `[earlier analysis omitted — ${review.length - limit} characters]\n${nl > 0 ? kept.slice(nl + 1) : kept}`;
+	return `[earlier analysis omitted — ${review.length - limit} characters]\n${tailFrom(review, limit)}`;
+}
+
+/** The length the turns will have once joined, without building the string. */
+function joinedLength(turns: string[]): number {
+	if (turns.length === 0) return 0;
+	let n = REVIEW_SEPARATOR.length * (turns.length - 1);
+	for (const t of turns) n += t.length;
+	return n;
+}
+
+/**
+ * How many turns to drop from the front of the buffer, or 0 to keep it whole.
+ *
+ * The extractor's prompt is prefix-cached, and that decides the shape of this.
+ * Appending a turn leaves every byte before it identical, so the provider
+ * re-reads the whole prefix for free; moving the START of the window by a single
+ * character invalidates all of it. Cutting the joined string to a fixed size
+ * every turn — which is what handing trimReview() the whole buffer did — moved
+ * the start every turn, so from the first overflow onward every pass reprefilled
+ * ~10k tokens and hit nothing.
+ *
+ * So: cut only at a turn boundary, only when the budget is actually exceeded,
+ * and when cutting, cut all the way back to `target`. The gap between the two is
+ * the headroom that lets the next several turns append without moving the anchor
+ * again — one invalidation per ~16k characters of new review instead of one per
+ * turn.
+ *
+ * The newest turn is never dropped: it carries the conclusions, and a turn that
+ * exceeds the budget on its own has no boundary to anchor to (reviewWindow falls
+ * back to its tail).
+ */
+export function reviewEviction(turns: string[], budget = REVIEW_BUDGET, target = REVIEW_TARGET): number {
+	let total = joinedLength(turns);
+	if (total <= budget) return 0;
+	let drop = 0;
+	while (drop < turns.length - 1 && total > target) {
+		total -= (turns[drop] ?? "").length + REVIEW_SEPARATOR.length;
+		drop += 1;
+	}
+	return drop;
+}
+
+/**
+ * The review buffer as the extractor sees it: the kept turns, and a note saying
+ * what was dropped so it knows the analysis it is reading is partial.
+ *
+ * The note counts everything evicted across the engagement, not just this cut,
+ * and it only changes when a cut happens — which is already the moment the
+ * prefix is invalidated, so it costs nothing extra.
+ */
+export function reviewWindow(
+	turns: string[],
+	dropped: { turns: number; chars: number } = { turns: 0, chars: 0 },
+	budget = REVIEW_BUDGET,
+): string {
+	const joined = turns.join(REVIEW_SEPARATOR);
+	// One turn longer than the whole budget: nothing to anchor to, so keep its
+	// tail and count the rest as dropped.
+	const body = tailFrom(joined, budget);
+	const chars = dropped.chars + (joined.length - body.length);
+	if (chars === 0) return body;
+	return `[earlier analysis omitted — ${dropped.turns} turn(s), ${chars} characters]\n${body}`;
 }
 
 /** A terser second ask, for when the first reply came back as prose. */
