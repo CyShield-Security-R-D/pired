@@ -143,6 +143,12 @@ describe("locating a finding", () => {
 	it("has no location to offer when nothing names one", () => {
 		expect(findingLocation({ title: "weak crypto" })).toBeUndefined();
 	});
+
+	it("does not read a host and port as a file and a line", () => {
+		// The pattern requires letters after the last dot, so 10.0.0.4:8080 is a
+		// service, not backend/auth.py:42, and stays whole as the target it is.
+		expect(findingLocation({ target: "10.0.0.4:8080" })).toBe("10.0.0.4:8080");
+	});
 });
 
 describe("comparing finding titles", () => {
@@ -153,14 +159,24 @@ describe("comparing finding titles", () => {
 			.toBe(1);
 	});
 
-	it("does NOT yet recognise an abbreviation — 'SQLi' and 'SQL injection' score 0.5", () => {
-		// Pinned as it behaves, not as it is meant to. This exact pair is the
-		// example in titleOverlap's own comment, and it lands under the 0.6 the
-		// near-duplicate check requires: the tokeniser compares words, and "sqli"
-		// is not the word "sql". So the motivating case is currently not reported.
-		// Fixing it is a design call — a stem, an abbreviation map, or a lower
-		// threshold — and belongs to whoever wires this module into `record`.
-		expect(titleOverlap("SQLi in login", "SQL injection in the login handler via the username parameter")).toBe(0.5);
+	it("recognises the abbreviation security titles are actually written in", () => {
+		// This pair is the example in titleOverlap's own comment, and under exact
+		// word equality it scored 0.5 — under the 0.6 the near-duplicate check
+		// requires, so the motivating case went unreported. A shared prefix of three
+		// characters or more settles it without a dictionary: sqli/sql,
+		// injections/injection, xxe/xxe. Only the warning reads this, never the
+		// merge, so a loose match costs a line of text and can never lose a finding.
+		expect(titleOverlap("SQLi in login", "SQL injection in the login handler via the username parameter")).toBe(1);
+		// A prefix does not reach every abbreviation — authz and authorization part
+		// company at the fifth character — and it does not have to: the rest of the
+		// title carries such a pair over the bar on its own.
+		expect(titleOverlap("Missing authz on /admin", "Missing authorization on /admin")).toBeGreaterThan(0.6);
+	});
+
+	it("still cannot be pushed above a perfect score by an abbreviation and its expansion", () => {
+		// "sql" and "sqli" both match "sqli"; counting over the shorter side keeps
+		// the ratio a ratio.
+		expect(titleOverlap("SQL SQLi", "SQLi")).toBe(1);
 	});
 
 	it("ignores function words, so a rewording still matches", () => {
@@ -193,6 +209,14 @@ describe("identifying a finding", () => {
 		expect(findDuplicate("finding", { kind: "finding", title: "no authn", class: "authn", target: "api.py:9" }, [
 			rec({ kind: "finding", title: "no authz", class: "authz", target: "api.py:9", id: "f1" }),
 		])).toBeUndefined();
+	});
+
+	it("is one finding when neither recording has a place to name", () => {
+		// "No dependency pins", "secrets printed to stdout" — worth reporting, with
+		// no line to hang off. Two of those are still one finding.
+		expect(findDuplicate("finding", { kind: "finding", title: "No dependency pins — SCA impossible" }, [
+			rec({ kind: "finding", title: "No dependency pins — SCA impossible", severity: "info", id: "f1" }),
+		])).toMatchObject({ id: "f1" });
 	});
 
 	it("keeps the same title at two different places apart", () => {

@@ -126,7 +126,24 @@ function tokens(v: unknown): Set<string> {
 }
 
 /**
- * How much of the shorter title the longer one already contains, 0..1.
+ * Two words for the same thing.
+ *
+ * Security titles are written in abbreviations and inflections — SQLi for SQL,
+ * authz for auth, injections for injection — and exact word equality scored the
+ * pair this measure exists to catch ("SQLi in login" against "SQL injection in
+ * the login handler") at 0.5, under the bar the near-duplicate check applies. A
+ * shared prefix of at least three characters covers those without needing a
+ * dictionary. Only the near-duplicate WARNING reads this, never the merge, so a
+ * loose match costs a line of text and can never fold one finding into another.
+ */
+function tokenMatches(a: string, b: string): boolean {
+	if (a === b) return true;
+	const [short, long] = a.length <= b.length ? [a, b] : [b, a];
+	return short.length >= 3 && long.startsWith(short);
+}
+
+/**
+ * How much of the shorter title the longer one already covers, 0..1.
  *
  * Containment rather than Jaccard: "SQLi in login" and "SQL injection in the
  * login handler via the username parameter" are one bug described at two lengths,
@@ -136,9 +153,16 @@ export function titleOverlap(a: unknown, b: unknown): number {
 	const x = tokens(a);
 	const y = tokens(b);
 	if (x.size === 0 || y.size === 0) return 0;
+	// Counted over the shorter side, so two words of one title matching a single
+	// word of the other ("sql" and "sqli" against "sqli") cannot score above 1.
+	const [small, large] = x.size <= y.size ? [x, y] : [y, x];
 	let shared = 0;
-	for (const t of x) if (y.has(t)) shared += 1;
-	return shared / Math.min(x.size, y.size);
+	for (const t of small) {
+		for (const u of large) {
+			if (tokenMatches(t, u)) { shared += 1; break; }
+		}
+	}
+	return shared / small.size;
 }
 
 /** Two findings are the same finding when they name the same bug in the same place. */

@@ -1313,8 +1313,11 @@ export default function piredExtension(pi: ExtensionAPI): void {
 			records,
 			async (args: Record<string, unknown>) => {
 				const out = await writeRecord.execute(args, toolCtx);
-				const ids = (out as { details?: { ids?: string[] } }).details?.ids;
-				return Array.isArray(ids) ? ids : [];
+				const d = (out as { details?: { ids?: string[]; created?: string[] } }).details;
+				return {
+					ids: Array.isArray(d?.ids) ? d.ids : [],
+					created: Array.isArray(d?.created) ? d.created : [],
+				};
 			},
 			idFor,
 		);
@@ -1325,11 +1328,18 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		const dropped = errors.length > 0 ? ` · ${errors.length} row(s) dropped` : "";
 		const notConsidered = extraction.classes.filter((v) => v.verdict === "not-considered").length;
 		const untouched = notConsidered > 0 ? ` · ${notConsidered} class(es) not considered` : "";
+		// This pass reads a review buffer that only grows, so it re-offers what it
+		// already extracted last turn. Those rows are folded into the ones they
+		// match rather than duplicated, and saying so is the difference between a
+		// quiet pass that did nothing and a quiet pass that had nothing new to do.
+		const again = applied.repeats > 0 ? ` · ${applied.repeats} already recorded` : "";
 		ctx.ui.notify(
 			wrote > 0
-				? `pired: extracted ${applied.surface} surface, ${applied.settled} cells settled, ${applied.findings} findings${untouched}${dropped}`
-				: `pired: extraction produced nothing${dropped ? ` (${errors[0]})` : ""}`,
-			wrote > 0 ? "info" : "warning",
+				? `pired: extracted ${applied.surface} surface, ${applied.settled} cells settled, ${applied.findings} findings${untouched}${again}${dropped}`
+				: applied.repeats > 0
+					? `pired: nothing new — ${applied.repeats} row(s) already recorded${untouched}${dropped}`
+					: `pired: extraction produced nothing${dropped ? ` (${errors[0]})` : ""}`,
+			wrote > 0 || applied.repeats > 0 ? "info" : "warning",
 		);
 	};
 
@@ -1338,10 +1348,13 @@ export default function piredExtension(pi: ExtensionAPI): void {
 			recordsThisTurn += 1;
 			// `record` reports what it wrote in its result details; the event carries
 			// no input. A bulk hypothesis call settles several cells in one go, so
-			// count the ids rather than the call.
-			const details = (event.result as { details?: { kind?: unknown; ids?: unknown[] } } | undefined)?.details;
+			// count the ids rather than the call — and only the ids it CREATED. A
+			// turn that re-recorded what was already in the ledger has not claimed
+			// anything new, and counting it as a claim is exactly how the rescue
+			// pass stops firing on the turns that need it.
+			const details = (event.result as { details?: { kind?: unknown; created?: unknown[] } } | undefined)?.details;
 			if (details?.kind === "hypothesis" || details?.kind === "finding") {
-				claimsThisTurn += Array.isArray(details.ids) ? Math.max(1, details.ids.length) : 1;
+				claimsThisTurn += Array.isArray(details.created) ? details.created.length : 1;
 			}
 			await refreshStatus(ctx);
 			await promptForNewBlockers(ctx);

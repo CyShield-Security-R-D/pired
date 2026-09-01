@@ -95,25 +95,55 @@ export class Workspace {
 
 	async append<S extends StoreName>(store: S, record: StoreRecordMap[S]): Promise<void> {
 		const path = this.storePath(store);
-		const line = `${JSON.stringify(record)}\n`;
 		await this.withLock(path, async () => {
-			// Loot is sensitive: guarantee 0o600 BEFORE any plaintext reaches disk.
-			// A brand-new ledger is created with the mode; a pre-existing one (perhaps
-			// world-readable — an older version, a stray umask) is tightened first, so
-			// a secret is never appended to a file that is still permissive.
-			if (store === "loot") {
-				if ((await this.fs.stat(path)) === undefined) {
-					await this.fs.writeFile(path, "", { mode: 0o600 });
-				} else {
-					await this.fs.chmod(path, 0o600);
-				}
-			}
-			await this.fs.appendFile(path, line);
+			await this.writeLines(store, path, [record]);
+		});
+	}
+
+	/**
+	 * Append what the current contents of the store say should be appended.
+	 *
+	 * Deduplication is a read-then-write, and `record` runs concurrently with
+	 * subagents and the `pired answer` subcommand: reading outside the lock lets
+	 * two writers both decide an element is new and both create it, which is the
+	 * duplicate this exists to prevent. So the decision is made inside the same
+	 * lock that guards the append, against the ledger as it stands at that
+	 * instant. `plan` returning nothing writes nothing — a repeat that says
+	 * nothing new should not cost a line.
+	 */
+	async upsert<S extends StoreName>(
+		store: S,
+		plan: (current: StoreRecordMap[S][]) => StoreRecordMap[S][] | undefined,
+	): Promise<void> {
+		const path = this.storePath(store);
+		await this.withLock(path, async () => {
+			const records = plan(this.parseStore<S>(await this.fs.readFileIfExists(path)));
+			if (records && records.length > 0) await this.writeLines(store, path, records);
 		});
 	}
 
 	async read<S extends StoreName>(store: S): Promise<StoreRecordMap[S][]> {
-		const raw = await this.fs.readFileIfExists(this.storePath(store));
+		return this.parseStore<S>(await this.fs.readFileIfExists(this.storePath(store)));
+	}
+
+	/** Must be called with the store's writer lock held. */
+	private async writeLines<S extends StoreName>(store: S, path: string, records: StoreRecordMap[S][]): Promise<void> {
+		// Loot is sensitive: guarantee 0o600 BEFORE any plaintext reaches disk.
+		// A brand-new ledger is created with the mode; a pre-existing one (perhaps
+		// world-readable — an older version, a stray umask) is tightened first, so
+		// a secret is never appended to a file that is still permissive.
+		if (store === "loot") {
+			if ((await this.fs.stat(path)) === undefined) {
+				await this.fs.writeFile(path, "", { mode: 0o600 });
+			} else {
+				await this.fs.chmod(path, 0o600);
+			}
+		}
+		await this.fs.appendFile(path, records.map((r) => `${JSON.stringify(r)}\n`).join(""));
+	}
+
+	/** JSONL to live records: last write wins per id, tombstones removed. */
+	private parseStore<S extends StoreName>(raw: string | undefined): StoreRecordMap[S][] {
 		if (!raw) return [];
 		const byId = new Map<string, StoreRecordMap[S]>();
 		for (const rawLine of raw.split("\n")) {

@@ -654,3 +654,181 @@ describe("a finding must be locatable", () => {
 		expect(await ws.read("findings")).toHaveLength(1);
 	});
 });
+
+describe("recording something that is already recorded", () => {
+	// Three paths produce repeats and none of them is the agent being careless:
+	// the extractor re-reads a growing review buffer once a turn, context is
+	// compacted mid-engagement, and subagents map the same surface concurrently.
+	// A second row for one thing splits its coverage, and for a finding it is a
+	// deliverable that reports the same bug twice.
+
+	it("keeps one row for an endpoint recorded twice", async () => {
+		const { ws, ctx, record } = await setup();
+		const first = await record.execute({ kind: "endpoint", method: "POST", path: "/api/login" }, ctx);
+		const again = await record.execute({ kind: "endpoint", method: "POST", path: "/api/login/" }, ctx);
+		expect(await ws.read("inventory")).toHaveLength(1);
+		expect((again.details as { id: string }).id).toBe((first.details as { id: string }).id);
+		expect(textOf(again)).toMatch(/already recorded/i);
+	});
+
+	it("says which id the repeat matched, so the agent can update it", async () => {
+		const { ctx, record } = await setup();
+		await record.execute({ kind: "host", value: "app.acme.test" }, ctx);
+		const again = await record.execute({ kind: "host", value: "APP.acme.test" }, ctx);
+		expect(textOf(again)).toContain("id=id1");
+	});
+
+	it("writes no line at all when the repeat says nothing new", async () => {
+		// The extractor offers the same rows every turn. Each one would otherwise
+		// append a full copy of the ledger to the ledger, all of it collapsed again
+		// on the next read.
+		const { svc, ws, ctx, record } = await setup();
+		await record.execute({ kind: "finding", title: "IDOR", severity: "high", target: "share.go:88" }, ctx);
+		const after = await svc.fs.readFileIfExists(ws.storePath("findings"));
+		await record.execute({ kind: "finding", title: "IDOR", severity: "high", target: "share.go:88" }, ctx);
+		expect(await svc.fs.readFileIfExists(ws.storePath("findings"))).toBe(after);
+	});
+
+	it("folds what the repeat adds into the row it matched", async () => {
+		const { ws, ctx, record } = await setup();
+		await record.execute({ kind: "endpoint", path: "/api/login", params: ["user"] }, ctx);
+		await record.execute({ kind: "endpoint", path: "/api/login", params: ["password"], auth: "session" }, ctx);
+		const inv = await ws.read("inventory");
+		expect(inv).toHaveLength(1);
+		expect(inv[0]).toMatchObject({ auth: "session", params: ["user", "password"] });
+	});
+
+	it("never lowers a severity on a repeat", async () => {
+		const { ws, ctx, record } = await setup();
+		await record.execute({ kind: "finding", title: "IDOR", severity: "high", target: "share.go:88" }, ctx);
+		await record.execute({ kind: "finding", title: "IDOR", severity: "info", target: "share.go:88", cwe: "CWE-639" }, ctx);
+		const findings = await ws.read("findings");
+		expect(findings).toHaveLength(1);
+		expect(findings[0]).toMatchObject({ severity: "high", cwe: "CWE-639" });
+	});
+
+	it("still lets an explicit id say exactly what it means", async () => {
+		// The escape hatch: an update the agent asked for by id is last-write-wins,
+		// including downward. Nothing else can lower a severity.
+		const { ws, ctx, record } = await setup();
+		const first = await record.execute({ kind: "finding", title: "IDOR", severity: "high", target: "share.go:88" }, ctx);
+		const id = (first.details as { id: string }).id;
+		await record.execute({ kind: "finding", id, severity: "low" }, ctx);
+		expect((await ws.read("findings"))[0]?.severity).toBe("low");
+	});
+
+	it("keeps two findings on one line apart when their classes differ", async () => {
+		const { ws, ctx, record } = await setup();
+		await record.execute({ kind: "finding", title: "Missing authentication on /admin", class: "authn", severity: "high", target: "app.py:42" }, ctx);
+		await record.execute({ kind: "finding", title: "Missing authorization on /admin", class: "authz", severity: "high", target: "app.py:42" }, ctx);
+		expect(await ws.read("findings")).toHaveLength(2);
+	});
+
+	it("reports a probable repeat rather than merging it away", async () => {
+		// Same place, similar words, nothing that proves they are one bug. Losing a
+		// real finding costs recall, which no later pass recovers, so the row is
+		// written and the resemblance is reported.
+		const { ws, ctx, record } = await setup();
+		await record.execute({ kind: "finding", title: "Weak session cookie on login", severity: "medium", target: "app.py:42" }, ctx);
+		const second = await record.execute({ kind: "finding", title: "Session cookie on login is weak", severity: "medium", target: "app.py:42" }, ctx);
+		expect(await ws.read("findings")).toHaveLength(2);
+		expect(textOf(second)).toMatch(/Possible duplicate of id1/);
+	});
+
+	it("does not write the same note twice", async () => {
+		const { ws, ctx, record } = await setup();
+		await record.execute({ kind: "note", text: "login lacks SameSite" }, ctx);
+		await record.execute({ kind: "note", text: "login lacks SameSite" }, ctx);
+		const notes = await ws.readNotes();
+		expect(notes.match(/login lacks SameSite/g)).toHaveLength(1);
+	});
+
+	it("keeps one row per coverage cell, so a refutation is not masked by its own proposal", async () => {
+		// Coverage ranks in-progress above settled: a stale `proposed` beside the
+		// `refuted` that resolved it leaves the cell reading as testing for the rest
+		// of the engagement, and the work of clearing it never counts.
+		const { ws, ctx, record } = await setup();
+		await ws.append("inventory", { v: 1, id: "e1", kind: "endpoint", createdAt: "t", host: "h", method: "GET", path: "/x" });
+		await record.execute({ kind: "hypothesis", target: "e1", class: "sqli", statement: "the login query looks built by hand" }, ctx);
+		await record.execute({
+			kind: "hypothesis", target: "e1", class: "sqli", outcome: "refuted",
+			statement: "every query on this route is parameterised through SQLAlchemy's bound parameters",
+		}, ctx);
+		const hyps = await ws.read("hypotheses");
+		expect(hyps).toHaveLength(1);
+		expect(hyps[0]?.outcome).toBe("refuted");
+	});
+
+	it("does not let a repeat un-settle a cell", async () => {
+		const { ws, ctx, record } = await setup();
+		await record.execute({ kind: "hypothesis", target: "e1", class: "sqli", outcome: "confirmed", statement: "landed a payload" }, ctx);
+		await record.execute({ kind: "hypothesis", target: "e1", class: "sqli", statement: "worth another look" }, ctx);
+		const hyps = await ws.read("hypotheses");
+		expect(hyps).toHaveLength(1);
+		expect(hyps[0]?.outcome).toBe("confirmed");
+	});
+
+	it("collapses a bulk cross product that was recorded before", async () => {
+		// Where repeats concentrate: the extractor re-offers one class verdict over
+		// the whole surface once a turn, so a forty-element engagement would gain
+		// forty rows a turn for reasoning it had already recorded.
+		const { ws, ctx, record } = await setup();
+		const args = {
+			kind: "hypothesis", target: ["e1", "e2"], class: ["sqli", "ssti"], outcome: "refuted",
+			statement: "no template rendering and no SQL string building anywhere on these routes",
+		};
+		await record.execute(args, ctx);
+		const second = await record.execute(args, ctx);
+		expect(await ws.read("hypotheses")).toHaveLength(4);
+		expect((second.details as { created: string[] }).created).toEqual([]);
+		expect(textOf(second)).toMatch(/already recorded/i);
+	});
+
+	it("does not record one cell twice when a target list names it two ways", async () => {
+		const { ws, ctx, record } = await setup();
+		await ws.append("inventory", { v: 1, id: "e1", kind: "endpoint", createdAt: "t", host: "h", method: "POST", path: "/api/login" });
+		await record.execute({
+			kind: "hypothesis", target: ["/api/login", "POST /api/login"], class: "sqli", outcome: "refuted",
+			statement: "the login query is parameterised and takes no user-controlled identifiers",
+		}, ctx);
+		const hyps = await ws.read("hypotheses");
+		expect(hyps).toHaveLength(1);
+		expect(hyps[0]?.target).toBe("e1");
+	});
+
+	it("resolves the targets of a bulk hypothesis to element ids, not the labels the model typed", async () => {
+		// Before this the bulk branch ran ahead of target resolution, so a list of
+		// labels was stored as written: the same cell existed twice, once keyed on
+		// an element id and once on prose, and the prose copy settled nothing.
+		const { ws, ctx, record } = await setup();
+		await ws.append("inventory", { v: 1, id: "e1", kind: "endpoint", createdAt: "t", host: "h", method: "GET", path: "/a" });
+		await ws.append("inventory", { v: 1, id: "e2", kind: "endpoint", createdAt: "t", host: "h", method: "GET", path: "/b" });
+		await record.execute({
+			kind: "hypothesis", target: ["/a", "/b"], class: "ssti", outcome: "refuted",
+			statement: "neither route renders a template with anything the caller supplied",
+		}, ctx);
+		expect((await ws.read("hypotheses")).map((h) => h.target).sort()).toEqual(["e1", "e2"]);
+	});
+
+	it("creates one element for a file two targets in the same call both name", async () => {
+		const { ws, ctx, record } = await setup();
+		await record.execute({
+			kind: "hypothesis", target: ["auth.py:12", "auth.py:40"], class: "authn", outcome: "refuted",
+			statement: "both call sites go through the same session check before doing any work",
+		}, ctx);
+		const inv = await ws.read("inventory");
+		expect(inv).toHaveLength(1);
+		expect(inv[0]).toMatchObject({ kind: "endpoint", path: "auth.py" });
+	});
+});
+
+describe("notes are compared block by block", () => {
+	it("still writes a short note that appears inside a longer one", async () => {
+		// Substring matching would drop it: "no rate limiting" is a phrase from the
+		// paragraph above it, and losing it is silent data loss.
+		const { ws, ctx, record } = await setup();
+		await record.execute({ kind: "note", text: "three problems on the login flow: no rate limiting, no lockout, no logging" }, ctx);
+		await record.execute({ kind: "note", text: "no rate limiting" }, ctx);
+		expect((await ws.readNotes()).match(/no rate limiting/g)).toHaveLength(2);
+	});
+});

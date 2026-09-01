@@ -553,8 +553,32 @@ export interface ApplyResult {
 	settled: number;
 	/** Findings written. */
 	findings: number;
+	/**
+	 * Rows that named something already in the ledger.
+	 *
+	 * This pass runs at the end of every turn over a review buffer that only
+	 * grows, so most of what it offers on the fifth turn was already recorded on
+	 * the fourth. `record` folds those back into the rows they match; counting
+	 * them here keeps them out of the numbers above, which would otherwise report
+	 * the same twelve findings as new work once a turn.
+	 */
+	repeats: number;
 	/** One line per row that was dropped, and why. */
 	errors: string[];
+}
+
+/**
+ * What one `record` call did: every id it touched, and the subset it created.
+ *
+ * The distinction is the whole point of the return value. A call that matched
+ * something already recorded still reports the id — the caller needs it to map a
+ * label onto the element that exists — but it created nothing, and a pass that
+ * counted calls instead of creations reported an engagement that was moving when
+ * it was standing still.
+ */
+export interface RecordOutcome {
+	ids: string[];
+	created: string[];
 }
 
 /**
@@ -578,26 +602,33 @@ export interface ApplyResult {
  */
 export async function applyPlan(
 	records: PlannedRecord[],
-	record: (args: Record<string, unknown>) => Promise<string[]>,
+	record: (args: Record<string, unknown>) => Promise<RecordOutcome>,
 	idFor: Map<string, string>,
 ): Promise<ApplyResult> {
-	const out: ApplyResult = { surface: 0, settled: 0, findings: 0, errors: [] };
+	const out: ApplyResult = { surface: 0, settled: 0, findings: 0, repeats: 0, errors: [] };
 	let previousFailed = false;
 	for (const row of records) {
 		if (row.dependsOnPrevious && previousFailed) continue;
 		const kind = row.args.kind;
 		const args = row.createsLabel ? row.args : { ...row.args, target: resolveTarget(row.args.target, idFor) };
 		try {
-			const ids = await record(args);
+			const { ids, created } = await record(args);
 			previousFailed = false;
 			if (row.createsLabel) {
-				out.surface += 1;
+				if (created.length > 0) out.surface += 1;
+				else out.repeats += 1;
+				// The id is mapped either way, and on a repeat it is the id of the
+				// element already recorded — which is the one later rows should point
+				// at. A pass that mapped only what it created sent every hypothesis
+				// about a known element to a label the ledger does not key on.
 				const id = ids[0];
 				if (id) idFor.set(row.createsLabel, id);
 			} else if (kind === "hypothesis") {
-				out.settled += ids.length;
+				out.settled += created.length;
+				out.repeats += ids.length - created.length;
 			} else if (kind === "finding") {
-				out.findings += 1;
+				if (created.length > 0) out.findings += 1;
+				else out.repeats += 1;
 			}
 		} catch (err) {
 			previousFailed = true;

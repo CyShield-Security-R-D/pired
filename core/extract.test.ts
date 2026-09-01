@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyPlan, classFromCwe, elementArgs, extractionSystemPrompt, extractionUserMessage, hypothesisForFinding, parseExtraction, planExtraction, REVIEW_SEPARATOR, reviewEviction, reviewWindow, type Extraction, type PlannedRecord } from "./extract.ts";
+import { applyPlan, classFromCwe, elementArgs, extractionSystemPrompt, extractionUserMessage, hypothesisForFinding, parseExtraction, planExtraction, REVIEW_SEPARATOR, reviewEviction, reviewWindow, type Extraction, type PlannedRecord, type RecordOutcome } from "./extract.ts";
 
 const GOOD = `{
   "surface": [{"kind":"endpoint","label":"POST /api/login"},{"kind":"endpoint","label":"GET /api/transactions"}],
@@ -429,15 +429,24 @@ describe("one extracted element as record arguments", () => {
 // ---------------------------------------------------------------------------
 
 /** A `record` that hands back one id per target, and can be told to fail. */
-function fakeRecord(failOn: (args: Record<string, unknown>) => boolean = () => false) {
+/**
+ * A stand-in for the `record` tool. `repeatOn` makes it answer the way the real
+ * one does for something already in the ledger: the id it matched, and nothing
+ * created.
+ */
+function fakeRecord(
+	failOn: (args: Record<string, unknown>) => boolean = () => false,
+	repeatOn: (args: Record<string, unknown>) => boolean = () => false,
+) {
 	const calls: Array<Record<string, unknown>> = [];
 	let n = 0;
-	const record = async (args: Record<string, unknown>): Promise<string[]> => {
+	const record = async (args: Record<string, unknown>): Promise<RecordOutcome> => {
 		calls.push(args);
 		if (failOn(args)) throw new Error("rejected by the ledger");
 		const t = args.target;
 		const count = Array.isArray(t) ? t.length : 1;
-		return Array.from({ length: count }, () => `id${++n}`);
+		const ids = Array.from({ length: count }, () => `id${++n}`);
+		return { ids, created: repeatOn(args) ? [] : ids };
 	};
 	return { record, calls };
 }
@@ -538,5 +547,42 @@ describe("running the plan", () => {
 		const out = await applyPlan(rows, record, new Map());
 		expect(out.errors[0]).toContain("SQL injection in login");
 		expect(out.errors[0]).toContain("rejected by the ledger");
+	});
+});
+
+describe("a pass that offers what is already recorded", () => {
+	// This runs at the end of every turn over a review buffer that only grows, so
+	// most of what it offers on the fifth turn was already recorded on the fourth.
+	// `record` folds those back into the rows they match; counting them as new
+	// work would report an engagement that is moving when it is standing still.
+	it("counts a repeated finding as a repeat, not as a finding", async () => {
+		const { record } = fakeRecord(() => false, (a) => a.kind === "finding");
+		const rows: PlannedRecord[] = [{ args: { kind: "finding", title: "IDOR", severity: "high" } }];
+		const out = await applyPlan(rows, record, new Map());
+		expect(out).toMatchObject({ findings: 0, repeats: 1 });
+	});
+
+	it("counts only the cells a bulk row actually settled", async () => {
+		const { record } = fakeRecord();
+		const half = async (args: Record<string, unknown>) => {
+			const { ids } = await record(args);
+			return { ids, created: ids.slice(0, 1) };
+		};
+		const rows: PlannedRecord[] = [{ args: { kind: "hypothesis", class: "ssti", target: ["a", "b", "c"], outcome: "refuted" } }];
+		const out = await applyPlan(rows, half, new Map());
+		expect(out).toMatchObject({ settled: 1, repeats: 2 });
+	});
+
+	it("maps the label of an element that already existed, so later rows point at it", async () => {
+		// A pass that mapped only what it created sent every hypothesis about a
+		// known element to a label the ledger does not key on.
+		const { record, calls } = fakeRecord(() => false, () => true);
+		const rows: PlannedRecord[] = [
+			{ args: { kind: "endpoint", method: "GET", path: "/a" }, createsLabel: "GET /a" },
+			{ args: { kind: "hypothesis", class: "sqli", target: "GET /a", outcome: "confirmed" } },
+		];
+		const out = await applyPlan(rows, record, new Map());
+		expect(calls[1]?.target).toBe("id1");
+		expect(out).toMatchObject({ surface: 0, repeats: 2 });
 	});
 });

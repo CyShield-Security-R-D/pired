@@ -10,8 +10,9 @@
  * maps them onto its harness. Runtime services (clock/ids) come from `ToolContext`.
  */
 
-import { buildBrowserModel } from "./browser.ts";
+import { buildBrowserModel, elementLabel } from "./browser.ts";
 import { computeCoverage, findGaps, selectNext } from "./coverage.ts";
+import { type Fields, findDuplicate, findNearDuplicate, type IdentityKind, isNoOp, mergeRecord } from "./identity.ts";
 import { computeCoverageView, computeEngagementStats } from "./stats.ts";
 import { CELL_GLYPH, renderCoveragePanel } from "./coverage-panel.ts";
 import {
@@ -192,13 +193,48 @@ function extractFields(kind: LedgerKind, a: Record<string, unknown>): Record<str
  * loot record carries a plaintext secret and `details` is persisted into the
  * session transcript, so this must never widen to the whole record.
  */
-function recordDetails(record: LedgerRecord): Record<string, unknown> {
-	const base: Record<string, unknown> = { id: record.id, kind: record.kind };
+/**
+ * What a write actually did. `created` is a new row; `updated` is the explicit
+ * `id=` path; `merged` and `unchanged` are what deduplication turned a repeat
+ * into. Callers count creations, never calls: the extractor re-offers the same
+ * rows every turn, and counting those as work reports an engagement that is
+ * moving when it is standing still.
+ */
+type WriteOutcome = "created" | "updated" | "merged" | "unchanged";
+
+function recordDetails(record: LedgerRecord, outcome: WriteOutcome): Record<string, unknown> {
+	const base: Record<string, unknown> = {
+		id: record.id,
+		kind: record.kind,
+		ids: [record.id],
+		created: outcome === "created" ? [record.id] : [],
+	};
 	if (record.kind === "finding") return { ...base, severity: record.severity, title: record.title };
 	return base;
 }
 
-function recordSummary(kind: string, record: LedgerRecord): string {
+/** How the operator would recognise a record: what it is, not which id it got. */
+function labelOf(record: LedgerRecord): string {
+	if (record.kind === "finding") return record.title;
+	if (record.kind === "hypothesis") return `${record.class} on ${record.target}`;
+	if (record.kind === "blocker") return record.question;
+	if (record.kind === "loot") return record.handle;
+	return elementLabel(record as InventoryRecord);
+}
+
+function recordSummary(kind: string, record: LedgerRecord, outcome: WriteOutcome): string {
+	// A repeat is told plainly what it matched, and that nothing was lost. The
+	// agent that re-recorded something usually did it because the first call
+	// scrolled out of context; "already there, as this id" is the answer to the
+	// question it was actually asking.
+	if (outcome === "merged") {
+		return `Already recorded as ${kind} ${record.id} (${labelOf(record)}) — updated it in place rather than adding a second row. ` +
+			`Pass id=${record.id} to change it further.`;
+	}
+	if (outcome === "unchanged") {
+		return `Already recorded as ${kind} ${record.id} (${labelOf(record)}) — nothing new in this call, so nothing was written. ` +
+			`Pass id=${record.id} to change it.`;
+	}
 	if (record.kind === "finding") return `Recorded finding ${record.id} [${record.severity}] ${record.title}`;
 	if (record.kind === "hypothesis") return `Recorded hypothesis ${record.id} (${record.outcome}) on ${record.target}`;
 	if (record.kind === "blocker") return `Parked blocker ${record.id} [${record.priority}]: ${record.question}`;
@@ -216,6 +252,8 @@ const RECORD_DESCRIPTION = `Record engagement state to the durable workspace. On
 - blocker: question (+blockerType, priority[low|medium|high], options[], blocks[] (work ids this gates))
 - loot: handle (e.g. cred:web-admin), secret (+lootType, username, target, source)
 Pass 'id' to update an existing record.
+
+Recording something twice is safe. Every kind has an identity — an endpoint is its method and path, a hypothesis is its (target, class) cell, a finding is its title and location — and a second recording of the same thing updates the first instead of creating a second row: fields you add are kept, a severity is never lowered, evidence and params are merged. So when you are not sure whether something is already recorded, record it. The reply names the id it matched, and 'id=<that>' is how you change it afterwards.
 
 How these connect (this is what makes coverage work, not ceremony):
 - Coverage is your checklist's classes x the surface *you have recorded*. A host or endpoint you never recorded has no cells at all, so it can never show as tested and 'recall gaps' cannot route you to it. Record the surface as you discover it.
@@ -328,13 +366,18 @@ async function writeRecord(
 	fields: Record<string, unknown>,
 ): Promise<string | undefined> {
 	try {
-		const id = ctx.services.ids.newId();
+		let id: string | undefined;
 		// Same defaults `record kind=endpoint` applies, so an element created here is
-		// indistinguishable from one the agent declared itself.
-		await deps.workspace.append("inventory", {
-			v: RECORD_VERSION, id, kind, createdAt: ctx.services.clock.nowIso(),
-			...(DEFAULTS[kind] ?? {}), ...fields,
-		} as unknown as InventoryRecord);
+		// indistinguishable from one the agent declared itself. And the same identity
+		// check: two subagents resolving the same unrecorded file both arrive here,
+		// and inside the writer's lock only the first of them creates it.
+		const merged = { ...(DEFAULTS[kind] ?? {}), ...fields };
+		await deps.workspace.upsert("inventory", (current) => {
+			const dup = findDuplicate(kind, merged, current as unknown as Fields[]);
+			if (dup) { id = (dup as unknown as InventoryRecord).id; return undefined; }
+			id = ctx.services.ids.newId();
+			return [{ v: RECORD_VERSION, id, kind, createdAt: ctx.services.clock.nowIso(), ...merged } as unknown as InventoryRecord];
+		});
 		return id;
 	} catch {
 		return undefined;
@@ -370,8 +413,17 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 
 			if (kind === "note") {
 				const body = required(str(a.text), "record note: 'text' is required");
+				// A note re-written verbatim is the same note. Nothing keys notes.md,
+				// so the only defence against the same observation appearing four
+				// times is to look before appending. Compared block by block rather
+				// than by substring: a one-line note is often a phrase from a longer
+				// one already written, and dropping it would be silent data loss.
+				const blocks = (await deps.workspace.readNotes()).split(/^## /m).map((b) => b.replace(/^\S+\n/, "").trim());
+				if (blocks.includes(body.trim())) {
+					return text("Already noted — not written twice.", { kind, created: [] });
+				}
 				await deps.workspace.appendNote(body);
-				return text("Noted.", { kind });
+				return text("Noted.", { kind, created: ["note"] });
 			}
 
 			// Evidence is a file, not a ledger row. Without this the evidence contract
@@ -417,35 +469,6 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 			}
 
 
-			// Coverage is settled one cell at a time, which for a real engagement is
-			// O(elements x classes) tool calls — 19 classes over 20 endpoints is 380
-			// calls, and no model will make them. So a reviewer's actual unit of
-			// reasoning ("these five classes don't apply to this route, for one
-			// reason") is expressible in one call: class and target accept lists and
-			// the cross product is recorded. Without this, coverage stays at 0% on
-			// real runs no matter how thorough the review was.
-			if (kind === "hypothesis" && (asList(a.class).length > 1 || asList(a.target).length > 1)) {
-				const classes = asList(a.class);
-				const targets = asList(a.target);
-				if (classes.length === 0 || targets.length === 0) throw new Error("record hypothesis: 'class' and 'target' lists must be non-empty");
-				const statement = required(str(a.statement), "record hypothesis: 'statement' is required");
-				const outcome = oneOf(a.outcome, HYPOTHESIS_OUTCOMES) ?? "proposed";
-				const stamp = ctx.services.clock.nowIso();
-				const ids: string[] = [];
-				for (const t of targets) {
-					for (const c of classes) {
-						const id = ctx.services.ids.newId();
-						await deps.workspace.append("hypotheses", defined({
-							v: RECORD_VERSION, id, kind: "hypothesis", createdAt: stamp,
-							statement, target: t, class: c, outcome,
-							method: str(a.approach) ?? str(a.method), evidence: str(a.evidence),
-						}) as unknown as HypothesisRecord);
-						ids.push(id);
-					}
-				}
-				return text(`Recorded ${ids.length} hypotheses (${targets.length} target(s) x ${classes.length} class(es)), outcome=${outcome}.`, { kind, ids });
-			}
-
 			// Targets are resolved before anything is written: the model names what it
 			// is looking at, and the ledger keys on ids.
 			//
@@ -464,10 +487,16 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 			// deliverable — "auth_routes.py:22" became element id "53d145", the line
 			// number was gone, and 164 findings graded as 5 (recall 0.08) against a key
 			// the same run had genuinely found dozens of entries for.
+			//
+			// This runs BEFORE the bulk branch below, not after. A list of targets
+			// that skipped resolution was stored as the labels the model typed, so
+			// the same cell existed twice — once keyed on "/api/login" from a bulk
+			// refutation and once on the element id from a single call — and the
+			// label-keyed copy settled nothing.
 			if (kind === "hypothesis") {
 				const wanted = asList(a.target).filter((t): t is string => typeof t === "string" && t.trim().length > 0);
 				if (wanted.length > 0) {
-					let index = targetIndex(await deps.workspace.read("inventory"));
+					const index = targetIndex(await deps.workspace.read("inventory"));
 					const resolved: string[] = [];
 					for (const t of wanted) {
 						const hit = resolveTarget(t, index);
@@ -482,11 +511,84 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 						const byName = resolveTarget(name, index);
 						if (byName !== name) { resolved.push(byName); continue; }
 						const created = await writeRecord(deps, ctx, "endpoint", { path: name });
-						index = targetIndex(await deps.workspace.read("inventory"));
+						// Index the new element rather than re-reading the whole store per
+						// target: a bulk refutation naming forty files would otherwise
+						// read the inventory forty times, and two targets naming the same
+						// unrecorded file would each create their own copy of it.
+						if (created) {
+							index.set(name.trim().toLowerCase().replace(/\/+$/, ""), created);
+							index.set(created, created);
+						}
 						resolved.push(created ?? t);
 					}
-					a.target = Array.isArray(a.target) ? resolved : resolved[0];
+					// Always a list: `asList` normalises it downstream, and assigning
+					// resolved[0] here dropped every target but the first whenever the
+					// model sent its array as a JSON string.
+					a.target = resolved;
 				}
+			}
+
+			// Coverage is settled one cell at a time, which for a real engagement is
+			// O(elements x classes) tool calls — 19 classes over 20 endpoints is 380
+			// calls, and no model will make them. So a reviewer's actual unit of
+			// reasoning ("these five classes don't apply to this route, for one
+			// reason") is expressible in one call: class and target accept lists and
+			// the cross product is recorded. Without this, coverage stays at 0% on
+			// real runs no matter how thorough the review was.
+			if (kind === "hypothesis" && (asList(a.class).length > 1 || asList(a.target).length > 1)) {
+				const classes = asList(a.class);
+				const targets = asList(a.target);
+				if (classes.length === 0 || targets.length === 0) throw new Error("record hypothesis: 'class' and 'target' lists must be non-empty");
+				const statement = required(str(a.statement), "record hypothesis: 'statement' is required");
+				const outcome = oneOf(a.outcome, HYPOTHESIS_OUTCOMES) ?? "proposed";
+				const stamp = ctx.services.clock.nowIso();
+				const ids: string[] = [];
+				const created: string[] = [];
+				await deps.workspace.upsert("hypotheses", (current) => {
+					// The cross product is where repeats concentrate: the extractor
+					// re-offers the same class verdict over the whole surface once a
+					// turn, so a 40-element engagement would gain 40 rows a turn for
+					// reasoning it had already recorded. Matching against rows written
+					// earlier in THIS call too, since a target list may name one element
+					// twice under two spellings.
+					const working = [...current] as unknown as Fields[];
+					const out: HypothesisRecord[] = [];
+					for (const t of targets) {
+						for (const c of classes) {
+							const patch = defined({
+								statement, target: t, class: c, outcome,
+								method: str(a.approach) ?? str(a.method), evidence: str(a.evidence),
+							});
+							const dup = findDuplicate("hypothesis", patch, working);
+							if (dup) {
+								const merged = defined({
+									...mergeRecord("hypothesis", dup, patch),
+									v: RECORD_VERSION, id: dup.id as string, kind: "hypothesis", createdAt: dup.createdAt, updatedAt: stamp,
+								}) as unknown as HypothesisRecord;
+								ids.push(merged.id);
+								if (isNoOp(dup, merged as unknown as Fields)) continue;
+								working.push(merged as unknown as Fields);
+								out.push(merged);
+								continue;
+							}
+							const id = ctx.services.ids.newId();
+							const record = defined({
+								v: RECORD_VERSION, id, kind: "hypothesis", createdAt: stamp, ...patch,
+							}) as unknown as HypothesisRecord;
+							working.push(record as unknown as Fields);
+							out.push(record);
+							ids.push(id);
+							created.push(id);
+						}
+					}
+					return out;
+				});
+				const repeats = ids.length - created.length;
+				return text(
+					`Recorded ${created.length} hypotheses (${targets.length} target(s) x ${classes.length} class(es)), outcome=${outcome}.` +
+					(repeats > 0 ? ` ${repeats} cell(s) were already recorded and were updated in place, not duplicated.` : ""),
+					{ kind, ids, created },
+				);
 			}
 
 
@@ -624,13 +726,10 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 			const existingId = str(a.id);
 			const existing = existingId ? (await deps.workspace.read(store)).find((r) => r.id === existingId) : undefined;
 
-			let record: LedgerRecord;
-			if (existing) {
-				record = defined({ ...existing, ...patch, v: RECORD_VERSION, id: existing.id, kind, createdAt: existing.createdAt, updatedAt: now }) as unknown as LedgerRecord;
-			} else {
-				const merged = { ...(DEFAULTS[kind] ?? {}), ...patch };
+			if (!existing) {
+				const complete = { ...(DEFAULTS[kind] ?? {}), ...patch };
 				for (const field of REQUIRED[kind]) {
-					if (merged[field] === undefined) {
+					if (complete[field] === undefined) {
 						// Name what did arrive. The old message said only that a field was
 						// required, which reads as the model's mistake even when the field
 						// was stripped from the schema before the model could send it.
@@ -650,12 +749,58 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 						);
 					}
 				}
-				const id = existingId ?? ctx.services.ids.newId();
-				record = defined({ v: RECORD_VERSION, id, kind, createdAt: now, ...merged }) as unknown as LedgerRecord;
 			}
 
-			await deps.workspace.append(store, record);
-			return text(recordSummary(kind, record), recordDetails(record));
+			// The write, and the identity check that decides whether it is a write at
+			// all, happen together under the store's lock.
+			//
+			// An `id` the caller passed is an explicit update and is honoured exactly
+			// as sent — that is the escape hatch for correcting a record downward,
+			// including past anything the merge below would protect. Everything else
+			// is checked against what is already recorded, because the agent asking
+			// to create a second copy of something is not making a claim that there
+			// are two of them; it is a turn that no longer remembers the first.
+			let record: LedgerRecord | undefined;
+			let outcome: WriteOutcome = "created";
+			let near: LedgerRecord | undefined;
+			await deps.workspace.upsert(store, (current) => {
+				const byId = existingId ? current.find((r) => r.id === existingId) : undefined;
+				if (byId) {
+					outcome = "updated";
+					record = defined({ ...byId, ...patch, v: RECORD_VERSION, id: byId.id, kind, createdAt: byId.createdAt, updatedAt: now }) as unknown as LedgerRecord;
+					return [record];
+				}
+				const dup = existingId ? undefined : findDuplicate(kind as IdentityKind, patch, current as unknown as Fields[]);
+				if (dup) {
+					const merged = defined({
+						...mergeRecord(kind as IdentityKind, dup as unknown as Fields, patch),
+						v: RECORD_VERSION, id: dup.id, kind, createdAt: dup.createdAt, updatedAt: now,
+					}) as unknown as LedgerRecord;
+					if (isNoOp(dup as unknown as Fields, merged as unknown as Fields)) {
+						outcome = "unchanged";
+						record = dup as unknown as LedgerRecord;
+						return undefined;
+					}
+					outcome = "merged";
+					record = merged;
+					return [merged];
+				}
+				// Same place, overlapping words, nothing that proves they are one bug.
+				// Written, then reported: a merge here could drop a real finding, and
+				// recall is the one thing that cannot be recovered later.
+				if (kind === "finding") near = findNearDuplicate(patch, current as unknown as Fields[]) as unknown as LedgerRecord | undefined;
+				const id = existingId ?? ctx.services.ids.newId();
+				record = defined({ v: RECORD_VERSION, id, kind, createdAt: now, ...(DEFAULTS[kind] ?? {}), ...patch }) as unknown as LedgerRecord;
+				return [record];
+			});
+
+			const written = record as LedgerRecord;
+			const warning = near
+				? `\nPossible duplicate of ${near.id} (${labelOf(near)}) — same location, similar wording, nothing that settles it. ` +
+					`Recorded separately rather than risk losing one of them. If they are the same issue, fold the detail into ` +
+					`${near.id} with record id=${near.id}, then record id=${written.id} status=false-positive.`
+				: "";
+			return text(recordSummary(kind, written, outcome) + warning, recordDetails(written, outcome));
 		},
 	};
 }

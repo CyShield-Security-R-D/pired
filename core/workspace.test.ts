@@ -152,3 +152,48 @@ describe("Workspace locking", () => {
 		await expect(ws.append("inventory", host("h1", "app.acme.test", svc.clock.nowIso()))).rejects.toThrow(/lock/i);
 	});
 });
+
+describe("Workspace.upsert", () => {
+	// Deduplication is a read-then-write, and `record` runs beside subagents and
+	// the `pired answer` subcommand. Reading outside the lock lets two writers
+	// both decide an element is new and both create it — the duplicate the check
+	// exists to prevent.
+	it("decides what to write from the store as it stands inside the lock", async () => {
+		const svc = makeFakeServices();
+		const ws = await Workspace.open(DIR, "acme", svc);
+		await ws.append("inventory", host("h1", "app.acme.test", svc.clock.nowIso()));
+		let seen = 0;
+		await ws.upsert("inventory", (current) => {
+			seen = current.length;
+			return [host("h2", "api.acme.test", svc.clock.nowIso())];
+		});
+		expect(seen).toBe(1);
+		expect(await ws.read("inventory")).toHaveLength(2);
+	});
+
+	it("writes nothing when the plan asks for nothing", async () => {
+		const svc = makeFakeServices();
+		const ws = await Workspace.open(DIR, "acme", svc);
+		await ws.upsert("inventory", () => undefined);
+		await ws.upsert("inventory", () => []);
+		expect(svc.fs.has(ws.storePath("inventory"))).toBe(false);
+	});
+
+	it("holds the lock for the whole read-decide-write", async () => {
+		const svc = makeFakeServices();
+		const ws = await Workspace.open(DIR, "acme", svc, { lockStaleMs: 60_000, lockTimeoutMs: 1000, lockRetryMs: 200 });
+		await svc.fs.tryCreateExclusive(`${ws.storePath("inventory")}.lock`);
+		await expect(ws.upsert("inventory", () => [host("h1", "a.test", svc.clock.nowIso())])).rejects.toThrow(/lock/i);
+	});
+
+	it("tightens a permissive loot ledger before the plan's secrets reach it", async () => {
+		const svc = makeFakeServices();
+		const ws = await Workspace.open(DIR, "acme", svc);
+		await svc.fs.writeFile(ws.storePath("loot"), "", { mode: 0o644 });
+		await ws.upsert("loot", () => [{
+			v: 1, id: "l1", kind: "loot", createdAt: svc.clock.nowIso(),
+			handle: "cred:web-admin", type: "password", secret: "hunter2",
+		}]);
+		expect(svc.fs.getMode(ws.storePath("loot"))).toBe(0o600);
+	});
+});
