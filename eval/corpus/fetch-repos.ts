@@ -131,6 +131,15 @@ for (const slug of repos) {
 			await writeFile(join(outRoot, `${slug.replace(/\//g, "_")}-${nonce}.truth.json`), JSON.stringify(key, null, 2));
 
 			manifest.push({
+				// Field names are run.ts's contract, not this script's preference: it
+				// reads id, package, target, truth, entries and scope, and a manifest
+				// that renames any of them crashes the runner on its first target.
+				id,
+				package: slug,
+				entries: key.length,
+				// The whole tree. These targets are admitted precisely because they are
+				// small enough to review entire, so there is no subtree to derive.
+				scope: ["."],
 				target: work,
 				truth: join(outRoot, `${slug.replace(/\//g, "_")}-${nonce}.truth.json`),
 				advisory: id,
