@@ -20,6 +20,8 @@ recall finding id=f3a9          # ONE finding, every field as recorded
 record id=f3a9 description="…" impact="…" remediation="…"
 ```
 
+A field that is already filled is not necessarily finished. The extraction pass copies an impact or a remediation across when the review stated one outright, and a reviewer's aside ("should use parameterised queries") is a note, not the remediation section of a report. Read what is there and raise it to the standard below rather than assuming a non-empty field is done.
+
 `recall finding id=<id>` is what makes this possible: it returns the whole record — description, impact, remediation, repro, evidence, cwe, cvss, target — not the one-line summary the list shows. **Never rewrite a finding from memory of having tested it.** Read it back first; the ledger is the source of truth and your context may have been compacted since.
 
 ## 1. Delegate it when a subagent tool exists

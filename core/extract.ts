@@ -31,6 +31,22 @@ export interface ExtractedFinding {
 	file?: string;
 	line?: number;
 	description?: string;
+	/**
+	 * Transcribed, never composed.
+	 *
+	 * A client's report needs what a flaw costs them and what fixes it, and a
+	 * review usually says neither — it says what is broken and where. This pass
+	 * reads prose, has no evidence files and no client context, so asking it to
+	 * supply the missing half would be asking it to invent the two claims that do
+	 * the most damage when invented: a fabricated record count is a lie to a
+	 * client, and a fabricated fix is advice about a codebase nobody read.
+	 *
+	 * So these carry across only when the review states them outright, and the
+	 * writing pass (skills/ops-technical-writer) authors the rest, working from
+	 * the finding and its evidence rather than from a paragraph.
+	 */
+	impact?: string;
+	remediation?: string;
 }
 
 export interface ExtractedElement {
@@ -105,7 +121,7 @@ Reply with ONE JSON object and nothing else — no prose before or after, no mar
 
 {
   "surface":  [{"kind": "endpoint|host|param|tech|service", "label": "POST /api/login"}],
-  "findings": [{"title": "...", "severity": "critical|high|medium|low|info", "class": "<id>", "cwe": "CWE-89", "file": "backend/routes/auth.py", "line": 42, "description": "one or two sentences"}],
+  "findings": [{"title": "...", "severity": "critical|high|medium|low|info", "class": "<id>", "cwe": "CWE-89", "file": "backend/routes/auth.py", "line": 42, "description": "one or two sentences", "impact": "only if the review states it", "remediation": "only if the review states it"}],
   "classes": [
 ${roll}
   ]
@@ -120,6 +136,7 @@ Other rules:
 - "class" on a finding must be one of exactly these ids: ${list}
 - "target" and "label" are the review's own words for the thing (a route, a file, a host) — not an id.
 - "file" and "line" must come from the review. Never guess a line number; omit the field instead.
+- "impact" and "remediation" are COPIED, never composed. Most reviews state neither, and omitting them is the correct and expected answer — a later pass writes them from the evidence. Include "impact" only if the review itself says what the flaw costs (records exposed, money, downtime, an obligation breached), and "remediation" only if the review itself names the fix. If you are summarising rather than quoting the review's own conclusion, leave the field out.
 - Invent nothing. Every row must be traceable to something the review actually says.`;
 }
 
@@ -176,6 +193,8 @@ export function parseExtraction(reply: string): ParseResult {
 			// still worth having — the grader matches on both, the report on either.
 			line: line !== undefined && str(row.file) ? line : undefined,
 			description: str(row.description),
+			impact: str(row.impact),
+			remediation: str(row.remediation),
 		});
 	}
 
@@ -522,6 +541,7 @@ export function planExtraction(input: PlanInput): { records: PlannedRecord[]; no
 				kind: "finding", title: f.title, severity: f.severity,
 				...(cls ? { class: cls } : {}), ...(f.cwe ? { cwe: f.cwe } : {}),
 				...(target ? { target } : {}), ...(f.description ? { description: f.description } : {}),
+				...(f.impact ? { impact: f.impact } : {}), ...(f.remediation ? { remediation: f.remediation } : {}),
 			},
 		});
 		// Coverage is settled by a hypothesis outcome, never by a finding. Without

@@ -586,3 +586,60 @@ describe("a pass that offers what is already recorded", () => {
 		expect(out).toMatchObject({ surface: 0, repeats: 2 });
 	});
 });
+
+describe("impact and remediation, transcribed but never composed", () => {
+	// A review says what is broken and where. It rarely says what the flaw costs
+	// the client or how to fix it, and this pass reads prose with no evidence
+	// files and no client context — so it copies those two when the review states
+	// them and omits them otherwise. Composing them here would invent the two
+	// claims that do the most damage when invented.
+	it("carries them across when the review stated them", () => {
+		const { extraction } = parseExtraction(`{
+			"surface": [], "hypotheses": [], "classes": [],
+			"findings": [{
+				"title": "IDOR in /api/user", "severity": "high", "file": "user_routes.py", "line": 41,
+				"description": "no ownership check on the id parameter",
+				"impact": "any customer can read all 40,000 customer records",
+				"remediation": "scope the query to the session user"
+			}]
+		}`);
+		expect(extraction.findings[0]).toMatchObject({
+			impact: "any customer can read all 40,000 customer records",
+			remediation: "scope the query to the session user",
+		});
+	});
+
+	it("leaves them undefined when the review said neither", () => {
+		const { extraction, errors } = parseExtraction(
+			`{"surface":[],"hypotheses":[],"classes":[],"findings":[{"title":"IDOR","severity":"high"}]}`,
+		);
+		expect(extraction.findings[0]?.impact).toBeUndefined();
+		expect(extraction.findings[0]?.remediation).toBeUndefined();
+		// Omitting them is a correct answer, not a dropped row.
+		expect(errors).toEqual([]);
+	});
+
+	it("tells the extractor that omitting them is the expected answer", () => {
+		const p = extractionSystemPrompt(["sqli"]);
+		expect(p).toMatch(/"impact" and "remediation" are COPIED, never composed/);
+		expect(p).toMatch(/omitting them is the correct and expected answer/);
+	});
+
+	it("passes them to the record call when they are there, and not when they are not", () => {
+		const withBoth = planExtraction({
+			extraction: {
+				surface: [], hypotheses: [], classes: [],
+				findings: [{ title: "IDOR", severity: "high", file: "a.py", line: 4, impact: "40k records", remediation: "scope the query" }],
+			},
+			known: new Set(), allSurface: [], classes: [],
+		});
+		expect(withBoth.records[0]?.args).toMatchObject({ impact: "40k records", remediation: "scope the query" });
+
+		const without = planExtraction({
+			extraction: { surface: [], hypotheses: [], classes: [], findings: [{ title: "IDOR", severity: "high" }] },
+			known: new Set(), allSurface: [], classes: [],
+		});
+		expect(without.records[0]?.args).not.toHaveProperty("impact");
+		expect(without.records[0]?.args).not.toHaveProperty("remediation");
+	});
+});
