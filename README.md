@@ -182,6 +182,18 @@ Alongside it: a status line carrying findings-by-severity, coverage and the **ar
 
 The panel also renders outside the TUI — `pired-state --watch` for a tmux pane, `--json` for your own status bar. Full tour: **[docs/ui.md](./docs/ui.md)**.
 
+### The same thing, running
+
+A whitebox `review` of **DVBank** — the ground-truth-labeled vulnerable banking app from the benchmark above — driven by a 27B model on the local box. The agent greps for sinks and settles checklist cells while the panel counts surface, hypotheses and findings as they land:
+
+<img src="docs/demo-review.gif" alt="pired reviewing DVBank: a grep for injection sinks, with the engagement panel counting surface, hypotheses and findings as they are recorded" width="100%">
+
+And the artifact it leaves behind — hypotheses browsable by class, including the ones it *refuted*, and a finding opened to its CWE, severity and exact target:
+
+<img src="docs/demo-ledger.gif" alt="the pired ledger: the hypotheses browser filtered by class, and a critical finding opened to CWE-640, class authn and target auth_routes.py" width="100%">
+
+The counters in both are the agent's own claims, recorded as it worked. What survives an independent grader is a separate question, and the honest answer is [the benchmark](#the-benchmark-result) — not the panel.
+
 ## Documentation
 
 **[docs/](./docs/)** — [quickstart](./docs/quickstart.md) · [the interface](./docs/ui.md) · [the panel](./docs/panel.md) · [coverage](./docs/coverage.md) · [scope](./docs/scope.md) · [profiles](./docs/profiles.md) · [tools](./docs/tools.md) · [workspace](./docs/workspace.md) · [skills](./docs/skills.md) · [models](./docs/models.md) · [theme](./docs/theme.md) · [commands](./docs/commands.md) · [architecture](./docs/architecture.md) · [evaluation](./docs/evaluation.md)
