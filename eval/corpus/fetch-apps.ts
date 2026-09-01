@@ -206,6 +206,25 @@ const override = (arg("packages") ?? "").split(",").map((x) => x.trim()).filter(
 const since = arg("since", "2025-06-01") as string;
 const limit = Number(arg("limit", "2"));
 const cap = Number(arg("cap", "1200"));
+/**
+ * The most application source a target may contain and still be admitted.
+ *
+ * A benchmark target should be reviewable WHOLE. The alternative — admit
+ * anything and cut it down afterwards with rescope.ts — derives the surviving
+ * subtree from the answer key, which quietly tells the reviewer "the bug is
+ * somewhere in these files". That is a different, easier question wearing the
+ * same name.
+ *
+ * The reference application is 2,670 lines. The 20 targets admitted before this
+ * gate existed measured 45,786 to 194,065, and 13 of them had to be rescoped;
+ * research/08 recorded what oversized targets do to the agent — a repository
+ * logged as a host, modules logged as endpoints, and zero hypotheses recorded.
+ *
+ * 25,000 is deliberately generous: gotify/server is 12,435 and passes with room,
+ * while every previously-admitted target fails. `--max-loc 0` disables the gate
+ * for anyone who wants the old behaviour.
+ */
+const maxLoc = Number(arg("max-loc", "25000"));
 const outRoot = arg("out", "/tmp/corpus-apps") as string;
 const dry = flag("dry");
 const only = arg("only", "");
@@ -257,7 +276,7 @@ const manifest: ManifestEntry[] = await (async () => {
 	}
 })();
 
-const stats = { advisories: 0, cloned: 0, notApp: 0, noKey: 0, failed: 0, built: 0 };
+const stats = { advisories: 0, cloned: 0, notApp: 0, tooBig: 0, noKey: 0, failed: 0, built: 0 };
 const rejected: string[] = [];
 
 process.stdout.write(
@@ -315,6 +334,24 @@ for (const ecosystem of ecosystems) {
 					process.stdout.write(`  ${adv.id.padEnd(22)} REJECTED — ${cls.why}\n`);
 					await rm(work, { recursive: true, force: true });
 					continue;
+				}
+
+				// Size gate, before the answer key is computed.
+				//
+				// Deliberately measured over the WHOLE application and deliberately
+				// placed ahead of keyFromPatch: if admission consulted the key, or the
+				// key-derived scope, then whether a project is a valid target would
+				// depend on where its bug happens to be. It must not.
+				if (maxLoc > 0) {
+					const wholeLoc = await countLines(work, w.source);
+					if (wholeLoc > maxLoc) {
+						stats.tooBig += 1;
+						const why = `${wholeLoc.toLocaleString()} loc of source — over the ${maxLoc.toLocaleString()} cap, not reviewable whole`;
+						rejected.push(`${adv.id} ${owner}/${repo}: ${why}`);
+						process.stdout.write(`  ${adv.id.padEnd(22)} REJECTED — ${why}\n`);
+						await rm(work, { recursive: true, force: true });
+						continue;
+					}
 				}
 
 				const key = refineKey(await keyFromPatch(work, sha, adv));
@@ -397,6 +434,6 @@ for (const ecosystem of ecosystems) {
 await rm(workRoot, { recursive: true, force: true });
 process.stdout.write(
 	`\n⦿ yield: ${stats.built} target(s) from ${stats.cloned} clone(s)` +
-	` · ${stats.notApp} not an application · ${stats.noKey} no source in fix · ${stats.failed} failed\n`,
+	` · ${stats.notApp} not an application · ${stats.tooBig} over the size cap · ${stats.noKey} no source in fix · ${stats.failed} failed\n`,
 );
 if (!dry) process.stdout.write(`targets under ${outRoot} · manifest.json lists them\n`);
