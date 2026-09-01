@@ -28,7 +28,7 @@ import { execFile } from "node:child_process";
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { COMMIT_RE, osvQuery, keyFromPatch, refineKey, resolveSha, stripLeakage } from "./lib.ts";
+import { COMMIT_RE, osvQuery, keyFromPatch, PULL_RE, refineKey, resolveSha, shaFromPull, stripLeakage } from "./lib.ts";
 import type { Advisory } from "./lib.ts";
 
 const run = promisify(execFile);
@@ -81,7 +81,10 @@ let advisories: Advisory[] = [];
 try {
 	advisories = (await osvQuery(pkg, ecosystem))
 		.filter((a) => (a.published ?? "") >= since)
-		.filter((a) => (a.references ?? []).some((r) => COMMIT_RE.test(r.url)))
+		// A commit OR a merged pull request. Advisories cite whichever the
+		// maintainer linked, and dropping the PR ones costs real targets for a
+		// reason unrelated to the vulnerability.
+		.filter((a) => (a.references ?? []).some((r) => COMMIT_RE.test(r.url) || PULL_RE.test(r.url)))
 		.sort((a, b) => (b.published ?? "").localeCompare(a.published ?? ""));
 } catch (err) {
 	process.stdout.write(`${pkg}: OSV query failed — ${String((err as Error).message).slice(0, 80)}\n`);
@@ -90,9 +93,25 @@ try {
 process.stdout.write(`${pkg} — ${advisories.length} candidate(s)\n`);
 
 for (const adv of advisories.slice(0, limit)) {
-	const ref = (adv.references ?? []).map((r) => COMMIT_RE.exec(r.url)).find(Boolean);
-	if (!ref) continue;
-	const [, owner, repo, shortSha] = ref as unknown as [string, string, string, string];
+	// Prefer a direct commit; fall back to resolving a merged PR to the commit it
+	// landed as. The rest of the pipeline only ever wanted a sha.
+	let owner = "";
+	let repo = "";
+	let shortSha = "";
+	const commitRef = (adv.references ?? []).map((r) => COMMIT_RE.exec(r.url)).find(Boolean);
+	if (commitRef) {
+		[, owner, repo, shortSha] = commitRef as unknown as [string, string, string, string];
+	} else {
+		const pullRef = (adv.references ?? []).map((r) => PULL_RE.exec(r.url)).find(Boolean);
+		if (!pullRef) continue;
+		const [, o, rp, num] = pullRef as unknown as [string, string, string, string];
+		const merged = await shaFromPull(o, rp, num);
+		if (!merged) {
+			process.stdout.write(`  ${adv.id}: PR #${num} is not merged — skipped\n`);
+			continue;
+		}
+		[owner, repo, shortSha] = [o, rp, merged];
+	}
 	// The directory name is visible to the agent — pired derives the engagement
 	// name from it and renders it in the status line on every frame. Leaving the
 	// advisory id there told the agent a known vulnerability exists, gave it the

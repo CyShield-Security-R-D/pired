@@ -29,6 +29,31 @@ export interface Advisory {
 export const COMMIT_RE = /github\.com\/([^/]+)\/([^/]+)\/commit\/([0-9a-f]{7,40})/;
 
 /**
+ * A pull request reference, which many advisories give INSTEAD of a commit.
+ *
+ * GHSA entries frequently cite the PR that fixed a bug rather than the merge
+ * commit — gotify's two XSS advisories reference `/pull/534` and `/pull/535`
+ * and no commit at all. Filtering candidates on COMMIT_RE alone silently drops
+ * every such advisory, which shrinks the corpus across every ecosystem for a
+ * reason that has nothing to do with the vulnerability.
+ */
+export const PULL_RE = /github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/;
+
+/** The merge commit a pull request landed as, or undefined if it never merged. */
+export async function shaFromPull(owner: string, repo: string, pull: string): Promise<string | undefined> {
+	const headers: Record<string, string> = { accept: "application/vnd.github+json" };
+	if (process.env.GITHUB_TOKEN) headers.authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
+	const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/pulls/${pull}`, { headers });
+	if (!res.ok) return undefined;
+	const pr = (await res.json()) as { merged_at?: string | null; merge_commit_sha?: string };
+	// An unmerged PR fixed nothing, and its merge_commit_sha is a test merge
+	// GitHub computed speculatively — following it would key the answer to a
+	// commit that is not in the repository's history.
+	if (!pr.merged_at || !pr.merge_commit_sha) return undefined;
+	return pr.merge_commit_sha;
+}
+
+/**
  * Expand an abbreviated commit sha to its full form.
  *
  * `git fetch origin <short-sha>` fails outright — "couldn't find remote ref" —
