@@ -1,0 +1,1140 @@
+[
+  {
+    "target": "/tmp/corpus-apps3/filebrowser_filebrowser-7wzjhu",
+    "truth": "/tmp/corpus-apps3/filebrowser_filebrowser-7wzjhu.truth.json",
+    "advisory": "CVE-2025-52903",
+    "aliases": [
+      "CVE-2025-52903",
+      "GHSA-3q2w-42mv-cph4",
+      "GO-2025-3786"
+    ],
+    "repo": "filebrowser/filebrowser",
+    "published": "2025-06-26",
+    "cwe": [
+      "CWE-183",
+      "CWE-749",
+      "CWE-77",
+      "CWE-88"
+    ],
+    "severity": "HIGH",
+    "fix_commit": "4d830f707fc4314741fd431e70c2ce50cd5a3108",
+    "scope_files": 145,
+    "scope_loc": 12332,
+    "id": "CVE-2025-52903",
+    "package": "filebrowser/filebrowser",
+    "scope": [
+      "."
+    ],
+    "entries": 4
+  },
+  {
+    "target": "/tmp/corpus-apps3/filebrowser_filebrowser-v5tawh",
+    "truth": "/tmp/corpus-apps3/filebrowser_filebrowser-v5tawh.truth.json",
+    "advisory": "CVE-2026-29188",
+    "aliases": [
+      "CVE-2026-29188",
+      "GHSA-79pf-vx4x-7jmm",
+      "GO-2026-4606"
+    ],
+    "repo": "filebrowser/filebrowser",
+    "published": "2026-03-04",
+    "cwe": [
+      "CWE-284",
+      "CWE-732"
+    ],
+    "severity": "CRITICAL",
+    "fix_commit": "7ed1425115be602c2b23236c410098ea2d74b42f",
+    "scope_files": 140,
+    "scope_loc": 13042,
+    "id": "CVE-2026-29188",
+    "package": "filebrowser/filebrowser",
+    "scope": [
+      "."
+    ],
+    "entries": 1
+  },
+  {
+    "target": "/tmp/corpus-apps3/filebrowser_filebrowser-kxjccs",
+    "truth": "/tmp/corpus-apps3/filebrowser_filebrowser-kxjccs.truth.json",
+    "advisory": "CVE-2026-28492",
+    "aliases": [
+      "CVE-2026-28492",
+      "GHSA-mr74-928f-rw69",
+      "GO-2026-4585"
+    ],
+    "repo": "filebrowser/filebrowser",
+    "published": "2026-03-02",
+    "cwe": [
+      "CWE-200"
+    ],
+    "severity": "HIGH",
+    "fix_commit": "31194fb57a5b92e7155219d7ec7273028fcb2e83",
+    "scope_files": 140,
+    "scope_loc": 13042,
+    "id": "CVE-2026-28492",
+    "package": "filebrowser/filebrowser",
+    "scope": [
+      "."
+    ],
+    "entries": 1
+  },
+  {
+    "target": "/tmp/corpus-apps3/filebrowser_filebrowser-zyxfry",
+    "truth": "/tmp/corpus-apps3/filebrowser_filebrowser-zyxfry.truth.json",
+    "advisory": "CVE-2026-54091",
+    "aliases": [
+      "CVE-2026-54091",
+      "GHSA-j9jx-hp4c-ghhh",
+      "GO-2026-5458"
+    ],
+    "repo": "filebrowser/filebrowser",
+    "published": "2026-06-12",
+    "cwe": [
+      "CWE-863"
+    ],
+    "severity": "HIGH",
+    "fix_commit": "e07c59df0b850f5924d5b1683e8609661ddcf534",
+    "scope_files": 140,
+    "scope_loc": 13563,
+    "id": "CVE-2026-54091",
+    "package": "filebrowser/filebrowser",
+    "scope": [
+      "."
+    ],
+    "entries": 2
+  },
+  {
+    "target": "/tmp/corpus-apps3/filebrowser_filebrowser-60oqzm",
+    "truth": "/tmp/corpus-apps3/filebrowser_filebrowser-60oqzm.truth.json",
+    "advisory": "CVE-2026-25890",
+    "aliases": [
+      "CVE-2026-25890",
+      "GHSA-4mh3-h929-w968",
+      "GO-2026-4474"
+    ],
+    "repo": "filebrowser/filebrowser",
+    "published": "2026-02-09",
+    "cwe": [
+      "CWE-706",
+      "CWE-863"
+    ],
+    "severity": "HIGH",
+    "fix_commit": "489af403a19057f6b6b4b1dc0e48cbb26a202ef9",
+    "scope_files": 140,
+    "scope_loc": 12911,
+    "id": "CVE-2026-25890",
+    "package": "filebrowser/filebrowser",
+    "scope": [
+      "."
+    ],
+    "entries": 1
+  },
+  {
+    "target": "/tmp/corpus-apps3/Kovah_LinkAce-1fgazf",
+    "truth": "/tmp/corpus-apps3/Kovah_LinkAce-1fgazf.truth.json",
+    "advisory": "CVE-2025-62721",
+    "aliases": [
+      "CVE-2025-62721"
+    ],
+    "repo": "Kovah/LinkAce",
+    "published": "2025-11-04",
+    "cwe": [
+      "CWE-200",
+      "CWE-284"
+    ],
+    "severity": "",
+    "fix_commit": "1fef32694cee2bd80892fb478416be9364c3fddd",
+    "scope_files": 922,
+    "scope_loc": 38977,
+    "id": "CVE-2025-62721",
+    "package": "Kovah/LinkAce",
+    "scope": [
+      "."
+    ],
+    "entries": 1
+  },
+  {
+    "target": "/tmp/corpus-apps3/Kovah_LinkAce-sl03wn",
+    "truth": "/tmp/corpus-apps3/Kovah_LinkAce-sl03wn.truth.json",
+    "advisory": "CVE-2025-62719",
+    "aliases": [
+      "CVE-2025-62719"
+    ],
+    "repo": "Kovah/LinkAce",
+    "published": "2025-11-04",
+    "cwe": [
+      "CWE-918"
+    ],
+    "severity": "",
+    "fix_commit": "4e0b822163ccefc2640c283ae969a39e673a0619",
+    "scope_files": 922,
+    "scope_loc": 38977,
+    "id": "CVE-2025-62719",
+    "package": "Kovah/LinkAce",
+    "scope": [
+      "."
+    ],
+    "entries": 2
+  },
+  {
+    "target": "/tmp/corpus-apps3/Kovah_LinkAce-06de9i",
+    "truth": "/tmp/corpus-apps3/Kovah_LinkAce-06de9i.truth.json",
+    "advisory": "CVE-2026-27458",
+    "aliases": [
+      "CVE-2026-27458"
+    ],
+    "repo": "Kovah/LinkAce",
+    "published": "2026-02-21",
+    "cwe": [
+      "CWE-80"
+    ],
+    "severity": "",
+    "fix_commit": "eb5ba2abe05177ffa678baac0aa3f9c48b47d2f0",
+    "scope_files": 923,
+    "scope_loc": 39013,
+    "id": "CVE-2026-27458",
+    "package": "Kovah/LinkAce",
+    "scope": [
+      "."
+    ],
+    "entries": 4
+  },
+  {
+    "target": "/tmp/corpus-apps3/Kovah_LinkAce-wm0i4i",
+    "truth": "/tmp/corpus-apps3/Kovah_LinkAce-wm0i4i.truth.json",
+    "advisory": "CVE-2024-56508",
+    "aliases": [
+      "CVE-2024-56508"
+    ],
+    "repo": "Kovah/LinkAce",
+    "published": "2024-12-27",
+    "cwe": [
+      "CWE-434"
+    ],
+    "severity": "",
+    "fix_commit": "8cf3670d71a8629d33408da76f9d441a1aa933f6",
+    "scope_files": 689,
+    "scope_loc": 28477,
+    "id": "CVE-2024-56508",
+    "package": "Kovah/LinkAce",
+    "scope": [
+      "."
+    ],
+    "entries": 1
+  },
+  {
+    "target": "/tmp/corpus-apps3/Kovah_LinkAce-bxy4t1",
+    "truth": "/tmp/corpus-apps3/Kovah_LinkAce-bxy4t1.truth.json",
+    "advisory": "CVE-2024-56507",
+    "aliases": [
+      "CVE-2024-56507"
+    ],
+    "repo": "Kovah/LinkAce",
+    "published": "2024-12-27",
+    "cwe": [
+      "CWE-79"
+    ],
+    "severity": "",
+    "fix_commit": "c7cd6a323a03ccd89c7f905f7d9f2afc265b7b67",
+    "scope_files": 689,
+    "scope_loc": 28476,
+    "id": "CVE-2024-56507",
+    "package": "Kovah/LinkAce",
+    "scope": [
+      "."
+    ],
+    "entries": 2
+  },
+  {
+    "target": "/tmp/corpus-apps3/fatfreecrm_fat_free_crm-cfaymd",
+    "truth": "/tmp/corpus-apps3/fatfreecrm_fat_free_crm-cfaymd.truth.json",
+    "advisory": "CVE-2022-39281",
+    "aliases": [
+      "CVE-2022-39281",
+      "GHSA-p75c-5x3h-cxcg"
+    ],
+    "repo": "fatfreecrm/fat_free_crm",
+    "published": "2022-10-07",
+    "cwe": [
+      "CWE-20"
+    ],
+    "severity": "MODERATE",
+    "fix_commit": "c85a2546348c2692d32f952c753f7f0b43d1ca71",
+    "scope_files": 239,
+    "scope_loc": 13376,
+    "id": "CVE-2022-39281",
+    "package": "fatfreecrm/fat_free_crm",
+    "scope": [
+      "."
+    ],
+    "entries": 2
+  },
+  {
+    "target": "/tmp/corpus-apps3/fatfreecrm_fat_free_crm-7ojuhk",
+    "truth": "/tmp/corpus-apps3/fatfreecrm_fat_free_crm-7ojuhk.truth.json",
+    "advisory": "CVE-2018-20975",
+    "aliases": [
+      "CVE-2018-20975",
+      "GHSA-4p8f-mmfj-r45g"
+    ],
+    "repo": "fatfreecrm/fat_free_crm",
+    "published": "2019-08-20",
+    "cwe": [
+      "CWE-79"
+    ],
+    "severity": "MODERATE",
+    "fix_commit": "6d60bc8ed010c4eda05d6645c64849f415f68d65",
+    "scope_files": 235,
+    "scope_loc": 12867,
+    "id": "CVE-2018-20975",
+    "package": "fatfreecrm/fat_free_crm",
+    "scope": [
+      "."
+    ],
+    "entries": 1
+  },
+  {
+    "target": "/tmp/corpus-apps3/benbusby_whoogle-search-j56i6v",
+    "truth": "/tmp/corpus-apps3/benbusby_whoogle-search-j56i6v.truth.json",
+    "advisory": "CVE-2024-22417",
+    "aliases": [
+      "CVE-2024-22417",
+      "GHSA-phg6-44m7-hx3h",
+      "PYSEC-2024-19"
+    ],
+    "repo": "benbusby/whoogle-search",
+    "published": "2024-01-23",
+    "cwe": [
+      "CWE-79"
+    ],
+    "severity": "MODERATE",
+    "fix_commit": "3a2e0b262e4a076a20416b45e6b6f23fd265aeda",
+    "scope_files": 25,
+    "scope_loc": 3650,
+    "id": "CVE-2024-22417",
+    "package": "benbusby/whoogle-search",
+    "scope": [
+      "."
+    ],
+    "entries": 1
+  },
+  {
+    "target": "/tmp/corpus-apps3/benbusby_whoogle-search-c1dcl9",
+    "truth": "/tmp/corpus-apps3/benbusby_whoogle-search-c1dcl9.truth.json",
+    "advisory": "CVE-2024-22205",
+    "aliases": [
+      "CVE-2024-22205",
+      "GHSA-3q6g-qmpx-rqw4",
+      "PYSEC-2024-18"
+    ],
+    "repo": "benbusby/whoogle-search",
+    "published": "2024-01-23",
+    "cwe": [
+      "CWE-918"
+    ],
+    "severity": "CRITICAL",
+    "fix_commit": "3a2e0b262e4a076a20416b45e6b6f23fd265aeda",
+    "scope_files": 25,
+    "scope_loc": 3650,
+    "id": "CVE-2024-22205",
+    "package": "benbusby/whoogle-search",
+    "scope": [
+      "."
+    ],
+    "entries": 1
+  },
+  {
+    "target": "/tmp/corpus-apps3/benbusby_whoogle-search-cxcgii",
+    "truth": "/tmp/corpus-apps3/benbusby_whoogle-search-cxcgii.truth.json",
+    "advisory": "CVE-2024-22204",
+    "aliases": [
+      "CVE-2024-22204",
+      "GHSA-hh2q-qv66-jcqg",
+      "PYSEC-2024-23"
+    ],
+    "repo": "benbusby/whoogle-search",
+    "published": "2024-01-23",
+    "cwe": [
+      "CWE-22"
+    ],
+    "severity": "MODERATE",
+    "fix_commit": "3a2e0b262e4a076a20416b45e6b6f23fd265aeda",
+    "scope_files": 25,
+    "scope_loc": 3650,
+    "id": "CVE-2024-22204",
+    "package": "benbusby/whoogle-search",
+    "scope": [
+      "."
+    ],
+    "entries": 1
+  },
+  {
+    "target": "/tmp/corpus-apps3/benbusby_whoogle-search-bfxcsr",
+    "truth": "/tmp/corpus-apps3/benbusby_whoogle-search-bfxcsr.truth.json",
+    "advisory": "CVE-2024-22203",
+    "aliases": [
+      "CVE-2024-22203",
+      "GHSA-q97g-c29h-x2p7",
+      "PYSEC-2024-20"
+    ],
+    "repo": "benbusby/whoogle-search",
+    "published": "2024-01-23",
+    "cwe": [
+      "CWE-918"
+    ],
+    "severity": "CRITICAL",
+    "fix_commit": "3a2e0b262e4a076a20416b45e6b6f23fd265aeda",
+    "scope_files": 25,
+    "scope_loc": 3650,
+    "id": "CVE-2024-22203",
+    "package": "benbusby/whoogle-search",
+    "scope": [
+      "."
+    ],
+    "entries": 1
+  },
+  {
+    "target": "/tmp/corpus-apps3/benbusby_whoogle-search-i9tx2u",
+    "truth": "/tmp/corpus-apps3/benbusby_whoogle-search-i9tx2u.truth.json",
+    "advisory": "CVE-2024-53305",
+    "aliases": [
+      "CVE-2024-53305",
+      "GHSA-2689-cw26-6cpj",
+      "PYSEC-2026-2048"
+    ],
+    "repo": "benbusby/whoogle-search",
+    "published": "2025-04-16",
+    "cwe": [
+      "CWE-78"
+    ],
+    "severity": "HIGH",
+    "fix_commit": "223f00c3c0533423114f99b30c561278bc0b42ba",
+    "scope_files": 25,
+    "scope_loc": 3955,
+    "id": "CVE-2024-53305",
+    "package": "benbusby/whoogle-search",
+    "scope": [
+      "."
+    ],
+    "entries": 1
+  },
+  {
+    "target": "/tmp/corpus-apps3/enchant97_note-mark-sa6r4t",
+    "truth": "/tmp/corpus-apps3/enchant97_note-mark-sa6r4t.truth.json",
+    "advisory": "CVE-2026-40262",
+    "aliases": [
+      "CVE-2026-40262",
+      "GHSA-9pr4-rf97-79qh",
+      "GO-2026-5295"
+    ],
+    "repo": "enchant97/note-mark",
+    "published": "2026-04-13",
+    "cwe": [
+      "CWE-434",
+      "CWE-79"
+    ],
+    "severity": "HIGH",
+    "fix_commit": "6bb62842ccb956870b9bf183629eba95e326e5e3",
+    "scope_files": 88,
+    "scope_loc": 8262,
+    "id": "CVE-2026-40262",
+    "package": "enchant97/note-mark",
+    "scope": [
+      "."
+    ],
+    "entries": 1
+  },
+  {
+    "target": "/tmp/corpus-apps3/enchant97_note-mark-55xtoe",
+    "truth": "/tmp/corpus-apps3/enchant97_note-mark-55xtoe.truth.json",
+    "advisory": "CVE-2026-40263",
+    "aliases": [
+      "CVE-2026-40263",
+      "GHSA-w6m9-39cv-2fwp",
+      "GO-2026-5696"
+    ],
+    "repo": "enchant97/note-mark",
+    "published": "2026-04-13",
+    "cwe": [
+      "CWE-208"
+    ],
+    "severity": "LOW",
+    "fix_commit": "cf4c6f6acf70b569d80396d323b067c00d45c034",
+    "scope_files": 88,
+    "scope_loc": 8288,
+    "id": "CVE-2026-40263",
+    "package": "enchant97/note-mark",
+    "scope": [
+      "."
+    ],
+    "entries": 2
+  },
+  {
+    "target": "/tmp/corpus-apps3/enchant97_note-mark-z2si2o",
+    "truth": "/tmp/corpus-apps3/enchant97_note-mark-z2si2o.truth.json",
+    "advisory": "CVE-2024-41819",
+    "aliases": [
+      "CVE-2024-41819"
+    ],
+    "repo": "enchant97/note-mark",
+    "published": "2024-07-29",
+    "cwe": [
+      "CWE-79"
+    ],
+    "severity": "",
+    "fix_commit": "a0997facb82f85bfb8c0d497606d89e7d150e182",
+    "scope_files": 78,
+    "scope_loc": 6932,
+    "id": "CVE-2024-41819",
+    "package": "enchant97/note-mark",
+    "scope": [
+      "."
+    ],
+    "entries": 1
+  },
+  {
+    "target": "/tmp/corpus-apps3/enchant97_note-mark-yh2ixt",
+    "truth": "/tmp/corpus-apps3/enchant97_note-mark-yh2ixt.truth.json",
+    "advisory": "CVE-2026-40265",
+    "aliases": [
+      "CVE-2026-40265",
+      "GHSA-p5w6-75f9-cc2p",
+      "GO-2026-5530"
+    ],
+    "repo": "enchant97/note-mark",
+    "published": "2026-04-13",
+    "cwe": [
+      "CWE-862"
+    ],
+    "severity": "MODERATE",
+    "fix_commit": "6593898855add151eb9965d96998b05e14c62026",
+    "scope_files": 88,
+    "scope_loc": 8270,
+    "id": "CVE-2026-40265",
+    "package": "enchant97/note-mark",
+    "scope": [
+      "."
+    ],
+    "entries": 2
+  },
+  {
+    "target": "/tmp/corpus-apps3/publify_publify-ryar3d",
+    "truth": "/tmp/corpus-apps3/publify_publify-ryar3d.truth.json",
+    "advisory": "CVE-2022-1553",
+    "aliases": [
+      "CVE-2022-1553",
+      "GHSA-5jm7-g527-m694"
+    ],
+    "repo": "publify/publify",
+    "published": "2022-05-16",
+    "cwe": [
+      "CWE-284",
+      "CWE-863"
+    ],
+    "severity": "MODERATE",
+    "fix_commit": "1a78f16f460847274265a12a9555b3524892d7db",
+    "scope_files": 238,
+    "scope_loc": 17565,
+    "id": "CVE-2022-1553",
+    "package": "publify/publify",
+    "scope": [
+      "."
+    ],
+    "entries": 1
+  },
+  {
+    "target": "/tmp/corpus-apps3/publify_publify-rhcpcp",
+    "truth": "/tmp/corpus-apps3/publify_publify-rhcpcp.truth.json",
+    "advisory": "CVE-2021-25975",
+    "aliases": [
+      "CVE-2021-25975",
+      "GHSA-3h7v-wqw7-ff28"
+    ],
+    "repo": "publify/publify",
+    "published": "2021-11-10",
+    "cwe": [
+      "CWE-79"
+    ],
+    "severity": "MODERATE",
+    "fix_commit": "d99c0870d3dbbfde7febdc6cad33199b84770101",
+    "scope_files": 236,
+    "scope_loc": 17525,
+    "id": "CVE-2021-25975",
+    "package": "publify/publify",
+    "scope": [
+      "."
+    ],
+    "entries": 1
+  },
+  {
+    "target": "/tmp/corpus-apps3/publify_publify-ki3hta",
+    "truth": "/tmp/corpus-apps3/publify_publify-ki3hta.truth.json",
+    "advisory": "CVE-2022-0524",
+    "aliases": [
+      "CVE-2022-0524",
+      "GHSA-x3rq-r3cm-5vc4"
+    ],
+    "repo": "publify/publify",
+    "published": "2022-02-08",
+    "cwe": [
+      "CWE-840",
+      "CWE-841"
+    ],
+    "severity": "HIGH",
+    "fix_commit": "16fceecadbe80ab0ef846b62a12dc7bfff10b8c5",
+    "scope_files": 237,
+    "scope_loc": 17546,
+    "id": "CVE-2022-0524",
+    "package": "publify/publify",
+    "scope": [
+      "."
+    ],
+    "entries": 1
+  },
+  {
+    "target": "/tmp/corpus-apps3/publify_publify-bgxz0i",
+    "truth": "/tmp/corpus-apps3/publify_publify-bgxz0i.truth.json",
+    "advisory": "CVE-2022-0578",
+    "aliases": [
+      "CVE-2022-0578",
+      "GHSA-w78q-4w34-jrjx"
+    ],
+    "repo": "publify/publify",
+    "published": "2022-05-16",
+    "cwe": [
+      "CWE-94"
+    ],
+    "severity": "MODERATE",
+    "fix_commit": "b50df050c593cc532b2c516792989bcfce2d73f7",
+    "scope_files": 238,
+    "scope_loc": 17561,
+    "id": "CVE-2022-0578",
+    "package": "publify/publify",
+    "scope": [
+      "."
+    ],
+    "entries": 1
+  },
+  {
+    "target": "/tmp/corpus-apps3/publify_publify-xnhowp",
+    "truth": "/tmp/corpus-apps3/publify_publify-xnhowp.truth.json",
+    "advisory": "CVE-2022-0574",
+    "aliases": [
+      "CVE-2022-0574",
+      "GHSA-79m3-q3wh-c3qm"
+    ],
+    "repo": "publify/publify",
+    "published": "2022-05-16",
+    "cwe": [
+      "CWE-284",
+      "CWE-863"
+    ],
+    "severity": "MODERATE",
+    "fix_commit": "0e6c66ac2002136517662399bca9d838c80d9739",
+    "scope_files": 238,
+    "scope_loc": 17554,
+    "id": "CVE-2022-0574",
+    "package": "publify/publify",
+    "scope": [
+      "."
+    ],
+    "entries": 1
+  },
+  {
+    "target": "/tmp/corpus-apps3/YOURLS_YOURLS-i2vfnc",
+    "truth": "/tmp/corpus-apps3/YOURLS_YOURLS-i2vfnc.truth.json",
+    "advisory": "CVE-2026-63135",
+    "aliases": [
+      "CVE-2026-63135",
+      "GHSA-5h77-88j3-r659"
+    ],
+    "repo": "YOURLS/YOURLS",
+    "published": "2026-08-21",
+    "cwe": [
+      "CWE-79"
+    ],
+    "severity": "HIGH",
+    "fix_commit": "e1e93476655107e6caab34e52259eb1c91079ec7",
+    "scope_files": 61,
+    "scope_loc": 16174,
+    "id": "CVE-2026-63135",
+    "package": "YOURLS/YOURLS",
+    "scope": [
+      "."
+    ],
+    "entries": 1
+  },
+  {
+    "target": "/tmp/corpus-apps3/filegator_filegator-k2esce",
+    "truth": "/tmp/corpus-apps3/filegator_filegator-k2esce.truth.json",
+    "advisory": "CVE-2026-63358",
+    "aliases": [
+      "CVE-2026-63358"
+    ],
+    "repo": "filegator/filegator",
+    "published": "2026-07-21",
+    "cwe": [
+      "CWE-732"
+    ],
+    "severity": "",
+    "fix_commit": "4a44ed9a43f84505703dce669c68fb55270c3f2c",
+    "scope_files": 85,
+    "scope_loc": 7365,
+    "id": "CVE-2026-63358",
+    "package": "filegator/filegator",
+    "scope": [
+      "."
+    ],
+    "entries": 1
+  },
+  {
+    "target": "/tmp/corpus-apps3/filegator_filegator-vb2yg8",
+    "truth": "/tmp/corpus-apps3/filegator_filegator-vb2yg8.truth.json",
+    "advisory": "CVE-2022-1850",
+    "aliases": [
+      "CVE-2022-1850",
+      "GHSA-rrhw-54r8-545q"
+    ],
+    "repo": "filegator/filegator",
+    "published": "2022-05-24",
+    "cwe": [
+      "CWE-22"
+    ],
+    "severity": "MODERATE",
+    "fix_commit": "6e2b68f17f48cdc1d6a4a93a2369d2069fe64989",
+    "scope_files": 78,
+    "scope_loc": 6478,
+    "id": "CVE-2022-1850",
+    "package": "filegator/filegator",
+    "scope": [
+      "."
+    ],
+    "entries": 1
+  },
+  {
+    "target": "/tmp/corpus-apps3/filegator_filegator-nkabra",
+    "truth": "/tmp/corpus-apps3/filegator_filegator-nkabra.truth.json",
+    "advisory": "CVE-2022-1849",
+    "aliases": [
+      "CVE-2022-1849",
+      "GHSA-47vg-483w-hp3m"
+    ],
+    "repo": "filegator/filegator",
+    "published": "2022-05-24",
+    "cwe": [
+      "CWE-384"
+    ],
+    "severity": "MODERATE",
+    "fix_commit": "fcd3995f64f5dfc6a4c2c059cc22a2fef1e81225",
+    "scope_files": 78,
+    "scope_loc": 6492,
+    "id": "CVE-2022-1849",
+    "package": "filegator/filegator",
+    "scope": [
+      "."
+    ],
+    "entries": 1
+  },
+  {
+    "target": "/tmp/corpus-apps3/goshs-labs_goshs-skwqiw",
+    "truth": "/tmp/corpus-apps3/goshs-labs_goshs-skwqiw.truth.json",
+    "advisory": "CVE-2026-64863",
+    "aliases": [
+      "CVE-2026-64863",
+      "GHSA-hq33-8jgp-8qq3",
+      "GO-2026-6136"
+    ],
+    "repo": "goshs-labs/goshs",
+    "published": "2026-07-28",
+    "cwe": [
+      "CWE-284"
+    ],
+    "severity": "CRITICAL",
+    "fix_commit": "0444ac6b1a8176ddae70d940adf7a26b2e5a6c29",
+    "scope_files": 106,
+    "scope_loc": 24059,
+    "id": "CVE-2026-64863",
+    "package": "goshs-labs/goshs",
+    "scope": [
+      "."
+    ],
+    "entries": 2
+  },
+  {
+    "target": "/tmp/corpus-apps3/goshs-labs_goshs-hl2oe9",
+    "truth": "/tmp/corpus-apps3/goshs-labs_goshs-hl2oe9.truth.json",
+    "advisory": "CVE-2026-54719",
+    "aliases": [
+      "CVE-2026-54719",
+      "GHSA-rmxw-pq4x-3fvh",
+      "GO-2026-6133"
+    ],
+    "repo": "goshs-labs/goshs",
+    "published": "2026-07-28",
+    "cwe": [
+      "CWE-862",
+      "CWE-863"
+    ],
+    "severity": "HIGH",
+    "fix_commit": "7cf911a26ace737e1a55b7dc073e307a25f7fd1d",
+    "scope_files": 99,
+    "scope_loc": 19654,
+    "id": "CVE-2026-54719",
+    "package": "goshs-labs/goshs",
+    "scope": [
+      "."
+    ],
+    "entries": 2
+  },
+  {
+    "target": "/tmp/corpus-apps3/goshs-labs_goshs-u3hln3",
+    "truth": "/tmp/corpus-apps3/goshs-labs_goshs-u3hln3.truth.json",
+    "advisory": "CVE-2026-62325",
+    "aliases": [
+      "CVE-2026-62325",
+      "GHSA-rjrw-mjq6-hpmm",
+      "GO-2026-6132"
+    ],
+    "repo": "goshs-labs/goshs",
+    "published": "2026-07-28",
+    "cwe": [
+      "CWE-306"
+    ],
+    "severity": "CRITICAL",
+    "fix_commit": "32f4a0e1790a709f722d0f3b2341f139d003180a",
+    "scope_files": 106,
+    "scope_loc": 23746,
+    "id": "CVE-2026-62325",
+    "package": "goshs-labs/goshs",
+    "scope": [
+      "."
+    ],
+    "entries": 1
+  },
+  {
+    "target": "/tmp/corpus-apps3/goshs-labs_goshs-cb3uwd",
+    "truth": "/tmp/corpus-apps3/goshs-labs_goshs-cb3uwd.truth.json",
+    "advisory": "CVE-2026-66064",
+    "aliases": [
+      "CVE-2026-66064",
+      "GHSA-964w-f6gj-5236",
+      "GO-2026-6134"
+    ],
+    "repo": "goshs-labs/goshs",
+    "published": "2026-07-28",
+    "cwe": [
+      "CWE-22",
+      "CWE-41",
+      "CWE-863"
+    ],
+    "severity": "MODERATE",
+    "fix_commit": "f3ef599e409151d1380866e47de8b1afb0bb54fa",
+    "scope_files": 106,
+    "scope_loc": 24209,
+    "id": "CVE-2026-66064",
+    "package": "goshs-labs/goshs",
+    "scope": [
+      "."
+    ],
+    "entries": 2
+  },
+  {
+    "target": "/tmp/corpus-apps3/goshs-labs_goshs-7ws6tj",
+    "truth": "/tmp/corpus-apps3/goshs-labs_goshs-7ws6tj.truth.json",
+    "advisory": "CVE-2026-66063",
+    "aliases": [
+      "CVE-2026-66063",
+      "GHSA-wg2q-39h6-66x9",
+      "GO-2026-6137"
+    ],
+    "repo": "goshs-labs/goshs",
+    "published": "2026-07-28",
+    "cwe": [
+      "CWE-22"
+    ],
+    "severity": "MODERATE",
+    "fix_commit": "f3ef599e409151d1380866e47de8b1afb0bb54fa",
+    "scope_files": 106,
+    "scope_loc": 24209,
+    "id": "CVE-2026-66063",
+    "package": "goshs-labs/goshs",
+    "scope": [
+      "."
+    ],
+    "entries": 2
+  },
+  {
+    "target": "/tmp/corpus-apps3/coderaiser_cloudcmd-4uf6tg",
+    "truth": "/tmp/corpus-apps3/coderaiser_cloudcmd-4uf6tg.truth.json",
+    "advisory": "CVE-2026-82460",
+    "aliases": [
+      "CVE-2026-82460"
+    ],
+    "repo": "coderaiser/cloudcmd",
+    "published": "2026-08-29",
+    "cwe": [
+      "CWE-22"
+    ],
+    "severity": "",
+    "fix_commit": "b9bdc9ed528350eeb2f9ef974c18998096fae919",
+    "scope_files": 118,
+    "scope_loc": 12182,
+    "id": "CVE-2026-82460",
+    "package": "coderaiser/cloudcmd",
+    "scope": [
+      "."
+    ],
+    "entries": 3
+  },
+  {
+    "target": "/tmp/corpus-apps3/remram44_taguette-zjuzzm",
+    "truth": "/tmp/corpus-apps3/remram44_taguette-zjuzzm.truth.json",
+    "advisory": "CVE-2025-67502",
+    "aliases": [
+      "CVE-2025-67502",
+      "GHSA-5923-r76v-mprm",
+      "PYSEC-2026-1948"
+    ],
+    "repo": "remram44/taguette",
+    "published": "2025-12-09",
+    "cwe": [
+      "CWE-601"
+    ],
+    "severity": "MODERATE",
+    "fix_commit": "67de2d2612e7e2572c61cd9627f89c2bfd0f2a36",
+    "scope_files": 47,
+    "scope_loc": 12911,
+    "id": "CVE-2025-67502",
+    "package": "remram44/taguette",
+    "scope": [
+      "."
+    ],
+    "entries": 3
+  },
+  {
+    "target": "/tmp/corpus-apps3/archivy_archivy-2pgntp",
+    "truth": "/tmp/corpus-apps3/archivy_archivy-2pgntp.truth.json",
+    "advisory": "CVE-2022-0697",
+    "aliases": [
+      "CVE-2022-0697",
+      "GHSA-28mg-98xm-q493",
+      "PYSEC-2022-161"
+    ],
+    "repo": "archivy/archivy",
+    "published": "2022-03-06",
+    "cwe": [
+      "CWE-601"
+    ],
+    "severity": "MODERATE",
+    "fix_commit": "2d8cb29853190d42572b36deb61127e68d6be574",
+    "scope_files": 26,
+    "scope_loc": 4997,
+    "id": "CVE-2022-0697",
+    "package": "archivy/archivy",
+    "scope": [
+      "."
+    ],
+    "entries": 2
+  },
+  {
+    "target": "/tmp/corpus-apps3/archivy_archivy-2u7ce2",
+    "truth": "/tmp/corpus-apps3/archivy_archivy-2u7ce2.truth.json",
+    "advisory": "CVE-2021-4162",
+    "aliases": [
+      "CVE-2021-4162",
+      "GHSA-9236-8w7q-rmrv",
+      "PYSEC-2021-869"
+    ],
+    "repo": "archivy/archivy",
+    "published": "2021-12-25",
+    "cwe": [
+      "CWE-352"
+    ],
+    "severity": "MODERATE",
+    "fix_commit": "796c3ae318eea183fc88c87ec5a27355b0f6a99d",
+    "scope_files": 26,
+    "scope_loc": 4915,
+    "id": "CVE-2021-4162",
+    "package": "archivy/archivy",
+    "scope": [
+      "."
+    ],
+    "entries": 3
+  },
+  {
+    "target": "/tmp/corpus-apps3/django-helpdesk_django-helpdesk-vuron7",
+    "truth": "/tmp/corpus-apps3/django-helpdesk_django-helpdesk-vuron7.truth.json",
+    "advisory": "CVE-2021-3994",
+    "aliases": [
+      "CVE-2021-3994",
+      "GHSA-2v5j-q74q-r53f",
+      "PYSEC-2021-438"
+    ],
+    "repo": "django-helpdesk/django-helpdesk",
+    "published": "2021-12-01",
+    "cwe": [
+      "CWE-79"
+    ],
+    "severity": "HIGH",
+    "fix_commit": "a22eb0673fe0b7784f99c6b5fd343b64a6700f06",
+    "scope_files": 92,
+    "scope_loc": 11477,
+    "id": "CVE-2021-3994",
+    "package": "django-helpdesk/django-helpdesk",
+    "scope": [
+      "."
+    ],
+    "entries": 1
+  },
+  {
+    "target": "/tmp/corpus-apps3/django-helpdesk_django-helpdesk-i2zzod",
+    "truth": "/tmp/corpus-apps3/django-helpdesk_django-helpdesk-i2zzod.truth.json",
+    "advisory": "CVE-2021-3950",
+    "aliases": [
+      "CVE-2021-3950",
+      "GHSA-vfrc-ggmc-5jwv",
+      "PYSEC-2021-431"
+    ],
+    "repo": "django-helpdesk/django-helpdesk",
+    "published": "2021-11-19",
+    "cwe": [
+      "CWE-79"
+    ],
+    "severity": "HIGH",
+    "fix_commit": "04483bdac3b5196737516398b5ce0383875a5c60",
+    "scope_files": 92,
+    "scope_loc": 11461,
+    "id": "CVE-2021-3950",
+    "package": "django-helpdesk/django-helpdesk",
+    "scope": [
+      "."
+    ],
+    "entries": 1
+  },
+  {
+    "target": "/tmp/corpus-apps3/alerta_alerta-iirnbi",
+    "truth": "/tmp/corpus-apps3/alerta_alerta-iirnbi.truth.json",
+    "advisory": "CVE-2020-26214",
+    "aliases": [
+      "CVE-2020-26214",
+      "GHSA-5hmm-x8q8-w5jh",
+      "PYSEC-2020-159"
+    ],
+    "repo": "alerta/alerta",
+    "published": "2020-11-06",
+    "cwe": [
+      "CWE-287"
+    ],
+    "severity": "CRITICAL",
+    "fix_commit": "2bfa31779a4c9df2fa68fa4d0c5c909698c5ef65",
+    "scope_files": 108,
+    "scope_loc": 14723,
+    "id": "CVE-2020-26214",
+    "package": "alerta/alerta",
+    "scope": [
+      "."
+    ],
+    "entries": 2
+  },
+  {
+    "target": "/tmp/corpus-apps3/alerta_alerta-hmkkaa",
+    "truth": "/tmp/corpus-apps3/alerta_alerta-hmkkaa.truth.json",
+    "advisory": "CVE-2026-34400",
+    "aliases": [
+      "CVE-2026-34400",
+      "GHSA-8prr-286p-4w7j",
+      "PYSEC-2026-2341"
+    ],
+    "repo": "alerta/alerta",
+    "published": "2026-03-31",
+    "cwe": [
+      "CWE-89"
+    ],
+    "severity": "MODERATE",
+    "fix_commit": "aeba85a37a09e5769a7a2da56481aa979ff99a00",
+    "scope_files": 91,
+    "scope_loc": 10707,
+    "id": "CVE-2026-34400",
+    "package": "alerta/alerta",
+    "scope": [
+      "."
+    ],
+    "entries": 4
+  },
+  {
+    "target": "/tmp/corpus-apps3/IceWhaleTech_CasaOS-7hxfir",
+    "truth": "/tmp/corpus-apps3/IceWhaleTech_CasaOS-7hxfir.truth.json",
+    "advisory": "CVE-2022-24193",
+    "aliases": [
+      "CVE-2022-24193",
+      "GHSA-jh63-28gx-7p26",
+      "GO-2022-0606"
+    ],
+    "repo": "IceWhaleTech/CasaOS",
+    "published": "2022-03-07",
+    "cwe": [
+      "CWE-78"
+    ],
+    "severity": "CRITICAL",
+    "fix_commit": "d060968b7ab08e7f8cbfe7ca9ccdfa47afe9bb06",
+    "scope_files": 116,
+    "scope_loc": 22012,
+    "id": "CVE-2022-24193",
+    "package": "IceWhaleTech/CasaOS",
+    "scope": [
+      "."
+    ],
+    "entries": 14
+  },
+  {
+    "target": "/tmp/corpus-apps3/IceWhaleTech_CasaOS-etc2tf",
+    "truth": "/tmp/corpus-apps3/IceWhaleTech_CasaOS-etc2tf.truth.json",
+    "advisory": "CVE-2023-37469",
+    "aliases": [
+      "CVE-2023-37469",
+      "GHSA-92vc-4fcw-g68q",
+      "GO-2023-2026"
+    ],
+    "repo": "IceWhaleTech/CasaOS",
+    "published": "2023-08-24",
+    "cwe": [
+      "CWE-77"
+    ],
+    "severity": "CRITICAL",
+    "fix_commit": "af440eac5563644854ff33f72041e52d3fd1f47c",
+    "scope_files": 130,
+    "scope_loc": 13692,
+    "id": "CVE-2023-37469",
+    "package": "IceWhaleTech/CasaOS",
+    "scope": [
+      "."
+    ],
+    "entries": 2
+  },
+  {
+    "target": "/tmp/corpus-apps3/IceWhaleTech_CasaOS-ornv5i",
+    "truth": "/tmp/corpus-apps3/IceWhaleTech_CasaOS-ornv5i.truth.json",
+    "advisory": "CVE-2023-37266",
+    "aliases": [
+      "CVE-2023-37266",
+      "GHSA-m5q5-8mfw-p2hr",
+      "GO-2023-1931"
+    ],
+    "repo": "IceWhaleTech/CasaOS",
+    "published": "2023-07-17",
+    "cwe": [
+      "CWE-1391",
+      "CWE-287"
+    ],
+    "severity": "CRITICAL",
+    "fix_commit": "705bf1facbffd2ca40b159b0303132b6fdf657ad",
+    "scope_files": 130,
+    "scope_loc": 13804,
+    "id": "CVE-2023-37266",
+    "package": "IceWhaleTech/CasaOS",
+    "scope": [
+      "."
+    ],
+    "entries": 2
+  }
+]
