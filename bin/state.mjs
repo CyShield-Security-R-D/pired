@@ -17,7 +17,12 @@ export const ENGAGEMENT_TYPES = {
 	network: "pentest · network",
 };
 
-/** Count how many of each value there are. */
+/**
+ * Count how many of each value there are.
+ *
+ * @param {string[]} values
+ * @returns {Record<string, number>}
+ */
 export function tally(values) {
 	const out = {};
 	for (const v of values) out[v] = (out[v] ?? 0) + 1;
@@ -29,6 +34,9 @@ export function tally(values) {
  *
  * Entries are `{ name, mtimeMs }`; anything that could not be stat'd arrives
  * with -1 and loses to everything, rather than winning by being first.
+ *
+ * @param {Array<{ name: string; mtimeMs: number }>} entries
+ * @returns {string | undefined}
  */
 export function pickNewest(entries) {
 	let best;
@@ -42,7 +50,12 @@ export function pickNewest(entries) {
 	return best;
 }
 
-/** The label for a checklist's target type, or the raw type when it is unknown. */
+/**
+ * The label for a checklist's target type, or the raw type when it is unknown.
+ *
+ * @param {{ targetType?: string } | undefined} checklist
+ * @returns {string | undefined}
+ */
 export function engagementType(checklist) {
 	if (!checklist) return undefined;
 	return ENGAGEMENT_TYPES[checklist.targetType] ?? checklist.targetType;
@@ -54,6 +67,18 @@ export function engagementType(checklist) {
  * Derived from pired's own computations rather than from the .jsonl files, so
  * an external panel and the TUI can never disagree — an earlier version scraped
  * the ledgers directly and could.
+ *
+ * @param {object} input
+ * @param {string} input.name
+ * @param {{ targetType?: string }} [input.checklist]
+ * @param {{ mode?: string; authorized?: unknown; targets?: unknown }} [input.scope]
+ * @param {{ coveragePct?: number; findings?: unknown }} [input.stats]
+ * @param {{ matrix: { applicable: number; counts: Record<string, number> } }} [input.view]
+ * @param {Array<{ kind: string }>} [input.inventory]
+ * @param {Array<{ outcome: string }>} [input.hypotheses]
+ * @param {Array<{ severity: string; title: string }>} [input.findings]
+ * @param {Array<{ status: string; question: string; priority: string }>} [input.blockers]
+ * @param {number} [input.evidence]
  */
 export function buildPanelData({
 	name,
@@ -88,7 +113,12 @@ export function buildPanelData({
 	};
 }
 
-/** Drop SGR escapes, so a coloured string can be measured by what it shows. */
+/**
+ * Drop SGR escapes, so a coloured string can be measured by what it shows.
+ *
+ * @param {string} text
+ * @returns {string}
+ */
 export function stripAnsi(text) {
 	// eslint-disable-next-line no-control-regex
 	return text.replace(/\x1b\[[0-9;]*m/g, "");
@@ -99,6 +129,10 @@ export function stripAnsi(text) {
  *
  * The ellipsis is the difference between "this line was cut" and "the title ends
  * mid-word", which reads as corrupted data rather than as a narrow pane.
+ *
+ * @param {string} text
+ * @param {number} width
+ * @returns {string}
  */
 export function truncateToWidth(text, width) {
 	const bare = stripAnsi(text);

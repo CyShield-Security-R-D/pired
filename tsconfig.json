@@ -7,6 +7,7 @@
     "module": "nodenext",
     "moduleResolution": "nodenext",
     "allowImportingTsExtensions": true,
+    "allowJs": true,
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "verbatimModuleSyntax": true,
@@ -17,6 +18,7 @@
   },
   "include": [
     "core/**/*.ts",
+    "bin/**/*.ts",
     "extensions/**/*.ts",
     "eval/**/*.ts"
   ]

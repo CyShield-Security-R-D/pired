@@ -73,14 +73,20 @@ The adapter is a good citizen in pi's extension chain:
 ## Testing
 
 ```bash
-npm run check      # tsc --noEmit && vitest run && the assay probes
-npm test           # vitest run
-npm run typecheck  # tsc --noEmit
+npm run check         # tsc --noEmit && vitest run --coverage && the assay probes
+npm test              # vitest run
+npm run test:coverage # vitest run --coverage
+npm run typecheck     # tsc --noEmit
 ```
 
-162 unit tests over the core, plus the [assay](evaluation.md) probes over the harness itself.
+625 unit tests — 445 over the core, the rest over the pi adapter, the two
+binaries and the grader — plus the [assay](evaluation.md) probes over the
+harness itself. Coverage is measured and ratcheted; see [testing](testing.md)
+for what is excluded and why.
 
 Built test-first with fakes throughout. TypeScript is strict, with `noUncheckedIndexedAccess`, `verbatimModuleSyntax`, and `erasableSyntaxOnly` — the last one because pi type-strips the extension at load rather than compiling it, so anything non-erasable would fail at runtime rather than at build.
+
+`bin/launch.mjs` and `bin/state.mjs` are plain JavaScript, because they sit on the startup path of a CLI and a launcher that needs type-stripping to boot has one more way to fail before it can print anything. They are still typechecked: `allowJs` is on and their contracts are declared in JSDoc, so their tests are held to the same strictness as everything else.
 
 ## An AI agent, not a toolbox
 

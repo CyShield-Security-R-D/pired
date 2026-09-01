@@ -31,12 +31,22 @@ export const PROFILES = ["review", "recon", "pentest"];
  * A flag given without a value takes the default rather than swallowing the next
  * flag: `pired --model --resume` asked for pi's `--resume`, not for a model
  * called "--resume".
+ *
+ * @param {string[]} argv
+ * @param {string} name
+ * @param {string} [def]
+ * @returns {string | undefined}
  */
 export function argValue(argv, name, def) {
 	const i = argv.indexOf(`--${name}`);
 	return i >= 0 && argv[i + 1] && !argv[i + 1].startsWith("--") ? argv[i + 1] : def;
 }
 
+/**
+ * @param {string[]} argv
+ * @param {string} name
+ * @returns {boolean}
+ */
 export function hasFlag(argv, name) {
 	return argv.includes(`--${name}`);
 }
@@ -49,6 +59,9 @@ export function hasFlag(argv, name) {
  * worked out. There is no ambiguity to resolve: pired knows its own flags, and
  * anything else is pi's. `--` still works, for the case where a value would
  * otherwise look like a flag.
+ *
+ * @param {string[]} argv
+ * @returns {{ own: string[]; forwarded: string[]; explicit: string[]; passthrough: string[] }}
  */
 export function partition(argv) {
 	const passIdx = argv.indexOf("--");
@@ -81,6 +94,16 @@ export function partition(argv) {
  *
  * `env`, `exists` and `resolvePackage` are injected so the search order can be
  * tested on a platform that is not the one running the test.
+ *
+ * @param {object} opts
+ * @param {Record<string, string | undefined>} [opts.env]
+ * @param {string} opts.platform
+ * @param {string} opts.root
+ * @param {string | undefined} opts.argv1
+ * @param {(path: string) => boolean} opts.exists
+ * @param {(() => { dir: string; bin: string } | undefined)} [opts.resolvePackage]
+ *   Where npm put pi's package, when it is resolvable from here at all.
+ * @returns {string} An absolute path, or the bare name so PATH gets its chance.
  */
 export function findPi({ env = {}, platform, root, argv1, exists, resolvePackage }) {
 	if (env.PI_BIN) return env.PI_BIN;
@@ -107,7 +130,16 @@ export function findPi({ env = {}, platform, root, argv1, exists, resolvePackage
 	return "pi";
 }
 
-/** The pi command line pired's own flags imply. */
+/**
+ * The pi command line pired's own flags imply.
+ *
+ * @param {object} opts
+ * @param {string} opts.ext Absolute path to the pired extension.
+ * @param {string} opts.theme Absolute path to the pired theme.
+ * @param {string[]} opts.argv pired's own arguments, without node and the script.
+ * @param {(path: string) => boolean} [opts.exists]
+ * @returns {string[]}
+ */
 export function buildPiArgs({ ext, theme, argv, exists = () => true }) {
 	const profileArg = argValue(argv, "profile");
 	const profile = PROFILES.includes(profileArg) ? profileArg : "review";
@@ -138,6 +170,9 @@ export function buildPiArgs({ ext, theme, argv, exists = () => true }) {
  * Only needed for the cmd.exe hop below. Node's own `shell: true` joins the
  * arguments with spaces and quotes none of them, which loses every path holding
  * one — and "C:\\Users\\Jane Doe" is not an exotic home directory.
+ *
+ * @param {unknown} value
+ * @returns {string}
  */
 export function quoteForWindows(value) {
 	const text = String(value);
@@ -171,6 +206,14 @@ export function quoteForWindows(value) {
  * spawned as one; and everything left on Windows is a .cmd shim, which node
  * refuses to spawn without a shell (CVE-2024-27980) — so the command line is
  * built here rather than left to node's unquoted `shell: true`.
+ *
+ * @param {object} opts
+ * @param {string} opts.piBin
+ * @param {string[]} opts.piArgs
+ * @param {string} opts.platform
+ * @param {string} opts.execPath The node already running us.
+ * @param {string} [opts.comspec] `process.env.ComSpec`, when it is set.
+ * @returns {{ command: string; args: string[]; via: "node" | "direct" | "cmd"; windowsVerbatimArguments?: boolean }}
  */
 export function launchPlan({ piBin, piArgs, platform, execPath, comspec }) {
 	const windows = platform === "win32";
