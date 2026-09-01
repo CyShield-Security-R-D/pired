@@ -80,7 +80,7 @@ Full methodology, per-category breakdown, exact token/cost accounting, and threa
 
 ## Install
 
-**No [pi](https://pi.dev) yet?** One line installs pi, pired, and the extension registration:
+**Nothing yet?** One line, on a box with nothing on it:
 
 ```bash
 # macOS and Linux
@@ -92,7 +92,11 @@ curl -fsSL https://raw.githubusercontent.com/mamgad/pired/main/install.sh | sh
 powershell -c "irm https://raw.githubusercontent.com/mamgad/pired/main/install.ps1 | iex"
 ```
 
-Needs Node.js >= 22.19. No sudo or elevation, no daemon, no state outside `~/.pi` and `~/.pired`. Windows gets its own script because npm lays a global install out differently there and PATH is a registry value, not a line in a dotfile — it offers to add the npm prefix to your user PATH, and points you at Git for Windows if the box has no `bash`, since that is what pi runs the tools through.
+On macOS and Linux the script surveys the box, prints exactly what it will install and where, asks once, and then does all of it — Node.js when it is missing or older than 22.19, pi, pired, the extension registration that makes a bare `pi` load the security layer, and the PATH line that makes the command typeable. `--dry-run` prints the plan and stops; `-y` skips the question.
+
+**It never asks for root.** A vanilla Ubuntu has neither Node nor git, and neither absence is worth a `sudo`: Node comes from nodejs.org as a checksum-verified user-owned tarball under `~/.local/share/pired`, and a `github:` source is fetched over HTTPS when there is no git to clone with. Everything it writes lives in `~/.local/share/pired`, `~/.pi` and `~/.pired` — `rm -rf` those three and the box is as it was. No daemon, no service, no shell hooks beyond the one PATH line it shows you first.
+
+Windows gets its own script because npm lays a global install out differently there and PATH is a registry value, not a line in a dotfile — it offers to add the npm prefix to your user PATH, and points you at Git for Windows if the box has no `bash`, since that is what pi runs the tools through. It expects Node.js >= 22.19 to be there already rather than installing it for you.
 
 ```bash
 pired          # review the current directory
@@ -114,7 +118,7 @@ That registers it in `~/.pi/agent/settings.json`, and every later `pi` starts wi
 | `pi install <src>` | user-wide: every `pi` session loads the security layer | `~/.pi/agent/settings.json` |
 | `pi install -l <src>` | this project only — commit `.pi/settings.json` and a teammate's first trusted `pi` installs it for them | `.pi/settings.json` |
 | `pi -e <src>` | one session, from a temporary clone | nothing |
-| `install.sh` / `install.ps1` | the `pired` and `pired-state` launchers on top of the package | npm global + settings |
+| `install.sh` / `install.ps1` | the `pired` and `pired-state` launchers on top of the package, plus Node.js itself when the box has none | npm global + settings |
 
 `<src>` is any pi package source: `git:github.com/mamgad/pired`, an npm spec, or a path to a checkout (`pi install ~/src/pired` — recorded as a path, not copied, so your edits are live on the next start).
 

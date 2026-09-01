@@ -1,5 +1,5 @@
 #!/bin/sh
-# pired installer for macOS and Linux — the launcher and the pi extension.
+# pired installer for macOS and Linux — from a vanilla box to a first engagement.
 #
 #   curl -fsSL https://raw.githubusercontent.com/mamgad/pired/main/install.sh | sh
 #
@@ -8,24 +8,107 @@
 #
 #   powershell -c "irm https://raw.githubusercontent.com/mamgad/pired/main/install.ps1 | iex"
 #
-# Installs, in order: pi (if missing), pired, and pired's extension registration
-# so a plain `pi` also loads the security layer. Everything is npm-global; there
-# is no sudo, no daemon and no state outside ~/.pi and ~/.pired.
+# It surveys the box, prints exactly what it will do and where, asks once, and
+# then does all of it: Node.js (when missing or too old), pi, pired, the
+# extension registration that makes a bare `pi` load the security layer, and the
+# PATH line that makes the command typeable.
+#
+# Nothing runs as root. A vanilla Ubuntu has neither Node nor git, and neither
+# absence is a reason to reach for sudo:
+#
+#   - Node comes from nodejs.org as a user-owned tarball under ~/.local/share,
+#     checksum-verified, as .tar.gz so unpacking it needs no xz.
+#   - A github: source is fetched over HTTPS from codeload when git is missing,
+#     rather than apt-installing git in order to run one clone.
+#
+# An installer for a security tool that skips a checksum, or takes root it does
+# not need, teaches the wrong habit on the very first command.
+#
+# Usage:
+#   install.sh [-y|--yes] [--dry-run] [-h|--help]
 #
 # Environment:
 #   PIRED_SOURCE   npm spec to install from      (default github:mamgad/pired)
-#   NPM_PREFIX     prefix to install into        (default npm's own global root,
-#                  or ~/.local when that root is not writable)
-#   PIRED_SKIP_PI  set to 1 to not install pi
+#   NPM_PREFIX     prefix to install into        (default npm's own global root;
+#                  ~/.local/share/pired when this script brings its own Node,
+#                  ~/.local when npm's root is not writable)
+#   PIRED_SKIP_PI  1 to not install pi
+#   PIRED_YES      1 to skip the confirmation prompt
+#   PIRED_NO_ANIM  1 for plain line-at-a-time output
 
 set -eu
 
-RED='\033[38;5;203m'; DIM='\033[2m'; BOLD='\033[1m'; OFF='\033[0m'
-if [ ! -t 1 ]; then RED=''; DIM=''; BOLD=''; OFF=''; fi
+PI_PACKAGE="@earendil-works/pi-coding-agent"
+NODE_LINE=22
+NODE_MIN_MAJOR=22
+NODE_MIN_MINOR=19
+NODE_DIST="https://nodejs.org/dist/latest-v${NODE_LINE}.x"
+DEFAULT_REPO="mamgad/pired"
 
-say()  { printf '%b\n' "$*"; }
-step() { printf '%b\n' "${RED}::${OFF} $*"; }
-die()  { printf '%b\n' "${RED}pired:${OFF} $*" >&2; exit 1; }
+ASSUME_YES=${PIRED_YES:-0}
+DRY_RUN=0
+
+usage() {
+	# Piped from curl there is no file to read the header out of, so the flags
+	# are spelled out rather than sliced from the comment block above.
+	if [ -r "${0:-}" ] && head -1 "$0" 2>/dev/null | grep -q '^#!'; then
+		sed -n '2,37p' "$0" | sed 's/^# \{0,1\}//'
+		return 0
+	fi
+	cat <<'USAGE'
+pired installer — installs Node.js (if needed), pi, pired and the extension.
+
+  install.sh [-y|--yes] [--dry-run] [-h|--help]
+
+  -y, --yes    install without the confirmation prompt
+  --dry-run    print the plan and change nothing
+
+  PIRED_SOURCE / NPM_PREFIX / PIRED_SKIP_PI / PIRED_YES / PIRED_NO_ANIM
+  https://github.com/mamgad/pired/tree/main/docs
+USAGE
+}
+
+for arg in "$@"; do
+	case "$arg" in
+		-y|--yes) ASSUME_YES=1 ;;
+		--dry-run) DRY_RUN=1 ;;
+		-h|--help) usage; exit 0 ;;
+		*) printf 'pired: unknown option %s (try --help)\n' "$arg" >&2; exit 2 ;;
+	esac
+done
+
+# --- output -----------------------------------------------------------------
+# The palette is the theme's: #ff5f5f for the accent, a soft green for the
+# checkmarks. Colour is dropped the moment stdout is not a terminal, so a log
+# file or a CI transcript stays readable.
+if [ -t 1 ] && [ "${TERM:-}" != "dumb" ]; then
+	RED='\033[38;5;203m'; GREEN='\033[38;5;108m'; DIM='\033[2m'; BOLD='\033[1m'; OFF='\033[0m'
+	TTY_OUT=1
+else
+	RED=''; GREEN=''; DIM=''; BOLD=''; OFF=''
+	TTY_OUT=0
+fi
+
+say() { printf '%b\n' "$*"; }
+die() { printf '%b\n' "${RED}pired:${OFF} $*" >&2; exit 1; }
+
+# Unicode is a question about the terminal, not about the platform: a box with
+# LANG=C draws the block wordmark as a row of question marks.
+UNICODE=0
+case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
+	*UTF-8*|*utf-8*|*UTF8*|*utf8*) UNICODE=1 ;;
+esac
+case "${TERM_PROGRAM:-}" in Apple_Terminal|iTerm.app|vscode|WezTerm) UNICODE=1 ;; esac
+
+if [ "$UNICODE" = 1 ]; then TICK='✓'; CROSS='✗'; DOT='·'; PLUS='+'; ARROW='→'
+else TICK='ok'; CROSS='!!'; DOT='-'; PLUS='+'; ARROW='->'; fi
+
+# A fractional sleep is what makes a spinner a spinner. Every coreutils and BSD
+# sleep takes one, but busybox's does not always — so ask before relying on it.
+ANIMATE=0
+if [ "$TTY_OUT" = 1 ] && [ "${PIRED_NO_ANIM:-0}" != 1 ] && sleep 0.05 2>/dev/null; then
+	ANIMATE=1
+fi
 
 # npm's own output is captured rather than discarded. An installer that says
 # only "could not install" leaves the user with nothing to act on.
@@ -34,32 +117,237 @@ die()  { printf '%b\n' "${RED}pired:${OFF} $*" >&2; exit 1; }
 # GNU mktemp accepts — and a predictable /tmp name is a world-writable path this
 # script then writes to.
 LOG=$(mktemp "${TMPDIR:-/tmp}/pired-install.XXXXXX") || die "could not create a temporary file."
-trap 'rm -f "$LOG"' EXIT
-spill() { sed -e 's/^/    /' "$LOG" | tail -12 >&2; }
+WORKDIR=""
+cleanup() {
+	rm -f "$LOG"
+	[ -n "$WORKDIR" ] && rm -rf "$WORKDIR"
+	[ "$TTY_OUT" = 1 ] && printf '\033[?25h'
+	return 0
+}
+trap cleanup EXIT
+trap 'cleanup; exit 130' INT TERM
 
-npm_install() {
-	# shellcheck disable=SC2086 # $1 may be an empty flag slot
-	npm install --global --ignore-scripts $1 "$2" >"$LOG" 2>&1
+spill() { sed -e 's/^/    /' "$LOG" | tail -14 >&2; }
+
+tilde() {
+	case "$1" in
+		"$HOME"/*) printf '~%s' "${1#"$HOME"}" ;;
+		*) printf '%s' "$1" ;;
+	esac
 }
 
-# --- prerequisites ----------------------------------------------------------
-# Checked before the banner: on a pipe, stdout is block-buffered while stderr is
-# not, so a die() here would otherwise print above the header it follows.
+on_path() {
+	case ":${PATH}:" in *":$1:"*) return 0 ;; esac
+	return 1
+}
+
+# --- the wordmark -----------------------------------------------------------
+# The same lockup the agent opens with (core/banner.ts): PIRED in a three-row
+# half-block face, split at the word so "pi" and "red" take their own tone —
+# the name is literally pi + red, so the accent makes the wordmark explain
+# itself. Full block capitals would be six rows and read as retro.
+banner_row() {
+	say "  ${BOLD}$1${OFF}${RED}${BOLD}$2${OFF}"
+	[ "$ANIMATE" = 1 ] && sleep 0.06
+	return 0
+}
+
+banner() {
+	say ""
+	if [ "$UNICODE" = 1 ]; then
+		banner_row '█▀█ █' ' █▀█ █▀▀ █▀▄'
+		banner_row '█▀▀ █' ' █▀▄ █▀▀ █ █'
+		banner_row '▀   ▀' ' ▀ ▀ ▀▀▀ ▀▀ '
+	else
+		say "  ${BOLD}pi${OFF}${RED}${BOLD}red${OFF}"
+	fi
+	say ""
+	say "  ${DIM}security assessment harness${OFF}"
+	say ""
+}
+
+# --- progress ---------------------------------------------------------------
+# One line per step: a spinner while it runs, a checkmark when it lands. The
+# label beside the spinner is scraped out of the log as it grows, so a long npm
+# install says what it is doing rather than sitting on "installing".
+spinner_frame() {
+	if [ "$UNICODE" = 1 ]; then
+		case $(($1 % 10)) in
+			0) printf '⠋' ;; 1) printf '⠙' ;; 2) printf '⠹' ;; 3) printf '⠸' ;; 4) printf '⠼' ;;
+			5) printf '⠴' ;; 6) printf '⠦' ;; 7) printf '⠧' ;; 8) printf '⠇' ;; *) printf '⠏' ;;
+		esac
+	else
+		case $(($1 % 4)) in 0) printf '-' ;; 1) printf '\\' ;; 2) printf '|' ;; *) printf '/' ;; esac
+	fi
+}
+
+animate() {
+	anim_title=$1; anim_labeller=$2; anim_log=$3
+	anim_step=0
+	anim_label=$STEP_HINT
+	while :; do
+		if [ $((anim_step % 5)) -eq 0 ]; then
+			anim_label=$("$anim_labeller" "$anim_log" "$anim_label")
+		fi
+		printf '\r\033[K  %b %-11s%b' \
+			"${RED}$(spinner_frame "$anim_step")${OFF}" "$anim_title" "${DIM}${anim_label}${OFF}"
+		anim_step=$((anim_step + 1))
+		sleep 0.08
+	done
+}
+
+# What the spinner says until the log gives it something better. Set before each
+# step; the labellers fall back to it rather than to an empty line.
+STEP_HINT=""
+
+# Run one step of the install with a spinner over it. $1 title, $2 the function
+# that turns log lines into a short label, then the command and its arguments.
+step() {
+	step_title=$1; step_labeller=$2; shift 2
+	: >"$LOG"
+
+	if [ "$ANIMATE" != 1 ]; then
+		# On a terminal without a usable spinner, say what started; in a log the
+		# checkmark line that follows says it all and this would only be noise.
+		[ "$TTY_OUT" = 1 ] && printf '  %b %s\n' "${DIM}${DOT}${OFF}" "$step_title"
+		if "$@" >"$LOG" 2>&1; then return 0; fi
+		return 1
+	fi
+
+	"$@" >"$LOG" 2>&1 &
+	step_pid=$!
+	printf '\033[?25l'
+	animate "$step_title" "$step_labeller" "$LOG" &
+	anim_pid=$!
+	trap 'kill "$step_pid" 2>/dev/null; kill "$anim_pid" 2>/dev/null; cleanup; exit 130' INT TERM
+
+	if wait "$step_pid"; then step_status=0; else step_status=$?; fi
+
+	kill "$anim_pid" 2>/dev/null || true
+	wait "$anim_pid" 2>/dev/null || true
+	printf '\r\033[K\033[?25h'
+	trap 'cleanup; exit 130' INT TERM
+	return "$step_status"
+}
+
+done_line() { printf '%b\n' "  ${GREEN}${TICK}${OFF} $(printf '%-11s' "$1")${DIM}$2${OFF}"; }
+skip_line() { printf '%b\n' "  ${DIM}${DOT} $(printf '%-11s' "$1")$2${OFF}"; }
+warn_line() { printf '%b\n' "  ${RED}${CROSS}${OFF} $(printf '%-11s' "$1")${DIM}$2${OFF}"; }
+
+# The labellers. Nothing here is load-bearing: a line that matches nothing just
+# leaves the previous label standing.
+node_label() {
+	nl_label=${2:-$STEP_HINT}
+	while IFS= read -r line; do
+		case "$line" in
+			Resolving*) nl_label="resolving the current v${NODE_LINE} release" ;;
+			Downloading*) nl_label="downloading Node.js ${line#Downloading }" ;;
+			Verifying*) nl_label="verifying the checksum" ;;
+			Extracting*) nl_label="unpacking" ;;
+			Linking*) nl_label="linking node, npm and npx" ;;
+			Installed*) nl_label="installed" ;;
+		esac
+	done < "$1"
+	printf '%s' "$nl_label"
+}
+
+npm_label() {
+	nl_label=${2:-$STEP_HINT}
+	nl_meta=0
+	nl_tar=0
+	while IFS= read -r line; do
+		case "$line" in
+			Fetching*) nl_label="fetching ${line#Fetching }" ;;
+			Unpacking*) nl_label="unpacking the source" ;;
+			npm\ http\ fetch\ GET\ *registry.npmjs.org/*.tgz*)
+				nl_tar=$((nl_tar + 1)); nl_label="fetching packages (${nl_tar})" ;;
+			npm\ http\ fetch\ GET\ *registry.npmjs.org/*)
+				nl_meta=$((nl_meta + 1)); nl_label="resolving packages (${nl_meta})" ;;
+			npm\ verbose\ title*) nl_label="resolving packages" ;;
+			added\ *|changed\ *|removed\ *|up\ to\ date*) nl_label="$line" ;;
+		esac
+	done < "$1"
+	printf '%s' "$nl_label"
+}
+
+quiet_label() { printf '%s' "${2:-$STEP_HINT}"; }
+
+# --- download helpers -------------------------------------------------------
+# curl is how most people got here, but a clone run on a box without it should
+# still work, and wget is the other thing that is always there.
+fetch() {
+	if command -v curl >/dev/null 2>&1; then curl -fsSL "$1" -o "$2"
+	elif command -v wget >/dev/null 2>&1; then wget -qO "$2" "$1"
+	else return 1
+	fi
+}
+
+have_downloader() { command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1; }
+
+# A checksum this script cannot compute is a checksum it must not skip. pired
+# spends its working life telling people to verify what they run; an installer
+# that shrugged here would be the first counterexample.
+sha256_of() {
+	if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1
+	elif command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | cut -d' ' -f1
+	elif command -v openssl >/dev/null 2>&1; then openssl dgst -sha256 "$1" | sed 's/.*= *//'
+	else return 1
+	fi
+}
+
+# --- layout -----------------------------------------------------------------
+# When this script brings its own Node, everything it owns lives under one
+# directory:
 #
-# node 22.19 is pi's floor and pired's: the extension is TypeScript that pi
-# type-strips at load, which needs a runtime that can do it.
-command -v node >/dev/null 2>&1 || die "node not found. Install Node.js >= 22.19 and re-run."
-command -v npm  >/dev/null 2>&1 || die "npm not found. Install Node.js >= 22.19 and re-run."
+#   ~/.local/share/pired/bin              node, npm, npx, pi, pired  (one PATH entry)
+#   ~/.local/share/pired/lib/node_modules
+#   ~/.local/share/pired/node/v22.x.y
+#   ~/.local/share/pired/node/current  ->  v22.x.y
+#
+# The npm prefix is deliberately the *parent* of the Node tree rather than the
+# Node tree itself. Installing globals into node/current means installing them
+# into a versioned directory behind a symlink, so the next Node upgrade relinks
+# `current` and silently takes pi and pired with it.
+pired_home() { printf '%s/pired' "${XDG_DATA_HOME:-$HOME/.local/share}"; }
+node_home() { printf '%s/node' "$(pired_home)"; }
 
-NODE_MAJOR=$(node -p 'process.versions.node.split(".")[0]')
-NODE_MINOR=$(node -p 'process.versions.node.split(".")[1]')
-if [ "$NODE_MAJOR" -lt 22 ] || { [ "$NODE_MAJOR" -eq 22 ] && [ "$NODE_MINOR" -lt 19 ]; }; then
-	die "node $(node -v) is too old. pired needs >= 22.19."
-fi
+# pi's own installer parks a standalone Node here. If it is already on the box
+# and new enough, adopt it rather than downloading a second copy of the same
+# thing — the two installers should not each own a Node.
+pi_node_home() { printf '%s/pi-node' "${XDG_DATA_HOME:-$HOME/.local/share}"; }
 
-say ""
-say "  ${RED}${BOLD}pired${OFF} ${DIM}— security assessment harness${OFF}"
-say ""
+node_new_enough() {
+	command -v node >/dev/null 2>&1 || return 1
+	node -e "const [a,b]=process.versions.node.split('.').map(Number);process.exit(a>$NODE_MIN_MAJOR||(a===$NODE_MIN_MAJOR&&b>=$NODE_MIN_MINOR)?0:1)" >/dev/null 2>&1
+}
+
+adopt_node() {
+	for candidate in "$(node_home)/current/bin" "$(pi_node_home)/current/bin"; do
+		if [ -x "$candidate/node" ]; then
+			PATH="$candidate:$PATH"; export PATH
+			if node_new_enough; then
+				ADOPTED_NODE=$candidate
+				return 0
+			fi
+			PATH=${PATH#"$candidate:"}; export PATH
+		fi
+	done
+	return 1
+}
+
+writable_or_creatable() {
+	_d=$1
+	while [ ! -e "$_d" ]; do
+		_parent=${_d%/*}
+		[ -n "$_parent" ] && [ "$_parent" != "$_d" ] || return 1
+		_d=$_parent
+	done
+	[ -d "$_d" ] && [ -w "$_d" ]
+}
+
+npm_prefix_usable() {
+	writable_or_creatable "$1/lib/node_modules" && writable_or_creatable "$1/bin"
+}
 
 # --- source -----------------------------------------------------------------
 # Prefer a checkout we are sitting inside: running ./install.sh from a clone
@@ -69,79 +357,417 @@ SELF_DIR=""
 case "${0:-}" in
 	*/*) SELF_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd) ;;
 esac
-DEFAULT_SOURCE="github:mamgad/pired"
+DEFAULT_SOURCE="github:$DEFAULT_REPO"
 if [ -n "$SELF_DIR" ] && [ -f "$SELF_DIR/package.json" ] &&
 	grep -q '"name": *"pired"' "$SELF_DIR/package.json" 2>/dev/null; then
 	DEFAULT_SOURCE="$SELF_DIR"
 fi
-
 SOURCE=${PIRED_SOURCE:-$DEFAULT_SOURCE}
 
-# --- where to install -------------------------------------------------------
+# npm resolves a github: spec by shelling out to git, and a vanilla Ubuntu has no
+# git. Rather than apt-installing one — sudo, for a single clone — fetch the same
+# tree GitHub serves to a browser and install the unpacked directory.
+NEED_TARBALL=0
+case "$SOURCE" in
+	github:*) command -v git >/dev/null 2>&1 || NEED_TARBALL=1 ;;
+esac
+
+# --- survey -----------------------------------------------------------------
+# Checked before the banner: with stdout redirected to a file it is
+# block-buffered while stderr is not, so a die() here would otherwise print
+# above the header it follows.
+have_downloader || die "neither curl nor wget is on this box. Install one and re-run."
+
+banner
+
+ADOPTED_NODE=""
+NODE_STATE=missing
+if node_new_enough || adopt_node; then
+	NODE_STATE=present
+elif command -v node >/dev/null 2>&1; then
+	NODE_STATE=old
+fi
+
+DO_NODE=0
+[ "$NODE_STATE" = present ] || DO_NODE=1
+
+UNWRITABLE=""
+PIRED_HOME=$(pired_home)
+NODE_HOME=$(node_home)
+if [ -n "${NPM_PREFIX:-}" ]; then
+	npm_prefix_usable "$NPM_PREFIX" || die "cannot write to NPM_PREFIX=$NPM_PREFIX. Pick a writable directory."
+	PREFIX=$NPM_PREFIX
+elif [ "$DO_NODE" = 1 ]; then
+	PREFIX=$PIRED_HOME
+	sha256_of /dev/null >/dev/null 2>&1 ||
+		die "no sha256sum, shasum or openssl here, so the Node.js download could not be verified.\n  Install Node.js >= $NODE_MIN_MAJOR.$NODE_MIN_MINOR yourself and re-run."
+else
+	case "$ADOPTED_NODE" in
+		"$NODE_HOME"/*)
+			# A Node this installer put here on an earlier run. Its layout comes
+			# with it: `npm prefix --global` would answer with the *versioned*
+			# directory behind node/current, which is the directory a Node upgrade
+			# relinks away from — taking pi and pired with it. Re-runs have to land
+			# in the same stable prefix the first run chose.
+			PREFIX=$PIRED_HOME
+			;;
+		*)
+			PREFIX=$(npm prefix --global 2>/dev/null || true)
+			# `npm install --global` writes to lib/node_modules and bin. When it
+			# cannot — a distro node owned by root, and a user who was promised no
+			# sudo — fall back to a per-user prefix rather than failing with npm's
+			# EACCES wall of text.
+			if [ -z "$PREFIX" ] || ! npm_prefix_usable "$PREFIX"; then
+				UNWRITABLE="${PREFIX:-the npm global prefix}"
+				PREFIX="$HOME/.local"
+			fi
+			;;
+	esac
+fi
+BIN_DIR="$PREFIX/bin"
+
+# Whether this install owns its whole tree decides how it is undone: one rm -rf,
+# or an npm uninstall that leaves the surrounding Node alone.
+OWNS_TREE=0
+[ "$PREFIX" = "$PIRED_HOME" ] && OWNS_TREE=1
+
+command -v npm >/dev/null 2>&1 || [ "$DO_NODE" = 1 ] ||
+	die "npm not found beside node $(node -v). Install npm and re-run."
+
+# Resolved by path first: under a custom prefix, pi lands in a bin directory that
+# is typically not on PATH yet, and `command -v pi` would miss the copy we are
+# about to install — reinstalling it, then silently skipping the registration.
+DO_PI=1
+PI_STATE=missing
+if [ -x "$BIN_DIR/pi" ] || { [ "$DO_NODE" = 0 ] && command -v pi >/dev/null 2>&1; }; then
+	DO_PI=0; PI_STATE=present
+fi
+if [ "${PIRED_SKIP_PI:-0}" = 1 ]; then DO_PI=0; fi
+
+REINSTALL=0
+if [ -x "$BIN_DIR/pired" ]; then REINSTALL=1; fi
+
+# --- the plan ---------------------------------------------------------------
+# Everything the script is about to do, named and located, before it does any of
+# it. A one-line curl into a shell earns its trust exactly here.
+shell_rc() {
+	case "$(basename "${SHELL:-sh}")" in
+		fish) printf '%s/.config/fish/config.fish' "$HOME" ;;
+		zsh) printf '%s/.zshrc' "${ZDOTDIR:-$HOME}" ;;
+		bash) if [ -f "$HOME/.bashrc" ]; then printf '%s/.bashrc' "$HOME"; else printf '%s/.profile' "$HOME"; fi ;;
+		*) printf '%s/.profile' "$HOME" ;;
+	esac
+}
+
+# $HOME rather than the expanded path: the line outlives a renamed home
+# directory, and it is shorter to read in the plan and in the rc file.
+path_line() {
+	case "$BIN_DIR" in
+		"$HOME"/*) _expr="\$HOME${BIN_DIR#"$HOME"}" ;;
+		*) _expr=$BIN_DIR ;;
+	esac
+	case "$(basename "${SHELL:-sh}")" in
+		fish) printf 'fish_add_path "%s"' "$_expr" ;;
+		*) printf 'export PATH="%s:$PATH"' "$_expr" ;;
+	esac
+}
+
+RC_FILE=$(shell_rc)
+PATH_LINE=$(path_line)
+
+# In the rc but not in this shell is its own answer: nothing to write, and the
+# reason the command is not typeable yet is that the file has not been sourced.
+PATH_STATE=missing
+if on_path "$BIN_DIR"; then
+	PATH_STATE=live
+elif [ -f "$RC_FILE" ] && grep -Fxq "$PATH_LINE" "$RC_FILE" 2>/dev/null; then
+	PATH_STATE=written
+fi
+
+# The trailing space is not decoration: a where-path longer than the column
+# would otherwise run straight into the note with nothing between them.
+plan_row() { printf '    %b %-11s%-29s %b\n' "$1" "$2" "$3" "${DIM}$4${OFF}"; }
+PLUS_MARK="${RED}${PLUS}${OFF}"
+KEEP_MARK="${DIM}${DOT}${OFF}"
+
+say "  ${BOLD}This will install${OFF}"
+say ""
+
+case "$NODE_STATE" in
+	present)
+		if [ -n "$ADOPTED_NODE" ]; then
+			plan_row "$KEEP_MARK" "node" "$(tilde "${ADOPTED_NODE%/current/bin}")" "$(node -v) — already here"
+		else
+			plan_row "$KEEP_MARK" "node" "$(tilde "$(command -v node)")" "$(node -v) — already good"
+		fi ;;
+	old)
+		plan_row "$PLUS_MARK" "node" "$(tilde "$NODE_HOME")" "$(node -v) is below $NODE_MIN_MAJOR.$NODE_MIN_MINOR — a private copy, no sudo" ;;
+	missing)
+		plan_row "$PLUS_MARK" "node" "$(tilde "$NODE_HOME")" "v${NODE_LINE} from nodejs.org, checksum-verified" ;;
+esac
+
+if [ "$DO_PI" = 1 ]; then
+	plan_row "$PLUS_MARK" "pi" "$(tilde "$BIN_DIR")" "$PI_PACKAGE"
+elif [ "$PI_STATE" = present ]; then
+	plan_row "$KEEP_MARK" "pi" "$(tilde "$BIN_DIR")" "already installed"
+else
+	plan_row "$KEEP_MARK" "pi" "" "skipped — PIRED_SKIP_PI=1"
+fi
+
+if [ "$NEED_TARBALL" = 1 ]; then
+	PIRED_NOTE="from $SOURCE over HTTPS — no git here"
+elif [ "$REINSTALL" = 1 ]; then
+	PIRED_NOTE="reinstall from $SOURCE"
+else
+	PIRED_NOTE="from $SOURCE"
+fi
+plan_row "$PLUS_MARK" "pired" "$(tilde "$BIN_DIR")" "$PIRED_NOTE"
+
+plan_row "$PLUS_MARK" "extension" "$(tilde "$HOME/.pi/agent")" "so a bare \`pi\` loads the security layer"
+
+case "$PATH_STATE" in
+	live) plan_row "$KEEP_MARK" "PATH" "$(tilde "$BIN_DIR")" "already on your PATH" ;;
+	written) plan_row "$KEEP_MARK" "PATH" "$(tilde "$RC_FILE")" "already there — new shells have it" ;;
+	*) plan_row "$PLUS_MARK" "PATH" "$(tilde "$RC_FILE")" "$PATH_LINE" ;;
+esac
+
+say ""
+say "  ${DIM}Nothing runs as root. No daemon, no service, no shell hooks.${OFF}"
+[ -n "$UNWRITABLE" ] && say "  ${DIM}$UNWRITABLE is not writable, so this installs under $(tilde "$PREFIX").${OFF}"
+if [ "$NODE_STATE" = old ]; then
+	say "  ${DIM}The PATH line puts pired's Node.js ahead of $(command -v node) in new shells.${OFF}"
+fi
+if [ "$OWNS_TREE" = 1 ]; then
+	say "  ${DIM}Undo: rm -rf $(tilde "$PIRED_HOME") ~/.pired ~/.pi${OFF}"
+else
+	say "  ${DIM}Undo: npm rm -g pired $PI_PACKAGE · rm -rf ~/.pired ~/.pi${OFF}"
+fi
+say ""
+
+if [ "$DRY_RUN" = 1 ]; then
+	say "  ${DIM}--dry-run: nothing was changed.${OFF}"
+	say ""
+	exit 0
+fi
+
+# --- approval ---------------------------------------------------------------
+# Under `curl … | sh` the script itself is stdin, so a plain read would swallow
+# the rest of this file. The controlling terminal is a separate open.
+#
+# This is the only question the installer asks. Everything above is in the plan
+# the answer covers — a second prompt later for the PATH line would be asking
+# twice for one decision.
+if [ "$ASSUME_YES" != 1 ]; then
+	if ( : <>/dev/tty ) 2>/dev/null; then
+		exec 3<>/dev/tty
+		printf '%b' "  ${BOLD}Proceed?${OFF} ${DIM}[Y/n]${OFF} " >&3
+		IFS= read -r answer <&3 || answer=""
+		exec 3>&-
+		case "$answer" in
+			n|N|no|NO|No)
+				say ""
+				say "  ${DIM}Nothing was changed.${OFF}"
+				say ""
+				exit 0
+				;;
+		esac
+		say ""
+	else
+		# No terminal to ask at — a CI job, a provisioning script. The plan was
+		# still printed, which is the part that matters in a log.
+		say "  ${DIM}No terminal to ask at — continuing. Pass --dry-run to only look.${OFF}"
+		say ""
+	fi
+fi
+
+# --- node -------------------------------------------------------------------
+node_platform() {
+	case "$(uname -s)" in
+		Darwin) printf 'darwin' ;;
+		Linux) printf 'linux' ;;
+		*) return 1 ;;
+	esac
+}
+
+node_arch() {
+	case "$(uname -m)" in
+		x86_64|amd64) printf 'x64' ;;
+		arm64|aarch64) printf 'arm64' ;;
+		armv7l) printf 'armv7l' ;;
+		ppc64le) printf 'ppc64le' ;;
+		s390x) printf 's390x' ;;
+		*) return 1 ;;
+	esac
+}
+
+install_node() {
+	np=$(node_platform) || { printf 'Unsupported operating system: %s\n' "$(uname -s)"; return 1; }
+	na=$(node_arch) || { printf 'Unsupported CPU architecture: %s\n' "$(uname -m)"; return 1; }
+
+	base=$(node_home)
+	tmp="$base/.download.$$"
+	rm -rf "$tmp"
+	mkdir -p "$tmp"
+
+	printf 'Resolving\n'
+	fetch "$NODE_DIST/SHASUMS256.txt" "$tmp/SHASUMS256.txt" || { printf 'Could not reach %s\n' "$NODE_DIST"; return 1; }
+
+	# .tar.gz rather than the smaller .tar.xz on purpose: every box that can run
+	# this script can already gunzip, while xz is a package a minimal Ubuntu does
+	# not carry — and installing it would mean the sudo this script promised not
+	# to ask for.
+	file=$(awk -v s="-$np-$na.tar.gz" 'index($2,"node-v")==1 && substr($2,length($2)-length(s)+1)==s {print $2; exit}' "$tmp/SHASUMS256.txt")
+	[ -n "$file" ] || { printf 'No Node.js %s build for %s-%s\n' "$NODE_LINE" "$np" "$na"; return 1; }
+	want=$(awk -v f="$file" '$2==f {print $1; exit}' "$tmp/SHASUMS256.txt")
+	version=${file#node-}; version=${version%%-*}
+
+	printf 'Downloading %s\n' "$version"
+	fetch "$NODE_DIST/$file" "$tmp/$file" || { printf 'Could not download %s\n' "$file"; return 1; }
+
+	printf 'Verifying\n'
+	got=$(sha256_of "$tmp/$file") || { printf 'No SHA-256 tool available\n'; return 1; }
+	if [ "$got" != "$want" ]; then
+		printf 'Checksum mismatch for %s\n  expected %s\n  got      %s\n' "$file" "$want" "$got"
+		rm -rf "$tmp"
+		return 1
+	fi
+
+	printf 'Extracting\n'
+	target="$base/$version"
+	rm -rf "$target"
+	mkdir -p "$target"
+	tar -xzf "$tmp/$file" -C "$target" --strip-components=1 || return 1
+	rm -rf "$tmp"
+
+	# A symlink, so an upgrade is one relink and the old tree can be deleted
+	# without the PATH line ever changing.
+	rm -f "$base/current"
+	ln -s "$target" "$base/current"
+
+	# node, npm and npx are linked into the same bin directory the packages
+	# install into, so one PATH entry covers the runtime and the commands.
+	printf 'Linking\n'
+	mkdir -p "$BIN_DIR"
+	for tool in node npm npx; do
+		[ -e "$base/current/bin/$tool" ] || continue
+		rm -f "$BIN_DIR/$tool"
+		ln -s "$base/current/bin/$tool" "$BIN_DIR/$tool"
+	done
+	printf 'Installed %s\n' "$version"
+}
+
+if [ "$DO_NODE" = 1 ]; then
+	STEP_HINT="reaching nodejs.org"
+	if step "node" node_label install_node; then
+		PATH="$BIN_DIR:$PATH"; export PATH
+		hash -r 2>/dev/null || true
+		done_line "node" "$(node -v)  $(tilde "$NODE_HOME")"
+	else
+		spill
+		die "could not install Node.js. Install Node.js >= $NODE_MIN_MAJOR.$NODE_MIN_MINOR yourself and re-run."
+	fi
+elif [ -n "$ADOPTED_NODE" ]; then
+	done_line "node" "$(node -v)  $(tilde "${ADOPTED_NODE%/current/bin}") — already here"
+else
+	done_line "node" "$(node -v)  $(tilde "$(command -v node)")"
+fi
+
+# --- where npm writes -------------------------------------------------------
 # The prefix travels as an environment variable, not as a --prefix argument: the
 # argument list was word-split, so a prefix containing a space installed
 # somewhere else entirely without saying so.
-[ -n "${NPM_PREFIX:-}" ] && export npm_config_prefix="$NPM_PREFIX"
+export npm_config_prefix="$PREFIX"
+mkdir -p "$PREFIX/lib/node_modules" "$BIN_DIR" 2>/dev/null || true
 
-# `npm install --global` writes to both of these. When it cannot — a distro node
-# owned by root, and a user who was promised no sudo — fall back to a per-user
-# prefix rather than failing with npm's EACCES wall of text.
-writable() {
-	_d=$1
-	while [ ! -d "$_d" ] && [ "$_d" != "/" ] && [ -n "$_d" ]; do _d=$(dirname "$_d"); done
-	[ -w "$_d" ]
-}
-prefix_writable() {
-	_p=$(npm prefix --global 2>/dev/null) || return 1
-	[ -n "$_p" ] || return 1
-	writable "$_p/lib/node_modules" && writable "$_p/bin"
-}
-
-if ! prefix_writable; then
-	[ -z "${NPM_PREFIX:-}" ] || die "cannot write to NPM_PREFIX=$NPM_PREFIX. Pick a writable directory."
-	UNWRITABLE=$(npm prefix --global 2>/dev/null || echo "npm's global prefix")
-	NPM_PREFIX="$HOME/.local"
-	mkdir -p "$NPM_PREFIX/bin" "$NPM_PREFIX/lib/node_modules" ||
-		die "$UNWRITABLE is not writable, and neither is $NPM_PREFIX."
-	export npm_config_prefix="$NPM_PREFIX"
-	say "  ${DIM}$UNWRITABLE is not writable — installing into $NPM_PREFIX instead${OFF}"
-	say ""
+# npm 11.6 added a release-age gate against publish-and-typosquat attacks. pi
+# ships an npm-shrinkwrap, so its transitive tree is pinned regardless of the
+# gate, and upstream's own installer waives it for that reason — without the
+# waiver a pi release younger than the default window refuses to install.
+NPM_AGE_FLAG=""
+if [ "$(npm -v 2>/dev/null | cut -d. -f1)" -ge 11 ] 2>/dev/null; then
+	NPM_AGE_FLAG="--min-release-age=0"
 fi
 
-# `npm bin -g` was removed in npm 9, so derive the directory from the prefix.
-BIN_DIR="$(npm prefix --global 2>/dev/null)/bin"
+npm_global() {
+	# shellcheck disable=SC2086 # the flag slot is deliberately word-split
+	npm install --global --ignore-scripts --loglevel http $1 "$2"
+}
 
 # --- pi ---------------------------------------------------------------------
-# Resolved by path first: under a custom prefix, pi lands in a bin directory that
-# is typically not on PATH yet, and `command -v pi` would miss the copy we just
-# installed — reinstalling it, then silently skipping the registration below.
-PI=""
 resolve_pi() {
 	if [ -x "$BIN_DIR/pi" ]; then PI="$BIN_DIR/pi"; else PI=$(command -v pi 2>/dev/null || true); fi
 }
-
+PI=""
 resolve_pi
-if [ "${PIRED_SKIP_PI:-0}" != "1" ] && [ -z "$PI" ]; then
-	step "installing pi"
-	npm_install "" @earendil-works/pi-coding-agent || { spill; die "could not install pi"; }
-	resolve_pi
+
+if [ "$DO_PI" = 1 ]; then
+	STEP_HINT="resolving packages"
+	if step "pi" npm_label npm_global "$NPM_AGE_FLAG" "$PI_PACKAGE"; then
+		resolve_pi
+		done_line "pi" "$("$PI" --version 2>/dev/null || echo installed)  $(tilde "$BIN_DIR")"
+	else
+		spill
+		die "could not install pi."
+	fi
+elif [ -n "$PI" ]; then
+	done_line "pi" "$("$PI" --version 2>/dev/null || echo present)  $(tilde "$PI")"
+else
+	skip_line "pi" "skipped — pired still works, a bare \`pi\` will not"
 fi
 
 # --- pired ------------------------------------------------------------------
-step "installing pired ${DIM}(${SOURCE})${OFF}"
-# Installing a local directory the plain way makes the global package a SYMLINK
-# back into it, so moving or deleting the clone silently breaks the install.
-# --install-links copies the files in, and honours package.json "files".
-LINKS=""
-[ -d "$SOURCE" ] && LINKS="--install-links"
-if ! npm_install "$LINKS" "$SOURCE"; then
+if [ "$NEED_TARBALL" = 1 ]; then
+	# Created out here rather than inside the step, which runs in a subshell whose
+	# variables the exit trap would never see.
+	WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/pired-src.XXXXXX") || die "could not create a temporary directory."
+fi
+
+install_pired() {
+	src=$SOURCE
+	if [ "$NEED_TARBALL" = 1 ]; then
+		spec=${SOURCE#github:}
+		# HEAD, not `main`: codeload resolves it to whatever the repository calls
+		# its default branch, so a fork living on `master` is not a 404 blamed on
+		# the wrong cause.
+		ref=HEAD
+		case "$spec" in *\#*) ref=${spec#*\#}; spec=${spec%%\#*} ;; esac
+		printf 'Fetching %s@%s\n' "$spec" "$ref"
+		fetch "https://codeload.github.com/$spec/tar.gz/$ref" "$WORKDIR/src.tar.gz" || {
+			printf 'Could not fetch https://codeload.github.com/%s/tar.gz/%s\n' "$spec" "$ref"
+			printf 'The repository is private, does not exist, or has no %s.\n' "$ref"
+			return 1
+		}
+		printf 'Unpacking\n'
+		mkdir -p "$WORKDIR/src"
+		tar -xzf "$WORKDIR/src.tar.gz" -C "$WORKDIR/src" --strip-components=1 || return 1
+		src="$WORKDIR/src"
+	fi
+	# Installing a local directory the plain way makes the global package a
+	# SYMLINK back into it, so moving or deleting the clone silently breaks the
+	# install. --install-links copies the files in, and honours package.json
+	# "files".
+	links=""
+	[ -d "$src" ] && links="--install-links"
+	npm_global "$links" "$src"
+}
+
+STEP_HINT="installing the security layer"
+if step "pired" npm_label install_pired; then
+	# Checked here rather than at the end: a checkmark printed before anyone has
+	# looked for the binary is a claim, not a result.
+	[ -x "$BIN_DIR/pired" ] || die "npm reported success but $BIN_DIR/pired is missing."
+	done_line "pired" "$(tilde "$BIN_DIR/pired")"
+else
 	spill
 	case "$SOURCE" in
 		github:*)
 			# A private repo 404s for an unauthenticated fetch, which npm reports as
-			# a missing package. Name the likely cause rather than the symptom.
-			say "  ${DIM}If the repository is private, clone it and run the installer from there:${OFF}"
-			say "    git clone git@github.com:mamgad/pired.git && cd pired && ./install.sh"
+			# a missing package and codeload as a missing ref. Name the likely cause
+			# rather than the symptom.
+			say ""
+			say "  ${DIM}A private repository cannot be fetched anonymously. Clone it over your${OFF}"
+			say "  ${DIM}SSH key and run the installer from the checkout:${OFF}"
+			say "    git clone git@github.com:${DEFAULT_REPO}.git && cd pired && ./install.sh"
 			;;
 	esac
 	die "could not install from $SOURCE"
@@ -153,40 +779,60 @@ fi
 # pired still works completely without it — but never silent: an unregistered
 # extension means a plain `pi` runs with no security layer at all.
 NPM_ROOT=$(npm root --global 2>/dev/null || true)
-if [ -n "$NPM_ROOT" ] && [ -d "$NPM_ROOT/pired" ]; then
-	if [ -n "$PI" ]; then
-		step "registering the extension with pi"
-		"$PI" install "$NPM_ROOT/pired" >"$LOG" 2>&1 ||
-			say "  ${DIM}skipped — run: pi install $NPM_ROOT/pired${OFF}"
+if [ -n "$PI" ] && [ -n "$NPM_ROOT" ] && [ -d "$NPM_ROOT/pired" ]; then
+	STEP_HINT="registering with pi"
+	if step "extension" quiet_label "$PI" install "$NPM_ROOT/pired"; then
+		done_line "extension" "registered — a bare \`pi\` loads the security layer"
 	else
-		say "  ${DIM}pi not found: a plain 'pi' will not load the security layer.${OFF}"
-		say "  ${DIM}register it with: pi install $NPM_ROOT/pired${OFF}"
+		warn_line "extension" "not registered — run: pi install $NPM_ROOT/pired"
 	fi
+elif [ -z "$PI" ]; then
+	skip_line "extension" "no pi to register with"
 fi
 
-# --- verify -----------------------------------------------------------------
-[ -x "$BIN_DIR/pired" ] || die "npm reported success but $BIN_DIR/pired is missing."
+# --- PATH -------------------------------------------------------------------
+# An install that works but cannot be typed looks identical to a failed one, so
+# the line goes in rather than being printed for the user to paste. It was in
+# the plan they approved, and it is one appended line under its own comment.
+case "$PATH_STATE" in
+	live) done_line "PATH" "$(tilde "$BIN_DIR") is already on it" ;;
+	written) done_line "PATH" "already in $(tilde "$RC_FILE")" ;;
+	*)
+		if mkdir -p "$(dirname "$RC_FILE")" 2>/dev/null &&
+			printf '\n# pired\n%s\n' "$PATH_LINE" >> "$RC_FILE" 2>/dev/null; then
+			done_line "PATH" "added to $(tilde "$RC_FILE") — new shells pick it up"
+		else
+			warn_line "PATH" "could not write $(tilde "$RC_FILE") — run: $PATH_LINE"
+		fi
+		;;
+esac
 
+# --- verify -----------------------------------------------------------------
 # An install that cannot start is indistinguishable from a working one until the
 # first engagement. Find out now, while there is still something to say about it.
 if [ -n "$PI" ]; then
-	step "verifying"
-	"$BIN_DIR/pired" --help >"$LOG" 2>&1 || { spill; die "pired installed but could not start."; }
+	STEP_HINT="starting pired"
+	if step "verify" quiet_label "$BIN_DIR/pired" --help; then
+		done_line "verify" "pired starts"
+	else
+		spill
+		die "pired installed but could not start."
+	fi
 fi
 
 # --- report -----------------------------------------------------------------
 say ""
-say "  ${BOLD}installed${OFF} ${DIM}$BIN_DIR/pired${OFF}"
-if [ "$(command -v pired 2>/dev/null || true)" != "$BIN_DIR/pired" ]; then
-	# The usual cause is an npm prefix whose bin/ is not on PATH. Say so: an
-	# install that works but cannot be typed looks identical to a failed one.
-	say "  ${DIM}not on your PATH — add it:${OFF} export PATH=\"$BIN_DIR:\$PATH\""
-fi
+say "  ${BOLD}Ready.${OFF} ${DIM}$(tilde "$BIN_DIR/pired")${OFF}"
 say ""
+if ! on_path "$BIN_DIR"; then
+	say "  ${DIM}This shell does not have it yet — open a new one, or run:${OFF}"
+	say "    $PATH_LINE"
+	say ""
+fi
 say "  ${DIM}next${OFF}"
 say "    pired                    ${DIM}review the current directory${OFF}"
 say "    pired --profile pentest  ${DIM}blackbox testing (needs an authorized scope)${OFF}"
-say "    /panel                   ${DIM}the engagement panel · alt+p toggles it${OFF}"
+say "    /panel                   ${DIM}the engagement panel ${ARROW} alt+p toggles it${OFF}"
 say ""
-say "  ${DIM}docs: https://github.com/mamgad/pired/tree/main/docs${OFF}"
+say "  ${DIM}docs: https://github.com/${DEFAULT_REPO}/tree/main/docs${OFF}"
 say ""

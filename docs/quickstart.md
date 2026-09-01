@@ -12,11 +12,32 @@ curl -fsSL https://raw.githubusercontent.com/mamgad/pired/main/install.sh | sh
 powershell -c "irm https://raw.githubusercontent.com/mamgad/pired/main/install.ps1 | iex"
 ```
 
-Either one installs [pi](https://pi.dev) if it is missing, installs pired, and registers pired's extension with pi so a bare `pi` loads the security layer too. No sudo or elevation, no daemon, no state outside `~/.pi` and `~/.pired`.
+Either one installs [pi](https://pi.dev) if it is missing, installs pired, and registers pired's extension with pi so a bare `pi` loads the security layer too.
 
-Requires **Node.js ≥ 22.19** — pired's extension is TypeScript that pi type-strips at load.
+On macOS and Linux the script starts by surveying the box and printing the plan — every component, where it goes, and the exact PATH line it wants to add — then asks once before doing any of it:
 
-Windows has its own script because npm puts its global shims in the prefix itself rather than `prefix/bin`, and PATH there is a registry value rather than a line in a dotfile — so it offers to add the prefix to your user PATH instead of printing an `export` line for you to paste. It also checks for `bash`: pired drives the tools already on the box and pi runs them through `bash`, which a bare Windows install does not have, so the script points you at Git for Windows when none is found.
+```
+  This will install
+
+    + node       ~/.local/share/pired/node     v22 from nodejs.org, checksum-verified
+    + pi         ~/.local/share/pired/bin      @earendil-works/pi-coding-agent
+    + pired      ~/.local/share/pired/bin      from github:mamgad/pired
+    + extension  ~/.pi/agent                   so a bare `pi` loads the security layer
+    + PATH       ~/.bashrc                     export PATH="$HOME/.local/share/pired/bin:$PATH"
+
+  Nothing runs as root. No daemon, no service, no shell hooks.
+  Undo: rm -rf ~/.local/share/pired ~/.pired ~/.pi
+
+  Proceed? [Y/n]
+```
+
+`--dry-run` prints that plan and changes nothing; `-y` (or `PIRED_YES=1`) skips the question, which is what you want in a provisioning script. With no terminal to ask at — a CI job, `curl … | sh` under a pipe — the plan is still printed and the install proceeds.
+
+**Node.js ≥ 22.19** is required — pired's extension is TypeScript that pi type-strips at load — but on macOS and Linux you do not have to install it yourself. When the box has none, or has one too old, the script fetches the current v22 from nodejs.org, checks its SHA-256 against the release manifest, and unpacks it under `~/.local/share/pired/node`. It is a `.tar.gz` rather than the smaller `.tar.xz` on purpose: a minimal Ubuntu has no `xz`, and installing one would mean the `sudo` the script promised not to ask for. A vanilla Ubuntu has no `git` either, so a `github:` source is fetched over HTTPS from codeload instead of cloned.
+
+Nothing runs as root, there is no daemon and no service, and everything written lives in `~/.local/share/pired`, `~/.pi` and `~/.pired`. The one thing it changes outside those is a single PATH line in your shell rc — shown in the plan, appended under its own `# pired` comment.
+
+Windows has its own script, and expects Node.js ≥ 22.19 to be installed already — it does not fetch one for you. npm puts its global shims in the prefix itself rather than `prefix/bin` there, and PATH is a registry value rather than a line in a dotfile, so it offers to add the prefix to your user PATH instead of printing an `export` line for you to paste. It also checks for `bash`: pired drives the tools already on the box and pi runs them through `bash`, which a bare Windows install does not have, so the script points you at Git for Windows when none is found.
 
 ### Beta access
 
@@ -65,8 +86,10 @@ pi -e ./extensions/pired.ts --pired-profile review
 | Variable | Default | Meaning |
 |---|---|---|
 | `PIRED_SOURCE` | `github:mamgad/pired` | npm spec to install from — a fork, a tag, a local path. |
-| `NPM_PREFIX` | npm's global root | Install somewhere else. When that root is not writable — a root-owned system node — the installer falls back to `~/.local` on its own and says so. |
+| `NPM_PREFIX` | npm's global root | Install somewhere else. When the script brings its own Node the default is `~/.local/share/pired`; when npm's root is not writable — a root-owned system node — it falls back to `~/.local` on its own and says so. |
 | `PIRED_SKIP_PI` | unset | `1` to not install pi. |
+| `PIRED_YES` | unset | `1` to install without the confirmation prompt (same as `-y`). |
+| `PIRED_NO_ANIM` | unset | `1` for plain line-at-a-time output instead of spinners. |
 
 </details>
 
