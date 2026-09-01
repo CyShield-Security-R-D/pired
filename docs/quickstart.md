@@ -52,7 +52,7 @@ pi -e ./extensions/pired.ts --pired-profile review
 | Variable | Default | Meaning |
 |---|---|---|
 | `PIRED_SOURCE` | `github:mamgad/pired` | npm spec to install from — a fork, a tag, a local path. |
-| `NPM_PREFIX` | npm's global root | Install somewhere else. |
+| `NPM_PREFIX` | npm's global root | Install somewhere else. When that root is not writable — a root-owned system node — the installer falls back to `~/.local` on its own and says so. |
 | `PIRED_SKIP_PI` | unset | `1` to not install pi. |
 
 </details>

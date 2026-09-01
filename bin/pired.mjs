@@ -19,7 +19,8 @@
  */
 
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -78,7 +79,40 @@ if (!existsSync(EXT)) {
 	process.exit(1);
 }
 
-const piBin = process.env.PI_BIN || "pi";
+/**
+ * pi is found by resolution, not by PATH.
+ *
+ * npm installs pired and pi as siblings, so pi's package is right there next to
+ * ours whether the prefix is /usr/local or a per-user ~/.local. Relying on the
+ * bare name instead meant that a prefix the user had not yet added to PATH gave
+ * a working install that could not start — the failure landing at the first
+ * engagement rather than at install time.
+ */
+function findPi() {
+	if (process.env.PI_BIN) return process.env.PI_BIN;
+	const require = createRequire(import.meta.url);
+	try {
+		const pkgPath = require.resolve("@earendil-works/pi-coding-agent/package.json");
+		const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
+		const rel = typeof pkg.bin === "string" ? pkg.bin : pkg.bin?.pi;
+		if (rel) {
+			const abs = resolve(dirname(pkgPath), rel);
+			if (existsSync(abs)) return abs;
+		}
+	} catch {
+		// Not resolvable from here (a linked checkout, an unusual layout): fall
+		// through to the sibling-binary and PATH lookups below.
+	}
+	// Installed layout: <prefix>/bin/pired next to <prefix>/bin/pi.
+	for (const dir of [dirname(process.argv[1] || ""), join(ROOT, "..", "..", "..", "bin")]) {
+		if (!dir) continue;
+		const sibling = join(dir, "pi");
+		if (existsSync(sibling)) return sibling;
+	}
+	return "pi";
+}
+
+const piBin = findPi();
 const piArgs = ["-e", EXT, "--pired-profile", profile, "--thinking", thinking, "--approve"];
 if (provider) piArgs.push("--provider", provider);
 if (model) piArgs.push("--model", model);
@@ -94,9 +128,15 @@ if (has("fullscreen")) piArgs.push("--tui-mode", "fullscreen");
 if (promptText) piArgs.push("-p", promptText);
 piArgs.push(...passthrough);
 
-const child = spawn(piBin, piArgs, { cwd: target, stdio: "inherit" });
+// A resolved package bin is a JS file whose executable bit and shebang we do
+// not control, so it is handed to the node that is already running us. A bare
+// "pi" from PATH is a real command and is spawned as one.
+const viaNode = piBin !== "pi" && /\.[cm]?js$/.test(piBin);
+const child = viaNode
+	? spawn(process.execPath, [piBin, ...piArgs], { cwd: target, stdio: "inherit" })
+	: spawn(piBin, piArgs, { cwd: target, stdio: "inherit" });
 child.on("exit", (code) => process.exit(code ?? 0));
 child.on("error", (err) => {
-	process.stderr.write(`pired: failed to launch pi (${err?.message || err}). Is pi installed and on PATH?\n`);
+	process.stderr.write(`pired: failed to launch pi at ${piBin} (${err?.message || err}).\n`);
 	process.exit(1);
 });
