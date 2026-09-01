@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	addHost, describeHost, filterModelIds, guessThinkingFormat, looksMissingVersionPath, maskToken,
-	normalizeBaseUrl, parseModelList, probeModels, type ProbedModel, type Prompter, suggestProviderId,
+	mergeProbes, normalizeBaseUrl, parseModelList, probeModels, type ProbedModel, type Prompter, suggestProviderId,
 	THINKING_FORMATS, toPositiveInt, uniqueId,
 } from "./provider-wizard.ts";
 import type { LocalProviderConfig } from "./providers.ts";
@@ -47,6 +47,29 @@ describe("normalizeBaseUrl", () => {
 		expect(normalizeBaseUrl("gpu-box:8000/v1")).toBe("http://gpu-box:8000/v1");
 		expect(normalizeBaseUrl("127.0.0.1:11434/v1")).toBe("http://127.0.0.1:11434/v1");
 		expect(normalizeBaseUrl("api.corp.example.com/v1")).toBe("https://api.corp.example.com/v1");
+	});
+
+	/**
+	 * The model server on the LAN is pired's primary case and its address has
+	 * dots in it. Reading `192.168.1.15:1234` as a public name and assuming
+	 * TLS produces a probe that cannot connect and a saved provider that never
+	 * works, with nothing on screen to say why.
+	 */
+	it("assumes http for every address that is on this network", () => {
+		for (const host of ["192.168.1.15:1234/v1", "10.0.0.5:8000/v1", "172.16.4.4:1234/v1",
+			"172.31.255.1:1234/v1", "169.254.7.7:1234/v1", "100.64.0.3:1234/v1", "gpu.local:1234/v1"]) {
+			expect(normalizeBaseUrl(host), host).toBe(`http://${host}`);
+		}
+	});
+
+	it("still assumes https for a public address that only looks numeric", () => {
+		expect(normalizeBaseUrl("8.8.8.8:1234/v1")).toBe("https://8.8.8.8:1234/v1");
+		expect(normalizeBaseUrl("172.32.0.1:1234/v1")).toBe("https://172.32.0.1:1234/v1");
+	});
+
+	it("never second-guesses a scheme that was typed", () => {
+		expect(normalizeBaseUrl("http://api.openrouter.ai/v1")).toBe("http://api.openrouter.ai/v1");
+		expect(normalizeBaseUrl("https://192.168.1.5/v1")).toBe("https://192.168.1.5/v1");
 	});
 
 	it("is empty for nothing typed", () => {
@@ -153,20 +176,73 @@ describe("parseModelList", () => {
 });
 
 describe("probeModels", () => {
+	/** A fetch that answers a scripted set of URLs and 404s everything else. */
+	const server = (routes: Record<string, unknown>, seen: string[] = []) => (async (url: string) => {
+		seen.push(String(url));
+		const body = routes[String(url)];
+		return body === undefined
+			? new Response("no", { status: 404, statusText: "Not Found" })
+			: new Response(JSON.stringify(body), { status: 200 });
+	}) as unknown as typeof fetch;
+
 	it("asks the host what it serves, with the token", async () => {
-		let seen: { url: string; auth: unknown } | undefined;
-		const models = await probeModels("http://localhost:1234/v1", "sk-test", 100, (async (url, init) => {
-			seen = { url: String(url), auth: (init?.headers as Record<string, string>)?.Authorization };
-			return new Response(JSON.stringify({ data: [{ id: "qwen3-27b" }] }), { status: 200 });
-		}) as typeof fetch);
-		expect(seen?.url).toBe("http://localhost:1234/v1/models");
-		expect(seen?.auth).toBe("Bearer sk-test");
-		expect(models).toEqual([{ id: "qwen3-27b" }]);
+		let auth: unknown;
+		const seen: string[] = [];
+		const models = await probeModels("http://localhost:1234/v1", "sk-test", 100, (async (url: string, init: RequestInit) => {
+			seen.push(String(url));
+			auth = (init?.headers as Record<string, string>)?.Authorization;
+			return new Response(JSON.stringify({ data: [{ id: "qwen3-27b", context_length: 262144 }] }), { status: 200 });
+		}) as unknown as typeof fetch);
+		expect(seen).toEqual(["http://localhost:1234/v1/models"]);
+		expect(auth).toBe("Bearer sk-test");
+		expect(models).toEqual([{ id: "qwen3-27b", contextWindow: 262144 }]);
+	});
+
+	/**
+	 * The LM Studio case, which is the documented one. Its OpenAI-shaped list is
+	 * ids and nothing else — no size, and no way to see that one of them is an
+	 * embedding model. Both of those are wrong answers a new operator would
+	 * accept without knowing: a 262k model configured at 32k, or a provider that
+	 * cannot hold a conversation at all.
+	 */
+	it("asks LM Studio's own endpoint when the first answer carries no sizes", async () => {
+		const seen: string[] = [];
+		const models = await probeModels("http://192.168.1.20:1234/v1", "local", 100, server({
+			"http://192.168.1.20:1234/v1/models": { data: [{ id: "qwen3.8-27b" }, { id: "nomic-embed" }, { id: "phi-4" }] },
+			"http://192.168.1.20:1234/api/v0/models": { data: [
+				{ id: "qwen3.8-27b", type: "vlm", max_context_length: 262144, loaded_context_length: 128000 },
+				{ id: "nomic-embed", type: "embeddings", max_context_length: 2048 },
+				{ id: "phi-4", type: "llm", max_context_length: 16384 },
+			] },
+		}, seen));
+		expect(seen).toEqual([
+			"http://192.168.1.20:1234/v1/models",
+			"http://192.168.1.20:1234/api/v0/models",
+		]);
+		// The embedding model is gone, and the size is the one actually loaded.
+		expect(models).toEqual([
+			{ id: "qwen3.8-27b", contextWindow: 128000, vision: true },
+			{ id: "phi-4", contextWindow: 16384 },
+		]);
+	});
+
+	it("keeps the ids it has when the second endpoint is not there", async () => {
+		const models = await probeModels("http://localhost:8000/v1", "local", 100, server({
+			"http://localhost:8000/v1/models": { data: [{ id: "served-by-vllm" }] },
+		}));
+		expect(models).toEqual([{ id: "served-by-vllm" }]);
 	});
 
 	it("reports the status rather than pretending the host serves nothing", async () => {
 		const failing = (async () => new Response("nope", { status: 401, statusText: "Unauthorized" })) as typeof fetch;
 		await expect(probeModels("http://x/v1", "local", 100, failing)).rejects.toThrow("HTTP 401");
+	});
+});
+
+describe("mergeProbes", () => {
+	it("refuses to filter against a listing that describes something else", () => {
+		const base = [{ id: "a" }, { id: "b" }];
+		expect(mergeProbes(base, [{ id: "x", contextWindow: 8 }])).toEqual(base);
 	});
 });
 

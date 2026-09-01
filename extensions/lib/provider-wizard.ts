@@ -101,19 +101,46 @@ export const THINKING_FORMATS: { id: string; label: string }[] = [
 ];
 
 /**
+ * An address that is on this machine or this network, and therefore almost
+ * certainly serving plain HTTP.
+ *
+ * The reason this is a list of ranges rather than "does it contain a dot": a
+ * model server on the engagement box is pired's *primary* case, and it is
+ * routinely reached at `192.168.1.20:1234` or `10.0.0.5:8000`. Reading those as
+ * public names and assuming `https` produces a probe that cannot connect and a
+ * saved provider that never works — and the operator is given no reason why,
+ * because from the outside it looks like the server is down.
+ */
+function isLocalAddress(host: string): boolean {
+	// No dot at all: `localhost`, `gpu-box`, `[::1]`, a container name.
+	if (!host.includes(".")) return true;
+	if (/\.local$/i.test(host)) return true;
+	const quad = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+	if (!quad) return false;
+	const a = Number(quad[1]);
+	const b = Number(quad[2]);
+	// loopback · this-host · RFC1918 · link-local · carrier-grade NAT
+	return a === 127 || a === 0 || a === 10 || (a === 192 && b === 168)
+		|| (a === 172 && b >= 16 && b <= 31) || (a === 169 && b === 254) || (a === 100 && b >= 64 && b <= 127);
+}
+
+/**
  * Scheme and trailing slash, so `localhost:1234/v1` is a base URL.
  *
- * A host with no dot in it — `localhost`, `gpu-box`, an IP on the LAN — gets
- * `http`, everything else `https`. That is the shape of the two cases: a model
- * server on the engagement box, or something across the internet.
+ * An address on this box or this network gets `http`, everything else `https`.
+ * A scheme that was typed is never second-guessed.
  */
 export function normalizeBaseUrl(raw: string): string {
 	const trimmed = raw.trim().replace(/\/+$/, "");
 	if (!trimmed) return "";
 	if (/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)) return trimmed;
 	const host = trimmed.split(/[/:]/, 1)[0] ?? "";
-	const local = !host.includes(".") || /^127\./.test(host) || host === "0.0.0.0";
-	return `${local ? "http" : "https"}://${trimmed}`;
+	return `${isLocalAddress(host) ? "http" : "https"}://${trimmed}`;
+}
+
+/** Whether the scheme was pired's guess rather than the operator's instruction. */
+export function schemeWasAssumed(raw: string): boolean {
+	return !/^[a-z][a-z0-9+.-]*:\/\//i.test(raw.trim());
 }
 
 /**
@@ -222,18 +249,34 @@ export function parseModelList(body: unknown): ProbedModel[] {
 			return undefined;
 		};
 		const modalities = Array.isArray(arch.input_modalities) ? arch.input_modalities : [];
+		// `loaded_context_length` before `max_context_length`: LM Studio reports
+		// both, and the model was loaded at the smaller one. Claiming the maximum
+		// would build a request the server rejects.
+		const context = num(r.context_length, r.loaded_context_length, r.max_context_length, r.context_window, top.context_length);
 		out.push({
 			id,
-			...(num(r.context_length, r.max_context_length, r.loaded_context_length, r.context_window, top.context_length) !== undefined
-				? { contextWindow: num(r.context_length, r.max_context_length, r.loaded_context_length, r.context_window, top.context_length) }
-				: {}),
+			...(context !== undefined ? { contextWindow: context } : {}),
 			...(num(top.max_completion_tokens, r.max_output_tokens, r.max_tokens) !== undefined
 				? { maxTokens: num(top.max_completion_tokens, r.max_output_tokens, r.max_tokens) }
 				: {}),
-			...(modalities.includes("image") ? { vision: true } : {}),
+			...(modalities.includes("image") || r.type === "vlm" ? { vision: true } : {}),
 		});
 	}
 	return out;
+}
+
+/**
+ * Merge a second listing into the first, by id.
+ *
+ * An id the richer listing dropped is dropped here too — that is how an
+ * embedding model disappears from the OpenAI-shaped list, which does not say
+ * which of its entries can hold a conversation.
+ */
+export function mergeProbes(base: ProbedModel[], richer: ProbedModel[]): ProbedModel[] {
+	const byId = new Map(richer.map((m) => [m.id, m]));
+	// Only trust it to *remove* entries when it plainly describes the same server.
+	if (!base.some((m) => byId.has(m.id))) return base;
+	return base.filter((m) => byId.has(m.id)).map((m) => ({ ...m, ...byId.get(m.id) }));
 }
 
 /**
@@ -242,6 +285,15 @@ export function parseModelList(body: unknown): ProbedModel[] {
  * Every failure is the caller's to report, not to swallow: "the host did not
  * answer" is the single most useful thing the wizard can say, since it is the
  * same thing that will happen later to the agent.
+ *
+ * `/v1/models` is the only endpoint every OpenAI-compatible server has, and on
+ * LM Studio — the server pired's own documentation opens with — it answers with
+ * nothing but ids: no context length, and no way to tell a chat model from an
+ * embedding one. Both matter. Defaulting a 262k model to 32k compacts an
+ * engagement eight times sooner than it needs to, and an embedding model in the
+ * picker is a provider that cannot answer at all. LM Studio's own
+ * `/api/v0/models` carries both, so it is asked as well when the first answer
+ * is that thin. A server that does not have it simply fails and is ignored.
  */
 export async function probeModels(
 	baseUrl: string,
@@ -249,12 +301,24 @@ export async function probeModels(
 	timeoutMs = 5000,
 	doFetch: typeof fetch = fetch,
 ): Promise<ProbedModel[]> {
-	const res = await doFetch(`${baseUrl}/models`, {
-		headers: { Authorization: `Bearer ${apiKey}`, Accept: "application/json" },
-		signal: AbortSignal.timeout(timeoutMs),
-	});
-	if (!res.ok) throw new Error(`HTTP ${res.status}${res.statusText ? ` ${res.statusText}` : ""}`);
-	return parseModelList(await res.json());
+	const ask = async (url: string): Promise<unknown> => {
+		const res = await doFetch(url, {
+			headers: { Authorization: `Bearer ${apiKey}`, Accept: "application/json" },
+			signal: AbortSignal.timeout(timeoutMs),
+		});
+		if (!res.ok) throw new Error(`HTTP ${res.status}${res.statusText ? ` ${res.statusText}` : ""}`);
+		return res.json();
+	};
+
+	const models = parseModelList(await ask(`${baseUrl}/models`));
+	if (models.length === 0 || models.some((m) => m.contextWindow !== undefined)) return models;
+	try {
+		const native = parseModelList(await ask(`${new URL(baseUrl).origin}/api/v0/models`));
+		return mergeProbes(models, native);
+	} catch {
+		// Not LM Studio, or it declined. The ids are still worth having.
+		return models;
+	}
 }
 
 /** One model, as a line: what it is and how it will be driven. */

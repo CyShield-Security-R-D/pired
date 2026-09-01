@@ -129,6 +129,7 @@ export default function hostsExtension(pi: ExtensionAPI): void {
 	let seen: ExtensionContext | undefined;
 	pi.on("session_start", (_event, ctx) => {
 		seen = ctx;
+		announceIfModelless(ctx);
 	});
 
 	pi.registerProvider(ADD_PROVIDER_ID, {
@@ -222,6 +223,28 @@ export default function hostsExtension(pi: ExtensionAPI): void {
 			if (added.useModelId) await useModel(pi, ctx, added.config.id, added.useModelId);
 		},
 	});
+}
+
+/**
+ * On a box with no model at all, say what to do about it in pired's own terms.
+ *
+ * pi already warns — but it points at two markdown files inside its own
+ * node_modules, and says nothing about the case pired exists for: a model
+ * already running on this machine, two questions away. This is the first thing
+ * a new operator sees, and until it is answered nothing else in the harness can
+ * run, so it is worth a line of its own.
+ */
+function announceIfModelless(ctx: ExtensionContext): void {
+	try {
+		if (ctx.modelRegistry.getAvailable().length > 0) return;
+	} catch {
+		// A host without a registry snapshot: say nothing rather than guess.
+		return;
+	}
+	ctx.ui.notify(
+		"pired: no model yet — `/provider` adds one you are already running (LM Studio, Ollama, llama.cpp, vLLM), `/login` signs in to a hosted one",
+		"warning",
+	);
 }
 
 /** Switch to what was just added, which is why it was added. */

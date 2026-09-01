@@ -14,7 +14,7 @@ import hostsExtension, { loginPrompter } from "./hosts.ts";
  */
 type Step = [match: string, answer: string | boolean | undefined];
 
-function stubHost() {
+function stubHost(available: unknown[] = [{ id: "already-configured" }]) {
 	const home = mkdtempSync(join(tmpdir(), "pired-hosts-"));
 	const seen = {
 		commands: new Map<string, (a: string, c: unknown) => unknown>(),
@@ -70,7 +70,10 @@ function stubHost() {
 
 	const ctx = {
 		hasUI: true,
-		modelRegistry: { find: (provider: string, id: string) => ({ provider, id }) },
+		modelRegistry: {
+			find: (provider: string, id: string) => ({ provider, id }),
+			getAvailable: () => available,
+		},
 		ui: {
 			notify: (m: string) => void said.push(m),
 			select: async (t: string) => answer(t) as string | undefined,
@@ -136,6 +139,18 @@ const A_HOST: Step[] = [
 	["Add lab?", true],
 	["Switch to my-model now?", false],
 ];
+
+describe("a first run with no model", () => {
+	it("says what to do about it, since nothing else in the harness can run first", () => {
+		const host = stubHost([]);
+		expect(host.said.join("\n")).toContain("no model yet");
+		expect(host.said.join("\n")).toContain("/provider");
+	});
+
+	it("stays quiet when a model is already configured", () => {
+		expect(stubHost().said.join("\n")).not.toContain("no model yet");
+	});
+});
 
 describe("the /login entry", () => {
 	it("registers a provider pi will list, with a login that is the wizard", () => {
