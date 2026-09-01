@@ -1,5 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="320" viewBox="0 0 1200 320" role="img" aria-label="pi(red) — engagement harness for security consultants">
-  <title>pi(red) — engagement harness for security consultants</title>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="320" viewBox="0 0 1200 320" role="img" aria-label="pired — engagement harness for security consultants">
+  <title>pired — engagement harness for security consultants</title>
   <defs>
     <linearGradient id="bar" x1="0" y1="0" x2="1" y2="0">
       <stop offset="0%" stop-color="#d75f5f"/>
@@ -24,9 +24,9 @@
 
   <!-- wordmark -->
   <text class="m" x="64" y="132" font-size="72" font-weight="700" letter-spacing="-1">
-    <tspan fill="#dcdcdc">pi(</tspan><tspan fill="#ff5f5f">red</tspan><tspan fill="#dcdcdc">)</tspan>
+    <tspan fill="#dcdcdc">pi</tspan><tspan fill="#ff5f5f">red</tspan>
   </text>
-  <rect x="66" y="156" width="316" height="2" fill="url(#rule)"/>
+  <rect x="66" y="156" width="232" height="2" fill="url(#rule)"/>
 
   <text class="m" x="64" y="196" font-size="18" fill="#b4b4b4">engagement harness for security consultants</text>
 

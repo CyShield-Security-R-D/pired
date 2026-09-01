@@ -1,6 +1,6 @@
 # The Development of pired
 
-*pi(red) — an engagement harness for security consultants, built on the pi coding agent*
+*pired — an engagement harness for security consultants, built on the pi coding agent*
 
 ## 1. Goal and motivation
 

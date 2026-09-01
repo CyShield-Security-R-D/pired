@@ -49,7 +49,7 @@ if [ "$NODE_MAJOR" -lt 22 ] || { [ "$NODE_MAJOR" -eq 22 ] && [ "$NODE_MINOR" -lt
 fi
 
 say ""
-say "  ${RED}${BOLD}pi(red)${OFF} ${DIM}— engagement harness for security consultants${OFF}"
+say "  ${RED}${BOLD}pired${OFF} ${DIM}— engagement harness for security consultants${OFF}"
 say ""
 
 # --- source -----------------------------------------------------------------
