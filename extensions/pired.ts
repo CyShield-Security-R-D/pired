@@ -26,7 +26,7 @@ import {
 	buildBrowserModel, detailRowCount, elementLabel, initialState, reduceBrowser, renderBrowser, type BrowserKey, type BrowserModel, type BrowserState, type BrowserTone, type BrowserView,
 } from "../core/browser.ts";
 import { type BannerTone, renderBanner } from "../core/banner.ts";
-import { exportFindingsMarkdown } from "../core/export.ts";
+import { exportFindingsMarkdown, notReportReady } from "../core/export.ts";
 import { bannerColumns, BROWSER_CHROME, OVERLAY, OVERLAY_HEIGHT_SHARE, railColumns } from "../core/layout.ts";
 import type { BlockerRecord, Checklist, EngagementScope, Severity, TargetType } from "../core/ontology.ts";
 import type { Gate, ToolContext, ToolDefinition } from "../core/ports.ts";
@@ -202,6 +202,28 @@ async function seedChecklist(workspace: Workspace, targetType: TargetType): Prom
 		if (checklist && Array.isArray(checklist.classes)) await workspace.writeChecklist(checklist);
 	} catch {
 		// a malformed template is non-fatal: coverage simply stays uncomputed
+	}
+}
+
+/**
+ * What to say about findings that would ship with a section missing.
+ *
+ * One clause, appended to a line that is already being printed: pi's status
+ * line replaces the previous one in place, so a second notification would erase
+ * the first rather than sit under it.
+ */
+export function describeUnready(count: number): string {
+	return count > 0
+		? ` · ${count} need${count === 1 ? "s" : ""} impact + remediation — /skill:ops-technical-writer`
+		: "";
+}
+
+async function countUnready(ws: Workspace): Promise<string> {
+	try {
+		return describeUnready(notReportReady(await ws.read("findings")).length);
+	} catch {
+		// The ledger is unreadable for the moment; the pass itself still reports.
+		return "";
 	}
 }
 
@@ -1351,9 +1373,14 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		// match rather than duplicated, and saying so is the difference between a
 		// quiet pass that did nothing and a quiet pass that had nothing new to do.
 		const again = applied.repeats > 0 ? ` · ${applied.repeats} already recorded` : "";
+		// Said here, on the line the pass already prints, because a second notify
+		// would replace this one rather than follow it — and because now is when
+		// the reviewer still has the context to write the two paragraphs. The
+		// export says the same thing, but by then the report is being handed over.
+		const unready = await countUnready(ws);
 		ctx.ui.notify(
 			wrote > 0
-				? `pired: extracted ${applied.surface} surface, ${applied.settled} cells settled, ${applied.findings} findings${untouched}${again}${dropped}`
+				? `pired: extracted ${applied.surface} surface, ${applied.settled} cells settled, ${applied.findings} findings${untouched}${again}${dropped}${unready}`
 				: applied.repeats > 0
 					? `pired: nothing new — ${applied.repeats} row(s) already recorded${untouched}${dropped}`
 					: `pired: extraction produced nothing${dropped ? ` (${errors[0]})` : ""}`,
@@ -1987,10 +2014,21 @@ export default function piredExtension(pi: ExtensionAPI): void {
 				return;
 			}
 			const findings = await workspace.read("findings");
+			// A report with no findings in it is not a report, and writing one puts
+			// a file called findings.md in the engagement that says nothing —
+			// indistinguishable, later, from a review that genuinely found nothing.
+			// Say what is missing instead.
+			if (findings.length === 0) {
+				ctx.ui.notify(
+					"pired: nothing to report yet — no findings recorded. The agent records them as it confirms them; `/extract` converts a review it has already written.",
+					"warning",
+				);
+				return;
+			}
 			const loot = await workspace.read("loot");
 			const markdown = exportFindingsMarkdown({ findings, loot, engagement: scope.engagement, generatedAt: services.clock.nowIso() });
 			const rel = await workspace.writeArtifact("findings.md", markdown);
-			ctx.ui.notify(`pired: exported ${findings.length} finding(s) -> ${rel}`, "info");
+			ctx.ui.notify(`pired: exported ${findings.length} finding(s) -> ${rel}${describeUnready(notReportReady(findings).length)}`, "info");
 		},
 	});
 }

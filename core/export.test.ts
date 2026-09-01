@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { FindingRecord, LootRecord } from "./ontology.ts";
-import { exportFindingsJson, exportFindingsMarkdown } from "./export.ts";
+import { exportFindingsJson, exportFindingsMarkdown, notReportReady } from "./export.ts";
 
 function finding(partial: Partial<FindingRecord> & Pick<FindingRecord, "id">): FindingRecord {
 	return { v: 1, kind: "finding", createdAt: "t", title: "T", severity: "high", target: "e1", status: "confirmed", ...partial };
@@ -90,5 +90,27 @@ describe("the three sections a client reads", () => {
 			...base, status: "accepted-risk" as const, reason: "client accepted; compensating WAF rule",
 		}] });
 		expect(md).toContain("- Rationale: client accepted; compensating WAF rule");
+	});
+});
+
+describe("notReportReady", () => {
+	const complete = { description: "what it is", impact: "what it costs", remediation: "what to do" };
+
+	it("is the check the report already applies, where the harness can reach it too", () => {
+		const findings = [
+			finding({ id: "whole", ...complete }),
+			finding({ id: "no-impact", description: "d", remediation: "r" }),
+			finding({ id: "no-fix", description: "d", impact: "i" }),
+			finding({ id: "bare" }),
+		];
+		expect(notReportReady(findings).map((f) => f.id)).toEqual(["no-impact", "no-fix", "bare"]);
+		// And what it says about a set that is finished is nothing at all.
+		expect(notReportReady([finding({ id: "whole", ...complete })])).toEqual([]);
+	});
+
+	it("agrees with the banner the exported report prints", () => {
+		const md = exportFindingsMarkdown({ findings: [finding({ id: "bare" }), finding({ id: "whole", ...complete })] });
+		expect(md).toContain("1 finding is not report-ready");
+		expect(md).toContain("bare");
 	});
 });

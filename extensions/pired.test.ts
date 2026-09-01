@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import piredExtension from "./pired.ts";
+import piredExtension, { describeUnready } from "./pired.ts";
 
 /**
  * The extension is mostly host glue, so it is not unit-testable in the usual
@@ -266,4 +266,19 @@ describe("alt+m", () => {
 		expect(host.overlay().focused).toBe(false);
 	});
 
+});
+
+/**
+ * The clause that tells an operator a finding would ship with a section
+ * missing. It rides on a line that is already being printed — the extraction
+ * summary, or the export — because pi's status line replaces the previous one
+ * in place, so a second notification erases the first instead of following it.
+ */
+describe("saying a finding is not report-ready", () => {
+	it("names the pass that fixes it, and says nothing when there is nothing to fix", () => {
+		expect(describeUnready(2)).toContain("2 need impact + remediation");
+		expect(describeUnready(2)).toContain("/skill:ops-technical-writer");
+		expect(describeUnready(1)).toContain("1 needs impact + remediation");
+		expect(describeUnready(0)).toBe("");
+	});
 });

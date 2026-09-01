@@ -48,6 +48,19 @@ export function exportFindingsJson(input: ExportInput): string {
 	return `${JSON.stringify({ engagement: input.engagement, generatedAt: input.generatedAt, findings }, null, 2)}\n`;
 }
 
+/**
+ * The findings that would ship with a section missing.
+ *
+ * Shared with the harness rather than kept inside the exporter, because the
+ * moment to hear about it is when the finding is recorded — while the reviewer
+ * still has the context to write the two paragraphs — and not when the report
+ * is already being handed over. `skills/ops-technical-writer` is the pass that
+ * fills them in.
+ */
+export function notReportReady(findings: FindingRecord[]): FindingRecord[] {
+	return findings.filter((f) => !f.description || !f.impact || !f.remediation);
+}
+
 export function exportFindingsMarkdown(input: ExportInput): string {
 	const findings = redactedSorted(input);
 	const counts = tally(findings);
@@ -60,7 +73,7 @@ export function exportFindingsMarkdown(input: ExportInput): string {
 	const summary = SEVERITY_DESC.filter((s) => counts[s] > 0).map((s) => `- ${s}: ${counts[s]}`);
 	out.push(summary.length ? summary.join("\n") : "No findings recorded.");
 	out.push(`\nTotal: ${findings.length} finding${findings.length === 1 ? "" : "s"}`);
-	const incomplete = findings.filter((f) => !f.description || !f.impact || !f.remediation);
+	const incomplete = notReportReady(findings);
 	if (incomplete.length > 0) {
 		out.push(
 			`\n> **${incomplete.length} finding${incomplete.length === 1 ? " is" : "s are"} not report-ready** — ` +
