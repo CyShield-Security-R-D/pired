@@ -93,6 +93,25 @@ pi -e ./extensions/pired.ts -e ./extensions/hosts.ts --pired-profile review
 
 </details>
 
+## Give it a model
+
+A fresh install has none, and nothing else works until it does. Start it:
+
+```bash
+pired
+```
+
+Then **`/provider`** — or *"Add a custom provider…"*, the first row in pi's own `/login`. Point it at a server you are already running:
+
+```
+Which server   LM Studio · Ollama · llama.cpp · vLLM · OpenRouter · anything OpenAI-compatible
+Base URL       192.168.1.20:1234/v1     (the scheme is filled in; a LAN address is http)
+API token      Enter for none — or $ENV_VAR, stored as the reference, never the key
+Model          pired asks the server what it serves and offers the list
+```
+
+It works out the context window and the reasoning format from what the server reports, writes `~/.pired/models.json` readable only by you, and puts the model in `/model` without a restart. Details, and the JSON if you would rather write it yourself, in [Models](models.md).
+
 Check it:
 
 ```bash

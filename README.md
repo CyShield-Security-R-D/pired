@@ -171,6 +171,8 @@ pired rides pi's full frontend — TUI, `/model` switching, `/login`, themes, se
 
 ## Quickstart
 
+**First, give it a model.** Start `pired` and run **`/provider`** — or pick *"Add a custom provider…"* from pi's own `/login`. It asks for the base URL and token of a server you are already running (LM Studio, Ollama, llama.cpp, vLLM, or anything OpenAI-compatible), asks that server what it serves, and registers it into `/model`. See [Models](./docs/models.md).
+
 ```bash
 # review the code in the current project (read-only, no network gate)
 pi -e ./extensions/pired.ts -e ./extensions/hosts.ts --pired-profile review -p "audit ./src for injection and auth bugs"
