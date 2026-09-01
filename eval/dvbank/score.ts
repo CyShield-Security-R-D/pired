@@ -155,10 +155,25 @@ export interface EngagementTelemetry {
 	hypotheses: number;
 	settled: number;
 	findings: number;
+	/**
+	 * Distinct reasoning behind the settled cells.
+	 *
+	 * `record` takes lists for target and class and writes the cross product, so
+	 * one judgement can settle a hundred cells. Measured on filebrowser: 1,438
+	 * refutations from 44 distinct statements, a 33x multiplier — and one of those
+	 * 44 was "command execution is by design with proper access controls",
+	 * replicated 103 times over the code the advisory was actually about.
+	 *
+	 * Reporting cells alone makes 44 acts of reasoning look like near-complete
+	 * coverage. Reporting both makes the amplification visible.
+	 */
+	judgements: number;
+	/** The largest number of cells a single statement settled. */
+	widest: number;
 }
 
 export async function engagementTelemetry(engagementDir: string): Promise<EngagementTelemetry> {
-	const empty = { surface: 0, hypotheses: 0, settled: 0, findings: 0 };
+	const empty = { surface: 0, hypotheses: 0, settled: 0, findings: 0, judgements: 0, widest: 0 };
 	if (!existsSync(engagementDir)) return empty;
 	try {
 		const ws = new Workspace(engagementDir, makeHostServices());
@@ -169,6 +184,11 @@ export async function engagementTelemetry(engagementDir: string): Promise<Engage
 			// Settled means the cell moved: a proposal nobody tested leaves the
 			// matrix exactly as open as it was.
 			settled: hyps.filter((h) => h.outcome === "confirmed" || h.outcome === "refuted").length,
+			judgements: new Set(hyps.map((h) => `${h.outcome}:${h.statement ?? ""}`)).size,
+			widest: hyps.reduce((max, h) => {
+				const n = hyps.filter((o) => o.statement === h.statement && o.outcome === h.outcome).length;
+				return n > max ? n : max;
+			}, 0),
 			findings: (await ws.read("findings")).length,
 		};
 	} catch {

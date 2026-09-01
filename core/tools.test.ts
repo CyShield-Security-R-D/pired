@@ -266,7 +266,7 @@ describe("record hypothesis in bulk", () => {
 			classes: [{ id: "xss", title: "XSS" }, { id: "ssti", title: "SSTI" }],
 		} satisfies Checklist);
 		await record.execute(
-			{ kind: "hypothesis", target: "e1", class: ["xss", "ssti"], outcome: "refuted", statement: "JSON only" },
+			{ kind: "hypothesis", target: "e1", class: ["xss", "ssti"], outcome: "refuted", statement: "no HTML sink: every response is JSON encoded by the framework" },
 			ctx,
 		);
 		// One call, a whole row of the matrix settled — the ergonomics fix exists
@@ -292,7 +292,7 @@ describe("list coercion on hypothesis fields", () => {
 		// Smaller models emit this shape constantly; strict Array.isArray stored the
 		// whole literal as one target id, orphaning every hypothesis it produced.
 		await record.execute(
-			{ kind: "hypothesis", target: '["e1","e2"]', class: "sqli", outcome: "refuted", statement: "parameterized on both" },
+			{ kind: "hypothesis", target: '["e1","e2"]', class: "sqli", outcome: "refuted", statement: "parameterized on both: each query binds its arguments via the driver" },
 			ctx,
 		);
 		const hyps = await ws.read("hypotheses");
@@ -303,7 +303,7 @@ describe("list coercion on hypothesis fields", () => {
 	it("accepts a comma-separated list", async () => {
 		const { ws, ctx, record } = await setup();
 		await record.execute(
-			{ kind: "hypothesis", target: "e1", class: "xss, ssti, xxe", outcome: "refuted", statement: "JSON only" },
+			{ kind: "hypothesis", target: "e1", class: "xss, ssti, xxe", outcome: "refuted", statement: "no HTML sink: every response is JSON encoded by the framework" },
 			ctx,
 		);
 		expect((await ws.read("hypotheses")).map((h) => h.class).sort()).toEqual(["ssti", "xss", "xxe"]);
@@ -312,7 +312,7 @@ describe("list coercion on hypothesis fields", () => {
 	it("leaves a single plain value alone", async () => {
 		const { ws, ctx, record } = await setup();
 		await record.execute(
-			{ kind: "hypothesis", target: "e1", class: "sqli", outcome: "refuted", statement: "bound parameter" },
+			{ kind: "hypothesis", target: "e1", class: "sqli", outcome: "refuted", statement: "bound parameter: the query uses $1 placeholders throughout" },
 			ctx,
 		);
 		const hyps = await ws.read("hypotheses");
@@ -485,7 +485,7 @@ describe("an empty ledger is not a finished engagement", () => {
 		const { ws, ctx, recall, record } = await setup();
 		await ws.writeChecklist({ v: 1, targetType: "web", classes: [{ id: "authz", title: "Access control" }] } as Checklist);
 		await ws.append("inventory", { v: 1, id: "e1", kind: "endpoint", createdAt: "t", host: "h1", method: "GET", path: "/x" });
-		await record.execute({ kind: "hypothesis", statement: "checked", target: "e1", class: "authz", outcome: "refuted" }, ctx);
+		await record.execute({ kind: "hypothesis", statement: "no HTML sink: every response is JSON encoded by the framework", target: "e1", class: "authz", outcome: "refuted" }, ctx);
 		expect(textOf(await recall.execute({ query: "gaps" }, ctx))).toMatch(/every askable cell is settled/i);
 	});
 });
@@ -547,7 +547,7 @@ describe("a hypothesis creates the surface it names", () => {
 		const { ws, ctx, record } = await seeded();
 		for (const cls of ["secrets", "authn"]) {
 			await record.execute(
-				{ kind: "hypothesis", statement: `${cls} check`, class: cls, outcome: "refuted", target: "app.py the login flow" }, ctx,
+				{ kind: "hypothesis", statement: `${cls}: no reachable sink in this file, checked every call site`, class: cls, outcome: "refuted", target: "app.py the login flow" }, ctx,
 			);
 		}
 		const paths = (await ws.read("inventory")).map((r) => (r as unknown as { path?: string }).path);
@@ -569,7 +569,7 @@ describe("a hypothesis creates the surface it names", () => {
 	it("leaves a target that names nothing as written, rather than inventing an element", async () => {
 		const { ws, ctx, record } = await seeded();
 		await record.execute(
-			{ kind: "hypothesis", statement: "s", class: "authn", outcome: "inconclusive", target: "the login flow generally" }, ctx,
+			{ kind: "hypothesis", statement: "no HTML sink: every response is JSON encoded", class: "authn", outcome: "inconclusive", target: "the login flow generally" }, ctx,
 		);
 		expect(await ws.read("inventory")).toHaveLength(0);
 		expect((await ws.read("hypotheses"))[0]?.target).toBe("the login flow generally");
@@ -581,5 +581,76 @@ describe("a hypothesis creates the surface it names", () => {
 			{ kind: "finding", title: "hardcoded key", severity: "high", target: "config/settings.py:4" }, ctx,
 		);
 		expect(await ws.read("inventory")).toHaveLength(0);
+	});
+});
+
+describe("clearing a cell costs as much as reporting a bug", () => {
+	// Reporting a bug requires a file, a line, a CWE and a severity. Clearing a
+	// class required a sentence, which made "it is safe" structurally cheaper than
+	// "it is broken" — the wrong way round for a tool whose coverage number is
+	// built out of refutations. On filebrowser, "The reviewer confirmed this is by
+	// design with proper access controls" cleared 103 cells over the very code the
+	// advisory was about.
+	it("refuses a refutation that asserts rather than explains", async () => {
+		const { ctx, record } = await setup();
+		await expect(record.execute(
+			{ kind: "hypothesis", target: "e1", class: "sqli", outcome: "refuted", statement: "safe" }, ctx,
+		)).rejects.toThrow(/needs to say what was checked/);
+	});
+
+	it("says how many cells the call would have cleared", async () => {
+		const { ctx, record } = await setup();
+		await expect(record.execute(
+			{ kind: "hypothesis", target: ["e1", "e2", "e3"], class: "sqli", outcome: "refuted", statement: "fine" }, ctx,
+		)).rejects.toThrow(/clears 3 cells at once/);
+	});
+
+	it("accepts one that names the mechanism", async () => {
+		const { ws, ctx, record } = await setup();
+		await record.execute({
+			kind: "hypothesis", target: "e1", class: "sqli", outcome: "refuted",
+			statement: "every query goes through the ORM with bound parameters; no string concatenation reaches the driver",
+		}, ctx);
+		expect(await ws.read("hypotheses")).toHaveLength(1);
+	});
+
+	it("leaves confirmations and open outcomes alone", async () => {
+		// The bar exists because a refutation CLEARS a cell. A confirmation is
+		// evidenced by the finding it becomes.
+		const { ws, ctx, record } = await setup();
+		await record.execute({ kind: "hypothesis", target: "e1", class: "sqli", outcome: "confirmed", statement: "f-string" }, ctx);
+		await record.execute({ kind: "hypothesis", target: "e2", class: "sqli", outcome: "proposed", statement: "check" }, ctx);
+		expect(await ws.read("hypotheses")).toHaveLength(2);
+	});
+});
+
+describe("a finding must be locatable", () => {
+	it("refuses a finding that names a file but no line", async () => {
+		const { ctx, record } = await setup();
+		await expect(record.execute(
+			{ kind: "finding", title: "IDOR", severity: "high", target: "share.go" }, ctx,
+		)).rejects.toThrow(/no line is/);
+	});
+
+	it("accepts file:line in the target", async () => {
+		const { ws, ctx, record } = await setup();
+		await record.execute({ kind: "finding", title: "IDOR", severity: "high", target: "http/share.go:88" }, ctx);
+		expect(await ws.read("findings")).toHaveLength(1);
+	});
+
+	it("accepts a line stated in the description instead", async () => {
+		const { ws, ctx, record } = await setup();
+		await record.execute({
+			kind: "finding", title: "IDOR", severity: "high", target: "http/share.go",
+			description: "the ownership check is missing at line 88",
+		}, ctx);
+		expect(await ws.read("findings")).toHaveLength(1);
+	});
+
+	it("leaves a finding that names no source file alone", async () => {
+		// "the login flow", a component, a design gap — not everything has a line.
+		const { ws, ctx, record } = await setup();
+		await record.execute({ kind: "finding", title: "No rate limiting anywhere", severity: "medium" }, ctx);
+		expect(await ws.read("findings")).toHaveLength(1);
 	});
 });

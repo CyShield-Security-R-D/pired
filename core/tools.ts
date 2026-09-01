@@ -384,6 +384,38 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 				const rel = await deps.workspace.writeEvidence(name, body);
 				return text(`Evidence saved to ${rel} — cite this exact path in the finding's evidence[].`, { kind, path: rel });
 			}
+			// A refutation clears cells, so it must say what was checked.
+			//
+			// Reporting a bug requires a file, a line, a CWE and a severity. Clearing
+			// a class required a sentence — which made "it is safe" structurally
+			// cheaper than "it is broken", the wrong way round for a tool whose
+			// coverage number is built out of refutations.
+			//
+			// Measured on filebrowser: "The reviewer confirmed this is by design with
+			// proper access controls" cleared 103 cells over the command-execution
+			// path the advisory was actually about. One unevidenced sentence, 103
+			// cells of false assurance.
+			//
+			// The bar is deliberately low — name the mechanism you checked — because
+			// the goal is to make an empty refutation impossible, not to make an
+			// honest one laborious.
+			if (kind === "hypothesis" && oneOf(a.outcome, HYPOTHESIS_OUTCOMES) === "refuted") {
+				const why = str(a.statement);
+				const targets = asList(a.target).length;
+				// Only when a statement was actually given. A missing one is the
+				// required-field check's business, and stealing its error would tell
+				// the agent to write more when the field never arrived at all.
+				if (why !== undefined && why.length < 40) {
+					throw new Error(
+						`record hypothesis: a refutation needs to say what was checked, not just that it was. ` +
+						`Got ${why?.length ?? 0} characters. State the mechanism that makes this class inapplicable here ` +
+						`— the sanitiser, the parameterised query, the capability check, the absence of the sink — ` +
+						`so the cleared cell can be audited later. ` +
+						(targets > 1 ? `This call clears ${targets} cells at once, which is exactly why. ` : ""),
+					);
+				}
+			}
+
 
 			// Coverage is settled one cell at a time, which for a real engagement is
 			// O(elements x classes) tool calls — 19 classes over 20 endpoints is 380
@@ -454,6 +486,35 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 						resolved.push(created ?? t);
 					}
 					a.target = Array.isArray(a.target) ? resolved : resolved[0];
+				}
+			}
+
+
+			// A finding that names a source file must name the line in it.
+			//
+			// The report cites a location and the grader locates a finding by
+			// file:line — that is the same regex on both sides. A finding recorded as
+			// "share.go" satisfies neither: it is unciteable in a deliverable and
+			// invisible to scoring. Measured on a real run: 27 findings, every one a
+			// bare filename, 0 gradeable — a correct find would have scored zero too.
+			//
+			// The line may live anywhere the grader looks (target, description, repro,
+			// title, evidence), so this checks the whole record rather than the target
+			// alone, and only fires when a source file is actually named.
+			if (kind === "finding") {
+				const hay = [a.target, a.description, a.repro, a.title, ...(strArr(a.evidence) ?? [])]
+					.filter((x): x is string => typeof x === "string").join(" ");
+				const SRC = /[\w./-]+\.(?:py|pyi|js|jsx|ts|tsx|mjs|cjs|go|rb|php|java|cs|rs|kt|kts|scala|swift|c|h|cpp|hpp|sql|sh)\b/;
+				const named = SRC.exec(hay);
+				const located = /[\w./-]+\.[A-Za-z]{1,6}:\d+/.test(hay) || /\blines?\s+\d+/i.test(hay);
+				if (named && !located) {
+					throw new Error(
+						`record finding: '${named[0]}' is named but no line is. Cite the vulnerable sink as ` +
+						`file:line — "${named[0]}:42" — in 'target', or state "line 42" in the description. ` +
+						"A finding without a line cannot be cited in the report and cannot be scored. " +
+						"If the issue genuinely has no single line (a missing control, a design flaw), say so in " +
+						"the description and give the file plus the function or route it concerns.",
+					);
 				}
 			}
 
