@@ -34,6 +34,14 @@ extension, where nothing could test which cells a verdict settles or whether a
 rejected finding still settled a cell. Excluding the file would hide the same
 gap while reporting a better number.
 
+`extensions/hosts.ts` is the shape that argument asks for: the host wizard is a
+sequence of decisions, so it lives in `extensions/lib/provider-wizard.ts` driven
+by a four-method prompter, and the extension is the wiring that binds it to pi's
+`/login` callbacks on one side and pi's dialogs on the other. Both are tested —
+the wizard against a scripted transcript, the extension against the shapes pi
+really uses, including a login prompt that *rejects* when dismissed rather than
+resolving undefined.
+
 ## Where the interesting tests are
 
 Most modules are tested the obvious way. These are the ones worth reading first,
@@ -60,6 +68,14 @@ because each exists to stop a specific failure that already happened:
 - **`bin/state.test.ts`** — the `pired-state --json` shape, which is a published
   interface. A field quietly renamed breaks somebody's tmux pane and nothing
   else in the project would notice.
+- **`extensions/hosts.test.ts`** — both doors into the host wizard, driven
+  through the shapes pi actually uses. The `/login` one is the reason it exists:
+  pi builds that list from registered providers, calls the chosen one's
+  `login()` with callbacks that reject on dismissal, and expects a credential
+  back — none of which is obvious from the types, and all of which the entry
+  rests on. It also pins the two things a wrong wiring loses silently: the
+  mirror an extension-less subagent resolves from, and the `0600` on a file that
+  holds a client's token.
 - **`extensions/lib/host.test.ts`** — the error semantics, not the delegation.
   The workspace decides "no engagement yet" from a swallowed `ENOENT` and the
   lock decides "someone else holds it" from a swallowed `EEXIST`; a swallowed

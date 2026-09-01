@@ -26,7 +26,8 @@
   ],
   "pi": {
     "extensions": [
-      "./extensions/pired.ts"
+      "./extensions/pired.ts",
+      "./extensions/hosts.ts"
     ],
     "themes": [
       "./themes"

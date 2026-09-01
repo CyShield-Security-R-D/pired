@@ -78,7 +78,7 @@ pi install git:github.com/mamgad/pired
 **Without installing anything** — one session, from a clone:
 
 ```bash
-pi -e ./extensions/pired.ts --pired-profile review
+pi -e ./extensions/pired.ts -e ./extensions/hosts.ts --pired-profile review
 ```
 
 **Installer environment:**
@@ -172,6 +172,8 @@ The engagement name comes from the scope file, or from the target directory's ba
 ## Pick a model
 
 Model selection is pi's — `/model`, or `Ctrl+P`. pired additionally registers any OpenAI-compatible providers from `~/.pired/models.json` (LM Studio, Ollama, llama.cpp, OpenRouter, proxies) into that picker.
+
+If the model you want is not there yet, add it from **`/login`** — pired puts *"Add a custom provider…"* in pi's own login list — or with **`/provider`**. Base URL, token, model: it asks the host what it serves and fills in the rest.
 
 pired is tuned for ~30B open-weight models so client code never has to leave the engagement box. See [Models](models.md).
 

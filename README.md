@@ -160,7 +160,7 @@ pi install "$(npm root -g)/pired"        # so a bare `pi` loads it too
 pi install -l git:github.com/mamgad/pired
 
 # one session, from a clone, installing nothing
-pi -e ./extensions/pired.ts --pired-profile review
+pi -e ./extensions/pired.ts -e ./extensions/hosts.ts --pired-profile review
 ```
 
 Both installers detect an existing pi and leave it alone; `PIRED_SKIP_PI=1` forces the skip, `PIRED_SOURCE` chooses what to install from, and `NPM_PREFIX` picks the prefix.
@@ -173,7 +173,7 @@ pired rides pi's full frontend — TUI, `/model` switching, `/login`, themes, se
 
 ```bash
 # review the code in the current project (read-only, no network gate)
-pi -e ./extensions/pired.ts --pired-profile review -p "audit ./src for injection and auth bugs"
+pi -e ./extensions/pired.ts -e ./extensions/hosts.ts --pired-profile review -p "audit ./src for injection and auth bugs"
 ```
 
 - **Profiles** — `--pired-profile review | recon | pentest` (default `review`).
@@ -255,8 +255,10 @@ The counters are the agent's own claims, recorded as it worked. What survives an
 
 Model selection is pi's — use **`/model`** (and Ctrl+P). pired registers any custom OpenAI-compatible providers from `~/.pired/models.json` (LM Studio, Ollama, llama.cpp, OpenRouter, proxies) into that picker, alongside your built-in and subscription models.
 
+Adding one is a wizard rather than a JSON file: pired puts **"Add a custom provider…"** in pi's own **`/login`** list, and **`/provider`** opens the same thing by name. It asks for the base URL and token, asks the host what models it serves, works out the context window and the reasoning format, writes `~/.pired/models.json` `0600`, and registers the host without a restart. A token given as `$ENV_VAR` is stored as the reference, not the key.
+
 ```json
-{ "providers": [ { "id": "openrouter", "baseUrl": "https://openrouter.ai/api/v1", "apiKey": "sk-or-…",
+{ "providers": [ { "id": "openrouter", "baseUrl": "https://openrouter.ai/api/v1", "apiKey": "$OPENROUTER_KEY",
   "models": [ { "id": "qwen/qwen3.8-27b", "contextWindow": 265000, "reasoning": true } ] } ] }
 ```
 

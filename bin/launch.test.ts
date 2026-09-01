@@ -60,11 +60,20 @@ describe("splitting pired's arguments from pi's", () => {
 });
 
 describe("the pi command line", () => {
-	const base = { ext: "/pired/extensions/pired.ts", theme: "/pired/themes/pired.json" };
+	const base = { exts: ["/pired/extensions/pired.ts", "/pired/extensions/hosts.ts"], theme: "/pired/themes/pired.json" };
 
-	it("always loads the extension and arms the profile", () => {
+	it("always loads the extensions and arms the profile", () => {
 		const args = buildPiArgs({ ...base, argv: [] });
-		expect(args.slice(0, 6)).toEqual(["-e", base.ext, "--pired-profile", "review", "--thinking", "high"]);
+		expect(args.slice(0, 8)).toEqual([
+			"-e", "/pired/extensions/pired.ts", "-e", "/pired/extensions/hosts.ts",
+			"--pired-profile", "review", "--thinking", "high",
+		]);
+	});
+
+	it("skips an extension that is not installed rather than failing to start", () => {
+		const args = buildPiArgs({ ...base, argv: [], exists: (p) => !p.endsWith("hosts.ts") });
+		expect(args).toContain("/pired/extensions/pired.ts");
+		expect(args).not.toContain("/pired/extensions/hosts.ts");
 	});
 
 	it("takes a profile it knows and ignores one it does not", () => {

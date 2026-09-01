@@ -134,16 +134,21 @@ export function findPi({ env = {}, platform, root, argv1, exists, resolvePackage
  * The pi command line pired's own flags imply.
  *
  * @param {object} opts
- * @param {string} opts.ext Absolute path to the pired extension.
+ * @param {string[]} opts.exts Absolute paths to pired's extensions, in load order.
  * @param {string} opts.theme Absolute path to the pired theme.
  * @param {string[]} opts.argv pired's own arguments, without node and the script.
  * @param {(path: string) => boolean} [opts.exists]
  * @returns {string[]}
  */
-export function buildPiArgs({ ext, theme, argv, exists = () => true }) {
+export function buildPiArgs({ exts, theme, argv, exists = () => true }) {
 	const profileArg = argValue(argv, "profile");
 	const profile = PROFILES.includes(profileArg) ? profileArg : "review";
-	const args = ["-e", ext, "--pired-profile", profile, "--thinking", argValue(argv, "thinking", "high"), "--approve"];
+	// One -e per extension, and only for the ones that are there: a partial or
+	// older install should lose the piece it is missing, not fail to start.
+	const args = [
+		...exts.filter((path) => exists(path)).flatMap((path) => ["-e", path]),
+		"--pired-profile", profile, "--thinking", argValue(argv, "thinking", "high"), "--approve",
+	];
 
 	const provider = argValue(argv, "provider");
 	const model = argValue(argv, "model");

@@ -6,6 +6,7 @@ pired is a **ports-and-adapters** design with one governing constraint: the secu
 core/          the security engine — no pi imports, no third-party, not even node builtins
 extensions/
   pired.ts     the pi adapter: tools, scope gate, prompt, commands, UI
+  hosts.ts     LLM providers: the "Add a custom provider…" entry in /login, and /provider
   lib/         node host services · core→pi tool bridge · provider registration
 skills/        opt-in methodology (39)
 checklists/    coverage class templates (4)

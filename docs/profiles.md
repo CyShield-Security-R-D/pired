@@ -9,6 +9,7 @@ pired --profile pentest
 ```
 
 Or, invoking pi directly: `pi -e <pired>/extensions/pired.ts --pired-profile pentest`.
+(pired's launcher also loads `extensions/hosts.ts`, which is what puts "Add a custom provider…" in `/login`.)
 
 ## `review` — whitebox code audit
 

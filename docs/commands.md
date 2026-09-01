@@ -1,6 +1,6 @@
 # Commands and Keys
 
-Everything pired adds to pi. pi's own commands (`/model`, `/login`, `/reload`, sessions, …) are unchanged — see [pi's docs](https://pi.dev).
+Everything pired adds to pi. pi's own commands (`/model`, `/reload`, sessions, …) are unchanged — see [pi's docs](https://pi.dev). The one pired reaches into is **`/login`**, which gains an entry for adding an arbitrary OpenAI-compatible provider; see [Models](models.md).
 
 ## Slash commands
 
@@ -20,6 +20,9 @@ Everything pired adds to pi. pi's own commands (`/model`, `/login`, `/reload`, s
 | `/blockers` | Walk the open blockers — what needs you — one dialog at a time, including ones already dismissed. |
 | `/extract` | Convert the review into ledger records now. Runs automatically when a turn leaves the checklist unanswered. |
 | `/extract off` \| `on` \| `status` | Turn the automatic second pass off or on for this session, or report its state. |
+| `/provider` | Add an LLM provider — base URL, model, token — the same wizard `/login` opens. |
+| `/provider list` | Show the providers in `~/.pired/models.json` and the models each serves. |
+| `/provider remove <id>` | Forget one, in pired's file, pi's mirror, and this session's picker. |
 
 ### Extraction, and why it exists
 
@@ -138,8 +141,8 @@ pired [--profile review|recon|pentest] [--provider NAME] [--model ID]
 The launcher always passes `--approve`. To run pired without it, invoke pi directly:
 
 ```bash
-pi -e /path/to/pired/extensions/pired.ts --pired-profile pentest
-pi -e /path/to/pired/extensions/pired.ts --pired-panel off   # what --no-panel maps to
+pi -e /path/to/pired/extensions/pired.ts -e /path/to/pired/extensions/hosts.ts --pired-profile pentest
+pi -e /path/to/pired/extensions/pired.ts --pired-panel off   # what --no-panel maps to  (hosts.ts is the second -e)
 ```
 
 ## `pired-state`

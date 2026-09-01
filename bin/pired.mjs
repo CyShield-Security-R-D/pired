@@ -30,6 +30,9 @@ import { argValue, buildPiArgs, findPi, launchPlan } from "./launch.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const EXT = join(ROOT, "extensions", "pired.ts");
+// The LLM-host layer: pi's /login gains "Add an LLM host…", and /host manages
+// them. A separate extension because it is not the security layer.
+const HOSTS_EXT = join(ROOT, "extensions", "hosts.ts");
 const THEME = join(ROOT, "themes", "pired.json");
 const argv = process.argv.slice(2);
 
@@ -61,7 +64,7 @@ const piBin = findPi({
 	exists: existsSync,
 	resolvePackage: resolvePiPackage,
 });
-const piArgs = buildPiArgs({ ext: EXT, theme: THEME, argv, exists: existsSync });
+const piArgs = buildPiArgs({ exts: [EXT, HOSTS_EXT], theme: THEME, argv, exists: existsSync });
 
 const targetRaw = argValue(argv, "target", ".");
 const target = isAbsolute(targetRaw) ? targetRaw : resolve(process.cwd(), targetRaw);
