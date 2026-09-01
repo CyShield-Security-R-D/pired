@@ -12,6 +12,7 @@
 
 import { buildBrowserModel, recordLabel } from "./browser.ts";
 import { computeCoverage, findGaps, selectNext } from "./coverage.ts";
+import { CVSS_DEFAULT_VERSION, CVSS_EXAMPLE, cvssVersion, validateCvss } from "./cvss.ts";
 import { type Fields, findDuplicate, findNearDuplicate, type IdentityKind, isNoOp, mergeRecord } from "./identity.ts";
 import { computeCoverageView, computeEngagementStats, isDisposed } from "./stats.ts";
 import { CELL_GLYPH, renderCoveragePanel } from "./coverage-panel.ts";
@@ -46,7 +47,7 @@ type RecordKind = (typeof RECORD_KINDS)[number];
 type LedgerKind = Exclude<RecordKind, "note" | "evidence">;
 
 const RECALL_QUERIES = [
-	"status", "next", "coverage", "surface", "gaps", "inventory", "hypotheses", "findings", "loot", "blockers", "notes",
+	"status", "next", "coverage", "surface", "gaps", "inventory", "hypotheses", "findings", "finding", "loot", "blockers", "notes",
 ] as const;
 
 /**
@@ -180,7 +181,7 @@ function extractFields(kind: LedgerKind, a: Record<string, unknown>): Record<str
 		case "hypothesis":
 			return defined({ statement: str(a.statement), target: asList(a.target)[0], class: asList(a.class)[0], method: str(a.approach) ?? str(a.method), outcome: oneOf(a.outcome, HYPOTHESIS_OUTCOMES), evidence: str(a.evidence), findingId: str(a.findingId) });
 		case "finding":
-			return defined({ title: str(a.title), severity: oneOf(a.severity, SEVERITIES), target: str(a.target), class: str(a.class), cwe: str(a.cwe), cvss: str(a.cvss), description: str(a.description), repro: str(a.repro), evidence: strArr(a.evidence), status: oneOf(a.status, FINDING_STATUSES), reason: str(a.reason), hypothesisId: str(a.hypothesisId) });
+			return defined({ title: str(a.title), severity: oneOf(a.severity, SEVERITIES), target: str(a.target), class: str(a.class), cwe: str(a.cwe), cvss: str(a.cvss), description: str(a.description), impact: str(a.impact), remediation: str(a.remediation), repro: str(a.repro), evidence: strArr(a.evidence), status: oneOf(a.status, FINDING_STATUSES), reason: str(a.reason), hypothesisId: str(a.hypothesisId) });
 		case "blocker":
 			return defined({ type: oneOf(a.blockerType, BLOCKER_TYPES), question: str(a.question), context: str(a.context), options: strArr(a.options), blocks: strArr(a.blocks), priority: oneOf(a.priority, PRIORITIES), status: oneOf(a.status, BLOCKER_STATUSES), answer: str(a.answer) });
 		case "loot":
@@ -240,6 +241,7 @@ const RECORD_DESCRIPTION = `Record engagement state to the durable workspace. On
 - hypothesis: statement, target (surface id), class (checklist id) (+approach, outcome[proposed|testing|confirmed|refuted|inconclusive], evidence). 'target' and 'class' also accept lists, recording the cross product in one call — use it when one piece of reasoning settles several cells at once.
 - finding: title, severity[info|low|medium|high|critical] (+target, class, cwe, cvss, description, repro, evidence[], status)
   A finding is anything worth carrying into the report, not only a proven vulnerability. Use severity=info for an observation that costs nothing now but may matter later — a missing dependency pin, an unpinned base image, a permissive default, a lead you could not finish. 'target' is optional and accepts a recorded element id OR a raw string (a file path, a module, a component) when no element fits; give one when you can, and record the finding either way rather than leaving it in notes.
+  A finding is a section of a document a client pays for, so it is written as one: 'description' says what the flaw is and where, 'impact' says what it costs THEM — the records exposed, the money moved, the service lost, the obligation breached — and 'remediation' says the concrete change that fixes it (the control to add, the call to replace; never "sanitize input"). 'repro' is numbered steps a third party can follow. Write impact in the client's terms, not the tool's: "any logged-in customer can read all 40k customer records, including national IDs" beats "confidentiality impact is high".
   status[open|confirmed|triaged|reported|false-positive|accepted-risk|ignored] is how a finding is settled without losing it. When the operator says a finding is not real, set status=false-positive; when they say the risk is accepted, status=accepted-risk; when they want it set aside, status=ignored. All three keep the row and its history, drop it out of the open-findings count, and take a 'reason' — which is what a client asks for three months later. Prefer them to deleting.
 - blocker: question (+blockerType, priority[low|medium|high], options[], blocks[] (work ids this gates))
 - loot: handle (e.g. cred:web-admin), secret (+lootType, username, target, source)
@@ -287,7 +289,7 @@ const RECORD_PARAMETERS: JsonSchema = {
 		},
 		approach: { type: "string" }, outcome: { enum: HYPOTHESIS_OUTCOMES },
 		content: { type: "string", description: "For kind=evidence: the raw output to save to the file." },
-		title: { type: "string" }, severity: { enum: SEVERITIES }, cwe: { type: "string" }, cvss: { type: "string" }, description: { type: "string" }, repro: { type: "string" }, status: { type: "string" }, evidence: { type: "array", items: { type: "string" }, description: "Workspace-relative paths to evidence files you wrote (e.g. [\"evidence/sqli-login.txt\"]). Not inline text." },
+		title: { type: "string" }, severity: { enum: SEVERITIES }, cwe: { type: "string" }, cvss: { type: "string", description: `CVSS vector. v4.0 by default, e.g. "${CVSS_EXAMPLE["4.0"]}"; a v3.1 vector is accepted when the engagement requires one.` }, description: { type: "string", description: "What the flaw is and where: the mechanism, in plain language." }, impact: { type: "string", description: "What it costs the client in their terms — records exposed, money moved, service lost, obligation breached." }, remediation: { type: "string", description: "The concrete change that fixes it: the control to add, the call to replace. Not \"sanitize input\"." }, repro: { type: "string" }, status: { type: "string" }, evidence: { type: "array", items: { type: "string" }, description: "Workspace-relative paths to evidence files you wrote (e.g. [\"evidence/sqli-login.txt\"]). Not inline text." },
 		question: { type: "string" }, blockerType: { enum: BLOCKER_TYPES }, priority: { enum: PRIORITIES }, options: { type: "array", items: { type: "string" } }, blocks: { type: "array", items: { type: "string" } }, context: { type: "string" },
 		handle: { type: "string" }, lootType: { enum: LOOT_TYPES }, username: { type: "string" }, secret: { type: "string" }, source: { type: "string" }, notes: { type: "string" },
 		delete: { type: "boolean", description: "With 'id': retire that record. For something that should never have been recorded — ask the operator first." },
@@ -653,6 +655,30 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 				}
 			}
 
+			// A CVSS vector is checked against the version it claims, not taken on
+			// trust.
+			//
+			// pired writes v4.0 and accepts v3.1, and the two are not distinguishable
+			// by eye — both are slash-separated pairs. Nearly everything written about
+			// CVSS is about v3.1, so v3.1 metrics are what a model reaches for even
+			// under a 4.0 label, and that reads as a scored finding right up to the
+			// point a client checks it. Relabelling the prefix does not fix it either:
+			// Scope is gone in v4.0 and AT is new, which is what the error says.
+			//
+			// Dropping the field is always offered. A vector is a nicety; the finding
+			// is the deliverable, and no check here may cost one.
+			if (kind === "finding") {
+				const vector = str(a.cvss);
+				const complaint = vector === undefined ? undefined : validateCvss(vector);
+				if (complaint !== undefined) {
+					throw new Error(
+						`record finding: ${complaint} Build a v${CVSS_DEFAULT_VERSION} vector at ` +
+						"https://www.first.org/cvss/calculator/4-0 (or the v3.1 calculator when the engagement requires v3.1), " +
+						"or omit 'cvss' and record the finding without one — severity, cwe and the description are what the report needs.",
+					);
+				}
+			}
+
 			// A class the checklist does not know is silent data loss.
 			//
 			// `class` is a free string, and the valid ids live in the engagement's
@@ -828,12 +854,29 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 			});
 
 			const written = record as LedgerRecord;
+			// What the report will be missing, said at the moment it can still be
+			// fixed cheaply.
+			//
+			// Not a rejection. A finding recorded without its business impact is
+			// still a finding, and refusing it would trade the deliverable for the
+			// paperwork — but nothing else in the run will ever mention the gap, and
+			// a description-only finding is a bug report a client is asked to
+			// translate for themselves. So the row lands and the tool says what is
+			// left, by id, in the order a reader needs it.
+			const gaps = kind === "finding"
+				? (["description", "impact", "remediation"] as const).filter((f) => str((written as unknown as Fields)[f]) === undefined)
+				: [];
+			const incomplete = gaps.length > 0
+				? `\nNot yet report-ready: no ${gaps.join(", no ")}. Add with record id=${written.id} ` +
+					`${gaps.map((g) => `${g}="..."`).join(" ")} — impact is what it costs the client in their terms, ` +
+					"remediation is the concrete change that fixes it."
+				: "";
 			const warning = near
 				? `\nPossible duplicate of ${near.id} (${recordLabel(near)}) — same location, similar wording, nothing that settles it. ` +
 					`Recorded separately rather than risk losing one of them. If they are the same issue, fold the detail into ` +
 					`${near.id} with record id=${near.id}, then retire this one with record id=${written.id} delete=true reason="duplicate of ${near.id}".`
 				: "";
-			return text(recordSummary(kind, written, outcome) + warning, recordDetails(written, outcome));
+			return text(recordSummary(kind, written, outcome) + warning + incomplete, recordDetails(written, outcome));
 		},
 	};
 }
@@ -891,7 +934,8 @@ export function createRecallTool(deps: ToolDeps): ToolDefinition {
 			"coverage (the full checklist x surface matrix, one row per class), " +
 			"surface (one row per recorded element with its coverage bar), " +
 			"next (next untested/actionable cell), gaps (untested/blocked cells), " +
-			"inventory, hypotheses, findings, loot (handles only), blockers, notes. " +
+			"inventory, hypotheses, findings, loot (handles only), blockers, notes, " +
+			"finding (ONE finding in full — pass id — every field as recorded: description, impact, remediation, repro, evidence, cwe, cvss). " +
 			"Use 'status' to see where the engagement stands, 'coverage'/'surface' to see WHERE the holes are, " +
 			"and 'next'/'gaps' to stay systematic and avoid quitting early.",
 		parameters: {
@@ -899,6 +943,7 @@ export function createRecallTool(deps: ToolDeps): ToolDefinition {
 			required: ["query"],
 			properties: {
 				query: { enum: RECALL_QUERIES },
+				id: { type: "string", description: "For query=finding: which one." },
 				limit: { type: "integer", description: "Max items (default 50)." },
 			},
 		},
@@ -933,6 +978,33 @@ export function createRecallTool(deps: ToolDeps): ToolDefinition {
 							`${f.id} [${f.severity}/${f.status}] ${f.title} (${f.target})${f.reason ? ` — ${f.reason}` : ""}`,
 						).join("\n") + truncated(Math.min(limit, fs.length), fs.length, "findings", "open first")
 						: "(no findings)");
+				}
+				case "finding": {
+					// One finding, whole.
+					//
+					// `findings` is a list, one line each, and there was no way for the
+					// agent to read back what it had actually written — the full text of
+					// a finding was reachable only from the operator's TUI. A pass that
+					// rewrites a finding for the report, and any child delegated to do
+					// it, has to be able to see the finding first.
+					const id = str(a.id);
+					if (!id) throw new Error("recall finding: 'id' is required — pass the finding id. Use query=findings for the list.");
+					const found = (await deps.workspace.read("findings")).find((f) => f.id === id);
+					if (!found) return text(`No live finding ${id}. Use 'recall findings' for what is there.`);
+					const lines = [
+						`${found.id} [${found.severity}/${found.status}] ${found.title}`,
+						`target: ${found.target ?? "(none)"}`,
+						`class: ${found.class ?? "(none)"}   cwe: ${found.cwe ?? "(none)"}   cvss: ${found.cvss ?? "(none)"}`,
+						`recorded: ${found.createdAt}${found.updatedAt ? ` · updated ${found.updatedAt}` : ""}`,
+						...(found.reason ? [`reason: ${found.reason}`] : []),
+						"",
+						`## Description\n${found.description ?? "(not recorded)"}`,
+						`## Business impact\n${found.impact ?? "(not recorded)"}`,
+						`## Remediation\n${found.remediation ?? "(not recorded)"}`,
+						`## Reproduction\n${found.repro ?? "(not recorded)"}`,
+						`## Evidence\n${found.evidence?.length ? found.evidence.join("\n") : "(none cited)"}`,
+					];
+					return text(lines.join("\n"));
 				}
 				case "blockers": {
 					const bs = (await deps.workspace.read("blockers")).filter((b) => b.status === "open");

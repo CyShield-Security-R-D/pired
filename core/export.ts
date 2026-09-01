@@ -10,6 +10,16 @@
 import type { FindingRecord, LootRecord, Severity } from "./ontology.ts";
 import { buildRedactor } from "./redaction.ts";
 
+/**
+ * What an unwritten section says.
+ *
+ * Loud on purpose. This document goes to a client, and the failure to avoid is
+ * one that ships looking finished: a finding with no business impact reads as a
+ * complete section to anyone skimming, and the gap is only visible if the
+ * document says so where the paragraph should have been.
+ */
+const MISSING = "_Not recorded — this finding is not yet report-ready._";
+
 const SEVERITY_DESC = ["critical", "high", "medium", "low", "info"] as const;
 const SEVERITY_ORDER: Record<Severity, number> = { critical: 5, high: 4, medium: 3, low: 2, info: 1 };
 
@@ -50,6 +60,13 @@ export function exportFindingsMarkdown(input: ExportInput): string {
 	const summary = SEVERITY_DESC.filter((s) => counts[s] > 0).map((s) => `- ${s}: ${counts[s]}`);
 	out.push(summary.length ? summary.join("\n") : "No findings recorded.");
 	out.push(`\nTotal: ${findings.length} finding${findings.length === 1 ? "" : "s"}`);
+	const incomplete = findings.filter((f) => !f.description || !f.impact || !f.remediation);
+	if (incomplete.length > 0) {
+		out.push(
+			`\n> **${incomplete.length} finding${incomplete.length === 1 ? " is" : "s are"} not report-ready** — ` +
+			`missing a description, a business impact or a remediation: ${incomplete.map((f) => f.id).join(", ")}.`,
+		);
+	}
 
 	out.push("\n## Findings\n");
 	if (findings.length === 0) {
@@ -61,8 +78,19 @@ export function exportFindingsMarkdown(input: ExportInput): string {
 		if (f.class) meta.push(`- Class: ${f.class}`);
 		if (f.cwe) meta.push(`- CWE: ${f.cwe}`);
 		if (f.cvss) meta.push(`- CVSS: ${f.cvss}`);
+		if (f.reason) meta.push(`- Rationale: ${f.reason}`);
 		out.push(meta.join("\n"));
-		if (f.description) out.push(`\n${f.description}`);
+		// The three sections a client's report is read for, in the order it is read
+		// in: what it is, what it costs us, what we do about it. Written out even
+		// when empty — a heading marked "not recorded" is caught by whoever reviews
+		// the document; a section that silently is not there is not.
+		for (const [heading, body] of [
+			["Description", f.description],
+			["Business impact", f.impact],
+			["Remediation", f.remediation],
+		] as const) {
+			out.push(`\n**${heading}**\n\n${body ?? MISSING}`);
+		}
 		if (f.repro) out.push(`\n**Reproduction**\n\n${f.repro}`);
 		if (f.evidence?.length) out.push(`\n**Evidence**\n${f.evidence.map((e) => `- ${e}`).join("\n")}`);
 		out.push("");

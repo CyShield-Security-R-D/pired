@@ -282,7 +282,20 @@ export interface FindingRecord extends RecordBase {
 	cwe?: string;
 	/** CVSS vector string. */
 	cvss?: string;
+	/** What the flaw is, in plain language: the mechanism, and where it lives. */
 	description?: string;
+	/**
+	 * What it costs the client, in their terms.
+	 *
+	 * The description says what is broken; this says why anyone should pay to fix
+	 * it — the records exposed, the money moved, the service lost, the obligation
+	 * breached. It is the paragraph a manager reads and the one a technical writer
+	 * most often leaves out, and a finding without it is a bug report rather than
+	 * a consulting deliverable.
+	 */
+	impact?: string;
+	/** The concrete change that fixes it: the control to add, not "sanitize input". */
+	remediation?: string;
 	repro?: string;
 	/** Workspace-relative evidence/artifact paths. */
 	evidence?: string[];

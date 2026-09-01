@@ -189,6 +189,8 @@ pi -e ./extensions/pired.ts --pired-profile review -p "audit ./src for injection
 
 - **Findings** — `/findings` browses them and `/report` exports a Markdown report; engagement state lives in `~/.pired/engagements/<name>/` (see [`FORMAT.md`](./FORMAT.md)).
 
+- **Report-grade findings** — a finding carries what the flaw is, what it costs the client in their terms, and the concrete fix; `record` says which of the three is still missing, and the exported report marks an unwritten section rather than quietly leaving it out. CVSS vectors are validated against the version they claim — v4.0 by default, v3.1 when an engagement requires it — so a v3.1 vector cannot enter the ledger under a v4.0 label. `recall finding id=<id>` reads one back in full, which is what a rewrite pass (or a delegated technical writer — see `skills/ops-technical-writer`) works from.
+
 - **Correcting the ledger** — tell the agent a finding is not real, that the client has accepted the risk, or to set it aside, and it records the decision as a status with your reason; the finding keeps its place in the report and leaves the open count. A row that should never have been recorded can be retired outright. Nothing is erased: the ledger is append-only, so every version is still in the file above the tombstone. `/dedupe` folds duplicates an older engagement already accumulated into one row each, moving every reference onto the surviving id so no coverage is lost — it shows what it would do and writes only when you say so.
 
 ## The interface

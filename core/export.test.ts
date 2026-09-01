@@ -48,3 +48,47 @@ describe("exportFindingsJson", () => {
 		expect(parsed.findings[0]?.repro).not.toContain("tok_abcdef");
 	});
 });
+
+describe("the three sections a client reads", () => {
+	const base = {
+		v: 1 as const, id: "f1", kind: "finding" as const, createdAt: "t",
+		title: "IDOR in /api/user", severity: "high" as const, target: "user_routes.py:41", status: "open" as const,
+	};
+
+	it("renders what it is, what it costs and what to do, in that order", () => {
+		const md = exportFindingsMarkdown({ findings: [{
+			...base,
+			description: "no ownership check on the id parameter",
+			impact: "any customer can read all 40,000 customer records",
+			remediation: "scope the query to the session user",
+		}] });
+		expect(md.indexOf("**Description**")).toBeLessThan(md.indexOf("**Business impact**"));
+		expect(md.indexOf("**Business impact**")).toBeLessThan(md.indexOf("**Remediation**"));
+		expect(md).toContain("any customer can read all 40,000 customer records");
+		expect(md).not.toContain("not yet report-ready");
+	});
+
+	it("marks an unwritten section rather than leaving it out", () => {
+		// A finding with no impact paragraph reads as a finished section to anyone
+		// skimming. The gap has to be visible where the paragraph should have been.
+		const md = exportFindingsMarkdown({ findings: [{ ...base, description: "no ownership check" }] });
+		expect(md).toMatch(/\*\*Business impact\*\*\n\n_Not recorded/);
+		expect(md).toMatch(/\*\*Remediation\*\*\n\n_Not recorded/);
+	});
+
+	it("says in the summary which findings are not ready to send", () => {
+		const md = exportFindingsMarkdown({ findings: [
+			{ ...base, id: "f1", description: "d", impact: "i", remediation: "r" },
+			{ ...base, id: "f2" },
+		] });
+		expect(md).toMatch(/\*\*1 finding is not report-ready\*\*/);
+		expect(md).toContain("f2.");
+	});
+
+	it("carries the rationale for a settled finding into the report", () => {
+		const md = exportFindingsMarkdown({ findings: [{
+			...base, status: "accepted-risk" as const, reason: "client accepted; compensating WAF rule",
+		}] });
+		expect(md).toContain("- Rationale: client accepted; compensating WAF rule");
+	});
+});

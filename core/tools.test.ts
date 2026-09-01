@@ -924,3 +924,94 @@ describe("retiring a record", () => {
 		expect(await ws.read("inventory")).toHaveLength(1);
 	});
 });
+
+describe("scoring a finding", () => {
+	// pired writes CVSS v4.0 and accepts v3.1. The two are not distinguishable by
+	// eye, and nearly all the writing about CVSS is about v3.1 — so v3.1 metrics
+	// are what a model reaches for even under a 4.0 label, and that reads as a
+	// scored finding right up to the point a client checks it.
+	const V4 = "CVSS:4.0/AV:N/AC:L/AT:N/PR:L/UI:N/VC:H/VI:N/VA:N/SC:N/SI:N/SA:N";
+
+	it("accepts a v4.0 vector", async () => {
+		const { ws, ctx, record } = await setup();
+		await record.execute({ kind: "finding", title: "IDOR", severity: "high", target: "share.go:88", cvss: V4 }, ctx);
+		expect((await ws.read("findings"))[0]?.cvss).toBe(V4);
+	});
+
+	it("accepts a v3.1 vector, for the engagement that requires one", async () => {
+		const { ws, ctx, record } = await setup();
+		const v31 = "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:N/A:N";
+		await record.execute({ kind: "finding", title: "IDOR", severity: "high", target: "share.go:88", cvss: v31 }, ctx);
+		expect((await ws.read("findings"))[0]?.cvss).toBe(v31);
+	});
+
+	it("refuses v3.1 metrics wearing a v4.0 label, and says where they went", async () => {
+		const { ctx, record } = await setup();
+		await expect(record.execute({
+			kind: "finding", title: "IDOR", severity: "high", target: "share.go:88",
+			cvss: "CVSS:4.0/AV:N/AC:L/AT:N/PR:L/UI:N/S:U/C:H/I:N/A:N",
+		}, ctx)).rejects.toThrow(/Scope, which v4\.0 removed/);
+	});
+
+	it("offers dropping the vector, so a bad one never costs the finding", async () => {
+		const { ctx, record } = await setup();
+		await expect(record.execute({
+			kind: "finding", title: "IDOR", severity: "high", target: "share.go:88", cvss: "nonsense",
+		}, ctx)).rejects.toThrow(/omit 'cvss'/);
+	});
+
+	it("records a finding with no vector at all", async () => {
+		const { ws, ctx, record } = await setup();
+		await record.execute({ kind: "finding", title: "IDOR", severity: "high", target: "share.go:88" }, ctx);
+		expect(await ws.read("findings")).toHaveLength(1);
+	});
+});
+
+describe("a finding written for the report", () => {
+	it("says what is still missing, by id, without refusing the finding", async () => {
+		// Not a rejection: a finding recorded without its business impact is still a
+		// finding, and refusing it would trade the deliverable for the paperwork.
+		const { ws, ctx, record } = await setup();
+		const made = await record.execute({ kind: "finding", title: "IDOR", severity: "high", target: "share.go:88" }, ctx);
+		expect(await ws.read("findings")).toHaveLength(1);
+		expect(textOf(made)).toMatch(/Not yet report-ready: no description, no impact, no remediation/);
+		expect(textOf(made)).toContain(`record id=${(made.details as { id: string }).id}`);
+	});
+
+	it("stops saying it once the three sections are there", async () => {
+		const { ctx, record } = await setup();
+		const done = await record.execute({
+			kind: "finding", title: "IDOR", severity: "high", target: "share.go:88",
+			description: "no ownership check on the id parameter",
+			impact: "any customer can read all 40,000 customer records",
+			remediation: "scope the query to the session user",
+		}, ctx);
+		expect(textOf(done)).not.toMatch(/report-ready/);
+	});
+
+	it("hands back one finding in full, which is what a writing pass works from", async () => {
+		// `findings` is a list, one line each. Before this the full text of a
+		// finding was reachable only from the operator's TUI, so neither a rewrite
+		// pass nor a delegated writer could read what it was about to rewrite.
+		const { ctx, record, recall } = await setup();
+		const made = await record.execute({
+			kind: "finding", title: "IDOR", severity: "high", target: "share.go:88",
+			description: "no ownership check", impact: "40,000 records", cwe: "CWE-639",
+		}, ctx);
+		const detail = textOf(await recall.execute({ query: "finding", id: (made.details as { id: string }).id }, ctx));
+		expect(detail).toContain("## Description\nno ownership check");
+		expect(detail).toContain("## Business impact\n40,000 records");
+		expect(detail).toContain("## Remediation\n(not recorded)");
+		expect(detail).toContain("CWE-639");
+	});
+
+	it("asks for an id rather than guessing which finding", async () => {
+		const { ctx, recall } = await setup();
+		await expect(recall.execute({ query: "finding" }, ctx)).rejects.toThrow(/'id' is required/);
+	});
+
+	it("says plainly when the id is not there", async () => {
+		const { ctx, recall } = await setup();
+		expect(textOf(await recall.execute({ query: "finding", id: "nope" }, ctx))).toMatch(/No live finding nope/);
+	});
+});

@@ -22,8 +22,10 @@ record kind=finding \
   target=e1 \
   class=authz \
   cwe=CWE-639 \
-  cvss="CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:N/A:N" \
-  description="The /api/user endpoint returns any account by numeric id with no ownership check. An authenticated low-priv user can enumerate ids 1..N and read every user's name, email, and address. ~40k records exposed." \
+  cvss="CVSS:4.0/AV:N/AC:L/AT:N/PR:L/UI:N/VC:H/VI:N/VA:N/SC:N/SI:N/SA:N" \
+  description="The /api/user endpoint returns any account by numeric id with no ownership check (backend/routes/user_routes.py:41). The handler reads the id straight from the query string and fetches that row, never comparing it to the session's own user." \
+  impact="Any customer with a login can read every other customer's name, email, postal address and national ID — roughly 40,000 records — by incrementing a number. That is the whole customer database in the hands of anyone who can register, and it is personal data under GDPR." \
+  remediation="Scope the query to the caller: fetch by session user id, or add an ownership check at the data-access layer before returning the row. The same pattern appears in three other handlers listed in the evidence; fix them together rather than patching this endpoint alone." \
   repro="1. Log in as attacker (id 1002). 2. GET /api/user?id=1001 with attacker's session cookie. 3. Response returns user 1001's full profile. 4. Increment id to enumerate all users." \
   evidence=["evidence/y7-userA.txt","evidence/y7-userB.txt"] \
   status=confirmed \
@@ -36,11 +38,12 @@ Field-by-field:
 - **target** — the inventory element id (`e1`, `h3`, `s4`) so it ties to the surface; a raw string only if nothing in inventory fits (then consider recording the surface element first).
 - **class** — the checklist class id (`authz`, `sqli`, ...); this is what marks the coverage cell `vulnerable`.
 - **cwe** — the single most specific CWE (`CWE-639` not just `CWE-284`). Map via `ops-severity-cvss`.
-- **cvss** — optional but preferred: a full v3.1 vector string. Built in `ops-severity-cvss`.
-- **description** — plain-language *what and why it matters*: the flaw, the data/impact, the scale. This is what a manager reads.
+- **cvss** — optional but preferred: a full **v4.0** vector string (v3.1 only when the engagement requires it — `record` validates against the version the prefix claims and rejects a mismatch). Built in `ops-severity-cvss`.
+- **description** — what the flaw *is* and where: the mechanism, the location as `file:line` or `METHOD /path`, in plain language. Not the journey you took to find it.
+- **impact** — what it costs **this client**, in their terms: the records exposed, the money moved, the service lost, the obligation breached. Quantify from evidence ("~40,000 customer records including national IDs"), never by restating the CVSS metrics ("confidentiality impact is high" tells them nothing). This is the paragraph that gets skipped and the one a manager reads — see `ops-technical-writer`.
+- **remediation** — the concrete change that fixes it, specific to this codebase: the control to add, the call to replace. Never "sanitize input". Fix the cause, name the other places the pattern appears, and say explicitly when a leaked credential must be rotated.
 - **repro** — numbered, copy-pasteable steps a third party can follow to reproduce, including preconditions (which account, which cookie). Reproducibility is what separates a finding from a guess.
 - **evidence** — workspace-relative paths to the request/response captures and screenshots that prove it (see `ops-evidence`). Every finding should have at least one.
-- **remediation** — put the fix in the description (or a note): the concrete change (add an ownership check / parameterize the query / disable the method), not "sanitize input".
 - **status** — `open` → `confirmed` → `triaged` → `reported`. Three statuses settle a finding instead: `false-positive` when it fails to hold, `accepted-risk` when the client accepts it, `ignored` when the operator sets it aside. All three keep the row and the history and take a `reason` — record the operator's words, not your paraphrase — and take the finding out of the open count. Use them when the operator says so; do not settle a finding on your own judgement.
 
 ## De-dupe before you record
@@ -64,4 +67,4 @@ Field-by-field:
 - PTES — Reporting — Penetration Testing Execution Standard — https://pentest-standard.readthedocs.io/en/latest/reporting.html (report-grade finding structure: impact, reproduction, remediation)
 - Technical Guide to Information Security Testing and Assessment — NIST SP 800-115 — https://csrc.nist.gov/pubs/sp/800/115/final (analyzing findings, evidence, reporting)
 - CWE List — MITRE — https://cwe.mitre.org/ (pick the single most specific `cwe`)
-- CVSS v3.1 Specification Document — FIRST — https://www.first.org/cvss/v3.1/specification-document (the `cvss` vector; scoring in `ops-severity-cvss`)
+- CVSS v4.0 Specification Document — FIRST — https://www.first.org/cvss/v4-0/specification-document (the `cvss` vector; scoring and the v3.1 fallback in `ops-severity-cvss`)

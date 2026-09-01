@@ -174,8 +174,10 @@ Refuted and inconclusive hypotheses are **retained** (no-retest + report rigor).
   "target":"e1",
   "class":"authz",
   "cwe":"CWE-639",
-  "cvss":"AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:N/A:N",   // optional, CVSS vector string
-  "description":"...",
+  "cvss":"CVSS:4.0/AV:N/AC:L/AT:N/PR:L/UI:N/VC:H/VI:N/VA:N/SC:N/SI:N/SA:N",  // v4.0 by default; v3.1 accepted
+  "description":"...",           // what the flaw is and where
+  "impact":"...",                // what it costs the client, in their terms
+  "remediation":"...",           // the concrete change that fixes it
   "repro":"1. Log in as user A ... 2. GET /api/user?id=<B> ...",
   "evidence":["evidence/f3a9-req.http","artifacts/f3a9-screenshot.png"],
   "status":"confirmed",          // see below
@@ -192,6 +194,19 @@ decision — the client accepted the risk, the operator judged it not real, it w
 set aside — is recorded without deleting anything, and `reason` is what a client
 asks about three months later. Deleting is the separate act, and it is for a row
 that should never have been recorded at all.
+
+`description`, `impact` and `remediation` are the three sections a client's report
+is read for — what it is, what it costs us, what we do about it — and the export
+writes all three whether or not they were recorded, marking an unwritten one
+rather than omitting it. A finding missing any of them is not report-ready, and
+`record` says so at the moment it is cheap to fix.
+
+`cvss` is validated on write against the version its own prefix claims: `CVSS:4.0`
+(the default) or `CVSS:3.1` (for an engagement that requires it). The two are
+different metric sets — v4.0 has no Scope, adds Attack Requirements, and splits
+impact across the vulnerable system (VC/VI/VA) and the systems it reaches next
+(SC/SI/SA) — so a vector cannot be converted by editing the prefix, and one that
+mismatches its version is rejected instead of stored.
 
 Findings are a subset of confirmed hypotheses. `cwe`/`cvss` align with the stable
 standards named in `PLAN.md` §3.1; findings export can render SARIF from these.
