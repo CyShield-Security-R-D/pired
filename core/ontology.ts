@@ -36,6 +36,32 @@ export type TargetType = (typeof TARGET_TYPES)[number] | (string & {});
 export const INVENTORY_KINDS = ["host", "service", "endpoint", "param", "tech"] as const;
 export type InventoryKind = (typeof INVENTORY_KINDS)[number];
 
+/**
+ * Sections of the target model (`model.md`) — the macro picture every micro
+ * record hangs off.
+ *
+ * Every other record in this ontology is an atom: one host, one cell, one
+ * defect. Nothing described the system as a whole, so the understanding that
+ * produces a good hypothesis — what this application is for, who its actors
+ * are, which rules must hold — lived only in the context window and died at the
+ * first compaction. These are the sections of the one artifact that survives it.
+ *
+ * `invariants` is the load-bearing one: an invariant is a hypothesis generator
+ * ("balances never go negative" -> what makes one go negative?), and those are
+ * the bugs no checklist and no scanner can reach.
+ */
+export const MODEL_SECTIONS = ["what", "actors", "invariants", "boundaries", "flows"] as const;
+export type ModelSection = (typeof MODEL_SECTIONS)[number];
+
+/** One-line prompt for each section, shown wherever the model asks what to write. */
+export const MODEL_SECTION_HELP: Record<ModelSection, string> = {
+	what: "what the system is for, in a paragraph — the business it is in, what it holds, who pays for it",
+	actors: "the roles and tenants, and what each is allowed to do",
+	invariants: "the rules that must always hold (resources conserved, ownership, idempotency, ordering) — each one is a hypothesis waiting to be written",
+	boundaries: "where untrusted data crosses into trusted code, and what is trusted on the other side",
+	flows: "the handful of sequences that matter — auth, payment, upload, reset — as steps",
+};
+
 export const HYPOTHESIS_OUTCOMES = ["proposed", "testing", "confirmed", "refuted", "inconclusive"] as const;
 export type HypothesisOutcome = (typeof HYPOTHESIS_OUTCOMES)[number];
 

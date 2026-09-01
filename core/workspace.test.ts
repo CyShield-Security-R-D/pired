@@ -197,3 +197,57 @@ describe("Workspace.upsert", () => {
 		expect(svc.fs.getMode(ws.storePath("loot"))).toBe(0o600);
 	});
 });
+
+describe("Workspace target model", () => {
+	it("writes a section and reads it back", async () => {
+		const svc = makeFakeServices();
+		const ws = await Workspace.open(DIR, "acme", svc);
+		await ws.writeModelSection("what", "A retail bank ledger. Holds customer balances and moves money between them.");
+		expect(await ws.readModel()).toContain("customer balances");
+		expect((await ws.readModelSections()).get("what")).toContain("retail bank");
+	});
+
+	it("REPLACES a section rather than appending, so a correction wins", async () => {
+		const svc = makeFakeServices();
+		const ws = await Workspace.open(DIR, "acme", svc);
+		await ws.writeModelSection("what", "A blog.");
+		await ws.writeModelSection("what", "Not a blog — a payments API.");
+		const model = await ws.readModel();
+		expect(model).toContain("payments API");
+		// The whole reason this is not a ledger: the superseded understanding must
+		// be gone, not stacked above the current one for the agent to weigh.
+		expect(model).not.toContain("A blog.");
+		expect((await ws.readModelSections()).size).toBe(1);
+	});
+
+	it("renders sections in canonical order regardless of write order", async () => {
+		const svc = makeFakeServices();
+		const ws = await Workspace.open(DIR, "acme", svc);
+		await ws.writeModelSection("flows", "login -> session -> transfer");
+		await ws.writeModelSection("what", "payments");
+		await ws.writeModelSection("invariants", "balances never go negative");
+		const model = await ws.readModel();
+		// Stable bytes: this document is injected into the system prompt, so a
+		// reshuffle on every write would move the prefix and cost the cache.
+		expect(model.indexOf("## what")).toBeLessThan(model.indexOf("## invariants"));
+		expect(model.indexOf("## invariants")).toBeLessThan(model.indexOf("## flows"));
+	});
+
+	it("keeps a section this ontology does not know, so a hand edit survives", async () => {
+		const svc = makeFakeServices();
+		const ws = await Workspace.open(DIR, "acme", svc);
+		await ws.writeModelSection("what", "payments");
+		await svc.fs.writeFile(`${DIR}/model.md`, "# Target model\n\n## what\npayments\n\n## deployment\nk8s, two regions\n");
+		await ws.writeModelSection("what", "payments, v2");
+		const model = await ws.readModel();
+		expect(model).toContain("k8s, two regions");
+		expect(model).toContain("payments, v2");
+	});
+
+	it("reads an empty model as empty rather than throwing", async () => {
+		const svc = makeFakeServices();
+		const ws = await Workspace.open(DIR, "acme", svc);
+		expect(await ws.readModel()).toBe("");
+		expect((await ws.readModelSections()).size).toBe(0);
+	});
+});

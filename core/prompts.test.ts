@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { EngagementScope } from "./ontology.ts";
-import { buildSystemPrompt, PIRED_PROFILES } from "./prompts.ts";
+import { buildSystemPrompt, PIRED_PROFILES, TARGET_MODEL_BUDGET } from "./prompts.ts";
 
 const scope: EngagementScope = {
 	v: 1,
@@ -173,5 +173,46 @@ describe("buildSystemPrompt", () => {
 		it("says nothing at all when there is no workspace yet", () => {
 			expect(buildSystemPrompt({ profile: "pentest" })).not.toContain("PIRED_WORKSPACE");
 		});
+	});
+});
+
+describe("target model in the prompt", () => {
+	it("is absent when the engagement has none, costing nothing", () => {
+		const p = buildSystemPrompt({ profile: "review", scope });
+		expect(p).not.toContain("<target-model>");
+	});
+
+	it("carries the model into the prompt so a cold session starts knowing it", () => {
+		const p = buildSystemPrompt({
+			profile: "review", scope,
+			targetModel: "## what\nA payments API.\n\n## invariants\nA balance never goes negative.",
+		});
+		expect(p).toContain("<target-model>");
+		expect(p).toContain("A balance never goes negative.");
+		expect(p).toMatch(/working theory, not a briefing/);
+	});
+
+	it("truncates a runaway model and says so rather than trailing off", () => {
+		// A document that grows without limit is charged on every turn of every
+		// future session, so the budget is what stops one engagement's notes-sprawl
+		// becoming a permanent tax.
+		const long = `## what\n${"x".repeat(TARGET_MODEL_BUDGET)}\nTAIL-MARKER`;
+		const p = buildSystemPrompt({ profile: "review", scope, targetModel: long });
+		expect(p).toContain("truncated");
+		expect(p).toContain("recall model");
+		expect(p).not.toContain("TAIL-MARKER");
+		expect(p.match(/x+/)?.[0].length).toBeLessThanOrEqual(TARGET_MODEL_BUDGET);
+	});
+
+	it("treats a blank model as no model", () => {
+		const p = buildSystemPrompt({ profile: "review", scope, targetModel: "   \n  " });
+		expect(p).not.toContain("<target-model>");
+	});
+
+	it("tells the agent to write the model down and to mine invariants for hypotheses", () => {
+		const p = buildSystemPrompt({ profile: "review", scope, checklist: ["authz", "sqli"] });
+		expect(p).toMatch(/record kind=model/);
+		expect(p).toMatch(/invariant/i);
+		expect(p).toMatch(/stale picture is worse than none/i);
 	});
 });

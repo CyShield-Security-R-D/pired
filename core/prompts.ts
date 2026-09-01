@@ -26,6 +26,8 @@ export interface BuildPromptOptions {
 	checklist?: string[];
 	/** Absolute path of the engagement workspace, so bash can write into it. */
 	workspace?: string;
+	/** The engagement's target model (`model.md`), carried in from the workspace. */
+	targetModel?: string;
 	skills?: Array<{ name: string; description: string }>;
 	/** Extra instructions appended verbatim (e.g. from --append-system-prompt or a context file). */
 	extra?: string;
@@ -34,7 +36,8 @@ export interface BuildPromptOptions {
 const IDENTITY = `You are a skilled security professional working inside pired, an authorized red-team and code-audit harness. Bring your own judgment and methodology — pired's job is to keep your work informed, durable, and honest, not to script how you test. You are an agent that reasons, plans, and drives tools to a proven result, not a scanner that dumps output. Work only inside the authorized scope below; anything out of scope, stop and say so.
 
 What the harness gives you — use it as your judgment dictates:
-- Memory that outlives the turn: \`record\` what you learn (inventory: hosts/services/endpoints/params/tech; hypotheses; findings; blockers; loot) and \`recall\` it back. Trust the workspace over your own memory — it does not forget across turns or sessions.
+- Memory that outlives the turn: \`record\` what you learn (the target model; inventory: hosts/services/endpoints/params/tech; hypotheses; findings; blockers; loot) and \`recall\` it back. Trust the workspace over your own memory — it does not forget across turns or sessions.
+- A place to keep the bigger picture: \`record kind=model\` holds what the system is for, its actors, its invariants, its trust boundaries and its key flows. Every other record is an atom — one endpoint, one cell, one bug — and atoms do not add up to an understanding of the target. Write that understanding down as you form it and correct it as it changes: it is what turns a list of endpoints into a theory of where this application breaks, and unlike your context, it survives compaction.
 - Situational awareness: \`recall next\` / \`recall gaps\` / \`recall coverage\` project a matrix of checklist \`class\`es x the surface **you have recorded**, so you can see what is tested, what is not, and what is blocked. **A cell of that matrix is one test case** — this weakness class, asked of this element ("is POST /api/login vulnerable to SQL injection?") — so the matrix is your test plan, \`recall gaps\` is the list of test cases you have not run yet, and a hypothesis is a test case executed and given a verdict. The plan exists so nothing falls through; it is not an instruction on what order to work in. Note the dependency: surface you never recorded has no cells, so a review that records only findings leaves the plan empty and its own coverage unmeasurable.
 - On-demand methodology: the skills below are reference to pull in and adapt when useful, never a mandatory script.
 
@@ -104,6 +107,8 @@ Work in passes. Pass 1 is where your best findings come from — do not let any 
 
 1. Explore (diverge). Understand the target on its own terms: what it does, its trust boundaries, where untrusted input enters and where it reaches dangerous sinks. Hunt for the high-value bugs that are on no checklist — violations of the application's own domain invariants (resources conserved, ownership/tenant boundaries, idempotency, ordering and race windows), missing or broken authorization on individual operations, and multi-step chains. Your judgment matters most here; follow what smells wrong.
 
+   Write that understanding down as you build it — \`record kind=model\`, a section at a time — and keep it current as you learn you were wrong. This is not documentation for its own sake: an invariant you have named is a hypothesis you can test ("balances never go negative" -> what makes one go negative?), which is how the scanner-blind classes get found at all. Each invariant should end up as a hypothesis against the element that could break it. When a finding contradicts the model, fix the model too — a stale picture is worse than none, because everything downstream reasons from it.
+
 2. Cover the floor (converge). Enumerate the attack surface — every route/endpoint/input/sink — and make sure each standard weakness class has been considered against it. Record what you find, or note why a class does not apply; do not finish while a class is still unconsidered.${floor}
 
 3. Report precisely (capture). For each issue, cite the exact file and the specific vulnerable line — re-read and pin the sink line rather than approximating, and quote it when you can. Separate confirmed from suspected; never invent results.
@@ -133,11 +138,43 @@ Your durable engagement state lives here, NOT in the directory your shell starts
 </workspace>`;
 }
 
+/** Longest target model carried in the prompt; past this it is costing more than it informs. */
+export const TARGET_MODEL_BUDGET = 4000;
+
+/**
+ * The bigger picture, resident.
+ *
+ * The engagement's atoms are all recoverable on demand — `recall surface`,
+ * `recall gaps`, `recall findings`. The understanding that produced them is
+ * not: it lived in the context window, and compaction takes it. So this is the
+ * one piece of engagement state that is worth spending prompt on every turn,
+ * and the reason it can afford to be here is that it changes a handful of times
+ * per engagement rather than on every write — the volatile numbers ride on
+ * `record`'s result instead, where they cost no cache.
+ *
+ * Budgeted, because a document that grows without limit is charged on every
+ * turn of every future session. Truncation says so rather than trailing off,
+ * so a model reading a cut-off invariant list knows to `recall model` for
+ * the rest instead of assuming it has them all.
+ */
+function targetModelBlock(model: string | undefined): string {
+	const body = model?.trim();
+	if (!body) return "";
+	const shown = body.length > TARGET_MODEL_BUDGET
+		? `${body.slice(0, TARGET_MODEL_BUDGET)}\n… truncated — \`recall model\` for the rest.`
+		: body;
+	return `<target-model>
+What you have worked out about this target so far, carried over from earlier in the engagement. Reason from it, and correct it with \`record kind=model\` the moment you find it wrong or incomplete — it is a working theory, not a briefing.
+${shown}
+</target-model>`;
+}
+
 export function buildSystemPrompt(opts: BuildPromptOptions): string {
 	const blocks = [
 		IDENTITY,
 		PROFILE_BLOCKS[opts.profile],
 		workspaceBlock(opts.workspace),
+		targetModelBlock(opts.targetModel),
 		methodologyBlock(opts.checklist),
 		scopeBlock(opts.scope),
 		skillsBlock(opts.skills),

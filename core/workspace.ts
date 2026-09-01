@@ -12,7 +12,7 @@
  */
 
 import type { Checklist, EngagementScope, StoreName, StoreRecordMap, WorkspaceManifest } from "./ontology.ts";
-import { FORMAT_VERSION } from "./ontology.ts";
+import { FORMAT_VERSION, MODEL_SECTIONS } from "./ontology.ts";
 import type { Clock, Fs } from "./ports.ts";
 
 /** Posix-style path join for the workspace's own paths. */
@@ -20,6 +20,47 @@ function joinPath(dir: string, ...parts: string[]): string {
 	let out = dir.replace(/\/+$/, "");
 	for (const part of parts) out += `/${part.replace(/^\/+/, "").replace(/\/+$/, "")}`;
 	return out;
+}
+
+/**
+ * `model.md` to its sections, keyed by lowercased heading.
+ *
+ * Tolerant on the way in: the file is hand-editable and a person who opens it
+ * to correct a sentence should not be able to break it. Anything before the
+ * first heading is dropped (it is the title), and an unknown heading is kept so
+ * an engagement can carry a section this ontology never anticipated.
+ */
+function parseModel(raw: string | undefined): Map<string, string> {
+	const out = new Map<string, string>();
+	if (!raw) return out;
+	let current: string | undefined;
+	let body: string[] = [];
+	const flush = (): void => {
+		if (current !== undefined) {
+			const text = body.join("\n").trim();
+			if (text.length > 0) out.set(current, text);
+		}
+	};
+	for (const line of raw.split("\n")) {
+		const heading = /^##\s+(.+?)\s*$/.exec(line);
+		if (heading?.[1]) {
+			flush();
+			current = heading[1].toLowerCase();
+			body = [];
+			continue;
+		}
+		if (current !== undefined) body.push(line);
+	}
+	flush();
+	return out;
+}
+
+/** Sections back to Markdown, in canonical order so the bytes are stable. */
+function renderModel(sections: Map<string, string>): string {
+	const known = MODEL_SECTIONS.filter((s) => sections.has(s));
+	const extra = [...sections.keys()].filter((k) => !(MODEL_SECTIONS as readonly string[]).includes(k)).sort();
+	const blocks = [...known, ...extra].map((name) => `## ${name}\n${sections.get(name) ?? ""}`);
+	return `# Target model\n\n${blocks.join("\n\n")}\n`;
 }
 
 export interface WorkspaceServices {
@@ -190,6 +231,43 @@ export class Workspace {
 		return this.readJson<Checklist>(this.file("checklist.json"));
 	}
 
+	// --- Target model --------------------------------------------------------
+
+	/**
+	 * Replace one section of the target model.
+	 *
+	 * REPLACE, not append — and that is the whole difference from `appendNote`.
+	 * A note is an observation, true when it was written and true forever; an
+	 * understanding of the target is a draft that gets corrected. Appending
+	 * revisions leaves a stack of contradicting versions with the current one
+	 * buried at the bottom, which is worse than having none: the agent reads the
+	 * pile and reasons from whichever paragraph it happened to weigh.
+	 *
+	 * Sections are rendered in `MODEL_SECTIONS` order, never in write order.
+	 * This document is injected into the system prompt, so a stable byte layout
+	 * is not cosmetic — reordering it on every write would move the prefix and
+	 * invalidate the cache behind it (the lesson `reviewEviction` in
+	 * core/extract.ts already paid for once).
+	 */
+	async writeModelSection(section: string, body: string): Promise<void> {
+		const path = this.file("model.md");
+		await this.withLock(path, async () => {
+			const sections = parseModel(await this.fs.readFileIfExists(path));
+			sections.set(section.trim().toLowerCase(), body.trim());
+			await this.writeTextAtomic(path, renderModel(sections));
+		});
+	}
+
+	/** The target model as written, or "" when the engagement has none yet. */
+	async readModel(): Promise<string> {
+		return (await this.fs.readFileIfExists(this.file("model.md"))) ?? "";
+	}
+
+	/** The target model by section, for callers that render their own view of it. */
+	async readModelSections(): Promise<Map<string, string>> {
+		return parseModel(await this.fs.readFileIfExists(this.file("model.md")));
+	}
+
 	// --- Notes / evidence / artifacts ---------------------------------------
 
 	async appendNote(text: string): Promise<void> {
@@ -243,8 +321,12 @@ export class Workspace {
 	}
 
 	private async writeJsonAtomic(path: string, value: unknown): Promise<void> {
+		await this.writeTextAtomic(path, `${JSON.stringify(value, null, 2)}\n`);
+	}
+
+	private async writeTextAtomic(path: string, body: string): Promise<void> {
 		const tmp = `${path}.tmp.${this.clock.now()}`;
-		await this.fs.writeFile(tmp, `${JSON.stringify(value, null, 2)}\n`);
+		await this.fs.writeFile(tmp, body);
 		await this.fs.rename(tmp, path);
 	}
 

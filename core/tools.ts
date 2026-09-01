@@ -11,7 +11,7 @@
  */
 
 import { buildBrowserModel, recordLabel } from "./browser.ts";
-import { computeCoverage, findGaps, selectNext } from "./coverage.ts";
+import { computeCoverage, coveragePercent, findGaps, selectNext } from "./coverage.ts";
 import { CVSS_DEFAULT_VERSION, CVSS_EXAMPLE, cvssVersion, validateCvss } from "./cvss.ts";
 import { type Fields, findDuplicate, findNearDuplicate, type IdentityKind, isNoOp, mergeRecord } from "./identity.ts";
 import { computeCoverageView, computeEngagementStats, isDisposed } from "./stats.ts";
@@ -21,6 +21,8 @@ import {
 	BLOCKER_TYPES,
 	FINDING_STATUSES,
 	HYPOTHESIS_OUTCOMES,
+	MODEL_SECTION_HELP,
+	MODEL_SECTIONS,
 	type HypothesisRecord,
 	type InventoryKind,
 	type InventoryRecord,
@@ -41,13 +43,13 @@ export interface ToolDeps {
 }
 
 const RECORD_KINDS = [
-	"note", "evidence", "host", "service", "endpoint", "param", "tech", "hypothesis", "finding", "blocker", "loot",
+	"note", "evidence", "model", "host", "service", "endpoint", "param", "tech", "hypothesis", "finding", "blocker", "loot",
 ] as const;
 type RecordKind = (typeof RECORD_KINDS)[number];
-type LedgerKind = Exclude<RecordKind, "note" | "evidence">;
+type LedgerKind = Exclude<RecordKind, "note" | "evidence" | "model">;
 
 const RECALL_QUERIES = [
-	"status", "next", "coverage", "surface", "gaps", "inventory", "hypotheses", "findings", "finding", "loot", "blockers", "notes",
+	"status", "next", "coverage", "surface", "gaps", "inventory", "hypotheses", "findings", "finding", "loot", "blockers", "notes", "model",
 ] as const;
 
 /**
@@ -235,6 +237,7 @@ function recordSummary(kind: string, record: LedgerRecord, outcome: WriteOutcome
 }
 
 const RECORD_DESCRIPTION = `Record engagement state to the durable workspace. One tool for all state; pick 'kind':
+- model: section[what|actors|invariants|boundaries|flows], text — the TARGET MODEL: the bigger picture every other record hangs off. what it is for, who its actors are, the invariants that must hold, where untrusted data crosses in, the flows that matter. Recording a section REPLACES it, because understanding gets corrected; this is the one record you are meant to rewrite. It is injected into every future session, so it is how a later you starts already knowing the target instead of re-deriving it. Write it early and correct it as you learn — and treat 'invariants' as your hypothesis generator: every rule that must hold is a question about what breaks it, and those are the bugs no checklist lists and no scanner sees.
 - note: text
 - evidence: name, content — saves raw output to the workspace and returns the path to cite (this is how you create the file that 'evidence' fields reference)
 - host: value (+ip, tech[]); service: host, port (+proto, name); endpoint: path (+host, method, params[], auth); param: name (+endpoint, location); tech: name (+host, version)
@@ -263,6 +266,7 @@ const RECORD_PARAMETERS: JsonSchema = {
 		kind: { enum: RECORD_KINDS, description: "What is being recorded." },
 		id: { type: "string", description: "Existing record id to update; omit to create." },
 		text: { type: "string" },
+		section: { enum: MODEL_SECTIONS, description: "For kind=model: which section of the target model this replaces." },
 		value: { type: "string" }, ip: { type: "string" }, tech: { type: "array", items: { type: "string" } },
 		host: { type: "string" }, port: { type: "integer" }, proto: { type: "string" }, name: { type: "string", description: "Name for param/tech; for kind=evidence, the filename to save under (e.g. \"sqli-login.txt\")." }, version: { type: "string" },
 		endpoint: { type: "string" }, method: { type: "string" }, path: { type: "string" }, params: { type: "array", items: { type: "string" } }, auth: { type: "string" }, location: { type: "string" },
@@ -425,6 +429,60 @@ async function adoptFromCwd(deps: ToolDeps, ctx: ToolContext, rel: string): Prom
 	}
 }
 
+/**
+ * Where the engagement stands, in one line, appended to what `record` returns.
+ *
+ * The operator has watched this the whole time — `refreshStatus` redraws the
+ * panel on every write, so the human has a live dashboard of surface, coverage
+ * and findings. The agent, which is the thing choosing what to do next, could
+ * only see it by stopping to ask. So the numbers went one way: the further into
+ * an engagement, the more the operator knew about it and the less the agent did.
+ *
+ * It rides on the tool result rather than in the system prompt on purpose.
+ * These numbers move on every write, and a block that changes every turn at the
+ * FRONT of the context invalidates the prefix cache behind it every turn — the
+ * failure `reviewEviction` (core/extract.ts) exists to prevent. At the tail, on
+ * a result that is already unique, the same line costs nothing.
+ *
+ * Derived from `computeCoverageView`, the same derivation the panel renders, so
+ * the number the agent reasons from and the number on the operator's screen
+ * cannot drift apart.
+ */
+async function macroDigest(deps: ToolDeps, surfaceKinds: InventoryKind[]): Promise<string> {
+	try {
+		const view = await computeCoverageView(deps.workspace, surfaceKinds);
+		const inventory = await deps.workspace.read("inventory");
+		const surface = inventory.filter((r) => surfaceKinds.includes(r.kind as InventoryKind)).length;
+		const parts = [`surface ${surface}`];
+		if (view) {
+			const outstanding = view.matrix.counts["not-tested"] + view.matrix.counts.blocked;
+			parts.push(`coverage ${coveragePercent(view.matrix)}%`, `${outstanding} test cases outstanding`);
+		}
+		const findings = (await deps.workspace.read("findings")).filter((f) => !isDisposed(f.status)).length;
+		if (findings > 0) parts.push(`${findings} findings`);
+		const blockers = (await deps.workspace.read("blockers")).filter((b) => b.status === "open").length;
+		if (blockers > 0) parts.push(`${blockers} open blockers`);
+
+		// The one nudge that ends. A standing instruction repeated on every call
+		// becomes wallpaper; this one appears only while the condition holds —
+		// there is a surface to reason about and nothing written down about what
+		// the system actually does — and is gone for good once it is answered.
+		const model = (await deps.workspace.readModelSections()).size > 0;
+		const nudge = !model && surface >= MODEL_PROMPT_AFTER
+			? `\nNothing recorded yet about what this system does. \`record kind=model section=what text="..."\` ` +
+				`— then \`section=invariants\`, which is where the bugs no checklist lists come from.`
+			: "";
+		return `\nEngagement: ${parts.join(" · ")}.${nudge}`;
+	} catch {
+		// Situational awareness is a courtesy on top of a write that already
+		// succeeded. It must never turn a recorded finding into a tool error.
+		return "";
+	}
+}
+
+/** Surface elements before the absence of a target model is worth mentioning. */
+const MODEL_PROMPT_AFTER = 3;
+
 export function createRecordTool(deps: ToolDeps): ToolDefinition {
 	return {
 		name: "record",
@@ -449,8 +507,8 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 			// says why. A wrong deletion is recoverable by anyone who opens the
 			// ledger, which is the property that makes it safe to expose at all.
 			if (a.delete === true || str(a.delete) === "true") {
-				if (kind === "note" || kind === "evidence") {
-					throw new Error(`record delete: '${kind}' is not a ledger row and has no id to retire. Notes and evidence files are edited on disk.`);
+				if (kind === "note" || kind === "evidence" || kind === "model") {
+					throw new Error(`record delete: '${kind}' is not a ledger row and has no id to retire. Notes, evidence files and the target model are edited on disk — or, for the model, corrected by recording the section again.`);
 				}
 				const id = required(str(a.id), "record delete: 'id' is required — name the record to retire.");
 				const store = STORE_FOR_KIND[kind];
@@ -472,6 +530,39 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 					`Deleted ${kind} ${id} (${recordLabel(gone)})${why ? `: ${why}` : ""}. ` +
 					"It is gone from every view and every count; the ledger keeps the line, so this is reversible by hand.",
 					{ kind, id, deleted: true, ids: [id], created: [] },
+				);
+			}
+
+			// The target model: one document, revised in place.
+			//
+			// Deliberately NOT a ledger row. Every ledger kind is an atom that
+			// accumulates — a second endpoint never invalidates the first — and the
+			// dedup machinery in identity.ts exists to keep it that way. An
+			// understanding of the target is the opposite: the third version of
+			// "what this system does" REPLACES the second, and a store that kept
+			// both would make the agent read two answers and pick one.
+			if (kind === "model") {
+				const section = (str(a.section) ?? "").trim().toLowerCase();
+				if (!section) {
+					throw new Error(
+						`record model: 'section' is required — one of ${MODEL_SECTIONS.join(", ")}. ` +
+						MODEL_SECTIONS.map((sec) => `${sec}: ${MODEL_SECTION_HELP[sec]}`).join("; "),
+					);
+				}
+				if (!(MODEL_SECTIONS as readonly string[]).includes(section)) {
+					throw new Error(`record model: unknown section '${section}'. Use one of ${MODEL_SECTIONS.join(", ")}.`);
+				}
+				const body = required(str(a.text), "record model: 'text' is required — the content of the section.");
+				await deps.workspace.writeModelSection(section, body);
+				const written = await deps.workspace.readModelSections();
+				const missing = MODEL_SECTIONS.filter((sec) => !written.has(sec));
+				return text(
+					`Target model updated: ${section}. It is carried into every future session, so a later you starts already knowing this.` +
+					(missing.length > 0 ? `\nStill blank: ${missing.join(", ")}.` : "") +
+					(section === "invariants"
+						? "\nEach of these is a hypothesis waiting to be written: ask what breaks it, and record that against the element it breaks on."
+						: ""),
+					{ kind, section, created: ["model"] },
 				);
 			}
 
@@ -940,7 +1031,8 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 					`Recorded separately rather than risk losing one of them. If they are the same issue, fold the detail into ` +
 					`${near.id} with record id=${near.id}, then retire this one with record id=${written.id} delete=true reason="duplicate of ${near.id}".`
 				: "";
-			return text(recordSummary(kind, written, outcome) + warning + pulled + incomplete, recordDetails(written, outcome));
+			const digest = await macroDigest(deps, deps.surfaceKinds ?? DEFAULT_SURFACE_KINDS);
+			return text(recordSummary(kind, written, outcome) + warning + pulled + incomplete + digest, recordDetails(written, outcome));
 		},
 	};
 }
@@ -1000,6 +1092,7 @@ export function createRecallTool(deps: ToolDeps): ToolDefinition {
 			"coverage (the full test plan as a matrix, one row per class), " +
 			"surface (one row per recorded element with its coverage bar), " +
 			"next (the next test case to run), gaps (test cases not run yet, plus the ones blocked), " +
+			"model (the target model: what the system does, its actors, its invariants), " +
 			"inventory, hypotheses, findings, loot (handles only), blockers, notes, " +
 			"finding (ONE finding in full — pass id — every field as recorded: description, impact, remediation, repro, evidence, cwe, cvss). " +
 			"Use 'status' to see where the engagement stands, 'coverage'/'surface' to see WHERE the holes are, " +
@@ -1020,6 +1113,15 @@ export function createRecallTool(deps: ToolDeps): ToolDefinition {
 			const limit = num(a.limit) ?? 50;
 
 			switch (query) {
+				case "model": {
+					const model = (await deps.workspace.readModel()).trim();
+					if (model.length > 0) return text(model);
+					return text(
+						"(no target model recorded)\n" +
+						`Write it with record kind=model section=<${MODEL_SECTIONS.join("|")}> text="...":\n` +
+						MODEL_SECTIONS.map((sec) => `- ${sec}: ${MODEL_SECTION_HELP[sec]}`).join("\n"),
+					);
+				}
 				case "notes": {
 					const notes = (await deps.workspace.readNotes()).trim();
 					return text(notes || "(no notes)");

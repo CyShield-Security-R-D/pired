@@ -1133,3 +1133,102 @@ describe("evidence written where the shell was standing", () => {
 		}, ctx)).rejects.toThrow(/do not resolve/);
 	});
 });
+
+describe("target model", () => {
+	it("records a section and says what is still blank", async () => {
+		const { ws, ctx, record } = await setup();
+		const out = textOf(await record.execute(
+			{ kind: "model", section: "what", text: "A payments API. Holds balances, moves money between customers." }, ctx,
+		));
+		expect(out).toMatch(/target model updated/i);
+		expect(out).toMatch(/still blank/i);
+		expect(await ws.readModel()).toContain("moves money");
+	});
+
+	it("names the sections when one is missing or misspelled", async () => {
+		const { ctx, record } = await setup();
+		await expect(record.execute({ kind: "model", text: "..." }, ctx)).rejects.toThrow(/invariants/);
+		await expect(record.execute({ kind: "model", section: "architecture", text: "..." }, ctx))
+			.rejects.toThrow(/unknown section/i);
+	});
+
+	it("points invariants at the hypotheses they generate", async () => {
+		const { ctx, record } = await setup();
+		const out = textOf(await record.execute(
+			{ kind: "model", section: "invariants", text: "A balance never goes negative. A refund never exceeds the payment." }, ctx,
+		));
+		expect(out).toMatch(/hypothesis/i);
+	});
+
+	it("cannot be deleted like a ledger row", async () => {
+		const { ctx, record } = await setup();
+		await expect(record.execute({ kind: "model", id: "m1", delete: true }, ctx)).rejects.toThrow(/not a ledger row/i);
+	});
+
+	it("recall hands back the model, or tells you how to write one", async () => {
+		const { ctx, record, recall } = await setup();
+		expect(textOf(await recall.execute({ query: "model" }, ctx))).toMatch(/no target model/i);
+		await record.execute({ kind: "model", section: "actors", text: "customer, merchant, admin" }, ctx);
+		expect(textOf(await recall.execute({ query: "model" }, ctx))).toContain("merchant");
+	});
+});
+
+describe("macro digest on record", () => {
+	async function seeded(): Promise<{ ws: Workspace; ctx: ToolContext; record: ToolDefinition }> {
+		const { ws, ctx, record } = await setup();
+		await ws.writeChecklist({
+			v: 1, targetType: "web",
+			classes: [{ id: "authz", title: "Access control" }, { id: "sqli", title: "SQL injection" }],
+		} as Checklist);
+		return { ws, ctx, record };
+	}
+
+	it("reports where the engagement stands on every ledger write", async () => {
+		const { ctx, record } = await seeded();
+		const out = textOf(await record.execute({ kind: "endpoint", path: "/api/user", host: "h1" }, ctx));
+		expect(out).toMatch(/Engagement: surface 1/);
+		expect(out).toMatch(/coverage 0%/);
+		expect(out).toMatch(/test cases outstanding/);
+	});
+
+	it("moves with the ledger, so it cannot read as boilerplate", async () => {
+		const { ctx, record } = await seeded();
+		await record.execute({ kind: "endpoint", path: "/api/user", host: "h1" }, ctx);
+		const second = textOf(await record.execute({ kind: "endpoint", path: "/api/admin", host: "h1" }, ctx));
+		expect(second).toMatch(/surface 2/);
+		const withFinding = textOf(await record.execute(
+			{ kind: "finding", title: "IDOR on /api/user", severity: "high", target: "/api/user", class: "authz" }, ctx,
+		));
+		expect(withFinding).toMatch(/1 findings/);
+	});
+
+	it("derives from the same view the operator sees", async () => {
+		const { ws, ctx, record } = await seeded();
+		await record.execute({ kind: "endpoint", path: "/api/user", host: "h1" }, ctx);
+		const out = textOf(await record.execute({ kind: "endpoint", path: "/api/admin", host: "h1" }, ctx));
+		const stats = await computeEngagementStats(ws);
+		expect(out).toContain(`coverage ${stats.coveragePct}%`);
+		expect(out).toContain(`surface ${stats.surface}`);
+	});
+
+	it("asks for a target model once there is a surface, and stops once there is one", async () => {
+		const { ctx, record } = await seeded();
+		await record.execute({ kind: "endpoint", path: "/a", host: "h1" }, ctx);
+		await record.execute({ kind: "endpoint", path: "/b", host: "h1" }, ctx);
+		const third = textOf(await record.execute({ kind: "endpoint", path: "/c", host: "h1" }, ctx));
+		expect(third).toMatch(/Nothing recorded yet about what this system does/);
+		await record.execute({ kind: "model", section: "what", text: "A payments API." }, ctx);
+		const after = textOf(await record.execute({ kind: "endpoint", path: "/d", host: "h1" }, ctx));
+		expect(after).toMatch(/Engagement: surface 4/);
+		// The nudge that ends: a standing instruction repeated forever is wallpaper.
+		expect(after).not.toMatch(/Nothing recorded yet/);
+	});
+
+	it("never turns a recorded finding into a tool error", async () => {
+		const { ws, ctx, record } = await seeded();
+		// A workspace whose coverage cannot be derived must still accept the write.
+		await ws.writeChecklist({ v: 1, targetType: "web", classes: [] } as unknown as Checklist);
+		const out = textOf(await record.execute({ kind: "finding", title: "hardcoded key", severity: "medium" }, ctx));
+		expect(out).toMatch(/Recorded finding/);
+	});
+});

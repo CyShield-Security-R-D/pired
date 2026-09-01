@@ -212,6 +212,15 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	let gate: Gate = createScopeGate(scope);
 	let workspace: Workspace | undefined;
 	let checklistClasses: string[] = [];
+	/**
+	 * The target model, held in memory rather than read per agent start.
+	 *
+	 * `before_agent_start` is synchronous and fires on every turn, so the disk
+	 * read has to happen somewhere else: at session start, and again whenever the
+	 * agent rewrites a section. Both are covered below, and both are the only
+	 * ways the file changes during a run.
+	 */
+	let targetModel = "";
 
 	pi.registerFlag("pired-profile", { description: "pired profile: review | recon | pentest", type: "string", default: "review" });
 	// The panel is the operator's view of the ledger, so it is on by default:
@@ -1029,6 +1038,9 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		await seedChecklist(workspace, pickTargetType(profile, scope));
 		const checklist = await workspace.readChecklist();
 		checklistClasses = checklist?.classes.map((c) => c.title || c.id) ?? [];
+		// The whole point of the model: a session that starts cold starts knowing
+		// what the last one worked out about the target.
+		targetModel = await workspace.readModel();
 
 		for (const tool of createCoreTools({ workspace })) {
 			const presentation = tool.name === "record" ? { renderResult: renderRecordResult } : undefined;
@@ -1087,7 +1099,7 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	// Skills are already advertised in the base prompt via resources_discover, so we
 	// do not re-list them here — the overlay stays small for local models.
 	pi.on("before_agent_start", (event) => ({
-		systemPrompt: `${event.systemPrompt}\n\n${buildSystemPrompt({ profile, scope, checklist: checklistClasses, workspace: workspace?.dir })}`,
+		systemPrompt: `${event.systemPrompt}\n\n${buildSystemPrompt({ profile, scope, checklist: checklistClasses, workspace: workspace?.dir, targetModel })}`,
 	}));
 
 	pi.on("tool_call", async (event, ctx) => {
@@ -1362,6 +1374,10 @@ export default function piredExtension(pi: ExtensionAPI): void {
 			if (details?.kind === "hypothesis" || details?.kind === "finding") {
 				claimsThisTurn += Array.isArray(details.created) ? details.created.length : 1;
 			}
+			// Re-read only when the model actually changed. The next turn's prompt
+			// is built from this variable, so a section corrected now is in front of
+			// the agent immediately rather than at the next session.
+			if (details?.kind === "model" && workspace) targetModel = await workspace.readModel();
 			await refreshStatus(ctx);
 			await promptForNewBlockers(ctx);
 		}

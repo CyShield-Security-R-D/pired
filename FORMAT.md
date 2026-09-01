@@ -253,7 +253,33 @@ the gated work on its next `recall`. See `PLAN.md` §7.1.
 Elsewhere (context, notes, reports) secrets are referred to by `handle`; the raw
 `secret` value is masked at every export/share boundary.
 
-## 9. `notes.md`
+## 9. `model.md`
+
+The target model: what the system is for, who its actors are, the invariants
+that must hold, where untrusted data crosses in, and the flows that matter.
+
+Markdown with one `##` heading per section, rendered in a fixed order —
+`what`, `actors`, `invariants`, `boundaries`, `flows` — followed by any section
+a hand edit has added. Unlike every other store here, a section is **replaced**
+on write rather than appended: the ledgers hold atoms that accumulate, while an
+understanding of the target is a draft that gets corrected, and keeping the
+superseded version would leave the agent reading two answers.
+
+The order is fixed because this file is injected into the system prompt. A
+document that reshuffled itself on every write would move the cached prefix
+behind it every turn.
+
+```markdown
+# Target model
+
+## what
+A retail payments API. Holds customer balances and moves money between them.
+
+## invariants
+A balance never goes negative. A refund never exceeds its original payment.
+```
+
+## 10. `notes.md`
 
 Freeform Markdown, append-oriented. Convention: timestamped `##` sections so
 appends are unambiguous and human-diffable.
@@ -263,18 +289,18 @@ appends are unambiguous and human-diffable.
 Login uses a legacy session cookie without SameSite. Worth an CSRF pass on state-changing endpoints.
 ```
 
-## 10. `evidence/` and `artifacts/`
+## 11. `evidence/` and `artifacts/`
 
 - `evidence/` — raw tool output and request/response dumps that back findings/hypotheses. Filenames should embed the referencing id, e.g. `evidence/y7-idor.txt`.
 - `artifacts/` — screenshots, dumped files, PoC scripts, e.g. `artifacts/f3a9-screenshot.png`.
 - Records reference these by **workspace-relative path**. No separate index file is required; the referencing record is the index.
 
-## 11. Derived data (never stored)
+## 12. Derived data (never stored)
 
 - **Coverage matrix** = `checklist.classes` × inventory surface elements — a **test plan**, where one cell is one test case (this class, asked of this element), a hypothesis is that case executed, and a gap is a case not yet run. Each cell's status is derived from `hypotheses` outcomes (`not-tested` | `testing` | `clear` | `vulnerable` | `blocked` | `n/a`). A cell is `blocked` when an open blocker in `blockers.jsonl` gates it. Coverage is recomputed on read so it can never drift from the ledgers.
 - **`recall` summaries** (coverage, gaps, next, …) are projections over these files, not stored artifacts.
 
-## 12. Migration log
+## 13. Migration log
 
 - `formatVersion 1` — initial specification. No prior versions.
 

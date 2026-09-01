@@ -22,6 +22,7 @@ The workspace is kept **outside the target tree** so loot and notes never land i
   findings.jsonl       confirmed vulns — what's REAL
   blockers.jsonl       parked operator questions
   loot.jsonl           credentials and secrets (chmod 600)
+  model.md             the target model — what the system IS
   notes.md             freeform, timestamped
   evidence/            raw tool output backing findings
   artifacts/           screenshots, PoCs, the exported report
@@ -38,6 +39,24 @@ The ontology is deliberately small, and the split between the first three is the
 | `findings.jsonl` | What is **real**? Confirmed vulnerabilities, with evidence. |
 
 Coverage is the first two multiplied together. Findings are the product. Keeping them separate is what makes "we looked and it was fine" recordable — a claim no findings list can express. See [Coverage](coverage.md).
+
+## And the one file that is not a ledger
+
+`model.md` answers a fourth question the ledgers cannot: what **is** this thing?
+
+Every record above is an atom — one endpoint, one cell, one bug — and atoms are
+what coverage counts, but they never add up to an understanding of the target.
+That understanding is what produces a good hypothesis in the first place, and
+before `model.md` it had nowhere to live: it sat in the context window and died
+at the first compaction, so the findings survived and the theory that found them
+did not.
+
+It is written a section at a time — `what`, `actors`, `invariants`,
+`boundaries`, `flows` — and a section is **replaced** on write, not appended.
+That is the opposite rule to every ledger here, and deliberately: an observation
+stays true, an understanding gets corrected, and a stack of superseded drafts is
+worse than none. It is carried into the system prompt of every later session, so
+a resumed engagement starts already knowing the target. See [Tools](tools.md).
 
 ## Append-only and versioned
 
