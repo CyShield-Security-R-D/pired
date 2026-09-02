@@ -52,6 +52,44 @@ Settling one cell per call would mean hundreds of calls, so `record` accepts lis
 
 A confirmed hypothesis should *also* be recorded as a finding, tagged with the same `class`, so the finding maps back to its cell.
 
+### The target has to name an element
+
+A cell is keyed on `(element, class)`, so a hypothesis settles one only when its
+target resolves to a recorded element. The model does not write ids — it writes
+what it is looking at (`/api/register`, `POST /api/login`, `backend/auth.py`,
+`CheckLinksCommand`) — so `record` resolves the target when the row is written.
+
+That alone was not enough, because of *when* things get recorded. A review
+reasons about a route and maps it as surface a turn later; the claim written
+first kept the raw label forever, and nothing ever looked again. Measured across
+the engagement ledgers on one machine: **192 of dvbank's 207 unattached
+hypotheses named an element its own inventory already held**, and 38 of
+filebrowser's 54. That is work that was done, recorded, and that the number could
+not see — while the agent, reading `recall gaps` each turn, was told to go and do
+it again.
+
+So coverage resolves targets a second time, when the matrix is **computed**,
+against the inventory as it stands ([`core/target.ts`](../core/target.ts)). Both
+passes share one set of rules: the target as written, a route inside prose, the
+target without its line number, its basename, and finally an element whose name
+sits inside the target as a whole word — `CheckLinksCommand link checking` is the
+`CheckLinksCommand` element, `user` is not the `users` one, and two different
+elements named in one phrase get no answer at all, because a cell attached to the
+wrong element reads as tested work that nobody did.
+
+**Resolution never invents an element.** It can only attach a claim to something
+already recorded, so the denominator cannot move: the percentage rises when work
+that was already done is finally counted, and never because the matrix was
+reshaped underneath you. On the ledgers above the effect was `+3` cells on
+a client engagement, `+9` on filebrowser, `+47` on dvbank, and no denominator changed.
+
+What is left over is reported rather than dropped. The `/coverage` summary reads
+`… · 7 claims settle no cell` whenever recorded hypotheses reach no cell — they
+name something nobody mapped, or something outside the surface this matrix
+measures. It is the honest gap between the ledger and the number, and closing it
+is a decision only the operator can make: map the thing as surface, or accept
+that the reasoning about it is not a test case.
+
 ## Applicability: `appliesTo` and `n/a`
 
 Not every class is askable of every element. "SQL injection" against a `tech` record is not an untested cell; it is a meaningless one, and counting it as a gap makes the denominator a lie.

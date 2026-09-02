@@ -4,6 +4,8 @@
  */
 
 import { computeCoverage, coveragePercent } from "./coverage.ts";
+import type { Fields } from "./identity.ts";
+import { attachToElements } from "./target.ts";
 import { DISPOSED_STATUSES, type CoverageMatrix, type InventoryKind, type Severity } from "./ontology.ts";
 import type { Workspace } from "./workspace.ts";
 
@@ -14,6 +16,16 @@ export interface CoverageView {
 	matrix: CoverageMatrix;
 	classes: Array<{ id: string; title: string }>;
 	elementIds: string[];
+	/**
+	 * Claims that settle no cell: they name nothing in the inventory, or they name
+	 * something that is not part of the surface this matrix measures.
+	 *
+	 * Shown rather than swallowed. It is testing that was done and recorded and
+	 * that the number cannot see, and the operator is the only one who can decide
+	 * whether the thing it names should have been mapped as surface in the first
+	 * place.
+	 */
+	unattached: number;
 }
 
 /**
@@ -34,13 +46,37 @@ export async function computeCoverageView(
 		.filter((r) => surfaceKinds.includes(r.kind as InventoryKind))
 		.map((r) => ({ id: r.id, kind: r.kind as InventoryKind }));
 	const elementIds = elements.map((e) => e.id);
+	// Resolve targets against the inventory as it stands NOW.
+	//
+	// `record` resolves when a row is written, and that is too early on its own:
+	// the element is often recorded after the claim about it, and a row that
+	// failed to resolve then kept the raw label forever. Measured across the
+	// ledgers on one machine, 192 of dvbank's 207 unattached hypotheses named an
+	// element that its own inventory already held. This only attaches claims to
+	// elements that exist, so the denominator cannot move — the numerator counts
+	// work that was already recorded and could not be seen.
+	const { hypotheses, unattached } = attachToElements(
+		await ws.read("hypotheses"),
+		inventory as unknown as Fields[],
+	);
 	const matrix = computeCoverage({
 		classes: checklist.classes,
 		elements,
-		hypotheses: await ws.read("hypotheses"),
+		hypotheses,
 		openBlockers: (await ws.read("blockers")).filter((b) => b.status === "open"),
 	});
-	return { matrix, classes: checklist.classes.map((c) => ({ id: c.id, title: c.title || c.id })), elementIds };
+	// Counted after resolution, and over the matrix rather than over the
+	// inventory: a claim that names nothing and a claim that names a param when
+	// the surface is routes and hosts are both work this percentage cannot
+	// account for, which is the question the number is being asked.
+	void unattached;
+	const inMatrix = new Set(elementIds);
+	return {
+		matrix,
+		classes: checklist.classes.map((c) => ({ id: c.id, title: c.title || c.id })),
+		elementIds,
+		unattached: hypotheses.filter((h) => !inMatrix.has(h.target)).length,
+	};
 }
 
 // Re-exported so existing importers keep their one import site; the definition

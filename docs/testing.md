@@ -62,6 +62,12 @@ because each exists to stop a specific failure that already happened:
   one after `agent_settled`, and an in-flight pass abandoned the moment the
   operator types. It drives the real extension against a real workspace in a
   temp directory with only the model mocked.
+- **`core/target.test.ts`** — which element a target names. The stakes are
+  asymmetric: an unresolved target costs a coverage cell, a target resolved to the
+  *wrong* element reads as tested work nobody did, so every rule either matches
+  something the review actually named or stops. The refusals are the point of the
+  file — `user` against `users`, a name too short to identify anything, two
+  elements named in one phrase.
 - **`eval/grade.test.ts`** — the grader, which decides every number the project
   reports about itself. A grader that is wrong in the agent's favour does not
   look like a bug, it looks like a good result. The cases are written around the

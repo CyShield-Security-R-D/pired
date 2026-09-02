@@ -60,3 +60,53 @@ describe("computeCoverageView applicability", () => {
 		expect((await computeEngagementStats(ws)).coveragePct).toBe(100);
 	});
 });
+
+
+describe("claims recorded before the element they name", () => {
+	/**
+	 * `record` resolves a target when the row is written, which is too early on
+	 * its own: the review reasons about a route and maps it a turn later, and the
+	 * row keeps the raw label forever. Measured across the ledgers on one machine,
+	 * 192 of dvbank's 207 unattached hypotheses named an element that its own
+	 * inventory already held — 47 coverage cells of work that was done, recorded,
+	 * and invisible.
+	 */
+	async function ledger(name: string) {
+		const svc = makeFakeServices();
+		const ws = await Workspace.open(`/ws/${name}`, name, svc);
+		await ws.writeChecklist({ v: 1, targetType: "web", classes: [{ id: "authz", title: "Access control" }] });
+		// The claim first, the element second — the order a review actually
+		// produces them in.
+		await ws.append("hypotheses", { v: 1, id: "y1", kind: "hypothesis", createdAt: "t", statement: "checked", target: "/api/register", class: "authz", outcome: "refuted" });
+		const endpoint: EndpointRecord = { v: 1, id: "e1", kind: "endpoint", createdAt: "t", host: "h1", method: "POST", path: "/api/register" };
+		await ws.append("inventory", endpoint);
+		return ws;
+	}
+
+	it("counts the cell once the element exists", async () => {
+		const ws = await ledger("late1");
+		const view = await computeCoverageView(ws);
+		expect(view?.matrix.cells[0]?.status).toBe("clear");
+		expect((await computeEngagementStats(ws)).coveragePct).toBe(100);
+	});
+
+	it("adds nothing to the denominator while doing it", async () => {
+		// The property that makes this safe to ship: resolving attaches claims to
+		// elements that already exist and never invents one, so the number can only
+		// rise, and it rises because work that was done is finally counted.
+		const ws = await ledger("late2");
+		const view = await computeCoverageView(ws);
+		expect(view?.matrix.applicable).toBe(1);
+		expect(view?.unattached).toBe(0);
+	});
+
+	it("reports the claims that still reach no cell", async () => {
+		const ws = await ledger("late3");
+		await ws.append("hypotheses", { v: 1, id: "y2", kind: "hypothesis", createdAt: "t", statement: "checked", target: "withUser", class: "authz", outcome: "refuted" });
+		const view = await computeCoverageView(ws);
+		// Said out loud rather than dropped: it is testing the percentage cannot
+		// account for, and only the operator can decide whether the thing it names
+		// should have been mapped as surface.
+		expect(view?.unattached).toBe(1);
+	});
+});

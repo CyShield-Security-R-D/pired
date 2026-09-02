@@ -15,6 +15,7 @@ import { computeCoverage, coveragePercent, findGaps, selectNext } from "./covera
 import { CVSS_DEFAULT_VERSION, CVSS_EXAMPLE, cvssVersion, validateCvss } from "./cvss.ts";
 import { type Fields, findDuplicate, findNearDuplicate, type IdentityKind, isNoOp, mergeRecord } from "./identity.ts";
 import { locateAcrossFiles, locateSink, sinkHints } from "./locate.ts";
+import { buildTargetIndex, resolveElementTarget, type TargetIndex } from "./target.ts";
 import { computeCoverageView, computeEngagementStats, isDisposed } from "./stats.ts";
 import { CELL_GLYPH, renderCoveragePanel } from "./coverage-panel.ts";
 import {
@@ -311,26 +312,21 @@ const RECORD_PARAMETERS: JsonSchema = {
  * hypotheses resolved, so a ledger with 107 rows reported 0% coverage and gave no
  * hint why. Ids are an implementation detail of the ledger; making the operator's
  * agent memorise them is the tool's problem to solve, not the model's.
+ *
+ * The rules live in core/target.ts, because coverage resolves targets a second
+ * time when it computes the matrix — the element is often recorded after the
+ * claim about it — and the two passes have to agree on what a name means.
  */
-function targetIndex(inventory: Awaited<ReturnType<Workspace["read"]>>): Map<string, string> {
-	const index = new Map<string, string>();
-	const add = (key: string | undefined, id: string): void => {
-		if (!key) return;
-		const k = key.trim().toLowerCase().replace(/\/+$/, "");
-		if (k.length > 0 && !index.has(k)) index.set(k, id);
-	};
-	for (const r of inventory) {
-		const rec = r as unknown as Record<string, unknown>;
-		const id = r.id;
-		add(id, id);
-		const path = typeof rec.path === "string" ? rec.path : undefined;
-		const method = typeof rec.method === "string" ? rec.method : undefined;
-		add(path, id);
-		if (method && path) add(`${method} ${path}`, id);
-		add(typeof rec.value === "string" ? rec.value : undefined, id);
-		add(typeof rec.name === "string" ? rec.name : undefined, id);
-	}
-	return index;
+function targetIndex(inventory: Awaited<ReturnType<Workspace["read"]>>): TargetIndex {
+	return buildTargetIndex(inventory as unknown as Fields[]);
+}
+
+/** Add an element created mid-call, so the targets behind it resolve to it too. */
+function indexElement(index: TargetIndex, name: string, id: string): void {
+	const k = name.trim().toLowerCase().replace(/\s+/g, " ").replace(/\/+$/, "");
+	if (k.length > 0 && !index.byKey.has(k)) index.byKey.set(k, id);
+	index.byKey.set(id, id);
+	index.named.push({ id, name: k });
 }
 
 /**
@@ -386,19 +382,16 @@ async function writeRecord(
 }
 
 /** Resolve one target to an element id, or leave it as written. */
-function resolveTarget(raw: string, index: Map<string, string>): string {
-	const k = raw.trim().toLowerCase().replace(/\/+$/, "");
-	const hit = index.get(k);
-	if (hit) return hit;
-	// "POST /api/login (line 30)" and "/api/login?id=" both name /api/login.
-	const path = /(\/[^\s?#)]*)/.exec(k)?.[1];
-	if (path && index.get(path)) return index.get(path) as string;
-	// "backend/auth_routes.py:36" names a file. It settles a cell only if that
-	// file was recorded as surface — which is right: a target naming something
-	// nobody mapped cannot be a cell, and silently attaching it to an unrelated
-	// element would be worse than leaving it as written.
-	const noLine = k.replace(/:\d+(?:-\d+)?$/, "");
-	return index.get(noLine) ?? index.get(noLine.split("/").pop() ?? "") ?? raw;
+/**
+ * The id of the element this target names, or the target unchanged.
+ *
+ * "A target naming something nobody mapped cannot be a cell, and silently
+ * attaching it to an unrelated element would be worse than leaving it as
+ * written" — so the rules in core/target.ts stop rather than guess when two
+ * elements fit equally well, and this hands back what it was given.
+ */
+function resolveTarget(raw: string, index: TargetIndex): string {
+	return resolveElementTarget(raw, index) ?? raw;
 }
 
 
@@ -729,10 +722,7 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 						// target: a bulk refutation naming forty files would otherwise
 						// read the inventory forty times, and two targets naming the same
 						// unrecorded file would each create their own copy of it.
-						if (created) {
-							index.set(name.trim().toLowerCase().replace(/\/+$/, ""), created);
-							index.set(created, created);
-						}
+						if (created) indexElement(index, name, created);
 						resolved.push(created ?? t);
 					}
 					// Always a list: `asList` normalises it downstream, and assigning

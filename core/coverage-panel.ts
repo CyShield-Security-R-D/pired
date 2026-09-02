@@ -143,7 +143,15 @@ export function renderCoveragePanel(opts: CoveragePanelOptions): string[] {
 	// before it decides how many rows it can spend.
 	// "cells" and "gaps" are the matrix's own words; "test cases" is the operator's.
 	// The panel is read by someone who thinks in a test plan, so it says both.
-	const summaryText = `${pct}% · ${matrix.applicable} test cases · ${matrix.counts["not-tested"] + matrix.counts.blocked} gaps`;
+	// Claims that reached no cell, said out loud rather than dropped.
+	//
+	// A hypothesis whose target names nothing recorded — or names a param when the
+	// surface is routes and hosts — is testing that was done, recorded, and that
+	// this percentage cannot see. Coverage resolves what it can when the matrix is
+	// built (core/target.ts); what is left is a real gap between the ledger and
+	// the number, and the operator is the only one who can close it.
+	const stray = view.unattached > 0 ? ` · ${view.unattached} claims settle no cell` : "";
+	const summaryText = `${pct}% · ${matrix.applicable} test cases · ${matrix.counts["not-tested"] + matrix.counts.blocked} gaps${stray}`;
 	const hintText = opts.hint ?? "";
 	const hintInline = hintText.length === 0
 		|| width - measure(summaryText) - measure(hintText) >= 1;

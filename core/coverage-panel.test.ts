@@ -23,6 +23,8 @@ function view(elements: string[], classes: string[], hypotheses: HypothesisRecor
 		}),
 		classes: classes.map((id) => ({ id, title: id })),
 		elementIds: elements,
+		// Every claim in these fixtures names an element the matrix measures.
+		unattached: 0,
 	};
 }
 
@@ -104,6 +106,8 @@ describe("renderCoveragePanel with n/a cells", () => {
 			{ id: "sqli", title: "sqli" },
 		],
 		elementIds: ["h1", "e1"],
+		// Every claim in these fixtures names an element the matrix measures.
+		unattached: 0,
 	};
 
 	it("counts each row over its askable cells only", () => {
@@ -196,5 +200,19 @@ describe("the welcome screen's copy", () => {
 		expect(render(v, 60).join("\n")).not.toContain("esc to close");
 		const overlay = renderCoveragePanel({ view: v, engagement: "acme", width: 60, hint: "esc to close", ink, measure, truncate });
 		expect(overlay.join("\n")).toContain("esc to close");
+	});
+});
+
+
+describe("claims the matrix cannot account for", () => {
+	it("says how many settle no cell, and says nothing when none do", () => {
+		// A hypothesis whose target names nothing recorded is testing that was done
+		// and that the percentage cannot see. Silence there is how a coverage number
+		// and a ledger drift apart without anyone noticing.
+		const base = view(["e1"], ["sqli"], [hyp("y1", "e1", "sqli", "confirmed")]);
+		const lines = (v: CoverageView): string =>
+			renderCoveragePanel({ view: v, engagement: "e", width: 80, ink, measure, truncate }).join("\n");
+		expect(lines(base)).not.toContain("settle no cell");
+		expect(lines({ ...base, unattached: 7 })).toContain("7 claims settle no cell");
 	});
 });
