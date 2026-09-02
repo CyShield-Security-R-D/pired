@@ -14,7 +14,7 @@ import { buildBrowserModel, recordLabel } from "./browser.ts";
 import { computeCoverage, coveragePercent, findGaps, selectNext } from "./coverage.ts";
 import { CVSS_DEFAULT_VERSION, CVSS_EXAMPLE, cvssVersion, validateCvss } from "./cvss.ts";
 import { type Fields, findDuplicate, findNearDuplicate, type IdentityKind, isNoOp, mergeRecord } from "./identity.ts";
-import { locateSink, sinkHints } from "./locate.ts";
+import { locateAcrossFiles, locateSink, sinkHints } from "./locate.ts";
 import { computeCoverageView, computeEngagementStats, isDisposed } from "./stats.ts";
 import { CELL_GLYPH, renderCoveragePanel } from "./coverage-panel.ts";
 import {
@@ -421,6 +421,37 @@ function resolveTarget(raw: string, index: Map<string, string>): string {
  * Bounded deliberately: a review names a file, not a haystack, and an unbounded
  * walk on a large tree would cost more than the location is worth.
  */
+/**
+ * Source files under `root`, for locating a finding that names no file.
+ *
+ * Bounded on every axis — depth, count and size — because this runs inside a
+ * `record` call and a review is not worth stalling to read a whole repository.
+ */
+async function readSourceTree(ctx: ToolContext, root: string): Promise<Array<{ path: string; body: string }>> {
+	const SRC_EXT = /\.(?:py|pyi|js|jsx|ts|tsx|mjs|cjs|go|rb|php|java|cs|rs|kt|kts|scala|swift|c|h|cpp|hpp|sql|sh)$/;
+	const SKIP = /^(node_modules|vendor|third_party|dist|build|site-packages|testdata)$/;
+	const out: Array<{ path: string; body: string }> = [];
+	let frontier = [""];
+	for (let depth = 0; depth < 6 && frontier.length > 0 && out.length < 600; depth += 1) {
+		const next: string[] = [];
+		for (const dir of frontier) {
+			const entries = await ctx.services.fs.readdir(`${root}${dir ? `/${dir}` : ""}`).catch(() => [] as string[]);
+			for (const entry of entries) {
+				if (SKIP.test(entry) || entry.startsWith(".")) continue;
+				const rel = dir ? `${dir}/${entry}` : entry;
+				if (SRC_EXT.test(entry)) {
+					if (out.length >= 600) break;
+					const body = await ctx.services.fs.readFileIfExists(`${root}/${rel}`).catch(() => undefined);
+					// A minified bundle matches everything and identifies nothing.
+					if (body !== undefined && body.length <= 400_000) out.push({ path: rel, body });
+				} else if (!entry.includes(".")) next.push(rel);
+			}
+		}
+		frontier = next;
+	}
+	return out;
+}
+
 async function findByBasename(ctx: ToolContext, root: string, base: string): Promise<string | undefined> {
 	const SKIP = /^(node_modules|vendor|third_party|dist|build|site-packages|\.git)$/;
 	let frontier = [""];
@@ -800,6 +831,25 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 					.filter((x): x is string => typeof x === "string").join(" ");
 				const SRC = /[\w./-]+\.(?:py|pyi|js|jsx|ts|tsx|mjs|cjs|go|rb|php|java|cs|rs|kt|kts|scala|swift|c|h|cpp|hpp|sql|sh)\b/;
 				const named = SRC.exec(hay);
+				// A finding that names identifiers but no file is still locatable: the
+				// identifiers live in exactly one file often enough to be worth looking.
+				// This is how the finding that correctly identified CVE-2025-52903's
+				// mechanism — "FILE and DESTINATION expanded into the hook command" —
+				// was recorded with no location at all and dropped before scoring.
+				if (!named && ctx.cwd) {
+					const hits = sinkHints(hay);
+					if (hits.length >= 2) {
+						const files = await readSourceTree(ctx, ctx.cwd.replace(/\/+$/, ""));
+						const found = locateAcrossFiles(files, hits);
+						if (found) {
+							a.target = `${found.path}:${found.at.line}`;
+							unlocated =
+								`\nNo file was named, so it was located from the code: '${found.at.symbol}' and the other ` +
+								`identifiers in this finding appear together only in ${found.path}, at line ${found.at.line}. ` +
+								`Correct it with record id=<id> target="<file>:<line>" if the sink is elsewhere.`;
+						}
+					}
+				}
 				const located = /[\w./-]+\.[A-Za-z]{1,6}:\d+/.test(hay) || /\blines?\s+\d+/i.test(hay);
 				if (named && !located) {
 					// Before asking, try to answer it from the code. The finding names the

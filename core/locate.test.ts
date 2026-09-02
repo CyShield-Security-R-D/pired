@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { locateSink, sinkHints } from "./locate.ts";
+import { locateSink, sinkHints, locateAcrossFiles } from "./locate.ts";
 
 const GO = `package http
 
@@ -87,5 +87,41 @@ describe("a dotted call keeps the qualifier that makes it specific", () => {
 
 	it("keeps the receiver on a method call", () => {
 		expect(sinkHints("calls f.Stat on the target")).toContain("f.Stat");
+	});
+});
+
+describe("locating a finding that names a sink but no file at all", () => {
+	const files = [
+		{ path: "runner/runner.go", body: 'case "FILE":\n\treturn path\ncase "DESTINATION":\n\treturn dst\n' },
+		{ path: "http/auth.go", body: "func withUser(fn handleFunc) handleFunc {\n\treturn fn\n}\n" },
+		{ path: "http/static.go", body: 'var FILE = "x"\n' },
+	];
+
+	it("takes SHOUTED identifiers as hints", () => {
+		// Without these the real CVE-2025-52903 finding produced no hints at all.
+		const h = sinkHints("FILE and DESTINATION values are expanded into the hook command");
+		expect(h).toContain("FILE");
+		expect(h).toContain("DESTINATION");
+	});
+
+	it("finds the one file that carries the named sinks", () => {
+		const hit = locateAcrossFiles(files, ["FILE", "DESTINATION"]);
+		expect(hit?.path).toBe("runner/runner.go");
+	});
+
+	it("declines when two files match equally well", () => {
+		const tie = [
+			{ path: "a.go", body: "ALPHA\nBETA\n" },
+			{ path: "b.go", body: "ALPHA\nBETA\n" },
+		];
+		expect(locateAcrossFiles(tie, ["ALPHA", "BETA"])).toBeUndefined();
+	});
+
+	it("declines when only one hint matches anywhere", () => {
+		expect(locateAcrossFiles(files, ["FILE"])).toBeUndefined();
+	});
+
+	it("declines when there are no hints", () => {
+		expect(locateAcrossFiles(files, [])).toBeUndefined();
 	});
 });

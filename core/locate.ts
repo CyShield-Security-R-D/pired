@@ -45,7 +45,12 @@ export function sinkHints(text: string): string[] {
 		const bare = raw.includes(".") ? raw : raw;
 		const tail = raw.includes(".") ? (raw.split(".").pop() ?? raw) : raw;
 		if (tail.length < 4 || bare.length > 60) continue;
-		if (STOP.has(tail.toLowerCase())) continue;
+		// SHOUTED tokens skip the prose filter: FILE, PATH, USER and DESTINATION are
+		// environment variables and constants, and every one of them is also an
+		// ordinary English word. Judging them by their lowercase form threw away the
+		// only two hints the real CVE-2025-52903 finding had.
+		const loud = /^[A-Z][A-Z0-9_]{3,}$/.test(tail);
+		if (!loud && STOP.has(tail.toLowerCase())) continue;
 		// Shape test: an internal case change, an underscore, or a dotted call.
 		//
 		// Being merely capitalised is NOT enough — English sentences capitalise, and
@@ -55,8 +60,12 @@ export function sinkHints(text: string): string[] {
 		// unfalsifiable in the report and scores as a wrong answer rather than a
 		// blank one.
 		// A dotted expression qualifies itself; anything else must carry an internal
-		// case change or an underscore to count as code.
-		const codeShaped = /[a-z][A-Z]/.test(tail) || tail.includes("_") || raw.includes(".");
+		// case change, an underscore, or be a SHOUTED identifier — environment
+		// variables and constants are code and read as prose otherwise. The
+		// finding that named the real CVE-2025-52903 mechanism said only "FILE and
+		// DESTINATION values are expanded into the hook command", and with those
+		// two dropped it produced no hints at all.
+		const codeShaped = /[a-z][A-Z]/.test(tail) || tail.includes("_") || raw.includes(".") || loud;
 		if (!codeShaped) continue;
 		const push = (v: string): void => {
 			const key = v.toLowerCase();
@@ -118,4 +127,41 @@ export function locateSink(source: string, hints: string[]): SinkLocation | unde
 		}
 	}
 	return mention;
+}
+
+/**
+ * Find the file a finding is about when it names a sink but no file at all.
+ *
+ * "the login flow", "a design gap" — some findings genuinely have no file, and
+ * that stays allowed. But a finding that names concrete identifiers is locatable
+ * even without a path: the identifiers are in exactly one file often enough to
+ * be worth looking, and looking is cheap next to losing the finding.
+ *
+ * Deliberately strict about ambiguity. Two hints must match, and the best file
+ * must beat the runner-up outright — a tie means the record does not identify
+ * one file and picking either would be a guess, which is the failure mode that
+ * put three findings on "Token", "URLs" and "Stat" earlier.
+ */
+export function locateAcrossFiles(
+	files: Array<{ path: string; body: string }>,
+	hints: string[],
+	minHits = 2,
+): { path: string; at: SinkLocation } | undefined {
+	if (hints.length === 0) return undefined;
+	const scored: Array<{ path: string; body: string; n: number }> = [];
+	for (const f of files) {
+		let n = 0;
+		for (const h of hints) {
+			if (new RegExp(`\\b${h.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(f.body)) n += 1;
+		}
+		if (n >= minHits) scored.push({ ...f, n });
+	}
+	if (scored.length === 0) return undefined;
+	scored.sort((a, b) => b.n - a.n);
+	const best = scored[0];
+	if (!best) return undefined;
+	const runnerUp = scored[1];
+	if (runnerUp && runnerUp.n === best.n) return undefined;
+	const at = locateSink(best.body, hints);
+	return at ? { path: best.path, at } : undefined;
 }

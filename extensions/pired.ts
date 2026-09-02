@@ -1378,7 +1378,13 @@ export default function piredExtension(pi: ExtensionAPI): void {
 
 		const { extraction, errors } = parsed;
 		if (retryError) errors.push(`retry failed: ${retryError}`);
-		const toolCtx: ToolContext = { services, mode: ctx.mode } as unknown as ToolContext;
+		// `cwd` is not optional here. `record` resolves a finding's line by reading
+		// the file it names, relative to the working directory, and without it that
+		// lookup returns immediately — which is why every finding this pass wrote
+		// across a whole corpus run carried a filename and no line, and every one
+		// was dropped before scoring. The tool context the agent's own calls arrive
+		// with has it; this synthetic one has to supply it too.
+		const toolCtx: ToolContext = { cwd: ctx.cwd, services, mode: ctx.mode } as unknown as ToolContext;
 
 		// Surface first: hypotheses and findings target elements by label, so the
 		// elements have to exist before anything can point at them.
