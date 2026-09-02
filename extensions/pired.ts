@@ -23,7 +23,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { type Component, Key, matchesKey, truncateToWidth, type TUI, visibleWidth } from "@earendil-works/pi-tui";
 import {
-	buildBrowserModel, detailRowCount, elementLabel, initialState, reduceBrowser, renderBrowser, type BrowserKey, type BrowserModel, type BrowserState, type BrowserTone, type BrowserView,
+	buildBrowserModel, detailRowCount, elementLabel, initialState, reduceBrowser, renderBrowser, selectedBlocker, visibleBlockers, type BrowserKey, type BrowserModel, type BrowserState, type BrowserTone, type BrowserView,
 } from "../core/browser.ts";
 import { type BannerTone, renderBanner } from "../core/banner.ts";
 import { exportFindingsMarkdown, notReportReady } from "../core/export.ts";
@@ -782,63 +782,104 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	 */
 	let coverageView: CoverageView | undefined;
 	const promptedBlockers = new Set<string>();
+
 	/**
-	 * Walk the open blockers and ask.
+	 * What the operator settled, waiting to be said to the agent.
 	 *
-	 * `onlyNew` is what separates the two callers. The automatic pass asks once
-	 * per blocker and never again — a dialog that reappears every time the agent
-	 * records something is a dialog the operator learns to dismiss. `/blockers`
-	 * asks about all of them: someone who typed the command is asking to be
-	 * asked, including about the ones they waved away an hour ago.
-	 *
-	 * Returns how many were answered, so a caller can say so.
+	 * Answering in the UI wrote the ledger and told nobody: `recall blockers`
+	 * lists only the OPEN ones, so an answer the operator gave was a row the agent
+	 * had no reason to read again. It parked the question, routed around it, and
+	 * carried on around it forever. These lines are injected into the next
+	 * request (see ANSWER_TAG) and dropped once the turn that carried them ends —
+	 * long enough to be acted on, not long enough to become furniture.
 	 */
-	const answerBlockers = async (ctx: ExtensionContext, onlyNew: boolean): Promise<number> => {
-		if (!workspace || ctx.mode !== "tui") return 0;
+	const settledForAgent = new Map<string, { line: string; delivered: boolean }>();
+	/** Enough to carry a burst of answers; older ones have long since been read. */
+	const SETTLED_KEPT = 8;
+
+	/**
+	 * Write an operator's decision back to the blocker it settles.
+	 *
+	 * The same record, appended with an answer: the ledger stays the single source
+	 * of truth and a resumed session sees the decision.
+	 */
+	const settleBlocker = async (
+		ctx: ExtensionContext,
+		b: BlockerRecord,
+		status: "answered" | "dismissed",
+		answer?: string,
+	): Promise<void> => {
+		if (!workspace) return;
+		await workspace.append("blockers", {
+			...b,
+			status,
+			...(answer === undefined ? {} : { answer }),
+			answeredAt: new Date().toISOString(),
+			answeredBy: "operator",
+		});
+		settledForAgent.set(b.id, {
+			line: `${b.id} [${status}] ${b.question}${answer ? ` → ${answer}` : ""}`,
+			delivered: false,
+		});
+		for (const id of [...settledForAgent.keys()].slice(0, Math.max(0, settledForAgent.size - SETTLED_KEPT))) {
+			settledForAgent.delete(id);
+		}
+		await refreshStatus(ctx);
+		ctx.ui.notify(`pired: blocker ${status} — ${b.question.slice(0, 48)}`, "info");
+	};
+
+	/**
+	 * Ask about one blocker, in the dialog its shape calls for.
+	 *
+	 * Returns whether it was answered. A dismissed dialog leaves the blocker open,
+	 * which is the correct outcome — it was not answered — and `/blockers` is the
+	 * way back to it.
+	 */
+	const answerOne = async (ctx: ExtensionContext, b: BlockerRecord): Promise<boolean> => {
+		const title = `pired · ${b.type.replace(/-/g, " ")}`;
+		const detail = b.context ? `${b.question}\n\n${b.context}` : b.question;
+		try {
+			let answer: string | undefined;
+			if (b.type === "approval") {
+				// A yes/no gate — the destructive-action case, where the wrong
+				// default is the expensive one, so nothing is pre-selected.
+				answer = (await ctx.ui.confirm(title, detail)) ? "approved" : "denied";
+			} else if (b.options && b.options.length > 0) {
+				answer = await ctx.ui.select(title, [...b.options, "skip for now"]);
+				if (answer === "skip for now") answer = undefined;
+			} else {
+				answer = await ctx.ui.input(title, b.type === "credential-request" ? "value (stored in the workspace)" : "answer");
+			}
+			if (!answer) return false;
+			await settleBlocker(ctx, b, "answered", answer);
+			return true;
+		} catch {
+			// A dialog that fails must never take the session with it.
+			return false;
+		}
+	};
+
+	/**
+	 * Ask the moment a blocker is recorded — once per blocker, and never again.
+	 *
+	 * A dialog that reappears every time the agent records something is a dialog
+	 * the operator learns to dismiss, and dismissing it is the correct answer to a
+	 * question asked at the wrong moment. `/blockers` is the way back: it lists
+	 * every one of them, waved-away included.
+	 */
+	const promptForNewBlockers = async (ctx: ExtensionContext): Promise<void> => {
+		if (!workspace || ctx.mode !== "tui") return;
 		let open: BlockerRecord[];
 		try {
 			open = (await workspace.read("blockers")).filter((b) => b.status === "open");
 		} catch {
-			return 0;
+			return;
 		}
-		let answered = 0;
 		for (const b of open) {
-			if (onlyNew && promptedBlockers.has(b.id)) continue;
+			if (promptedBlockers.has(b.id)) continue;
 			promptedBlockers.add(b.id);
-			const title = `pired · ${b.type.replace(/-/g, " ")}`;
-			const detail = b.context ? `${b.question}\n\n${b.context}` : b.question;
-			try {
-				let answer: string | undefined;
-				if (b.type === "approval") {
-					// A yes/no gate — the destructive-action case, where the wrong
-					// default is the expensive one, so nothing is pre-selected.
-					answer = (await ctx.ui.confirm(title, detail)) ? "approved" : "denied";
-				} else if (b.options && b.options.length > 0) {
-					answer = await ctx.ui.select(title, [...b.options, "skip for now"]);
-					if (answer === "skip for now") answer = undefined;
-				} else {
-					answer = await ctx.ui.input(title, b.type === "credential-request" ? "value (stored in the workspace)" : "answer");
-				}
-				if (!answer) continue; // dismissed: the blocker stays open, as it should
-
-				await workspace.append("blockers", {
-					...b,
-					status: "answered",
-					answer,
-					answeredAt: new Date().toISOString(),
-					answeredBy: "operator",
-				});
-				answered += 1;
-				await refreshStatus(ctx);
-				ctx.ui.notify(`pired: blocker answered — ${b.question.slice(0, 48)}`, "info");
-			} catch {
-				// A dialog that fails must never take the session with it.
-			}
+			await answerOne(ctx, b);
 		}
-		return answered;
-	};
-	const promptForNewBlockers = async (ctx: ExtensionContext): Promise<void> => {
-		await answerBlockers(ctx, true);
 	};
 
 	/**
@@ -1163,6 +1204,8 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	// do not re-list them here — the overlay stays small for local models.
 	/** Opening tag of the injected coverage block, and the key for replacing it. */
 	const BRIEF_TAG = "<pired-coverage>";
+	/** Same, for the block that carries the operator's answers back. */
+	const ANSWER_TAG = "<pired-answered>";
 
 	/**
 	 * Put the coverage matrix in front of the agent instead of waiting to be asked.
@@ -1201,9 +1244,32 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		} catch { return undefined; }
 
 		const kept = event.messages.filter(
-			(m) => !(m.role === "user" && typeof m.content === "string" && m.content.startsWith(BRIEF_TAG)),
+			(m) => !(m.role === "user" && typeof m.content === "string"
+				&& (m.content.startsWith(BRIEF_TAG) || m.content.startsWith(ANSWER_TAG))),
 		);
-		if (text.length === 0) return { messages: kept };
+
+		/**
+		 * What the operator settled since the agent last looked.
+		 *
+		 * The other half of the blocker loop. The agent parks a question and routes
+		 * around it; the operator answers it in `/blockers`; and until now that
+		 * answer went into a row nothing would read again — `recall blockers` lists
+		 * only the open ones, so the agent kept routing around a question that had
+		 * been answered an hour ago. This says so, once, in the request that
+		 * follows the answer.
+		 */
+		const answers = [...settledForAgent.values()].map((e) => e.line);
+		// Marked only where the block is actually appended: a request this handler
+		// declines to touch (see `pending` below) delivered nothing, and an answer
+		// counted as delivered is an answer dropped at the end of the turn.
+		const markDelivered = (): void => {
+			for (const entry of settledForAgent.values()) entry.delivered = true;
+		};
+		const answered = answers.length === 0 ? undefined : {
+			role: "user" as const,
+			content: `${ANSWER_TAG}\nThe operator settled these in the UI — the ledger is already updated, so nothing needs recording to close them out. Act on them now; a decision you were routing around no longer has to be routed around.\n\n${answers.join("\n")}\n</pired-answered>`,
+			timestamp: Date.now(),
+		};
 		// Appending after an assistant message that still has tool calls out would
 		// split a call from its result, so leave that request alone; the next one
 		// carries the same block a moment later.
@@ -1211,12 +1277,19 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		const pending = last?.role === "assistant" && Array.isArray(last.content)
 			&& last.content.some((c) => (c as { type?: string }).type === "toolCall");
 		if (pending) return { messages: kept };
+		if (text.length === 0) {
+			if (!answered) return { messages: kept };
+			markDelivered();
+			return { messages: [...kept, answered as unknown as (typeof event.messages)[number]] };
+		}
 		const notice = {
 			role: "user" as const,
 			content: `${BRIEF_TAG}\nDerived from your ledger and refreshed automatically — no tool call was made for this, and none is required. \`recall gaps\` reads the full matrix when you want the detail.\n\n${text}\n</pired-coverage>`,
 			timestamp: Date.now(),
 		};
-		return { messages: [...kept, notice as unknown as (typeof event.messages)[number]] };
+		if (answered) markDelivered();
+		const add = [notice, ...(answered ? [answered] : [])] as unknown as (typeof event.messages)[number][];
+		return { messages: [...kept, ...add] };
 	});
 
 	pi.on("before_agent_start", (event) => {
@@ -1662,6 +1735,12 @@ export default function piredExtension(pi: ExtensionAPI): void {
 				};
 			}
 		}
+		// An answer the agent has now seen has done its work. Kept any longer it
+		// becomes furniture: the same three lines in every request for the rest of
+		// the session, describing decisions that were acted on turns ago.
+		for (const [id, entry] of settledForAgent) {
+			if (entry.delivered) settledForAgent.delete(id);
+		}
 		await refreshStatus(ctx);
 	});
 
@@ -1918,6 +1997,14 @@ export default function piredExtension(pi: ExtensionAPI): void {
 			if (data === "r") return "filter:refuted";
 			if (data === "o") return "filter:open";
 		}
+		// The blockers views are the only ones with anything to do to a row, so
+		// they are the only ones where a letter writes to the ledger. `a` is worth
+		// more here than a fourth filter would be.
+		if (view === "blockers" || view === "blocker") {
+			if (data === "a") return "answer";
+			if (data === "x") return "dismiss";
+			if (data === "f") return "filter:toggle";
+		}
 		return undefined;
 	};
 
@@ -1925,8 +2012,8 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	const browserHeight = (tui?: { terminal?: { rows: number } }): number =>
 		Math.max(1, overlayRows(tui) - BROWSER_CHROME);
 
-	/** Open the browser at `view`; shared by /surface, /hypotheses and /findings. */
-	const openBrowser = async (ctx: ExtensionContext, view: "coverage" | "surface" | "hypotheses" | "findings"): Promise<void> => {
+	/** Open the browser at `view`; shared by /surface, /hypotheses, /findings and /blockers. */
+	const openBrowser = async (ctx: ExtensionContext, view: "coverage" | "surface" | "hypotheses" | "findings" | "blockers"): Promise<void> => {
 		if (!workspace) {
 			ctx.ui.notify("pired: no engagement workspace yet", "warning");
 			return;
@@ -1943,6 +2030,7 @@ export default function piredExtension(pi: ExtensionAPI): void {
 				inventory: await ws.read("inventory"),
 				hypotheses: await ws.read("hypotheses"),
 				findings: await ws.read("findings"),
+				blockers: await ws.read("blockers"),
 			});
 		};
 		// Rebuildable: the browser is open while the agent is still recording, and a
@@ -1965,72 +2053,111 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		// scrollable length is only knowable here — handleInput is given no width.
 		let lastWidth = 72;
 		let reloadGen = 0;
-		await ctx.ui.custom<void>(
-			(tui, theme, _keybindings, done) => ({
-				render: (width: number): string[] => {
-					lastWidth = width;
-					return renderBrowser({
-						model, state, width,
-						// Chrome is the box edges, the tally, two rules and the legend.
-						height: browserHeight(tui),
-						maxLines: overlayRows(tui),
-						ink: (tone, text) => theme.fg(BROWSER_TONE_COLOR[tone], text),
-						// Background, not foreground: theme.fg resets with \x1b[39m, so an
-						// outer accent dies at the row's first inner colour and the cursor
-						// row renders less coloured than its neighbours. bg resets with
-						// \x1b[49m, which no foreground code emits. selectedBg was already
-						// in themes/pired.json and used by nothing.
-						highlight: (line) => theme.bg("selectedBg", line),
-						measure: visibleWidth,
-						truncate: (x, ww) => truncateToWidth(x, ww, theme.fg("dim", "…")),
-					});
-				},
-				invalidate(): void {},
-				handleInput(data: string): void {
-					const key = toBrowserKey(data, state.view);
-					if (!key) return;
-					const height = browserHeight(tui);
-					const detailRows = detailRowCount({
-						model, state, width: lastWidth, height,
-						ink: (_t: BrowserTone, text: string) => text,
-						measure: visibleWidth,
-						truncate: (x: string, ww: number) => truncateToWidth(x, ww),
-					});
-					if (key === "refresh") {
-						// Generation guard: two fast presses otherwise resolve in arbitrary
-						// order and the older read can win.
-						const gen = ++reloadGen;
-						void build().then((fresh) => {
-							if (gen !== reloadGen) return;
-							model = fresh;
-							// The surface list re-sorts by progress on every build, so a kept
-							// cursor lands on a different row. Clamp it back into range.
-							const rows = detailRowCount({
-								model, state, width: lastWidth, height: browserHeight(tui),
-								ink: (_t: BrowserTone, x: string) => x, measure: visibleWidth,
-								truncate: (x: string, ww: number) => truncateToWidth(x, ww),
-							});
-							state = { ...state, cursor: 0, scroll: 0, ...(rows === 0 ? {} : {}) };
-							tui.requestRender();
-						}).catch((err) => {
-							// A failed reload must not look like a successful empty one.
-							ctx.ui.notify(`pired: reload failed — ${err instanceof Error ? err.message : String(err)}`, "warning");
+		// Answering a blocker takes a dialog, and a dialog cannot open under an
+		// overlay that owns the keyboard. So the overlay closes, the question is
+		// asked, and the browser comes back where it was — which is why this is a
+		// loop and not a single call.
+		for (;;) {
+			let pending: { action: "answer" | "dismiss"; id: string } | undefined;
+			await ctx.ui.custom<void>(
+				(tui, theme, _keybindings, done) => ({
+					render: (width: number): string[] => {
+						lastWidth = width;
+						return renderBrowser({
+							model, state, width,
+							// Chrome is the box edges, the tally, two rules and the legend.
+							height: browserHeight(tui),
+							maxLines: overlayRows(tui),
+							ink: (tone, text) => theme.fg(BROWSER_TONE_COLOR[tone], text),
+							// Background, not foreground: theme.fg resets with \x1b[39m, so an
+							// outer accent dies at the row's first inner colour and the cursor
+							// row renders less coloured than its neighbours. bg resets with
+							// \x1b[49m, which no foreground code emits. selectedBg was already
+							// in themes/pired.json and used by nothing.
+							highlight: (line) => theme.bg("selectedBg", line),
+							measure: visibleWidth,
+							truncate: (x, ww) => truncateToWidth(x, ww, theme.fg("dim", "…")),
 						});
-						return;
-					}
-					const next = reduceBrowser(state, key, model, height, detailRows);
-					if (next === "close") {
-						done();
-						return;
-					}
-					state = next;
-					// Without this the component keeps the old frame: pi renders on
-					// request, not on a timer.
-					tui.requestRender();
-				},
-			}),
-			{ overlay: true, overlayOptions: { ...OVERLAY.browser } },
-		);
+					},
+					invalidate(): void {},
+					handleInput(data: string): void {
+						const key = toBrowserKey(data, state.view);
+						if (!key) return;
+						const height = browserHeight(tui);
+						const detailRows = detailRowCount({
+							model, state, width: lastWidth, height,
+							ink: (_t: BrowserTone, text: string) => text,
+							measure: visibleWidth,
+							truncate: (x: string, ww: number) => truncateToWidth(x, ww),
+						});
+						if (key === "refresh") {
+							// Generation guard: two fast presses otherwise resolve in arbitrary
+							// order and the older read can win.
+							const gen = ++reloadGen;
+							void build().then((fresh) => {
+								if (gen !== reloadGen) return;
+								model = fresh;
+								// The surface list re-sorts by progress on every build, so a kept
+								// cursor lands on a different row. Clamp it back into range.
+								const rows = detailRowCount({
+									model, state, width: lastWidth, height: browserHeight(tui),
+									ink: (_t: BrowserTone, x: string) => x, measure: visibleWidth,
+									truncate: (x: string, ww: number) => truncateToWidth(x, ww),
+								});
+								state = { ...state, cursor: 0, scroll: 0, ...(rows === 0 ? {} : {}) };
+								tui.requestRender();
+							}).catch((err) => {
+								// A failed reload must not look like a successful empty one.
+								ctx.ui.notify(`pired: reload failed — ${err instanceof Error ? err.message : String(err)}`, "warning");
+							});
+							return;
+						}
+						if (key === "answer" || key === "dismiss") {
+							// Carried out above, once the overlay is gone: this handler is
+							// synchronous and the write needs the operator.
+							const b = selectedBlocker(model, state);
+							if (!b) return;
+							pending = { action: key, id: b.id };
+							done();
+							return;
+						}
+						const next = reduceBrowser(state, key, model, height, detailRows);
+						if (next === "close") {
+							done();
+							return;
+						}
+						state = next;
+						// Without this the component keeps the old frame: pi renders on
+						// request, not on a timer.
+						tui.requestRender();
+					},
+				}),
+				{ overlay: true, overlayOptions: { ...OVERLAY.browser } },
+			);
+			const act = pending;
+			if (!act) return;
+			const rec = (await ws.read("blockers")).find((b) => b.id === act.id);
+			if (rec) {
+				if (act.action === "answer") await answerOne(ctx, rec);
+				// Dismissing is the "this is no longer a question" case, so it asks
+				// nothing: the row keeps its history and stops being counted.
+				else await settleBlocker(ctx, rec, "dismissed");
+			}
+			model = await build();
+			// Back to the list, on the row you just dealt with. It moves — settling
+			// one sorts it below everything still waiting, and takes it out of the
+			// list entirely under the `open` filter — so the cursor follows it where
+			// it went and falls back to the nearest row where it did not.
+			const rows = visibleBlockers(model, state);
+			const landed = rows.findIndex((b) => b.id === act.id);
+			state = {
+				...state,
+				view: "blockers",
+				blockerId: undefined,
+				cursor: landed >= 0 ? landed : Math.min(state.cursor, Math.max(0, rows.length - 1)),
+				scroll: 0,
+			};
+		}
 	};
 
 	/**
@@ -2124,41 +2251,43 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	 * mid-thought dismisses it — correctly, since the blocker stays open. What was
 	 * missing was the way back: the panel's "needs you" section could show three
 	 * open blockers with no way to answer them short of waiting for the agent to
-	 * record something and re-trigger the prompt for the NEXT one. This is that
-	 * way back, and it re-asks the dismissed ones too.
+	 * record something and re-trigger the prompt for the NEXT one.
+	 *
+	 * It was a forced march through those dialogs, which is a poor way to read
+	 * anything: a modal shows one question, out of order, with no way to see what
+	 * else is waiting, how long it has waited, or what was decided last time. So
+	 * this is the same browser `/findings` opens — a list you can sit in, sorted
+	 * by what is holding up the most, with the whole record of a blocker one
+	 * keystroke away. Answering is `a` from either the list or the detail, which
+	 * makes it a thing you choose to do to a row rather than a queue you are put
+	 * through.
 	 */
 	pi.registerCommand("blockers", {
-		description: "Answer what needs you — walk the open blockers, one dialog at a time",
+		description: "What needs you — browse the parked questions and answer them",
 		handler: async (_args, ctx) => {
 			if (!workspace) {
 				ctx.ui.notify("pired: no engagement workspace yet", "warning");
 				return;
 			}
-			let open: BlockerRecord[];
-			try {
-				open = (await workspace.read("blockers")).filter((b) => b.status === "open");
-			} catch (err) {
-				ctx.ui.notify(`pired: could not read blockers — ${err instanceof Error ? err.message : String(err)}`, "warning");
-				return;
-			}
-			if (open.length === 0) {
-				ctx.ui.notify("pired: nothing needs you — no open blockers", "info");
-				return;
-			}
-			// Outside the TUI there are no dialogs to walk, so say what is waiting
+			// Outside the TUI there is no browser to open, so say what is waiting
 			// rather than silently doing nothing.
 			if (ctx.mode !== "tui") {
-				const list = open.map((b) => `· ${b.type.replace(/-/g, " ")}: ${b.question}`).join("\n");
+				let open: BlockerRecord[];
+				try {
+					open = (await workspace.read("blockers")).filter((b) => b.status === "open");
+				} catch (err) {
+					ctx.ui.notify(`pired: could not read blockers — ${err instanceof Error ? err.message : String(err)}`, "warning");
+					return;
+				}
+				if (open.length === 0) {
+					ctx.ui.notify("pired: nothing needs you — no open blockers", "info");
+					return;
+				}
+				const list = open.map((b) => `· [${b.priority}] ${b.type.replace(/-/g, " ")}: ${b.question}`).join("\n");
 				ctx.ui.notify(`pired: ${open.length} open blocker(s) — answering needs the terminal UI\n${list}`, "warning");
 				return;
 			}
-			const answered = await answerBlockers(ctx, false);
-			ctx.ui.notify(
-				answered > 0
-					? `pired: ${answered} of ${open.length} blocker(s) answered`
-					: `pired: ${open.length} blocker(s) still open`,
-				answered > 0 ? "info" : "warning",
-			);
+			await openBrowser(ctx, "blockers");
 		},
 	});
 

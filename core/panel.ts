@@ -302,9 +302,14 @@ export function renderPanel(opts: PanelOptions): string[] {
 		}
 	}
 
-	if (mode === "blockers" && d.openBlockers.length === 0) {
+	if (mode === "blockers") {
 		line("");
-		line(ink("good", "  nothing blocked"));
+		// The view named after the one thing that needs a human should say how a
+		// human answers it. Everywhere else this is a count; here it is a queue,
+		// and a queue with no way out of it is just a reproach.
+		line(d.openBlockers.length === 0
+			? ink("good", "  nothing blocked")
+			: ink("muted", "  /blockers to read and answer them"));
 	}
 
 	// --- footer ---------------------------------------------------------------

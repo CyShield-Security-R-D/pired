@@ -171,7 +171,9 @@ So the moment a blocker is recorded, pired asks. The dialog is chosen from the b
 | Has `options: [...]` | A select, with `skip for now` appended. |
 | Anything else | A free-text input. `credential-request` is prompted as a value stored in the workspace. |
 
-The answer is written back to the same blocker record (`answer`, `answeredAt`, `answeredBy`), so the ledger stays the single source of truth and a resumed session sees the decision. Dismissing a dialog leaves the blocker open, which is the correct outcome — it was not answered. A dialog that fails never takes the session with it.
+The answer is written back to the same blocker record (`answer`, `answeredAt`, `answeredBy`), so the ledger stays the single source of truth and a resumed session sees the decision. Dismissing a dialog leaves the blocker open, which is the correct outcome — it was not answered; [`/blockers`](#what-needs-you) is the way back to it. A dialog that fails never takes the session with it.
+
+And the answer reaches the **agent**. `recall blockers` lists only the open ones, so an answered blocker was a row nothing would read again: the agent parked a question, routed around it, and kept routing around it after it had been settled. Each decision is now put in front of the agent on its next request — once, then dropped, because an answer that is repeated in every request for the rest of the session stops being news and becomes furniture.
 
 ## Scope refusals
 
@@ -215,12 +217,12 @@ Colour carries meaning only — severity and outcome — never decoration. Every
 
 - The status line is not installed; state is published through pi's `setStatus` instead, which is what pi's own footer renders.
 - `/coverage` prints a one-line summary (`coverage 62% · 170 cells · 65 gaps`) instead of opening an overlay.
-- Blocker dialogs do not fire. Blockers accumulate in the ledger and can be read with `recall blockers`, or with `pired-state --json`.
+- Blocker dialogs do not fire and `/blockers` cannot open a browser, so it reports what is waiting as a notification instead. Blockers can also be read with `recall blockers`, or with `pired-state --json`.
 - `/report` behaves identically — it writes Markdown to the workspace either way.
 
 ## The engagement browser
 
-`/surface` and `/hypotheses` open the same browser at different entry points. The panel shows counts; this shows the records behind them.
+`/surface`, `/hypotheses`, `/findings` and `/blockers` open the same browser at different entry points. The panel shows counts; this shows the records behind them.
 
 ```
 surface · airflow-ftxin0                        6 elements · 25/45 settled
@@ -251,6 +253,27 @@ From the maximized panel, `⏎` hands off here. The panel is a dashboard — it 
 
 `/hypotheses` lists them flat, with `a` / `c` / `r` / `o` filtering to all, confirmed, refuted, or open. **The refuted ones are the point.** Confirmed hypotheses become findings; refuted ones are the evidence that everything else was checked — the difference between "we found three bugs" and "we tested 174 hypotheses across 10 endpoints and three held". `⏎` opens one in full: statement, class, target, method, evidence path, and the finding it produced.
 
+### What needs you
+
+`/blockers` is the fifth view, and the only one whose rows are addressed to a person rather than describing the target. Every other list is a record of what the agent did; this one is the agent waiting.
+
+```
+⦿ blockers · acme-webapp                                 3 open · 1 answered
+──────────────────────────────────────────────────────────────────────────
+▸ ? high    scope clarification Is payments.acme.io in scope? It resolves …
+  ? high    approval            Run the destructive delete PoC on /api/v2…
+  ? medium  decision            Staging replica or prod?
+  ✓ high    credential request  Admin credentials for the panel?
+──────────────────────────────────────────────────────────────────────────
+↑↓ move · ⏎ open · a answer · x dismiss · f open/all · tab coverage · q close
+```
+
+Waiting first, worst first, and inside a priority the longest wait at the top: a question parked an hour ago sitting under one parked a second ago is the wrong way round. `✓` is answered, `·` dismissed; both keep their place in the ledger and their answer in the detail, because what was decided three weeks ago is what a client asks about three months later.
+
+`⏎` opens one in full — context, the options offered, the work ids it gates, and the answer with who gave it and when. `a` answers the row under the cursor from either the list or the detail; `x` dismisses it, for a question that is no longer a question; `f` hides everything already settled. Answering closes the overlay for the dialog and comes back to where you were, because a dialog cannot open under an overlay that owns the keyboard.
+
+This replaced a forced march through those dialogs, one per open blocker. A modal shows one question, out of order, with no way to see what else is waiting, how long it has waited, or what was decided last time — which is a poor way to read anything, and worse when the answer has consequences.
+
 ### Keys
 
 | Key | Does |
@@ -260,8 +283,9 @@ From the maximized panel, `⏎` hands off here. The panel is a dashboard — it 
 | `g` `G` / `Home` `End` | first, last |
 | `⏎` `→` `l` | drill in |
 | `Esc` `←` `h` | back, and out of the browser at the top level |
-| `Tab` | switch between surface and hypotheses, keeping the filter |
-| `a` `c` `r` `o` | filter all / confirmed / refuted / open |
+| `Tab` | cycle coverage → surface → hypotheses → findings → blockers, keeping the filter |
+| `a` `c` `r` `o` | filter all / confirmed / refuted / open (hypotheses) |
+| `a` `x` `f` | answer, dismiss, waiting/all (blockers) |
 | `q` | close |
 
 Outside the TUI — `--print`, RPC, JSON — both commands report the tallies as a notification instead, so a headless run is told what it would have seen.

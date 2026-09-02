@@ -29,7 +29,11 @@ import { CELL_GLYPH } from "./coverage-panel.ts";
 import type { Tone } from "./coverage-panel.ts";
 import { frameLines, RULE } from "./frame.ts";
 import type {
+	BlockerRecord,
+	BlockerStatus,
+	BlockerType,
 	CoverageCell,
+	Priority,
 	Severity,
 	CoverageStatus,
 	FindingRecord,
@@ -47,7 +51,8 @@ export type BrowserView =
 	| "coverage" | "class"
 	| "surface" | "element"
 	| "hypotheses" | "hypothesis"
-	| "findings" | "finding";
+	| "findings" | "finding"
+	| "blockers" | "blocker";
 
 /** Outcome filter for the hypotheses list. `open` is anything not yet settled. */
 export type HypothesisFilter = "all" | "confirmed" | "refuted" | "open";
@@ -55,7 +60,11 @@ export type HypothesisFilter = "all" | "confirmed" | "refuted" | "open";
 export type BrowserKey =
 	| "up" | "down" | "pageUp" | "pageDown" | "top" | "bottom"
 	| "in" | "out" | "close" | "switch" | "refresh"
-	| "filter:all" | "filter:confirmed" | "filter:refuted" | "filter:open";
+	| "filter:all" | "filter:confirmed" | "filter:refuted" | "filter:open"
+	// Blockers only. Two of these write to the ledger, which core does not do, so
+	// the adapter carries them out; they are named here anyway to keep one key
+	// vocabulary rather than a second one hidden in the host.
+	| "answer" | "dismiss" | "filter:toggle";
 
 export interface SurfaceRow {
 	id: string;
@@ -94,13 +103,37 @@ export interface FindingRow {
 	evidence?: string[];
 }
 
+/**
+ * A parked question, as a row.
+ *
+ * `blocks` keeps the raw work ids the agent wrote: those are hypothesis and
+ * finding ids, which the inventory's label map cannot resolve, and a label
+ * invented for one would be a guess.
+ */
+export interface BlockerRow {
+	id: string;
+	type: BlockerType;
+	priority: Priority;
+	status: BlockerStatus;
+	question: string;
+	context?: string;
+	options?: string[];
+	blocks?: string[];
+	answer?: string;
+	askedAt?: string;
+	answeredAt?: string;
+	answeredBy?: string;
+}
+
 export interface BrowserModel {
 	engagement: string;
 	classes: Array<{ id: string; title: string }>;
 	surface: SurfaceRow[];
 	hypotheses: HypothesisRow[];
 	findings: FindingRow[];
+	blockers: BlockerRow[];
 	counts: Record<HypothesisFilter, number>;
+	blockerCounts: { all: number; open: number; answered: number };
 }
 
 export interface BrowserState {
@@ -114,6 +147,7 @@ export interface BrowserState {
 	classId?: string;
 	hypothesisId?: string;
 	findingId?: string;
+	blockerId?: string;
 }
 
 export function initialState(view: BrowserView = "surface"): BrowserState {
@@ -121,6 +155,7 @@ export function initialState(view: BrowserView = "surface"): BrowserState {
 }
 
 const SEVERITY_RANK: Record<Severity, number> = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
+const PRIORITY_RANK: Record<Priority, number> = { high: 0, medium: 1, low: 2 };
 const SEVERITY_TONE: Record<Severity, BrowserTone> = {
 	// low is neither "clear" nor "accent". Green means "ruled out" everywhere else
 	// in the tool, so a green low-severity bug says the opposite of what it is —
@@ -143,6 +178,21 @@ const STATUS_WORD: Record<CoverageStatus, string> = {
 	clear: "clear", vulnerable: "vulnerable", testing: "testing",
 	blocked: "blocked", "not-tested": "not tested", "n/a": "does not apply",
 };
+
+/**
+ * A blocker reads by how much it is holding up, so an open one is toned by its
+ * priority and a settled one gets out of the way. Green for answered is the
+ * same promise `clear` makes everywhere else in the tool: this one is dealt
+ * with.
+ */
+function blockerTone(b: BlockerRow): BrowserTone {
+	if (b.status === "answered") return "clear";
+	if (b.status === "dismissed") return "muted";
+	return b.priority === "high" ? "vulnerable" : b.priority === "medium" ? "testing" : "blocked";
+}
+
+/** Single-column, so the glyph never shifts the columns after it. */
+const BLOCKER_GLYPH: Record<BlockerStatus, string> = { open: "?", answered: "✓", dismissed: "·" };
 
 const OUTCOME_GLYPH: Record<HypothesisOutcome, string> = {
 	confirmed: "▲", refuted: "●", testing: "◐", proposed: "·", inconclusive: "⊘",
@@ -185,10 +235,13 @@ export interface BuildModelInput {
 	inventory: InventoryRecord[];
 	hypotheses: HypothesisRecord[];
 	findings: FindingRecord[];
+	/** Optional: a caller that only wants coverage need not read the store. */
+	blockers?: BlockerRecord[];
 }
 
 export function buildBrowserModel(input: BuildModelInput): BrowserModel {
 	const { engagement, classes, cells, inventory, hypotheses, findings } = input;
+	const blockers = input.blockers ?? [];
 	const labels = new Map(inventory.map((r) => [r.id, elementLabel(r)]));
 
 	// Cells arrive class-major; index them so each element's row can be read in
@@ -270,6 +323,35 @@ export function buildBrowserModel(input: BuildModelInput): BrowserModel {
 		})
 		.sort((a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity] || a.title.localeCompare(b.title));
 
+	// Open first, and inside that the ones that have waited longest at the top:
+	// this list answers "what needs me", and a question parked an hour ago sitting
+	// under one parked a second ago is the wrong way round. Settled rows come back
+	// most recently answered first, which is the order you re-read them in.
+	const blockerRows: BlockerRow[] = blockers
+		.map((b) => ({
+			id: b.id,
+			type: b.type,
+			priority: b.priority,
+			status: b.status,
+			question: b.question,
+			context: b.context,
+			options: b.options,
+			blocks: b.blocks,
+			answer: b.answer,
+			askedAt: b.createdAt,
+			answeredAt: b.answeredAt,
+			answeredBy: b.answeredBy,
+		}))
+		.sort((a, b) => {
+			const waiting = (x: BlockerRow): number => (x.status === "open" ? 0 : 1);
+			if (waiting(a) !== waiting(b)) return waiting(a) - waiting(b);
+			if (a.status === "open") {
+				return PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority]
+					|| (a.askedAt ?? "").localeCompare(b.askedAt ?? "");
+			}
+			return (b.answeredAt ?? b.askedAt ?? "").localeCompare(a.answeredAt ?? a.askedAt ?? "");
+		});
+
 	const settled = (o: HypothesisOutcome): boolean => o === "confirmed" || o === "refuted";
 	return {
 		engagement,
@@ -277,6 +359,12 @@ export function buildBrowserModel(input: BuildModelInput): BrowserModel {
 		surface,
 		hypotheses: rows,
 		findings: findingRows,
+		blockers: blockerRows,
+		blockerCounts: {
+			all: blockerRows.length,
+			open: blockerRows.filter((b) => b.status === "open").length,
+			answered: blockerRows.filter((b) => b.status === "answered").length,
+		},
 		counts: {
 			all: rows.length,
 			confirmed: rows.filter((h) => h.outcome === "confirmed").length,
@@ -300,12 +388,37 @@ export function visibleHypotheses(model: BrowserModel, state: BrowserState): Hyp
 	}
 }
 
+/**
+ * The blockers the list is showing.
+ *
+ * Only two of the four filters mean anything here, so everything that is not
+ * `open` reads as "all" — including one carried in from the hypotheses list by
+ * `tab`, which would otherwise empty this view for a reason nothing on screen
+ * explains.
+ */
+export function visibleBlockers(model: BrowserModel, state: BrowserState): BlockerRow[] {
+	return state.filter === "open" ? model.blockers.filter((b) => b.status === "open") : model.blockers;
+}
+
+/**
+ * The blocker the operator is pointing at, from either the list or the detail.
+ *
+ * The adapter needs it to answer one — it owns the workspace write — and the two
+ * views disagree about where the selection lives.
+ */
+export function selectedBlocker(model: BrowserModel, state: BrowserState): BlockerRow | undefined {
+	if (state.view === "blocker") return model.blockers.find((b) => b.id === state.blockerId);
+	if (state.view === "blockers") return visibleBlockers(model, state)[state.cursor];
+	return undefined;
+}
+
 function rowCount(model: BrowserModel, state: BrowserState, detailRows = 0): number {
 	switch (state.view) {
 		case "surface": return model.surface.length;
 		case "hypotheses": return visibleHypotheses(model, state).length;
 		case "element": return model.classes.length;
 		case "findings": return model.findings.length;
+		case "blockers": return visibleBlockers(model, state).length;
 		// The matrix, class-major: one row per class, then that class down the
 		// whole surface. Both are views over data the model already carries.
 		case "coverage": return model.classes.length;
@@ -314,6 +427,7 @@ function rowCount(model: BrowserModel, state: BrowserState, detailRows = 0): num
 		// the width it wrapped at — which only the caller knows. Zero here is what
 		// pinned the cursor and made the detail unscrollable.
 		case "finding":
+		case "blocker":
 		case "hypothesis": return detailRows;
 		default: return 0;
 	}
@@ -344,6 +458,7 @@ export function detailRowCount(o: RenderOptions): number {
 function detailRowCountAt(o: RenderOptions): number {
 	switch (o.state.view) {
 		case "finding": return findingLines(o).length;
+		case "blocker": return blockerLines(o).length;
 		case "hypothesis": return hypothesisLines(o).length;
 		default: return 0;
 	}
@@ -354,7 +469,7 @@ function detailRowCountAt(o: RenderOptions): number {
 export function reduceBrowser(state: BrowserState, key: BrowserKey, model: BrowserModel, viewport: number, detailRows = 0): BrowserState | "close" {
 	const total = rowCount(model, state, detailRows);
 	const page = Math.max(1, viewport);
-	const detail = state.view === "finding" || state.view === "hypothesis";
+	const detail = state.view === "finding" || state.view === "hypothesis" || state.view === "blocker";
 	const move = (n: number): BrowserState => {
 		if (detail) {
 			// No cursor in a detail pane: the keys move the window itself, clamped so
@@ -382,14 +497,26 @@ export function reduceBrowser(state: BrowserState, key: BrowserKey, model: Brows
 		// Handled by the adapter, which owns the workspace read. Returning state
 		// unchanged keeps the reducer pure and the cursor where it was.
 		case "refresh": return state;
+		// Likewise the two that write. Answering a blocker takes a dialog and a
+		// ledger append, neither of which core does; the cursor stays put so the
+		// list is where it was when the answer comes back.
+		case "answer":
+		case "dismiss": return state;
+		// The blockers list has one axis worth filtering on — what is still
+		// waiting — so it is a toggle rather than four letters to remember.
+		case "filter:toggle":
+			return state.view === "blockers"
+				? { ...state, filter: state.filter === "open" ? "all" : "open", cursor: 0, scroll: 0 }
+				: state;
 		case "switch": {
-			const order: BrowserView[] = ["coverage", "surface", "hypotheses", "findings"];
+			const order: BrowserView[] = ["coverage", "surface", "hypotheses", "findings", "blockers"];
 			const here = order.indexOf(
 				state.view === "class" ? "coverage"
 					: state.view === "element" ? "surface"
 						: state.view === "hypothesis" ? "hypotheses"
 							: state.view === "finding" ? "findings"
-								: state.view);
+								: state.view === "blocker" ? "blockers"
+									: state.view);
 			const next = order[(Math.max(0, here) + 1) % order.length] as BrowserView;
 			return { ...initialState(next), filter: state.filter };
 		}
@@ -399,6 +526,7 @@ export function reduceBrowser(state: BrowserState, key: BrowserKey, model: Brows
 		case "filter:open": return { ...state, filter: "open", cursor: 0, scroll: 0 };
 		case "out": {
 			if (state.view === "finding") return { ...state, view: "findings", findingId: undefined, cursor: 0, scroll: 0 };
+			if (state.view === "blocker") return { ...state, view: "blockers", blockerId: undefined, cursor: 0, scroll: 0 };
 			if (state.view === "hypothesis") {
 				const back: BrowserView = state.classId ? "class" : state.elementId ? "element" : "hypotheses";
 				return { ...state, view: back, hypothesisId: undefined, cursor: 0, scroll: 0 };
@@ -415,6 +543,10 @@ export function reduceBrowser(state: BrowserState, key: BrowserKey, model: Brows
 			if (state.view === "findings") {
 				const row = model.findings[state.cursor];
 				return row ? { ...state, view: "finding", findingId: row.id, cursor: 0, scroll: 0 } : state;
+			}
+			if (state.view === "blockers") {
+				const row = visibleBlockers(model, state)[state.cursor];
+				return row ? { ...state, view: "blocker", blockerId: row.id, cursor: 0, scroll: 0 } : state;
 			}
 			if (state.view === "hypotheses") {
 				const row = visibleHypotheses(model, state)[state.cursor];
@@ -517,7 +649,11 @@ function header(right: string, o: RenderOptions): string[] {
 /** The key legend, which differs per view and is the only affordance a user gets. */
 function footer(o: RenderOptions): string[] {
 	const { state, ink, width } = o;
-	const keys = state.view === "hypothesis" || state.view === "finding"
+	const keys = state.view === "blocker"
+		? "↑↓ scroll · a answer · x dismiss · esc back · q close"
+		: state.view === "blockers"
+			? "↑↓ move · ⏎ open · a answer · x dismiss · f open/all · tab coverage · q close"
+		: state.view === "hypothesis" || state.view === "finding"
 		? "↑↓ scroll · esc back · q close"
 		: state.view === "element"
 			? "↑↓ move · ⏎ open · esc back · tab hypotheses · q close"
@@ -528,7 +664,7 @@ function footer(o: RenderOptions): string[] {
 					: state.view === "surface"
 						? "↑↓ move · ⏎ open · tab hypotheses · R reload · q close"
 				: state.view === "findings"
-					? "↑↓ move · ⏎ open · tab coverage · R reload · q close"
+					? "↑↓ move · ⏎ open · tab blockers · R reload · q close"
 					: "↑↓ move · ⏎ open · a/c/r/o filter · tab findings · R reload · q close";
 	return [ink("muted", o.truncate(keys, width))];
 }
@@ -737,6 +873,85 @@ function findingBody(o: RenderOptions): string[] {
 	return findingLines(o).slice(o.state.scroll, o.state.scroll + o.height).map((l) => o.truncate(l, o.width));
 }
 
+/**
+ * What needs the operator, as a list.
+ *
+ * The one view in the browser whose rows are addressed to a person rather than
+ * describing the target — which is why it is the one that carries actions. Every
+ * other list is a record of what the agent did; this one is the agent waiting.
+ */
+function blockersBody(o: RenderOptions): string[] {
+	const { model, state, width, ink, measure, truncate } = o;
+	const rows = visibleBlockers(model, state);
+	if (rows.length === 0) {
+		const why = model.blockers.length === 0
+			? "nothing needs you — the agent has parked no questions"
+			: "no open blockers · f shows the answered ones too";
+		return [ink("muted", `  ${why}`)];
+	}
+	// The glyph carries the status and the column carries the priority, the way
+	// the hypotheses list spends its first column on the outcome: a word for
+	// "answered" beside a ✓ that already says it costs the question 8 columns to
+	// repeat something. "scope clarification" is the widest type there is, and a
+	// type clipped to "scope clarific" is a type nobody can read.
+	const markW = 7;
+	const typeW = Math.min(19, Math.max(10, Math.floor(width * 0.25)));
+	const out: string[] = [];
+	for (const [i, b] of rows.slice(state.scroll, state.scroll + o.height).entries()) {
+		const idx = state.scroll + i;
+		const tone = blockerTone(b);
+		const glyph = ink(tone, BLOCKER_GLYPH[b.status]);
+		const mark = ink(tone, pad(b.priority, markW, measure));
+		const type = ink("muted", pad(truncate(b.type.replace(/-/g, " "), typeW), typeW, measure));
+		out.push(row(idx === state.cursor, `${glyph} ${mark} ${type} ${b.question}`, width, o));
+	}
+	return out;
+}
+
+/** A timestamp as an operator reads one: to the minute, and not in ISO's T. */
+function stamp(iso: string): string {
+	return iso.slice(0, 16).replace("T", " ");
+}
+
+/** Every line of a blocker's detail, unsliced. See findingLines. */
+function blockerLines(o: RenderOptions): string[] {
+	const { model, state, width, ink, measure } = o;
+	const b = model.blockers.find((x) => x.id === state.blockerId);
+	if (!b) return [ink("muted", "  blocker not found")];
+	const labelW = 10;
+	const field = (k: string, v: string, tone: BrowserTone = "label"): string[] =>
+		wrap(v, Math.max(8, width - labelW - 2), measure).map((line, i) =>
+			`${ink("muted", pad(i === 0 ? k : "", labelW, measure))}${ink(tone, line)}`);
+
+	// The question first: it is what the operator has to answer, and the record's
+	// classification is only interesting once they have read it.
+	const out: string[] = [
+		...wrap(b.question, width, measure).map((l) => ink("label", l)),
+		"",
+		...field("status", `${BLOCKER_GLYPH[b.status]} ${b.status}`, blockerTone(b)),
+		...field("type", b.type.replace(/-/g, " ")),
+		...field("priority", b.priority),
+		...(b.askedAt ? field("asked", stamp(b.askedAt), "muted") : []),
+	];
+	if (b.context) out.push("", ...wrap(b.context, width, measure).map((l) => ink("body", l)));
+	if (b.options && b.options.length > 0) out.push("", ...field("options", b.options.join(" · "), "muted"));
+	if (b.blocks && b.blocks.length > 0) out.push(...field("blocks", b.blocks.join(", "), "muted"));
+	if (b.answer) {
+		out.push("", ...field("answer", b.answer, "clear"));
+		const who = [b.answeredBy, b.answeredAt ? stamp(b.answeredAt) : ""].filter(Boolean).join(" · ");
+		if (who) out.push(...field("", who, "muted"));
+	} else {
+		// Said here as well as in the legend: this is the pane you are reading when
+		// you decide, and the decision needs its key within reach of the sentence.
+		out.push("", ...field("", "waiting on you — a answers it, x dismisses it", "muted"));
+	}
+	return out;
+}
+
+function blockerBody(o: RenderOptions): string[] {
+	return blockerLines(o).slice(o.state.scroll, o.state.scroll + o.height).map((l) => o.truncate(l, o.width));
+}
+
 /** Wrap on spaces; a hypothesis statement is a sentence, not a path. */
 function wrap(text: string, width: number, measure: (s: string) => number): string[] {
 	const words = text.split(/\s+/).filter(Boolean);
@@ -800,6 +1015,11 @@ function frameTitle(o: RenderOptions): string {
 		}
 		case "findings": return `⦿ findings · ${model.engagement}`;
 		case "finding": return `⦿ finding · ${model.engagement}`;
+		case "blockers": {
+			const filt = state.filter === "open" ? " [open]" : "";
+			return `⦿ blockers${filt} · ${model.engagement}`;
+		}
+		case "blocker": return `⦿ blocker · ${model.engagement}`;
 		default: return `⦿ hypothesis · ${model.engagement}`;
 	}
 }
@@ -858,6 +1078,17 @@ function parts(o: RenderOptions): { tally: string; body: string[]; total: number
 		case "finding": {
 			const lines = findingLines(o);
 			return { tally: `${lines.length} lines`, body: findingBody(o), total: lines.length };
+		}
+		case "blockers": {
+			const c = model.blockerCounts;
+			return {
+				tally: c.all === 0 ? "none" : `${c.open} open · ${c.answered} answered`,
+				body: blockersBody(o), total: visibleBlockers(model, state).length,
+			};
+		}
+		case "blocker": {
+			const lines = blockerLines(o);
+			return { tally: `${lines.length} lines`, body: blockerBody(o), total: lines.length };
 		}
 		default: {
 			const lines = hypothesisLines(o);

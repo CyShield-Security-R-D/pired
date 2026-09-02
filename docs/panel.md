@@ -72,13 +72,13 @@ Terminal.app and iTerm2 send **Option+P as `π`**, not as Meta, so on a default 
 | `state` | Everything: coverage, scope, surface, hypotheses, findings. The default. |
 | `coverage` | The coverage bar and cell counts alone. |
 | `findings` | The severity tally and up to 12 recent findings. |
-| `blockers` | Open operator questions, or `nothing blocked`. |
+| `blockers` | Open operator questions, or `nothing blocked`. Points at `/blockers`, which is where they are answered. |
 
 `/panel <mode>` switches and opens in one step — there is no state where naming a view leaves it hidden. `/panel next` cycles.
 
 ## Sections
 
-**`needs you`** — open blockers, at most three plus a `+N more`. It sits directly under the header in every mode but `findings`, and is **never dropped for space**. A blocker is the one line that needs a human; losing it to a short terminal would defeat the point of showing it.
+**`needs you`** — open blockers, at most three plus a `+N more`. It sits directly under the header in every mode but `findings`, and is **never dropped for space**. A blocker is the one line that needs a human; losing it to a short terminal would defeat the point of showing it. The panel reports them; [`/blockers`](commands.md#blockers--what-needs-you) is where you read one in full and answer it.
 
 **`coverage`** — a bar with the settled/applicable count and gaps *beside* it, then the per-status tally. A bar and the numbers it draws are one fact, so they share a row, and the bar gives up columns to make that work — down to twelve, under which it stops being a bar and the two take a row each. See [Coverage](coverage.md) for what settles a cell.
 

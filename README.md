@@ -229,7 +229,7 @@ The transcript is the conversation; the ledger is the artifact. Coverage you can
 
 `/panel` toggles it, `alt+p` does the same without leaving the editor, and `pired --no-panel` starts without it. The dismiss hint is platform-aware — macOS terminals send Option+P as `π` rather than as Meta, so a Mac is told `/panel to hide` instead of a key it cannot press.
 
-Alongside it: a status line carrying findings-by-severity, coverage and the **armed state of the scope gate**; `/coverage` for the full checklist × surface matrix; and blocker dialogs that put the agent's parked questions in front of you the moment they are recorded, so "never stall" doesn't quietly become "never finish" — with `/blockers` as the way back to any you waved away.
+Alongside it: a status line carrying findings-by-severity, coverage and the **armed state of the scope gate**; `/coverage` for the full checklist × surface matrix; and blocker dialogs that put the agent's parked questions in front of you the moment they are recorded, so "never stall" doesn't quietly become "never finish" — with `/blockers` — a browsable list of every parked question, waiting ones first, answerable in place — as the way back to any you waved away.
 
 The panel also renders outside the TUI — `pired-state --watch` for a tmux pane, `--json` for your own status bar. Full tour: **[docs/ui.md](./docs/ui.md)**.
 

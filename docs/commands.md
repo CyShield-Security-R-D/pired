@@ -17,7 +17,7 @@ Everything pired adds to pi. pi's own commands (`/model`, `/reload`, sessions, �
 | `/hypotheses` | Browse every hypothesis — confirmed, refuted and open — with outcome filters and full detail. |
 | `/findings` | Browse findings, worst first; select one to read its description, repro and evidence. |
 | `/report` | Write findings to Markdown in the engagement workspace. |
-| `/blockers` | Walk the open blockers — what needs you — one dialog at a time, including ones already dismissed. |
+| `/blockers` | Browse what needs you: every parked question, waiting ones first, with `a` to answer the one under the cursor. |
 | `/scribe` | Write the review into the ledger now — findings, surface, and a verdict on every checklist class. |
 | `/scribe on` \| `off` \| `status` | Let it run by itself after every reply (off by default), or report its state. |
 | `/scribe quick` | The cheap half only: findings and surface out of new review, no checklist roll-call. |
@@ -122,10 +122,28 @@ conversation.
 The agent is built to never stall: it parks a question as a blocker and routes
 around it. The dialog fires the moment one is recorded, which is also the moment
 the operator has the context — but an operator who is mid-thought dismisses it,
-and the blocker correctly stays open. `/blockers` is the way back to it. It walks
-every open blocker, including the ones already waved away, and writes each answer
-onto the same record, so the ledger stays the single source of truth and a
-resumed session sees the decision.
+and the blocker correctly stays open. `/blockers` is the way back to it.
+
+It is the same browser `/findings` opens, on the blockers ledger: a list you can
+sit in rather than a queue you are put through. Waiting questions come first,
+worst first, and the longest wait at the top of that; answered ones stay below
+with what was decided and by whom. `⏎` opens one in full — its context, the
+options offered, the work it gates, the answer it got.
+
+| Key | Does |
+|---|---|
+| `a` | Answer the blocker under the cursor, in the dialog its shape calls for. |
+| `x` | Dismiss it: this is no longer a question. The row keeps its history and stops being counted. |
+| `f` | Toggle between what is still waiting and everything. |
+
+Either key writes onto the same record, so the ledger stays the single source of
+truth and a resumed session sees the decision. **The agent is told.** An answer
+used to go into a row nothing would read again — `recall blockers` lists only the
+open ones — so the agent kept routing around a question that had been settled an
+hour ago. What you decide here is now put in front of it on its next request, once,
+with no tool call and nothing for you to retype. Telling it in chat still works,
+and so does having it close one out itself:
+`record kind=blocker id=<id> status=answered answer=…`.
 
 `/findings` reads, `/report` writes. It used to be the other way about — `/report`
 browsed while `/findings` exported — so the noun did the verb's job. `/export` is
@@ -140,8 +158,9 @@ not available for the writer: pi already owns `/export`, `/copy` and `/share`.
 | `Home` `End` / `g` `G` | Top, bottom. |
 | `⏎` / `→` / `l` | Open the row under the cursor. |
 | `esc` / `←` / `h` | Back out one level; at the top level, close. |
-| `tab` | Cycle surface → hypotheses → findings. |
+| `tab` | Cycle coverage → surface → hypotheses → findings → blockers. |
 | `a` `c` `r` `o` | Filter hypotheses: all, confirmed, refuted, open. |
+| `a` `x` `f` | In blockers: answer, dismiss, or toggle waiting/all. |
 | `R` | Re-read the ledger — the agent may have recorded more since you opened it. |
 | `q` | Close. |
 

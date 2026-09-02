@@ -38,7 +38,7 @@ Hosts, services, endpoints, parameters, and technologies are recorded as invento
 - **Method:** recon, enumerate, hypothesize, confirm, record — at whatever depth and order the target warrants.
 - **Tools it reaches for:** `nmap`, `httpx`, `ffuf`/`gobuster`, `nuclei`, `sqlmap`, `curl`, `jq`.
 
-In-scope hosts only, request/response evidence for each attempt, and the **least-intrusive PoC**. No data loss, no DoS, nothing destructive unless the engagement explicitly authorizes it — and if a step would cross that line, the agent parks an approval blocker instead of running it. That blocker becomes a yes/no dialog in front of you. See [Blocker dialogs](ui.md#blocker-dialogs).
+In-scope hosts only, request/response evidence for each attempt, and the **least-intrusive PoC**. No data loss, no DoS, nothing destructive unless the engagement explicitly authorizes it — and if a step would cross that line, the agent parks an approval blocker instead of running it. That blocker becomes a yes/no dialog in front of you, and `/blockers` lists every one still waiting. See [Blocker dialogs](ui.md#blocker-dialogs).
 
 ## What the profile decides
 

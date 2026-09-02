@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
-	buildBrowserModel, contentWidth, detailRowCount, initialState, reduceBrowser, renderBrowser, visibleHypotheses,
+	buildBrowserModel, contentWidth, detailRowCount, initialState, reduceBrowser, renderBrowser, selectedBlocker, visibleBlockers, visibleHypotheses,
 } from "./browser.ts";
 import type { BrowserModel, BrowserState } from "./browser.ts";
-import type { CoverageCell, FindingRecord, HypothesisRecord, InventoryRecord } from "./ontology.ts";
+import type { BlockerRecord, CoverageCell, FindingRecord, HypothesisRecord, InventoryRecord } from "./ontology.ts";
 
 const CLASSES = [
 	{ id: "authz", title: "authz" },
@@ -37,8 +37,15 @@ const findings = [
 	{ id: "f3", kind: "finding", title: "Secrets to stdout", severity: "medium", target: "telegram.py:55" },
 ] as unknown as FindingRecord[];
 
+const blockers = [
+	{ id: "b1", kind: "blocker", type: "decision", priority: "medium", status: "open", createdAt: "2026-09-01T09:00:00Z", question: "Staging replica or prod?", options: ["staging", "prod"] },
+	{ id: "b2", kind: "blocker", type: "approval", priority: "high", status: "open", createdAt: "2026-09-01T11:00:00Z", question: "Run the destructive delete PoC?", context: "It removes the test dag.", blocks: ["hy2"] },
+	{ id: "b3", kind: "blocker", type: "credential-request", priority: "high", status: "answered", createdAt: "2026-08-31T08:00:00Z", question: "Admin creds for the panel?", answer: "cred:web-admin", answeredAt: "2026-08-31T09:30:00Z", answeredBy: "operator" },
+	{ id: "b4", kind: "blocker", type: "scope-clarification", priority: "high", status: "open", createdAt: "2026-09-01T07:00:00Z", question: "Is the payments host in scope?" },
+] as unknown as BlockerRecord[];
+
 const model: BrowserModel = buildBrowserModel({
-	engagement: "airflow", classes: CLASSES, cells, inventory, hypotheses, findings,
+	engagement: "airflow", classes: CLASSES, cells, inventory, hypotheses, findings, blockers,
 });
 
 /** ASCII stand-in: no colour, so assertions are about layout only. */
@@ -248,9 +255,9 @@ describe("findings", () => {
 		expect(text).toContain("evidence/idor.txt");
 	});
 
-	it("tab cycles coverage -> surface -> hypotheses -> findings -> coverage", () => {
+	it("tab cycles coverage -> surface -> hypotheses -> findings -> blockers -> coverage", () => {
 		let s = initialState("coverage");
-		for (const expected of ["surface", "hypotheses", "findings", "coverage"]) {
+		for (const expected of ["surface", "hypotheses", "findings", "blockers", "coverage"]) {
 			s = reduceBrowser(s, "switch", model, 10) as BrowserState;
 			expect(s.view).toBe(expected);
 		}
@@ -446,12 +453,107 @@ describe("the overlay is opaque", () => {
 	// transcript with the title written over it — and the rail's "─────┤" down the
 	// right of every row. Every emitted line must therefore fill the full width.
 	it("emits lines of exactly the requested width, in every view", () => {
-		for (const v of ["surface", "findings", "coverage", "hypotheses"] as const) {
+		for (const v of ["surface", "findings", "coverage", "hypotheses", "blockers", "blocker"] as const) {
 			for (const w of [60, 80, 104]) {
 				for (const l of renderBrowser({ ...opts(initialState(v), w, 6) })) {
 					expect(l).toHaveLength(w);
 				}
 			}
 		}
+	});
+});
+
+describe("blockers", () => {
+	it("puts what is waiting first, worst first, and the longest wait at the top of that", () => {
+		// b4 and b2 are both high and both open; b4 has waited four hours longer.
+		// b3 is answered, so it sorts below every question still unanswered.
+		expect(model.blockers.map((b) => b.id)).toEqual(["b4", "b2", "b1", "b3"]);
+		expect(model.blockerCounts).toEqual({ all: 4, open: 3, answered: 1 });
+	});
+
+	it("filters to what is still waiting, and reads any other filter as all", () => {
+		const open = visibleBlockers(model, { ...initialState("blockers"), filter: "open" });
+		expect(open.map((b) => b.id)).toEqual(["b4", "b2", "b1"]);
+		// `tab` carries the hypotheses filter across; a blockers list emptied by a
+		// filter it never showed is a list that looks broken.
+		expect(visibleBlockers(model, { ...initialState("blockers"), filter: "refuted" })).toHaveLength(4);
+	});
+
+	it("toggles that filter, and only in the list", () => {
+		const on = reduceBrowser(initialState("blockers"), "filter:toggle", model, 10) as BrowserState;
+		expect(on.filter).toBe("open");
+		expect((reduceBrowser(on, "filter:toggle", model, 10) as BrowserState).filter).toBe("all");
+		// Nothing to filter in a detail pane.
+		const detail = { ...initialState("blockers"), view: "blocker" as const, blockerId: "b1" };
+		expect((reduceBrowser(detail, "filter:toggle", model, 10) as BrowserState).filter).toBe("all");
+	});
+
+	it("drills into one and back out", () => {
+		let s = initialState("blockers");
+		s = reduceBrowser(s, "in", model, 10) as BrowserState;
+		expect(s.view).toBe("blocker");
+		expect(s.blockerId).toBe("b4");
+		s = reduceBrowser(s, "out", model, 10) as BrowserState;
+		expect(s.view).toBe("blockers");
+		expect(s.blockerId).toBeUndefined();
+	});
+
+	it("names the selected row from either view, so the adapter can write to it", () => {
+		const list = { ...initialState("blockers"), cursor: 1 };
+		expect(selectedBlocker(model, list)?.id).toBe("b2");
+		expect(selectedBlocker(model, { ...initialState("blockers"), view: "blocker", blockerId: "b3" })?.id).toBe("b3");
+		// The list is filtered, so the cursor indexes what is on screen.
+		expect(selectedBlocker(model, { ...list, filter: "open", cursor: 2 })?.id).toBe("b1");
+		expect(selectedBlocker(model, initialState("findings"))).toBeUndefined();
+	});
+
+	it("leaves the state alone for the two keys that write, since core does not write", () => {
+		const s = { ...initialState("blockers"), cursor: 2 };
+		expect(reduceBrowser(s, "answer", model, 10)).toEqual(s);
+		expect(reduceBrowser(s, "dismiss", model, 10)).toEqual(s);
+	});
+
+	it("lists priority, type and question, and tallies what is open", () => {
+		const text = renderBrowser(opts(initialState("blockers"))).join("\n");
+		expect(text).toContain("Is the payments host in scope?");
+		expect(text).toContain("scope clarification");
+		expect(text).toContain("high");
+		expect(text).toContain("3 open · 1 answered");
+	});
+
+	it("puts the question, its context, its options and who answered in the detail", () => {
+		const open = renderBrowser(opts({ ...initialState("blockers"), view: "blocker", blockerId: "b2" }, 80, 20)).join("\n");
+		expect(open).toContain("Run the destructive delete PoC?");
+		expect(open).toContain("It removes the test dag.");
+		expect(open).toContain("approval");
+		expect(open).toContain("hy2");
+		// An unanswered one says what to press, where the decision is being made.
+		expect(open).toContain("a answers it");
+
+		const done = renderBrowser(opts({ ...initialState("blockers"), view: "blocker", blockerId: "b3" }, 80, 20)).join("\n");
+		expect(done).toContain("cred:web-admin");
+		expect(done).toContain("operator");
+		expect(done).toContain("2026-08-31 09:30");
+		expect(done).not.toContain("a answers it");
+	});
+
+	it("scrolls the detail, because its footer says it does", () => {
+		const wordy = Array.from({ length: 60 }, (_, i) => `sentence ${i} of a very long question`).join(" ");
+		const big = buildBrowserModel({
+			engagement: "x", classes: CLASSES, cells, inventory, hypotheses, findings,
+			blockers: [{ id: "b1", kind: "blocker", type: "decision", priority: "high", status: "open", createdAt: "2026-09-01T09:00:00Z", question: wordy }] as unknown as BlockerRecord[],
+		});
+		const state: BrowserState = { ...initialState("blockers"), view: "blocker", blockerId: "b1" };
+		const rows = detailRowCount({ ...opts(state), model: big });
+		expect(rows).toBeGreaterThan(10);
+		const down = reduceBrowser(state, "down", big, 10, rows) as BrowserState;
+		expect(down.scroll).toBe(1);
+	});
+
+	it("says nothing is waiting rather than showing an empty box", () => {
+		const bare = buildBrowserModel({ engagement: "x", classes: CLASSES, cells: [], inventory: [], hypotheses: [], findings: [] });
+		const text = renderBrowser({ ...opts(initialState("blockers")), model: bare }).join("\n");
+		expect(text).toContain("nothing needs you");
+		expect(text).not.toMatch(/↓ \d+ more/);
 	});
 });
