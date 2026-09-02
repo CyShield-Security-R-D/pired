@@ -14,6 +14,7 @@ import { buildBrowserModel, recordLabel } from "./browser.ts";
 import { computeCoverage, coveragePercent, findGaps, selectNext } from "./coverage.ts";
 import { CVSS_DEFAULT_VERSION, CVSS_EXAMPLE, cvssVersion, validateCvss } from "./cvss.ts";
 import { type Fields, findDuplicate, findNearDuplicate, type IdentityKind, isNoOp, mergeRecord } from "./identity.ts";
+import { locateSink, sinkHints } from "./locate.ts";
 import { computeCoverageView, computeEngagementStats, isDisposed } from "./stats.ts";
 import { CELL_GLYPH, renderCoveragePanel } from "./coverage-panel.ts";
 import {
@@ -414,6 +415,33 @@ function resolveTarget(raw: string, index: Map<string, string>): string {
  * names the directory to write it to instead, which is recoverable, while a
  * mangled PNG cited as proof is not.
  */
+/**
+ * Find a file by basename under `root`, or undefined if it is absent or ambiguous.
+ *
+ * Bounded deliberately: a review names a file, not a haystack, and an unbounded
+ * walk on a large tree would cost more than the location is worth.
+ */
+async function findByBasename(ctx: ToolContext, root: string, base: string): Promise<string | undefined> {
+	const SKIP = /^(node_modules|vendor|third_party|dist|build|site-packages|\.git)$/;
+	let frontier = [""];
+	const matches: string[] = [];
+	for (let depth = 0; depth < 6 && frontier.length > 0 && matches.length < 2; depth += 1) {
+		const next: string[] = [];
+		for (const dir of frontier) {
+			if (next.length > 400) break;
+			const entries = await ctx.services.fs.readdir(`${root}${dir ? `/${dir}` : ""}`).catch(() => [] as string[]);
+			for (const entry of entries) {
+				if (SKIP.test(entry) || entry.startsWith(".")) continue;
+				const rel = dir ? `${dir}/${entry}` : entry;
+				if (entry === base) matches.push(rel);
+				else if (!entry.includes(".")) next.push(rel);
+			}
+		}
+		frontier = next;
+	}
+	return matches.length === 1 ? matches[0] : undefined;
+}
+
 async function adoptFromCwd(deps: ToolDeps, ctx: ToolContext, rel: string): Promise<string | undefined> {
 	if (rel.startsWith("/") || rel.includes("\\")) return undefined;
 	if (rel.split("/").some((seg) => seg === "..")) return undefined;
@@ -747,17 +775,26 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 			}
 
 
-			// A finding that names a source file must name the line in it.
+			// A finding that names a source file should name the line in it — asked
+			// for, never enforced by refusing the write.
 			//
 			// The report cites a location and the grader locates a finding by
-			// file:line — that is the same regex on both sides. A finding recorded as
-			// "share.go" satisfies neither: it is unciteable in a deliverable and
-			// invisible to scoring. Measured on a real run: 27 findings, every one a
-			// bare filename, 0 gradeable — a correct find would have scored zero too.
+			// file:line, so "share.go" alone is unciteable and unscoreable. This once
+			// threw for that reason, and the cure was worse than the disease: the
+			// extractor is told in the same breath "never guess a line number; omit
+			// the field instead", so it emits exactly the shape this rejected. On one
+			// corpus target it produced eighteen findings across its passes — seven in
+			// a single one, two of them naming files that were in the answer key — and
+			// every one was thrown away at this line. The run before it recorded 27
+			// unlocated findings and scored zero; this turned that into 0 findings and
+			// scored zero, having also destroyed the evidence.
 			//
-			// The line may live anywhere the grader looks (target, description, repro,
-			// title, evidence), so this checks the whole record rather than the target
-			// alone, and only fires when a source file is actually named.
+			// So it warns and writes. The nudge still reaches the model in the tool
+			// result, where it can act on it by reading the file and citing a line,
+			// and the finding survives either way. Recall above all: a finding the
+			// client needs is not improved by deleting it, and no check here may cost
+			// one.
+			let unlocated = "";
 			if (kind === "finding") {
 				const hay = [a.target, a.description, a.repro, a.title, ...(strArr(a.evidence) ?? [])]
 					.filter((x): x is string => typeof x === "string").join(" ");
@@ -765,13 +802,43 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 				const named = SRC.exec(hay);
 				const located = /[\w./-]+\.[A-Za-z]{1,6}:\d+/.test(hay) || /\blines?\s+\d+/i.test(hay);
 				if (named && !located) {
-					throw new Error(
-						`record finding: '${named[0]}' is named but no line is. Cite the vulnerable sink as ` +
-						`file:line — "${named[0]}:42" — in 'target', or state "line 42" in the description. ` +
-						"A finding without a line cannot be cited in the report and cannot be scored. " +
-						"If the issue genuinely has no single line (a missing control, a design flaw), say so in " +
-						"the description and give the file plus the function or route it concerns.",
-					);
+					// Before asking, try to answer it from the code. The finding names the
+					// file and almost always names the function inside it, and the file is
+					// on disk — so look up where that symbol is defined. That is reading,
+					// not guessing: deterministic, and silent when the symbol is absent.
+					const file = named[0];
+					const found = await (async () => {
+						if (!ctx.cwd || file.startsWith("/") || file.split("/").some((seg) => seg === "..")) return undefined;
+						const root = ctx.cwd.replace(/\/+$/, "");
+						const direct = await ctx.services.fs.readFileIfExists(`${root}/${file}`).catch(() => undefined);
+						if (direct !== undefined) return { path: file, body: direct };
+						// A review says "share.go"; the file is `http/share.go`. Resolving the
+						// basename against the tree recovers the finding instead of leaving it
+						// unlocated over a prefix the reviewer never had reason to type.
+						// Ambiguity is left alone: two files of the same name mean the record
+						// does not identify one, and picking either would be a guess.
+						const hit = await findByBasename(ctx, root, file.split("/").pop() ?? file);
+						if (!hit) return undefined;
+						const body = await ctx.services.fs.readFileIfExists(`${root}/${hit}`).catch(() => undefined);
+						return body === undefined ? undefined : { path: hit, body };
+					})();
+					const at = found ? locateSink(found.body, sinkHints(hay)) : undefined;
+					if (at && found) {
+						// Written into the target so the report and the grader both see it;
+						// both read file:line and neither reads prose.
+						a.target = `${found.path}:${at.line}`;
+						unlocated =
+							`\nNo line was given, so it was resolved from the source: '${at.symbol}' is ` +
+							`${at.kind === "definition" ? "defined" : "referenced"} at ${found.path}:${at.line}, and the finding ` +
+							`was recorded there. Correct it with record id=<id> target="${found.path}:<line>" if the sink is elsewhere.`;
+					} else {
+						unlocated =
+							`\n'${file}' is named but no line is, and no symbol from this finding was found in it. ` +
+							`The finding is recorded, but as it stands it cannot be cited precisely in the report and ` +
+							`will not be scored. Add the line with record id=<id> target="${file}:42" once you have read ` +
+							"the sink. If it genuinely has no single line (a missing control, a design flaw), give the " +
+							"file plus the function or route it concerns and say so in the description.";
+					}
 				}
 			}
 
@@ -1032,7 +1099,7 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 					`${near.id} with record id=${near.id}, then retire this one with record id=${written.id} delete=true reason="duplicate of ${near.id}".`
 				: "";
 			const digest = await macroDigest(deps, deps.surfaceKinds ?? DEFAULT_SURFACE_KINDS);
-			return text(recordSummary(kind, written, outcome) + warning + pulled + incomplete + digest, recordDetails(written, outcome));
+			return text(recordSummary(kind, written, outcome) + warning + unlocated + pulled + incomplete + digest, recordDetails(written, outcome));
 		},
 	};
 }

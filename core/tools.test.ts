@@ -626,11 +626,26 @@ describe("clearing a cell costs as much as reporting a bug", () => {
 });
 
 describe("a finding must be locatable", () => {
-	it("refuses a finding that names a file but no line", async () => {
-		const { ctx, record } = await setup();
-		await expect(record.execute(
+	it("keeps a finding that names a file but no line, and says what is missing", async () => {
+		// This once threw. The extractor is told "never guess a line number; omit the
+		// field instead", so it emits precisely this shape — and on one corpus target
+		// eighteen findings were destroyed here, two of them naming answer-key files.
+		// Warn, write, and let the model add the line; never trade a finding for it.
+		const { ws, ctx, record } = await setup();
+		const out = textOf(await record.execute(
 			{ kind: "finding", title: "IDOR", severity: "high", target: "share.go" }, ctx,
-		)).rejects.toThrow(/no line is/);
+		));
+		expect(await ws.read("findings")).toHaveLength(1);
+		expect(out).toMatch(/no line is/);
+		expect(out).toMatch(/Recorded finding/);
+	});
+
+	it("says nothing about lines when the finding already has one", async () => {
+		const { ctx, record } = await setup();
+		const out = textOf(await record.execute(
+			{ kind: "finding", title: "IDOR", severity: "high", target: "http/share.go:88" }, ctx,
+		));
+		expect(out).not.toMatch(/no line is/);
 	});
 
 	it("accepts file:line in the target", async () => {
