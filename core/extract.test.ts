@@ -679,3 +679,26 @@ describe("deciding whether another extraction pass is worth making", () => {
 		expect(shouldExtract({ ...base, reviewLength: 13_000, lastLength: 10_000, barren: 0 })).toBe(true);
 	});
 });
+
+describe("what a target means depends on what is being recorded", () => {
+	it("resolves a hypothesis target to the element id that settles the cell", async () => {
+		const seen: Array<Record<string, unknown>> = [];
+		await applyPlan(
+			[{ args: { kind: "hypothesis", class: "ssrf", target: "POST /fetch", outcome: "refuted", statement: "x" } }],
+			async (a) => { seen.push(a); return { ids: ["h1"], created: ["h1"] }; },
+			new Map([["POST /fetch", "e1"]]),
+		);
+		expect(seen[0]?.target).toBe("e1");
+	});
+
+	it("leaves a finding's location alone", async () => {
+		// "FetchController.php:95" rewritten to "ae6ea1" is unciteable and unscoreable.
+		const seen: Array<Record<string, unknown>> = [];
+		await applyPlan(
+			[{ args: { kind: "finding", title: "SSRF", severity: "high", target: "FetchController.php:95" } }],
+			async (a) => { seen.push(a); return { ids: ["f1"], created: ["f1"] }; },
+			new Map([["FetchController.php:95", "ae6ea1"]]),
+		);
+		expect(seen[0]?.target).toBe("FetchController.php:95");
+	});
+});

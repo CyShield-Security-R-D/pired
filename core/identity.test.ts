@@ -312,3 +312,28 @@ describe("recognising that nothing new was said", () => {
 		expect(isNoOp(existing, mergeRecord("finding", existing, { description: "new detail" }))).toBe(false);
 	});
 });
+
+describe("a file named two ways is one place", () => {
+	const f = (title: string, target: string) => ({ kind: "finding", title, target, severity: "high" });
+
+	it("folds a bare filename into the same finding under its full path", () => {
+		// Measured on LinkAce: one SSRF recorded six times under path variants.
+		expect(findDuplicate("finding", f("SSRF in fetch", "http/data.go"),
+			[f("SSRF in fetch", "data.go")] as never)).toBeDefined();
+	});
+
+	it("keeps same-named files in different directories apart", () => {
+		expect(findDuplicate("finding", f("IDOR", "api/user.go"),
+			[f("IDOR", "auth/user.go")] as never)).toBeUndefined();
+	});
+
+	it("keeps two different lines in one file apart", () => {
+		expect(findDuplicate("finding", f("SSRF", "http/data.go:95"),
+			[f("SSRF", "http/data.go:200")] as never)).toBeUndefined();
+	});
+
+	it("folds a variant path when the line agrees", () => {
+		expect(findDuplicate("finding", f("SSRF", "app/Http/Controllers/Fetch.php:95"),
+			[f("SSRF", "Fetch.php:95")] as never)).toBeDefined();
+	});
+});

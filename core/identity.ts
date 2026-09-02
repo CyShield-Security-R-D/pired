@@ -165,17 +165,43 @@ export function titleOverlap(a: unknown, b: unknown): number {
 	return shared / small.size;
 }
 
+/**
+ * Two locations that name the same place.
+ *
+ * A review writes "share.go" where the tree has "http/share.go", and both are
+ * the same file — so one path being a tail of the other, on a path boundary, is
+ * a match. Without this a second sighting under a different prefix became a
+ * second finding: measured on LinkAce, one SSRF was recorded six times under
+ * `FetchController.php` and `app/Http/Controllers/FetchController.php`.
+ *
+ * A tail match is required, not merely a shared basename: `auth/user.go` and
+ * `api/user.go` are different files and must stay apart.
+ */
+function sameLocation(a: string | undefined, b: string | undefined): boolean {
+	if (a === undefined || b === undefined) return true;
+	if (a === b) return true;
+	const split = (v: string): [string, string | undefined] => {
+		const m = /^(.*):(\d+)$/.exec(v);
+		return m ? [m[1] as string, m[2]] : [v, undefined];
+	};
+	const [pa, la] = split(a);
+	const [pb, lb] = split(b);
+	if (la !== undefined && lb !== undefined && la !== lb) return false;
+	const [long, short] = pa.length >= pb.length ? [pa, pb] : [pb, pa];
+	return long === short || long.endsWith(`/${short}`);
+}
+
 /** Two findings are the same finding when they name the same bug in the same place. */
 function sameFinding(patch: Fields, existing: Fields): boolean {
 	const here = findingLocation(patch);
 	const there = findingLocation(existing);
 	// Same words, and nothing says they are in different places.
-	if (same(patch.title, existing.title) && (here === undefined || there === undefined || here === there)) return true;
+	if (same(patch.title, existing.title) && sameLocation(here, there)) return true;
 	// Same coordinate, same checklist class: that IS one cell, however the two
 	// were worded. Requiring both classes to be present keeps two genuinely
 	// different bugs on one line (missing authn vs missing authz) apart, since
 	// those carry different classes.
-	if (here !== undefined && here === there && same(patch.class, existing.class)) return true;
+	if (here !== undefined && there !== undefined && sameLocation(here, there) && same(patch.class, existing.class)) return true;
 	return false;
 }
 

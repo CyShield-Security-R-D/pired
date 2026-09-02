@@ -630,7 +630,14 @@ export async function applyPlan(
 	for (const row of records) {
 		if (row.dependsOnPrevious && previousFailed) continue;
 		const kind = row.args.kind;
-		const args = row.createsLabel ? row.args : { ...row.args, target: resolveTarget(row.args.target, idFor) };
+		// Hypotheses target a surface ELEMENT and must resolve to its id — that is
+		// what settles a coverage cell. Findings target a LOCATION and must not:
+		// rewriting "FetchController.php:95" to "ae6ea1" destroys the only thing the
+		// report can cite and the grader can read. Measured on LinkAce: 19 findings
+		// recorded, several carrying inventory ids where a path belonged, 5 gradeable.
+		const args = row.createsLabel || kind === "finding"
+			? row.args
+			: { ...row.args, target: resolveTarget(row.args.target, idFor) };
 		try {
 			const { ids, created } = await record(args);
 			previousFailed = false;
