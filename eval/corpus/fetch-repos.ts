@@ -22,7 +22,8 @@
  *     --repos benbusby/whoogle-search,filegator/filegator \
  *     --index /path/to/byrepo.json --out /tmp/corpus-small --max-loc 25000
  */
-import { mkdir, rm, writeFile, readFile } from "node:fs/promises";
+import { cp, mkdir, rm, writeFile, readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import {
 	COMMIT_RE, keyFromPatch, refineKey, resolveSha, run, stripLeakage, walk,
@@ -60,6 +61,22 @@ interface IndexRecord {
 	published?: string;
 }
 
+const CLONES = arg("clones", "/tmp/corpus-clones") as string;
+
+/** A full clone per repository, made once and reused by every advisory on it. */
+const cloned = new Set<string>();
+async function ensureClone(owner: string, repo: string): Promise<string> {
+	const dir = join(CLONES, `${owner}_${repo}`);
+	if (cloned.has(dir)) return dir;
+	if (!existsSync(join(dir, ".git"))) {
+		await mkdir(CLONES, { recursive: true });
+		process.stdout.write(`  cloning ${owner}/${repo}…\n`);
+		await run("git", ["clone", "--quiet", `https://github.com/${owner}/${repo}.git`, dir], { timeout: 1_800_000 });
+	}
+	cloned.add(dir);
+	return dir;
+}
+
 const index = JSON.parse(await readFile(indexPath, "utf8")) as Record<string, IndexRecord[]>;
 await mkdir(outRoot, { recursive: true });
 
@@ -92,13 +109,27 @@ for (const slug of repos) {
 		const work = join(outRoot, `${slug.replace(/\//g, "_")}-${nonce}`);
 
 		try {
-			const sha = await resolveSha(owner, repo, shortSha);
+			// One full clone per repository, checked out locally per advisory.
+			//
+			// This used to `git init` + `fetch --depth 2 origin <sha>` per target.
+			// GitHub stopped serving those by-SHA fetches partway through a build —
+			// git falls back to asking for credentials and reports "could not read
+			// Username", which is not a permissions problem and not a bad ref: the
+			// same SHA that fetched an hour earlier failed, while `git clone` kept
+			// working. 19 of 26 targets died that way. Cloning once is also far fewer
+			// network round-trips than one fetch per advisory.
+			const cache = await ensureClone(owner, repo);
+			// From the clone rather than the API, so a build is not also spending
+			// GitHub's unauthenticated request budget.
+			const sha = (await run("git", ["-C", cache, "rev-parse", shortSha], { timeout: 60_000 })).stdout.trim();
+			await run("git", ["-C", cache, "checkout", "--quiet", "--detach", `${sha}^1`], { timeout: 300_000 });
 			await rm(work, { recursive: true, force: true });
-			await mkdir(work, { recursive: true });
-			await run("git", ["-C", work, "init", "--quiet"], { timeout: 60_000 });
-			await run("git", ["-C", work, "remote", "add", "origin", `https://github.com/${owner}/${repo}.git`], { timeout: 60_000 });
-			await run("git", ["-C", work, "fetch", "--quiet", "--depth", "2", "origin", sha], { timeout: 900_000 });
-			await run("git", ["-C", work, "checkout", "--quiet", `${sha}^1`], { timeout: 300_000 });
+			// Copy the tree WITHOUT .git: the target must be a plain directory, and
+			// the key is computed against the clone, which still has its history.
+			await cp(cache, work, {
+				recursive: true,
+				filter: (src) => !src.split("/").includes(".git"),
+			});
 			stats.cloned += 1;
 
 			const w = await walk(work);
@@ -119,7 +150,7 @@ for (const slug of repos) {
 			}
 
 			const adv: Advisory = { id, summary: rec.summary, published: rec.published, references: [] } as unknown as Advisory;
-			const key: TruthEntry[] = refineKey(await keyFromPatch(work, sha, adv));
+			const key: TruthEntry[] = refineKey(await keyFromPatch(cache, sha, adv));
 			if (key.length === 0) {
 				stats.noKey += 1;
 				process.stdout.write(`  ${id.padEnd(24)} skipped — fix touches no source files\n`);

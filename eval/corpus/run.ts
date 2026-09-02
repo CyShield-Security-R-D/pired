@@ -54,7 +54,16 @@ const manifest = JSON.parse(await readFile(join(corpusDir, "manifest.json"), "ut
 const only = arg("only", "");
 // Comma-separated so a repeat experiment can pin one subset across passes.
 const wanted = only.split(",").map((x) => x.trim()).filter(Boolean);
-const targets = wanted.length ? manifest.filter((m) => wanted.some((w) => m.id.includes(w) || m.package.includes(w))) : manifest;
+const selected = wanted.length ? manifest.filter((m) => wanted.some((w) => m.id.includes(w) || m.package.includes(w))) : manifest;
+// `--resume` keeps whatever a previous pass already measured and runs the rest,
+// so an interrupted corpus does not start from nothing.
+const resuming = process.argv.includes("--resume");
+const targets = resuming
+	? selected.filter((m) => !existsSync(join(corpusDir, `${basename(m.target)}.row.json`)))
+	: selected;
+if (resuming && targets.length < selected.length) {
+	process.stderr.write(`⦿ resuming · ${selected.length - targets.length} target(s) already measured, ${targets.length} to go\n`);
+}
 
 // The first two clauses were added after gradio spent an hour concluding
 // "matches upstream Gradio 5.7.1 (no planted deviation found yet)" and recorded
@@ -278,11 +287,17 @@ const jobs = targets.map((m) => async (): Promise<void> => {
 	// without that fact is how three passes of the library corpus came to look like
 	// a harness result.
 	const engaged = await engagementTelemetry(engagementDir);
-	rows.push({
+	const row = {
 		...m, recall: score.recall ?? 0, precision: score.precision ?? 0,
 		found: score.true_positives ?? 0, reported: findings.length,
 		seconds: Math.round((Date.now() - started) / 1000), ok, error, engaged,
-	});
+	};
+	rows.push(row);
+	// Persisted the moment it is known, not at the end of the scan. A corpus pass
+	// is hours long and this machine rebooted twice in a day; a run that only
+	// writes its summary on the last line loses every target it already measured.
+	// This file is also what `--resume` reads.
+	await writeFile(join(corpusDir, `${name}.row.json`), `${JSON.stringify(row, null, 2)}\n`).catch(() => {});
 	process.stderr.write(
 		ok
 			? `  ${m.id.padEnd(24)} recall ${(score.recall ?? 0).toFixed(2)}  found ${score.true_positives ?? 0}/${m.entries}  reported ${findings.length}  ` +
