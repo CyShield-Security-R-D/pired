@@ -6,7 +6,7 @@ Both are opt-in by design. The system prompt hands the model situational awarene
 
 ## Skills
 
-39 skills under `skills/<name>/SKILL.md`, contributed to pi's resource loader. pi discovers each one, advertises the name and description in the system prompt, and loads the body only when the model asks for it — so the always-on cost is one line each.
+41 skills under `skills/<name>/SKILL.md`, contributed to pi's resource loader. pi discovers each one, advertises the name and description in the system prompt, and loads the body only when the model asks for it — so the always-on cost is one line each.
 
 ```
 skills/
@@ -16,7 +16,7 @@ skills/
   ...
 ```
 
-### Code review — 14
+### Code review — 15
 
 | Skill | For |
 |---|---|
@@ -47,7 +47,7 @@ skills/
 
 `recon-passive`, `recon-active-web`, `recon-attack-surface`, `network-host-discovery`, `network-service-enum`, `network-post-exploit-notes`.
 
-### Operations — 6
+### Operations — 7
 
 | Skill | For |
 |---|---|
@@ -57,6 +57,7 @@ skills/
 | `ops-severity-cvss` | Severity, a CVSS v3.1 vector, and the right CWE, with worked examples. |
 | `ops-loot-credentials` | Stable handles, referring by handle instead of reprinting plaintext. |
 | `ops-delegation` | Delegating noisy recon and adversarial verification to a sub-agent. |
+| `ops-technical-writer` | Rewriting a confirmed finding to report grade, working from `recall finding`. |
 
 ### What a skill looks like
 
