@@ -38,6 +38,7 @@ import type { AssistantMessage, Message, UserMessage } from "@earendil-works/pi-
 import { describePlan, type Ledgers, planCompaction } from "../core/dedupe.ts";
 import { applyPlan, extractionSystemPrompt, extractionUserMessage, parseExtraction, planExtraction, retryNudge, reviewEviction, reviewWindow } from "../core/extract.ts";
 import { dismissHint, PANEL_MODES, renderFindingDetail, renderPanel, scrollFramed, type PanelData, type PanelMode, type PanelTone } from "../core/panel.ts";
+import { coverageBrief, renderCoverageBrief } from "../core/coverage.ts";
 import { computeCoverageView, computeEngagementStats, coveragePercent, type CoverageView, type EngagementStats } from "../core/stats.ts";
 import { layoutStatusLine, type Segment } from "../core/statusline.ts";
 import { createCoreTools } from "../core/tools.ts";
@@ -1120,6 +1121,64 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	// extensions in the chain (BeforeAgentStartEventResult.systemPrompt is chained).
 	// Skills are already advertised in the base prompt via resources_discover, so we
 	// do not re-list them here — the overlay stays small for local models.
+	/** Opening tag of the injected coverage block, and the key for replacing it. */
+	const BRIEF_TAG = "<pired-coverage>";
+
+	/**
+	 * Put the coverage matrix in front of the agent instead of waiting to be asked.
+	 *
+	 * Measured across five sessions on three corpus targets: 30 `read` calls, 20
+	 * `bash`, 3 `record` — and 1 `recall`. The reviewer reasons well and simply
+	 * does not consult the ledger, so a test plan it has to pull is a test plan it
+	 * never reads. On one target `cmdi` stayed untested for a whole engagement
+	 * beside a `/api/command` the agent had recorded itself.
+	 *
+	 * This is the "inform" lever, not a script: the block states what the ledger
+	 * says and stops there. It ranks nothing and asks for nothing, because
+	 * choosing what to test next is the reviewer's judgement and a harness that
+	 * ordered the work would be writing the review.
+	 *
+	 * Re-derived per request and the previous copy dropped, so it cannot go stale
+	 * and cannot accumulate — and because it is rebuilt from the ledger rather
+	 * than remembered, it survives compaction, which is exactly where the earlier
+	 * sessions lost the thread.
+	 */
+	pi.on("context", async (event) => {
+		if (!workspace) return undefined;
+		const ws = workspace;
+		// Never let situational awareness break the turn it is meant to inform.
+		let text = "";
+		try {
+			const view = await computeCoverageView(ws);
+			if (view) {
+				const labels = new Map<string, string>();
+				for (const rec of await ws.read("inventory")) {
+					const label = elementLabel(rec as Parameters<typeof elementLabel>[0]);
+					if (label) labels.set(rec.id, label);
+				}
+				text = renderCoverageBrief(coverageBrief(view.matrix), (id) => labels.get(id));
+			}
+		} catch { return undefined; }
+
+		const kept = event.messages.filter(
+			(m) => !(m.role === "user" && typeof m.content === "string" && m.content.startsWith(BRIEF_TAG)),
+		);
+		if (text.length === 0) return { messages: kept };
+		// Appending after an assistant message that still has tool calls out would
+		// split a call from its result, so leave that request alone; the next one
+		// carries the same block a moment later.
+		const last = kept[kept.length - 1] as { role?: string; content?: unknown } | undefined;
+		const pending = last?.role === "assistant" && Array.isArray(last.content)
+			&& last.content.some((c) => (c as { type?: string }).type === "toolCall");
+		if (pending) return { messages: kept };
+		const notice = {
+			role: "user" as const,
+			content: `${BRIEF_TAG}\nDerived from your ledger and refreshed automatically — no tool call was made for this, and none is required. \`recall gaps\` reads the full matrix when you want the detail.\n\n${text}\n</pired-coverage>`,
+			timestamp: Date.now(),
+		};
+		return { messages: [...kept, notice as unknown as (typeof event.messages)[number]] };
+	});
+
 	pi.on("before_agent_start", (event) => ({
 		systemPrompt: `${event.systemPrompt}\n\n${buildSystemPrompt({ profile, scope, checklist: checklistClasses, workspace: workspace?.dir, targetModel })}`,
 	}));

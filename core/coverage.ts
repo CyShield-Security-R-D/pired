@@ -141,3 +141,89 @@ export function findGaps(matrix: CoverageMatrix): CoverageGap[] {
 export function selectNext(matrix: CoverageMatrix): CoverageCell | undefined {
 	return matrix.cells.find((c) => c.status === "not-tested") ?? matrix.cells.find((c) => c.status === "testing");
 }
+
+/**
+ * A compact, factual summary of where coverage stands, for putting in front of
+ * the agent unasked.
+ *
+ * Measured across five sessions on three targets: 30 `read` calls, 20 `bash`,
+ * 3 `record` and **1** `recall`. The agent reasons well and almost never
+ * consults the ledger, so a matrix it has to pull is a matrix it never sees —
+ * on one target `cmdi` sat untested for a full engagement beside a recorded
+ * `/api/command`, because nothing ever said so.
+ *
+ * The two lists below are the part a percentage cannot carry. A class never
+ * asked of ANY element is a whole column missing, not a thin one; an element
+ * with no hypothesis at all is surface that was mapped and then never revisited.
+ * Both are facts about the ledger, deliberately stated without a recommendation
+ * attached — what to do about them is the reviewer's call, and a harness that
+ * ranks the work would be scripting the review rather than informing it.
+ */
+export interface CoverageBrief {
+	elements: number;
+	classes: number;
+	applicable: number;
+	settled: number;
+	percent: number;
+	/** Classes with no settled cell anywhere — never asked of anything recorded. */
+	untestedClasses: string[];
+	/** Elements with no settled cell — recorded, then never tested. */
+	untestedElements: string[];
+}
+
+export function coverageBrief(matrix: CoverageMatrix): CoverageBrief {
+	const byClass = new Map<string, boolean>();
+	const byElement = new Map<string, boolean>();
+	for (const c of matrix.cells) {
+		// `n/a` is not a gap: the class does not apply to that element kind, so it
+		// must not make a column look unasked.
+		if (c.status === "n/a") continue;
+		const settled = c.status === "clear" || c.status === "vulnerable";
+		byClass.set(c.class, (byClass.get(c.class) ?? false) || settled);
+		byElement.set(c.element, (byElement.get(c.element) ?? false) || settled);
+	}
+	const untestedClasses = [...byClass].filter(([, done]) => !done).map(([id]) => id);
+	const untestedElements = [...byElement].filter(([, done]) => !done).map(([id]) => id);
+	return {
+		elements: byElement.size,
+		classes: byClass.size,
+		applicable: matrix.applicable,
+		settled: matrix.counts.clear + matrix.counts.vulnerable,
+		percent: coveragePercent(matrix),
+		untestedClasses,
+		untestedElements,
+	};
+}
+
+/**
+ * Render the brief for the model's context, or "" when there is nothing to say.
+ *
+ * Empty on an empty ledger by design: at the start of an engagement every cell
+ * is untested, and announcing that is noise that trains the reader to skip the
+ * block. `labelFor` turns inventory ids into the words the reviewer used, since
+ * an id it has never seen is not information.
+ */
+export function renderCoverageBrief(
+	brief: CoverageBrief,
+	labelFor: (id: string) => string | undefined,
+	limit = 12,
+): string {
+	if (brief.elements === 0 || brief.applicable === 0) return "";
+	const lines = [
+		`Coverage: ${brief.settled}/${brief.applicable} test cases settled (${brief.percent}%) ` +
+		`across ${brief.elements} recorded element(s) x ${brief.classes} class(es).`,
+	];
+	if (brief.untestedClasses.length > 0) {
+		lines.push(`Classes not yet asked of anything recorded: ${brief.untestedClasses.join(", ")}.`);
+	}
+	if (brief.untestedElements.length > 0) {
+		const named = brief.untestedElements.map((id) => labelFor(id) ?? id);
+		const shown = named.slice(0, limit).join(", ");
+		// Say what was left out rather than trailing an ellipsis: a truncated list
+		// that does not declare its own truncation reads as a complete one.
+		const rest = named.length > limit ? ` (+${named.length - limit} more)` : "";
+		lines.push(`Recorded surface with no hypothesis yet: ${shown}${rest}.`);
+	}
+	if (brief.untestedClasses.length === 0 && brief.untestedElements.length === 0) return "";
+	return lines.join("\n");
+}

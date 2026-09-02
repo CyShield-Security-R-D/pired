@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { computeCoverage, coveragePercent, findGaps, selectNext } from "./coverage.ts";
+import { computeCoverage, coveragePercent, findGaps, selectNext, coverageBrief, renderCoverageBrief } from "./coverage.ts";
 import type { BlockerRecord, CoverageMatrix, HypothesisRecord, InventoryKind } from "./ontology.ts";
 
 const classes = [{ id: "authz" }, { id: "sqli" }];
@@ -191,5 +191,54 @@ describe("appliesTo / n-a cells", () => {
 		});
 		expect(m.applicable).toBe(0);
 		expect(coveragePercent(m)).toBe(0);
+	});
+});
+
+describe("the coverage brief put in front of the agent unasked", () => {
+	const classes = [{ id: "sqli" }, { id: "cmdi" }, { id: "authz" }];
+	const elements = [{ id: "e1" }, { id: "e2" }];
+	const hyp = (id: string, target: string, cls: string, outcome: string): HypothesisRecord =>
+		({ v: 1, id, kind: "hypothesis", createdAt: "", statement: "s", target, class: cls, outcome } as unknown as HypothesisRecord);
+
+	it("names the classes never asked of anything recorded", () => {
+		// The measured failure: /api/command recorded, cmdi never tested, nothing said so.
+		const m = computeCoverage({ classes, elements, hypotheses: [hyp("h1", "e1", "sqli", "refuted")], openBlockers: [] });
+		const b = coverageBrief(m);
+		expect(b.untestedClasses).toContain("cmdi");
+		expect(b.untestedClasses).not.toContain("sqli");
+	});
+
+	it("names surface that was recorded and then never tested", () => {
+		const m = computeCoverage({ classes, elements, hypotheses: [hyp("h1", "e1", "sqli", "confirmed")], openBlockers: [] });
+		expect(coverageBrief(m).untestedElements).toEqual(["e2"]);
+	});
+
+	it("does not count a proposed hypothesis as a settled cell", () => {
+		const m = computeCoverage({ classes, elements, hypotheses: [hyp("h1", "e1", "sqli", "proposed")], openBlockers: [] });
+		expect(coverageBrief(m).untestedClasses).toContain("sqli");
+	});
+
+	it("renders labels the reviewer used, not inventory ids", () => {
+		const m = computeCoverage({ classes, elements, hypotheses: [], openBlockers: [] });
+		const out = renderCoverageBrief(coverageBrief(m), (id) => (id === "e1" ? "POST /api/command" : undefined));
+		expect(out).toContain("POST /api/command");
+	});
+
+	it("says nothing at all when there is no surface yet", () => {
+		const m = computeCoverage({ classes, elements: [], hypotheses: [], openBlockers: [] });
+		expect(renderCoverageBrief(coverageBrief(m), () => undefined)).toBe("");
+	});
+
+	it("says nothing once every class and element has been settled", () => {
+		const hyps = [hyp("h1", "e1", "sqli", "refuted"), hyp("h2", "e1", "cmdi", "refuted"), hyp("h3", "e1", "authz", "refuted"),
+			hyp("h4", "e2", "sqli", "refuted"), hyp("h5", "e2", "cmdi", "refuted"), hyp("h6", "e2", "authz", "refuted")];
+		const m = computeCoverage({ classes, elements, hypotheses: hyps, openBlockers: [] });
+		expect(renderCoverageBrief(coverageBrief(m), () => undefined)).toBe("");
+	});
+
+	it("declares what it left out of a long list", () => {
+		const many = Array.from({ length: 20 }, (_, i) => ({ id: `e${i}` }));
+		const m = computeCoverage({ classes, elements: many, hypotheses: [], openBlockers: [] });
+		expect(renderCoverageBrief(coverageBrief(m), () => undefined, 5)).toContain("+15 more");
 	});
 });
