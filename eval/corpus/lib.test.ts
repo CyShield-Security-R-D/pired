@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deriveScope, scopeClause } from "./lib.ts";
+import { deriveScope, scopeClause, mapRangeBack } from "./lib.ts";
 
 /** A truth entry needs only `file` for scope selection; the rest is noise here. */
 const at = (file: string) => ({ id: "x", title: "x", severity: "high", file, line: 1 });
@@ -134,5 +134,45 @@ describe("deriveScope loc ceiling", () => {
 	it("is unchanged when no loc ceiling is given", () => {
 		const source = tree({ a: 100, b: 100 });
 		expect(deriveScope(source, [at("a/x.py")], 1200).dirs).toEqual(["."]);
+	});
+});
+
+describe("translating a truth range from a later commit back to the target", () => {
+	// `git diff <earlier> <later>` at --unified=0. "-" is the earlier file.
+	it("leaves a range alone when nothing changed before it", () => {
+		expect(mapRangeBack("", [40, 50])).toEqual([40, 50]);
+	});
+
+	it("shifts a range back by the lines added above it", () => {
+		// 10 lines inserted at line 5 of the later file: line 40 there was 30 before.
+		const diff = "@@ -4,0 +5,10 @@\n";
+		expect(mapRangeBack(diff, [40, 50])).toEqual([30, 40]);
+	});
+
+	it("shifts forward when lines were deleted above it", () => {
+		const diff = "@@ -5,10 +4,0 @@\n";
+		expect(mapRangeBack(diff, [40, 50])).toEqual([50, 60]);
+	});
+
+	it("refuses a range that overlaps a changed hunk", () => {
+		// The code there is not the same code, so there is no honest mapping — and
+		// a rewritten region means this is not the same vulnerability either.
+		const diff = "@@ -40,5 +40,5 @@\n";
+		expect(mapRangeBack(diff, [42, 44])).toBeUndefined();
+	});
+
+	it("ignores hunks that fall after the range", () => {
+		const diff = "@@ -100,4 +100,9 @@\n";
+		expect(mapRangeBack(diff, [10, 20])).toEqual([10, 20]);
+	});
+
+	it("accumulates several hunks above the range", () => {
+		const diff = "@@ -4,0 +5,10 @@\n@@ -20,0 +31,5 @@\n";
+		expect(mapRangeBack(diff, [60, 61])).toEqual([45, 46]);
+	});
+
+	it("refuses a mapping that would fall off the top of the file", () => {
+		const diff = "@@ -0,0 +1,100 @@\n";
+		expect(mapRangeBack(diff, [5, 6])).toBeUndefined();
 	});
 });

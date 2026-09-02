@@ -419,3 +419,45 @@ export function fixReference(
 	}
 	return undefined;
 }
+
+/**
+ * Translate a line range from a later commit back to an earlier one.
+ *
+ * A one-advisory key is exact because the target commit IS the fix's parent, so
+ * the diff's line numbers are the target's line numbers. The moment a target
+ * carries several advisories that stops being true: an advisory fixed months
+ * later reports lines in ITS parent tree, and pointing the grader at those
+ * numbers in an older tree is pointing it at the wrong code.
+ *
+ * `diff` is `git diff <earlier> <later> -- <file>` at --unified=0. Hunks are
+ * walked in order accumulating the offset between the two files, which is exact
+ * outside changed regions.
+ *
+ * Returns undefined when the range overlaps a hunk — the code there is not the
+ * same code, so no honest mapping exists and the entry is dropped rather than
+ * guessed. That also happens to be the check for "was this bug present in the
+ * older tree at all": if the vulnerable region was rewritten in between, it is
+ * not the same vulnerability and does not belong in that target's key.
+ */
+export function mapRangeBack(diff: string, range: [number, number]): [number, number] | undefined {
+	const [lo, hi] = range;
+	let offset = 0;
+	for (const line of diff.split("\n")) {
+		// -old,count +new,count
+		const h = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line);
+		if (!h) continue;
+		const oldStart = Number(h[1]);
+		const oldLen = h[2] === undefined ? 1 : Number(h[2]);
+		const newStart = Number(h[3]);
+		const newLen = h[4] === undefined ? 1 : Number(h[4]);
+		// The hunk covers [newStart, newStart+newLen) in the later file. An
+		// insertion (newLen 0) covers nothing and only shifts what follows.
+		const hunkLo = newStart;
+		const hunkHi = newStart + Math.max(newLen, 1) - 1;
+		if (newLen > 0 && hi >= hunkLo && lo <= hunkHi) return undefined;
+		if (hunkHi < lo) offset += oldLen - newLen;
+		else break;
+	}
+	const mapped: [number, number] = [lo + offset, hi + offset];
+	return mapped[0] >= 1 ? mapped : undefined;
+}
