@@ -18,7 +18,7 @@
 
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { cp, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, readdir, readFile, readlink, rm, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { promisify } from "node:util";
 import { dedupe, engagementTelemetry, fromLedger, scoreFindings } from "../dvbank/score.ts";
@@ -102,6 +102,29 @@ interface Row extends Entry {
  * Taken on first use, so it must be taken from a tree fetch.ts has just built —
  * snapshotting a dirty target would bake the contamination in permanently.
  */
+/**
+ * Kill anything still running inside a finished target.
+ *
+ * Identified by cwd — /proc/<pid>/cwd is the one link back to the target that
+ * survives the parent's death — and narrowed to the agent's own processes so a
+ * shell someone left open in the directory is not caught with them.
+ */
+async function reapStrays(target: string): Promise<number> {
+	let killed = 0;
+	const entries = await readdir("/proc").catch(() => [] as string[]);
+	for (const entry of entries) {
+		if (!/^\d+$/.test(entry)) continue;
+		const pid = Number(entry);
+		if (pid === process.pid) continue;
+		const cwd = await readlink(`/proc/${entry}/cwd`).catch(() => "");
+		if (cwd !== target) continue;
+		const cmd = await readFile(`/proc/${entry}/cmdline`, "utf8").catch(() => "");
+		if (!/\bpi\b|pired|node/.test(cmd.replace(/\0/g, " "))) continue;
+		try { process.kill(pid, "SIGKILL"); killed += 1; } catch { /* already gone */ }
+	}
+	return killed;
+}
+
 async function restorePristine(target: string): Promise<void> {
 	const snap = `${target}.pristine`;
 	if (!existsSync(snap)) {
@@ -165,6 +188,9 @@ const jobs = targets.map((m) => async (): Promise<void> => {
 	const started = Date.now();
 	let ok = true;
 	let error: string | undefined;
+	// Held outside the try so the reaper below can still see the child after a
+	// timeout throws.
+	let child: { pid?: number } | undefined;
 	try {
 		const pending = run(process.execPath, [
 			PIRED, "--profile", "review", "--provider", PROVIDER,
@@ -203,6 +229,7 @@ const jobs = targets.map((m) => async (): Promise<void> => {
 				},
 			}),
 		});
+		child = pending.child;
 		pending.child.stdin?.end();
 		await pending;
 	} catch (err) {
@@ -226,6 +253,24 @@ const jobs = targets.map((m) => async (): Promise<void> => {
 		const sig = e.signal ? ` signal=${e.signal}` : "";
 		error = `${kind}${sig}: ${why.slice(0, 260).replace(/\s+/g, " ")}`;
 	}
+	// Reap anything still alive in this target before the next one starts.
+	//
+	// Node's `timeout` signals the DIRECT child only. pired.mjs died on every
+	// timed-out target while the `pi` process it had spawned was reparented to
+	// init and kept its socket to the model server open. Measured mid-run: three
+	// live connections to a server that answers one call at a time, two of them
+	// orphans from targets already written down as finished — so the corpus got
+	// slower the further it went, and later targets were scored under contention
+	// the earlier ones never saw.
+	//
+	// Matched by working directory rather than by process tree: by the time the
+	// exec settles the orphan's parent is gone, so there is no tree left to walk.
+	// Killing the group would be tidier, but execFile does not forward `detached`
+	// to spawn, so the child never leads one.
+	void child;
+	const strays = await reapStrays(m.target);
+	if (strays > 0) process.stderr.write(`  reaped ${strays} stray process(es) from ${name}\n`);
+
 	const findings = dedupe(await fromLedger(engagementDir));
 	const score = await scoreFindings(findings, join(corpusDir, `${name}-${RUN_ID}.report.json`), m.truth);
 	// What the coverage machinery did, not just what it found. A run that records
