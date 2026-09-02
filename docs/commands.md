@@ -18,13 +18,15 @@ Everything pired adds to pi. pi's own commands (`/model`, `/reload`, sessions, �
 | `/findings` | Browse findings, worst first; select one to read its description, repro and evidence. |
 | `/report` | Write findings to Markdown in the engagement workspace. |
 | `/blockers` | Walk the open blockers — what needs you — one dialog at a time, including ones already dismissed. |
-| `/extract` | Convert the review into ledger records now. Runs automatically when a turn leaves the checklist unanswered. |
-| `/extract off` \| `on` \| `status` | Turn the automatic second pass off or on for this session, or report its state. |
+| `/scribe` | Write the review into the ledger now — findings, surface, and a verdict on every checklist class. |
+| `/scribe on` \| `off` \| `status` | Let it run by itself after every reply (off by default), or report its state. |
+| `/scribe quick` | The cheap half only: findings and surface out of new review, no checklist roll-call. |
+| `/extract` | The old name for `/scribe`, kept as an alias. |
 | `/provider` | Add an LLM provider — base URL, model, token — the same wizard `/login` opens. |
 | `/provider list` | Show the providers in `~/.pired/models.json` and the models each serves. |
 | `/provider remove <id>` | Forget one, in pired's file, pi's mirror, and this session's picker. |
 
-### Extraction, and why it exists
+### The scribe, and why it exists
 
 A review turn is asked to do two jobs at once: reason about the code, and call
 `record` as it goes. Models do the first well and skip the second. Measured over
@@ -34,30 +36,57 @@ model replied with a well-formed findings list in prose — CWEs, severities,
 CVSS vectors — and no tool call. The break is not in deciding what to record; it
 is in emitting the call at all, late in a long conversation.
 
-So the jobs are separated. Phase one reviews, uninterrupted, in prose. When a
-turn ends having recorded nothing, phase two makes a **fresh single-turn call**
-whose only job is to convert that review into rows — the regime where a small
-model is reliable — and it returns **JSON, not a tool call**, because a tool call
-is the thing that does not get emitted. The harness writes the rows through the
-same `record` tool the model would have used, so validation, ids and coverage
-behave identically.
+So the jobs are separated. Phase one reviews, uninterrupted, in prose. Phase two
+— the scribe — makes a **fresh single-turn call** whose only job is to convert
+that review into rows: the regime where a small model is reliable. It returns
+**JSON, not a tool call**, because a tool call is the thing that does not get
+emitted. The harness writes the rows through the same `record` tool the model
+would have used, so validation, ids and coverage behave identically.
 
-Two things the harness finishes on its own, because the extractor reliably omits
+Two things the harness finishes on its own, because the scribe reliably omits
 them: a finding's checklist `class` is recovered from its CWE (the checklist
 already maps the two), and the **confirmed hypothesis a finding already
 represents** is written alongside it — coverage is settled by hypothesis
 outcomes, never by findings, so without it the matrix reads zero while the report
 fills up.
 
-`/extract` runs the same pass by hand, and `/extract off` stops it running
-itself — for a demo, a slow provider, or an engagement being driven by hand. It
-disables only the *automatic* pass: asking for one by name keeps working, which
-is the difference between turning a reviewer off and taking it away. The setting
-is session-scoped; a new session starts it back on, and `/extract status`
-reports it along with how much review is buffered.
+#### Where it runs, and why it is off by default
 
-The pass re-reads the same buffer every turn, so it is built to be cheap to
-re-send: the window it hands the model is cut **at a turn boundary and in
+The scribe is **off until you ask for it**, and that is a reversal — it used to
+run automatically at the end of every turn. The reason is what a *turn* is. In
+pi a turn is one assistant message plus its tool batch, not one exchange with
+the operator, and the agent's own loop **awaits** the handler: a review that
+reads thirty files ends thirty turns, and the gate clears on 2,000 characters of
+new prose, which a single turn of visible thinking passes. So the harness stopped
+the agent mid-loop for a whole second model call, over and over, on a local
+server that answers one request at a time. That is not a background pass; it is
+the harness taking the machine away from the work.
+
+What runs in the hot path now is appending a string to an array. Everything else
+moved:
+
+- **`/scribe`** runs a full pass on demand — the roll-call included — and is the
+  normal way to use it: review, then write it up.
+- **`/scribe on`** runs the cheap half automatically, but only once pi has
+  *settled* (`agent_settled` — no retry, compaction or follow-up left), never
+  between the agent's own turns, and never awaited.
+- **The moment you type**, an automatic pass in flight is abandoned. Its model
+  call is dropped, which on a one-slot local server is also what hands the slot
+  back to the agent you are now waiting on. Nothing is lost: the review is still
+  buffered and the next idle moment picks it up.
+- **The roll-call is not asked automatically.** It is one JSON row per checklist
+  class, every pass, and until a review has been somewhere most of those rows are
+  `not-considered` — rows the planner then discards. `/scribe` asks it, and asks
+  only about classes with a cell still open.
+
+The status line says which of the three states it is in — `✎ scribe off`,
+`✎ scribe`, `✎ scribe…` while a pass is running — because a mode that is off by
+default and costs a model call when it is not is a mode you should never have to
+ask about. `/scribe status` also reports how much review is buffered. The setting
+is session-scoped: a new session starts it off.
+
+The pass re-reads the same buffer each time it runs, so it is built to be cheap
+to re-send: the window it hands the model is cut **at a turn boundary and in
 chunks**, never slid character by character, so appending a turn leaves every
 byte before it identical and the provider re-reads the prefix from its cache. The
 retry, when a reply comes back as prose, is appended as a third message rather

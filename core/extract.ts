@@ -10,9 +10,17 @@
  * call at all, deep inside a long conversation.
  *
  * So the two jobs are separated. Phase one reviews, in prose, uninterrupted.
- * Phase two is a fresh, single-turn call whose only job is to convert that prose
- * into rows — the regime where a small model is reliable, and where the output
- * is plain JSON rather than a tool call, so there is no call left to skip.
+ * Phase two — the scribe, to an operator — is a fresh, single-turn call whose
+ * only job is to convert that prose into rows: the regime where a small model is
+ * reliable, and where the output is plain JSON rather than a tool call, so there
+ * is no call left to skip.
+ *
+ * Phase two is itself two questions with different costs, and `rollCall` splits
+ * them. "What did this new prose find?" is a handful of rows and is asked often;
+ * "what does the review conclude about each of the nineteen checklist classes?"
+ * is a form to fill in, is mostly answered "not-considered" until the review has
+ * been somewhere, and is asked when an operator asks for it. Emitting both every
+ * time was most of the tokens and most of the wait.
  *
  * Pure module: builds a request and parses a reply. The model call and the
  * ledger writes belong to the adapter.
@@ -96,6 +104,16 @@ export interface ParseResult {
 	extraction: Extraction;
 	/** Rows dropped, and why. Surfaced to the operator rather than swallowed. */
 	errors: string[];
+	/**
+	 * Whether a JSON object was found and read at all.
+	 *
+	 * Distinct from an empty extraction, and the distinction decides whether a
+	 * retry is worth a second call: a reply that came back as prose has not done
+	 * the job, while `{"findings": []}` has — it is a model correctly saying the
+	 * new review concluded nothing. Counting the second as a failure is how the
+	 * cheap pass would pay double for its most common answer.
+	 */
+	parsed: boolean;
 }
 
 const SEVERITIES: Severity[] = ["critical", "high", "medium", "low", "info"];
@@ -104,33 +122,77 @@ const OUTCOMES: ExtractedHypothesis["outcome"][] = ["confirmed", "refuted", "inc
 const VERDICTS: ClassVerdict["verdict"][] = ["confirmed", "refuted", "not-considered"];
 
 /**
+ * Which classes the roll-call still has a question to ask about.
+ *
+ * The roll-call is the expensive half of the pass: one JSON row per checklist
+ * class, every time, whether or not the answer can still change anything. A
+ * class whose every applicable cell is already settled — clear, vulnerable, or
+ * not a question at all — has no answer left to give, and asking for one buys
+ * a row the planner will discard.
+ *
+ * A class with no cells at all stays in: nothing has been recorded against it,
+ * which is the case the roll-call exists for. Fails open for the same reason
+ * `applies()` does — a filter that can only shrink the question set must never
+ * shrink it on a guess.
+ */
+export function rollCallClasses(classes: string[], cells: Array<{ class: string; status: string }>): string[] {
+	const open = new Set<string>();
+	const seen = new Set<string>();
+	for (const c of cells) {
+		seen.add(c.class);
+		if (c.status === "not-tested" || c.status === "testing" || c.status === "blocked") open.add(c.class);
+	}
+	return classes.filter((c) => !seen.has(c) || open.has(c));
+}
+
+export interface ExtractionPromptOptions {
+	/**
+	 * The classes to ask for a verdict on.
+	 *
+	 * Omitted, the roll-call covers every class — what an operator asking for a
+	 * sweep means. A subset skips the ones already settled. An EMPTY array drops
+	 * the roll-call entirely, which is the cheap pass: findings and surface out
+	 * of new prose, and no per-class form to fill in.
+	 *
+	 * The split exists because the two halves have different costs and different
+	 * rhythms. Findings arrive as the review writes them and are a handful of
+	 * rows; the roll-call is nineteen rows of mostly "not-considered" that only
+	 * becomes answerable once the review has actually been somewhere. Emitting
+	 * it every pass is most of the tokens for most of the wait.
+	 */
+	rollCall?: string[];
+}
+
+/**
  * The extractor's instructions.
  *
  * It is told it is NOT reviewing. Given any latitude to analyse, a model that
  * has just spent twenty minutes analysing will keep going, and the run ends in
  * more prose — which is the failure this exists to end.
  */
-export function extractionSystemPrompt(classes: string[]): string {
+export function extractionSystemPrompt(classes: string[], options: ExtractionPromptOptions = {}): string {
+	const roster = options.rollCall ?? classes;
 	const list = classes.length > 0 ? classes.join(", ") : "(no checklist loaded — omit the class field)";
-	const roll = classes.length > 0
-		? classes.map((c) => `  {"class": "${c}", "verdict": "confirmed|refuted|not-considered", "why": "...", "targets": []}`).join(",\n")
-		: '  // no checklist loaded — return an empty array';
+	const roll = roster.map((c) => `  {"class": "${c}", "verdict": "confirmed|refuted|not-considered", "why": "...", "targets": []}`).join(",\n");
+	const classesField = roster.length > 0 ? `,\n  "classes": [\n${roll}\n  ]` : "";
+	const rollRules = roster.length > 0
+		? `
+
+The "classes" array is a checklist and you must return EVERY row above, in order, with no rows added or removed. For each one, say what the review concluded:
+- "confirmed" — the review found this class present. List the places in "targets".
+- "refuted" — the review examined this class and found it clean. Put the reason in "why" ("no template rendering of user input anywhere in the reviewed code"). Leave "targets" empty if it applies across everything reviewed.
+- "not-considered" — the review did not examine this class. This is a normal, correct answer and you must use it rather than guessing. Never mark a class "refuted" because the review did not mention it; silence is not a clean bill of health.`
+		: `
+
+Coverage is not being asked for in this pass: return no "classes" array. If the review examined a class and found it clean, say nothing about it here — a later pass asks that question directly. An empty "findings" array is a correct and expected answer when the review has not concluded anything new.`;
 	return `You convert a finished security review into structured data. You are NOT reviewing anything: the analysis is complete and correct as written. Do not add findings, do not re-judge severity, do not investigate further. Transcribe what the review already concluded.
 
 Reply with ONE JSON object and nothing else — no prose before or after, no markdown fence:
 
 {
   "surface":  [{"kind": "endpoint|host|param|tech|service", "label": "POST /api/login"}],
-  "findings": [{"title": "...", "severity": "critical|high|medium|low|info", "class": "<id>", "cwe": "CWE-89", "file": "backend/routes/auth.py", "line": 42, "description": "one or two sentences", "impact": "only if the review states it", "remediation": "only if the review states it"}],
-  "classes": [
-${roll}
-  ]
-}
-
-The "classes" array is a checklist and you must return EVERY row above, in order, with no rows added or removed. For each one, say what the review concluded:
-- "confirmed" — the review found this class present. List the places in "targets".
-- "refuted" — the review examined this class and found it clean. Put the reason in "why" ("no template rendering of user input anywhere in the reviewed code"). Leave "targets" empty if it applies across everything reviewed.
-- "not-considered" — the review did not examine this class. This is a normal, correct answer and you must use it rather than guessing. Never mark a class "refuted" because the review did not mention it; silence is not a clean bill of health.
+  "findings": [{"title": "...", "severity": "critical|high|medium|low|info", "class": "<id>", "cwe": "CWE-89", "file": "backend/routes/auth.py", "line": 42, "description": "one or two sentences", "impact": "only if the review states it", "remediation": "only if the review states it"}]${classesField}
+}${rollRules}
 
 Other rules:
 - "class" on a finding must be one of exactly these ids: ${list}
@@ -158,15 +220,15 @@ export function parseExtraction(reply: string): ParseResult {
 	const empty: Extraction = { surface: [], findings: [], hypotheses: [], classes: [] };
 
 	const raw = sliceJsonObject(reply);
-	if (!raw) return { extraction: empty, errors: ["no JSON object found in the reply"] };
+	if (!raw) return { extraction: empty, errors: ["no JSON object found in the reply"], parsed: false };
 
 	let doc: unknown;
 	try {
 		doc = JSON.parse(raw);
 	} catch (e) {
-		return { extraction: empty, errors: [`reply was not valid JSON: ${e instanceof Error ? e.message : String(e)}`] };
+		return { extraction: empty, errors: [`reply was not valid JSON: ${e instanceof Error ? e.message : String(e)}`], parsed: false };
 	}
-	if (typeof doc !== "object" || doc === null) return { extraction: empty, errors: ["reply was not a JSON object"] };
+	if (typeof doc !== "object" || doc === null) return { extraction: empty, errors: ["reply was not a JSON object"], parsed: false };
 	const obj = doc as Record<string, unknown>;
 
 	const surface: ExtractedElement[] = [];
@@ -223,7 +285,7 @@ export function parseExtraction(reply: string): ParseResult {
 		verdicts.push({ class: cls, verdict, why: str(row.why), targets });
 	}
 
-	return { extraction: { surface, findings, hypotheses, classes: verdicts }, errors };
+	return { extraction: { surface, findings, hypotheses, classes: verdicts }, errors, parsed: true };
 }
 
 /**
@@ -452,6 +514,25 @@ export function reviewWindow(
 	const chars = dropped.chars + (joined.length - body.length);
 	if (chars === 0) return body;
 	return `[earlier analysis omitted — ${dropped.turns} turn(s), ${chars} characters]\n${body}`;
+}
+
+/**
+ * Whether a reply is worth a second call.
+ *
+ * The first live attempt answered a "return JSON" instruction with prose, and
+ * the nudge exists for that. What it must not do is fire on an honest empty
+ * answer: the cheap pass asks "anything new in this prose?" and the correct
+ * reply is often `{"surface": [], "findings": []}`. Retrying that doubles the
+ * cost of the quietest turns, which are the ones the whole redesign is for.
+ *
+ * So: retry when nothing was parsed. Retry an empty roll-call too — a sweep
+ * that returns no verdicts at all has skipped the form it was handed, which is
+ * the prose failure wearing a JSON hat.
+ */
+export function needsRetry(result: ParseResult, rollCall: boolean): boolean {
+	if (!result.parsed) return true;
+	if (!rollCall) return false;
+	return result.extraction.findings.length === 0 && result.extraction.classes.length === 0;
 }
 
 /** A terser second ask, for when the first reply came back as prose. */

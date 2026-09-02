@@ -33,9 +33,18 @@ describe("pired extension registration", () => {
 			"panel", "coverage", "findings", "maximize",
 			// The browser: the surface and the hypotheses behind the panel's counts.
 			"surface", "hypotheses", "report",
-			// The second pass, and the way back to a dismissed blocker.
-			"extract", "blockers",
+			// The scribe, the name it had before, and the way back to a dismissed blocker.
+			"scribe", "extract", "blockers",
 		]));
+	});
+
+	it("hooks agent_settled and input, which is where the scribe now lives", () => {
+		// The pass used to run from `turn_end`, inside pi's agent loop and awaited
+		// by it. These two are the replacement: start when the agent has finished,
+		// stop when the operator wants the machine back. See extensions/scribe.test.ts.
+		const { api, seen } = stubApi();
+		piredExtension(api as never);
+		expect(seen.events).toEqual(expect.arrayContaining(["turn_end", "agent_settled", "input"]));
 	});
 
 	it("binds a key for the panel — a view behind a typed command gets checked less", () => {
@@ -143,50 +152,6 @@ function railHost() {
 		overlay: () => overlay as Overlay,
 	};
 }
-
-describe("/extract as a switch", () => {
-	/** The notify text is the only thing the operator sees, so it is what is asserted. */
-	function noisyHost() {
-		const said: string[] = [];
-		const host = railHost();
-		const ctx = { ...host.ctx, ui: { ...host.ctx.ui, notify: (m: string) => said.push(m) } };
-		return { host, ctx, said };
-	}
-
-	it("reports its state without needing an engagement", async () => {
-		const { host, ctx, said } = noisyHost();
-		await host.run("extract", "status", ctx);
-		expect(said.join(" ")).toContain("automatic extraction is on");
-	});
-
-	it("turns the automatic pass off and says so, and status agrees afterwards", async () => {
-		const { host, ctx, said } = noisyHost();
-		await host.run("extract", "off", ctx);
-		expect(said.join(" ")).toContain("off for this session");
-		said.length = 0;
-		await host.run("extract", "status", ctx);
-		expect(said.join(" ")).toContain("automatic extraction is off");
-	});
-
-	it("turns it back on", async () => {
-		const { host, ctx, said } = noisyHost();
-		await host.run("extract", "off", ctx);
-		await host.run("extract", "on", ctx);
-		said.length = 0;
-		await host.run("extract", "status", ctx);
-		expect(said.join(" ")).toContain("automatic extraction is on");
-	});
-
-	it("still runs a pass by hand — off disables the automatic one, not the command", async () => {
-		const { host, ctx, said } = noisyHost();
-		await host.run("extract", "off", ctx);
-		said.length = 0;
-		// No engagement and no buffered review, so it stops at "nothing to
-		// extract" — the point is that `off` did not swallow the request.
-		await host.run("extract", "", ctx);
-		expect(said.join(" ")).toContain("nothing to extract");
-	});
-});
 
 describe("/blockers", () => {
 	it("says so plainly when there is no engagement to read", async () => {

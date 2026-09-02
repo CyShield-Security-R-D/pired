@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyPlan, classFromCwe, elementArgs, extractionSystemPrompt, extractionUserMessage, hypothesisForFinding, parseExtraction, planExtraction, REVIEW_SEPARATOR, reviewEviction, reviewWindow, type Extraction, type PlannedRecord, type RecordOutcome, shouldExtract, extractionThreshold } from "./extract.ts";
+import { applyPlan, classFromCwe, elementArgs, extractionSystemPrompt, extractionUserMessage, hypothesisForFinding, needsRetry, parseExtraction, planExtraction, REVIEW_SEPARATOR, reviewEviction, reviewWindow, rollCallClasses, type Extraction, type PlannedRecord, type RecordOutcome, shouldExtract, extractionThreshold } from "./extract.ts";
 
 const GOOD = `{
   "surface": [{"kind":"endpoint","label":"POST /api/login"},{"kind":"endpoint","label":"GET /api/transactions"}],
@@ -47,6 +47,111 @@ describe("the extractor's instructions", () => {
 
 	it("carries the review verbatim", () => {
 		expect(extractionUserMessage("the review body")).toContain("the review body");
+	});
+});
+
+describe("the cheap pass: findings without the roll-call", () => {
+	// The roll-call is one JSON row per class, every pass, and until a review has
+	// actually been somewhere almost every row is "not-considered" — rows the
+	// planner then discards. It is most of the tokens and most of the wait, so
+	// the pass that runs by itself does not ask for it.
+	it("drops the classes array entirely when no class is on the roll-call", () => {
+		const p = extractionSystemPrompt(["sqli", "ssti"], { rollCall: [] });
+		// Not in the schema, not in the rules, and said out loud — a model handed a
+		// shape it was told not to fill in will fill it in.
+		expect(p).not.toContain('"classes": [');
+		expect(p).not.toMatch(/EVERY row/);
+		expect(p).toMatch(/return no "classes" array/);
+	});
+
+	it("still pins the class vocabulary, because findings are still classified", () => {
+		// Dropping the roll-call must not drop the ids: a finding still carries a
+		// class, and an unpinned vocabulary is how a class the checklist does not
+		// have reaches the planner.
+		const p = extractionSystemPrompt(["sqli", "ssti"], { rollCall: [] });
+		expect(p).toContain("sqli, ssti");
+	});
+
+	it("says an empty findings list is a correct answer", () => {
+		// Otherwise the model fills the silence. This pass runs after every reply,
+		// and most replies conclude nothing new.
+		expect(extractionSystemPrompt(["sqli"], { rollCall: [] })).toMatch(/empty "findings" array is a correct/);
+	});
+
+	it("asks only about the classes it was given", () => {
+		const p = extractionSystemPrompt(["sqli", "ssti", "xxe"], { rollCall: ["ssti"] });
+		expect(p).toContain('"class": "ssti"');
+		expect(p).not.toContain('"class": "sqli"');
+		expect(p).toMatch(/EVERY row/);
+	});
+
+	it("keeps the whole roll-call when none is named", () => {
+		// The default is the old behaviour: an operator asking for a sweep means
+		// the complete form.
+		const p = extractionSystemPrompt(["sqli", "ssti"]);
+		expect(p).toContain('"class": "sqli"');
+		expect(p).toContain('"class": "ssti"');
+	});
+});
+
+describe("which classes the roll-call still has a question for", () => {
+	it("keeps a class with an untested cell", () => {
+		expect(rollCallClasses(["sqli", "ssti"], [
+			{ class: "sqli", status: "not-tested" },
+			{ class: "ssti", status: "clear" },
+		])).toEqual(["sqli"]);
+	});
+
+	it("drops a class that is settled everywhere it applies", () => {
+		// Clear, vulnerable and n/a are all answers. Asking again buys a row per
+		// pass for the rest of the engagement and changes nothing.
+		expect(rollCallClasses(["sqli"], [
+			{ class: "sqli", status: "clear" },
+			{ class: "sqli", status: "vulnerable" },
+			{ class: "sqli", status: "n/a" },
+		])).toEqual([]);
+	});
+
+	it("keeps a class with no cells at all", () => {
+		// Nothing has been recorded against it, which is the case the roll-call
+		// exists for. A filter that can only shrink the question set must never
+		// shrink it on a guess.
+		expect(rollCallClasses(["sqli", "ssti"], [])).toEqual(["sqli", "ssti"]);
+	});
+
+	it("keeps a class that is only blocked or in progress", () => {
+		expect(rollCallClasses(["sqli", "ssti"], [
+			{ class: "sqli", status: "blocked" },
+			{ class: "ssti", status: "testing" },
+		])).toEqual(["sqli", "ssti"]);
+	});
+});
+
+describe("whether a reply is worth a second call", () => {
+	const parsed = (reply: string) => parseExtraction(reply);
+
+	it("retries prose", () => {
+		// The failure the nudge exists for: a "reply with JSON" instruction
+		// answered with a findings list in English.
+		expect(needsRetry(parsed("Here are the findings I identified: 1. SQL injection…"), false)).toBe(true);
+		expect(needsRetry(parsed("not json at all"), true)).toBe(true);
+	});
+
+	it("does NOT retry an honest empty answer from the cheap pass", () => {
+		// `{"findings": []}` is a model correctly saying the new prose concluded
+		// nothing. Retrying it doubles the cost of the quietest turns, which are
+		// the ones the whole redesign is for.
+		expect(needsRetry(parsed('{"surface": [], "findings": []}'), false)).toBe(false);
+	});
+
+	it("retries a sweep that came back with no verdicts", () => {
+		// A roll-call that returns nothing has skipped the form it was handed —
+		// the prose failure wearing a JSON hat.
+		expect(needsRetry(parsed('{"surface": [{"kind":"host","label":"api.example.com"}], "findings": [], "classes": []}'), true)).toBe(true);
+	});
+
+	it("takes a sweep that answered", () => {
+		expect(needsRetry(parsed('{"findings": [], "classes": [{"class":"sqli","verdict":"not-considered","targets":[]}]}'), true)).toBe(false);
 	});
 });
 

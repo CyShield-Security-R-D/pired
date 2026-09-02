@@ -5,9 +5,9 @@
  * the same endpoint, the same cell or the same bug being written twice. Three
  * paths produce repeats, and none of them is a mistake the agent can see:
  *
- *   - The extractor (core/extract.ts) runs at the end of EVERY turn over a review
- *     buffer that only grows. The same analysis is read again and again, so the
- *     same findings and the same class verdicts are re-emitted every pass.
+ *   - The scribe (core/extract.ts) reads a review buffer that only grows. The
+ *     same analysis is read again on every pass, so the same findings and the
+ *     same class verdicts are re-emitted.
  *   - Context is compacted mid-engagement. What was recorded an hour ago is no
  *     longer in front of the agent, so it records it again.
  *   - Subagents work the same surface concurrently and each records what it maps.

@@ -36,11 +36,11 @@ import { renderCoveragePanel, type Tone } from "../core/coverage-panel.ts";
 import { complete } from "@earendil-works/pi-ai/compat";
 import type { AssistantMessage, Message, UserMessage } from "@earendil-works/pi-ai/compat";
 import { describePlan, type Ledgers, planCompaction } from "../core/dedupe.ts";
-import { applyPlan, extractionSystemPrompt, extractionUserMessage, parseExtraction, planExtraction, retryNudge, reviewEviction, reviewWindow, shouldExtract } from "../core/extract.ts";
+import { applyPlan, extractionSystemPrompt, extractionUserMessage, needsRetry, parseExtraction, planExtraction, retryNudge, reviewEviction, reviewWindow, rollCallClasses, shouldExtract } from "../core/extract.ts";
 import { dismissHint, PANEL_MODES, renderFindingDetail, renderPanel, scrollFramed, type PanelData, type PanelMode, type PanelTone } from "../core/panel.ts";
 import { coverageBrief, renderCoverageBrief } from "../core/coverage.ts";
 import { computeCoverageView, computeEngagementStats, coveragePercent, type CoverageView, type EngagementStats } from "../core/stats.ts";
-import { layoutStatusLine, type Segment } from "../core/statusline.ts";
+import { layoutStatusLine, scribeStatus, type ScribeState, type Segment } from "../core/statusline.ts";
 import { createCoreTools } from "../core/tools.ts";
 import { Workspace } from "../core/workspace.ts";
 import { execFile } from "node:child_process";
@@ -79,11 +79,13 @@ const PRIORITY = {
 	/** Only the unarmed ("review") scope label is droppable; an armed gate is mandatory. */
 	scope: 3,
 	model: 4,
-	coverage: 5,
-	context: 6,
-	findings: 7,
-	blockers: 8,
-	engagement: 9,
+	/** A mode, so it yields to the engagement's own numbers before they yield to it. */
+	scribe: 5,
+	coverage: 6,
+	context: 7,
+	findings: 8,
+	blockers: 9,
+	engagement: 10,
 };
 
 /** Coverage-panel tones mapped onto the active theme. */
@@ -272,20 +274,6 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	let stats: EngagementStats | undefined;
 
 	/**
-	 * Records the current turn wrote, so phase two runs only when phase one
-	 * skipped the ledger. A turn that recorded as it went needs nothing.
-	 */
-	let recordsThisTurn = 0;
-	/**
-	 * Of those, the ones that settle a coverage cell or reach the report.
-	 *
-	 * Counting every record is not enough: a turn can map forty-four endpoints and
-	 * settle nothing, which is a map with no testing on it — coverage 0%, findings
-	 * none. Take five did exactly that and sailed past a `recordsThisTurn === 0`
-	 * check.
-	 */
-	let claimsThisTurn = 0;
-	/**
 	 * Below this many characters a turn is an exchange, not a review, and running
 	 * a second model call over "ok, done" wastes a minute of a consultant's time.
 	 */
@@ -323,15 +311,45 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	/** New review a pass needs before it is worth making again. */
 	const EXTRACT_GROWTH = 2000;
 	/**
-	 * Whether the second pass runs on its own at turn end.
+	 * Whether the scribe runs on its own.
 	 *
-	 * `/extract off` for the operator who wants the transcript left alone — a
-	 * demo, a slow provider, an engagement being driven by hand. It gates only the
-	 * automatic pass; `/extract` on its own still runs one on demand, because
-	 * turning off the reviewer and losing the ability to ask for it is not what
-	 * anyone means. Session-scoped: a new session starts it back on.
+	 * OFF by default, which is a reversal, and the reason is where it used to run.
+	 * `turn_end` in pi is not the end of the operator's request — it is one
+	 * assistant message plus its tool batch, emitted inside the agent's own loop
+	 * and awaited by it (`agent-loop.js`: `await emit({ type: "turn_end" })`). A
+	 * review that reads thirty files ends thirty turns, and the gate below clears
+	 * on 2,000 characters of new prose, which a single turn of visible thinking
+	 * passes. So the agent stopped, mid-loop, for a whole second model call, again
+	 * and again, on a local server that answers one request at a time. That is not
+	 * a background pass; it is the harness taking the machine away from the work.
+	 *
+	 * Now: opt-in with `/scribe on`, started only once the agent has settled,
+	 * never awaited, and abandoned the moment the operator types. What is left in
+	 * the hot path is appending a string to an array.
+	 *
+	 * Session-scoped, like the rest of this state: a new session starts it off.
 	 */
-	let autoExtract = true;
+	let scribeAuto = false;
+	/**
+	 * The pass in flight, so a second cannot start and the first can be dropped.
+	 *
+	 * Held until the promise settles rather than cleared on abort: aborting stops
+	 * the model call, but the rows that call already earned are still being
+	 * written, and a second pass starting on top of them is how one turn's
+	 * analysis gets recorded twice.
+	 */
+	let scribeRun: { abort: AbortController; done: Promise<void> } | undefined;
+	/** Offered once a session: a buffer worth a pass, with nobody running one. */
+	let scribeOffered = false;
+	/**
+	 * A pass the operator asked for, which is not held in `scribeRun` because
+	 * nothing may cancel it — but which the status line must still show as work in
+	 * progress. `/scribe` on a session with the scribe off would otherwise render
+	 * "off" for the whole minute it spends running.
+	 */
+	let scribeByHand = false;
+	/** The one place the three states are decided, so every surface agrees. */
+	const scribeState = (): ScribeState => (scribeRun || scribeByHand ? "running" : scribeAuto ? "on" : "off");
 
 	// The panel rides in the footer, so showing and hiding it is a boolean and a
 	// re-render — no window management, no modal to dismiss. Off by default: the
@@ -738,6 +756,12 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		const parts = [`⦿ ${scope.engagement}`, `findings ${stats.findingsTotal}`];
 		if (stats.coveragePct !== undefined) parts.push(`cov ${stats.coveragePct}%`);
 		if (stats.blockers > 0) parts.push(`blockers ${stats.blockers}`);
+		// A mode that costs a model call is a mode the operator should never have
+		// to ask about, and one that is off by default is one they will otherwise
+		// assume is on. Said here as well as in the footer, because this is the
+		// line pi renders in print and RPC modes and whenever the custom footer
+		// is not installed.
+		parts.push(scribeStatus(scribeState()).text);
 		// Still published through setStatus: it is what pi's own footer renders in
 		// non-TUI modes and when our custom footer is not installed.
 		ctx.ui.setStatus("pired", parts.join(" · "));
@@ -927,7 +951,7 @@ export default function piredExtension(pi: ExtensionAPI): void {
 							...SEVERITY_INK.map(([sev]) => stats?.findings[sev])].join("\u0000");
 						// Panel visibility and mode belong in the cache key: without them a
 						// toggle would not repaint until something else happened to change.
-						const fullKey = `${key}\u0000${panelOpen ? panelMode : "off"}`;
+						const fullKey = `${key}\u0000${panelOpen ? panelMode : "off"}\u0000${scribeState()}`;
 						if (cache?.key === fullKey) return cache.lines;
 
 						const dim = (text: string): string => theme.fg("dim", text);
@@ -956,6 +980,16 @@ export default function piredExtension(pi: ExtensionAPI): void {
 								left.push({ text: theme.fg("warning", `blockers ${st.blockers}`), priority: PRIORITY.blockers });
 							}
 						}
+
+						// The scribe writes the review into the ledger, and it is off until
+						// asked — so the line says so. A background pass that costs a model
+						// call must be visible while it runs, and a default that quietly
+						// does nothing must be visible while it does not: an operator who
+						// believes their findings are being recorded and is wrong finds out
+						// at the report, which is far too late.
+						const scribe = scribeStatus(scribeState());
+						const scribeInk = scribeRun ? (t: string) => theme.fg("accent", t) : dim;
+						left.push({ text: scribeInk(scribe.text), compact: scribeInk(scribe.compact), priority: PRIORITY.scribe });
 
 						// Whether the scope gate is live is the one piece of state that
 						// separates this from a coding agent: in an enforcing profile you
@@ -1184,9 +1218,15 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		return { messages: [...kept, notice as unknown as (typeof event.messages)[number]] };
 	});
 
-	pi.on("before_agent_start", (event) => ({
-		systemPrompt: `${event.systemPrompt}\n\n${buildSystemPrompt({ profile, scope, checklist: checklistClasses, workspace: workspace?.dir, targetModel })}`,
-	}));
+	pi.on("before_agent_start", (event) => {
+		// The backstop to the `input` handler: a queued follow-up, a steering
+		// message or a command that starts a run never passes through `input`, and
+		// every one of them means the model is wanted elsewhere.
+		stopScribe();
+		return {
+			systemPrompt: `${event.systemPrompt}\n\n${buildSystemPrompt({ profile, scope, checklist: checklistClasses, workspace: workspace?.dir, targetModel })}`,
+		};
+	});
 
 	pi.on("tool_call", async (event, ctx) => {
 		const decision = await gate({ name: event.toolName, args: event.input });
@@ -1234,13 +1274,47 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		`pired-extract-${createHash("sha256").update(dir).digest("hex").slice(0, 16)}`;
 
 	/**
+	 * Was this the operator taking the machine back, rather than a failure?
+	 *
+	 * Runtimes disagree about what an aborted request throws — a DOMException
+	 * named "AbortError", a plain Error, or nothing at all because the provider
+	 * returned an empty message instead — so the signal is the authority and the
+	 * error's shape is only a fallback.
+	 */
+	const aborted = (err: unknown, signal?: AbortSignal): boolean => {
+		if (signal?.aborted) return true;
+		const name = (err as { name?: string } | undefined)?.name;
+		return name === "AbortError" || name === "TimeoutError";
+	};
+
+	/** One run of the scribe: what it is allowed to ask, and how to call it off. */
+	interface ScribeOptions {
+		/** `manual` says what went wrong out loud; `auto` fails quietly and tries again later. */
+		trigger: "auto" | "manual";
+		/**
+		 * Ask the checklist roll-call as well.
+		 *
+		 * The sweep is what settles coverage cells, and it is the expensive half:
+		 * one JSON row per class, every pass, mostly "not-considered" until the
+		 * review has been somewhere. So the automatic pass leaves it out and reads
+		 * new prose for findings and surface, and an operator typing `/scribe`
+		 * gets it — an explicit ask is exactly when a slower, complete answer is
+		 * the one wanted.
+		 */
+		sweep: boolean;
+		/** Tripped when the operator wants the machine back. */
+		signal?: AbortSignal;
+	}
+
+	/**
 	 * Phase two: a fresh single-turn call that converts the review into records.
 	 *
 	 * Deliberately NOT a tool call. The failure being worked around is that the
 	 * model does not emit tool calls late in a long conversation, so asking it to
 	 * emit one here would reproduce the bug. It returns JSON; the harness writes.
 	 */
-	const runExtraction = async (ctx: ExtensionContext, review: string, trigger: "auto" | "manual"): Promise<void> => {
+	const runScribe = async (ctx: ExtensionContext, review: string, opts: ScribeOptions): Promise<void> => {
+		const { trigger, sweep, signal } = opts;
 		if (!workspace || !recordTool) return;
 		// Bound once: `workspace` is a mutable module-level binding, so the guard's
 		// narrowing does not survive into the awaits below.
@@ -1248,30 +1322,45 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		const writeRecord = recordTool;
 		const model = ctx.model;
 		if (!model) {
-			if (trigger === "manual") ctx.ui.notify("pired: no model available to extract with", "warning");
+			if (trigger === "manual") ctx.ui.notify("pired: no model available to write records with", "warning");
 			return;
 		}
 
 		// A long engagement ends many turns without settling anything, and each one
 		// would re-extract overlapping prose into duplicate rows. Fingerprint what
 		// was extracted and skip a repeat.
-		const fingerprint = `${review.length}:${review.slice(0, 200)}:${review.slice(-200)}`;
+		const fingerprint = `${sweep ? "sweep" : "pass"}:${review.length}:${review.slice(0, 200)}:${review.slice(-200)}`;
 		if (trigger === "auto" && extractedAlready.has(fingerprint)) return;
 		extractedAlready.add(fingerprint);
+		// Nothing was spent yet, so a pass that stops here must leave no trace:
+		// the next idle moment should be free to try the same review again.
+		const forget = (): void => {
+			extractedAlready.delete(fingerprint);
+		};
 
 		const checklist = await ws.readChecklist();
 		const classList = checklist?.classes ?? [];
 		const classes = classList.map((c) => c.id);
-		// "recorded nothing" was a lie whenever phase one had mapped the surface and
-		// settled none of it, which is the common case.
+		// Only the classes with a cell still open. A class settled everywhere it
+		// applies has no answer left to give, and asking costs a row per pass for
+		// the rest of the engagement.
+		const rollCall = sweep
+			? rollCallClasses(classes, (await computeCoverageView(ws).catch(() => undefined))?.matrix.cells ?? [])
+			: [];
+		if (signal?.aborted) { forget(); return; }
+		// Say which of the two questions is being asked, and how big it is. A pass
+		// that takes a minute of a consultant's time should have told them what it
+		// went to do — "extracting…" said neither.
 		ctx.ui.notify(
-			trigger === "manual"
-				? "pired: extracting records from the last review…"
-				: "pired: the review settled nothing — extracting findings and coverage…",
+			rollCall.length > 0
+				? `pired: scribe — writing the review into the ledger, and asking the review about ${rollCall.length} unsettled checklist class(es)…`
+				: sweep
+					? "pired: scribe — writing the review into the ledger; every checklist class is already settled"
+					: "pired: scribe — reading the new review for findings and surface…",
 			"info",
 		);
 
-		const systemPrompt = extractionSystemPrompt(classes);
+		const systemPrompt = extractionSystemPrompt(classes, { rollCall });
 		// Already bounded at a turn boundary by the review window; trimming again
 		// here would shave characters off the FRONT of a prefix built to stay put.
 		const body = extractionUserMessage(review);
@@ -1301,6 +1390,10 @@ export default function piredExtension(pi: ExtensionAPI): void {
 					apiKey: apiKeyForProvider(model.provider),
 					sessionId: extractionCacheKey(ws.dir),
 					cacheRetention: "long",
+					// The operator typing is the one thing that outranks this pass. On a
+					// server that answers one request at a time, dropping the connection
+					// is also what hands the slot back to the agent they are waiting on.
+					signal,
 				},
 			);
 			// complete() does NOT throw on a failed call: it returns a message with
@@ -1330,14 +1423,20 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		try {
 			first = await ask([user(body)]);
 		} catch (err) {
-			ctx.ui.notify(`pired: extraction call failed — ${err instanceof Error ? err.message : String(err)}`, "warning");
+			// An abort is not a failure. The operator sent a prompt, this pass got out
+			// of the way, and the review it was reading is still buffered — so it
+			// leaves no fingerprint, says nothing, and the next idle moment picks the
+			// same work up. Anything else is a real failure worth a line.
+			if (aborted(err, signal)) { forget(); return; }
+			forget();
+			if (trigger === "manual") ctx.ui.notify(`pired: scribe call failed — ${err instanceof Error ? err.message : String(err)}`, "warning");
 			return;
 		}
 		let reply = first.text;
 
 		let parsed = parseExtraction(reply);
 		let retryError: string | undefined;
-		if (parsed.extraction.findings.length === 0 && parsed.extraction.classes.length === 0) {
+		if (needsRetry(parsed, rollCall.length > 0)) {
 			// One retry, as a third message rather than a second prompt. The comment
 			// here used to promise "with the reply in context so the model can see
 			// what it did" while the code sent a lone user message with the nudge
@@ -1365,7 +1464,10 @@ export default function piredExtension(pi: ExtensionAPI): void {
 					if (gain > 0) { reply = second; parsed = reparsed; }
 				}
 			} catch (err) {
-				retryError = err instanceof Error ? err.message : String(err);
+				// An aborted retry is not a failed one: keep whatever the first reply
+				// parsed to and write it, rather than reporting a failure the operator
+				// caused by typing.
+				if (!aborted(err, signal)) retryError = err instanceof Error ? err.message : String(err);
 			}
 		}
 
@@ -1373,7 +1475,7 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		// is undiagnosable without seeing what the model actually said, and this is
 		// the one artifact that explains it.
 		try {
-			await ws.writeEvidence(`extraction-${Date.now()}.txt`, reply);
+			await ws.writeEvidence(`scribe-${Date.now()}.txt`, reply);
 		} catch { /* diagnostics must never break the run */ }
 
 		const { extraction, errors } = parsed;
@@ -1455,29 +1557,63 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		else barrenExtractions += 1;
 
 		const unready = await countUnready(ws);
+		// What a pass that did not ask the roll-call owes the operator: the reason
+		// coverage did not move is that nobody asked it to, and a number that stays
+		// at zero without saying why is the failure the roll-call was built for.
+		const sweepHint = !sweep && classes.length > 0 ? " · `/scribe` settles the checklist" : "";
+		const settled = sweep ? `, ${applied.settled} cells settled` : "";
 		ctx.ui.notify(
 			wrote > 0
-				? `pired: extracted ${applied.surface} surface, ${applied.settled} cells settled, ${applied.findings} findings${untouched}${again}${dropped}${unready}`
+				? `pired: scribe — ${applied.surface} surface${settled}, ${applied.findings} findings${untouched}${again}${dropped}${unready}${sweepHint}`
 				: applied.repeats > 0
-					? `pired: nothing new — ${applied.repeats} row(s) already recorded${untouched}${dropped}`
-					: `pired: extraction produced nothing${dropped ? ` (${errors[0]})` : ""}`,
-			wrote > 0 || applied.repeats > 0 ? "info" : "warning",
+					? `pired: scribe — nothing new, ${applied.repeats} row(s) already recorded${untouched}${dropped}${sweepHint}`
+					: `pired: scribe — nothing to write${dropped ? ` (${errors[0]})` : ""}${sweepHint}`,
+			wrote > 0 || applied.repeats > 0 ? "info" : trigger === "manual" ? "warning" : "info",
 		);
+	};
+
+	/**
+	 * Start a pass in the background, and never more than one.
+	 *
+	 * Not awaited by anything: that is the entire point. The caller is an event
+	 * handler the agent loop is waiting on, and a pass that ran inside it would be
+	 * the stall this redesign exists to remove.
+	 */
+	const startScribe = (ctx: ExtensionContext, sweep: boolean): void => {
+		// A run that has been called off no longer holds the slot. It may still be
+		// draining — writing rows its model call already earned — but it will make
+		// no further call, and making the next pass wait on that would cost the
+		// engagement a whole idle window for a keystroke. Overlapping writes are
+		// what `record`'s identity check is for.
+		if (scribeRun && !scribeRun.abort.signal.aborted) return;
+		const abort = new AbortController();
+		const run = {
+			abort,
+			done: runScribe(ctx, reviewSoFar(), { trigger: "auto", sweep, signal: abort.signal })
+				// A background pass must never take the session down with it, and it has
+				// already said anything worth saying.
+				.catch(() => {})
+				.then(() => {
+					if (scribeRun?.abort === abort) scribeRun = undefined;
+				}),
+		};
+		scribeRun = run;
+	};
+
+	/**
+	 * Drop the pass the moment the operator wants the machine back.
+	 *
+	 * Only the model call is abandoned. Rows from a call that already answered are
+	 * written out — they are paid for, and throwing them away would lose the
+	 * engagement's record to a keystroke.
+	 */
+	const stopScribe = (): void => {
+		scribeRun?.abort.abort();
 	};
 
 	pi.on("tool_execution_end", async (event, ctx) => {
 		if (event.toolName === "record" && !event.isError) {
-			recordsThisTurn += 1;
-			// `record` reports what it wrote in its result details; the event carries
-			// no input. A bulk hypothesis call settles several cells in one go, so
-			// count the ids rather than the call — and only the ids it CREATED. A
-			// turn that re-recorded what was already in the ledger has not claimed
-			// anything new, and counting it as a claim is exactly how the rescue
-			// pass stops firing on the turns that need it.
-			const details = (event.result as { details?: { kind?: unknown; created?: unknown[] } } | undefined)?.details;
-			if (details?.kind === "hypothesis" || details?.kind === "finding") {
-				claimsThisTurn += Array.isArray(details.created) ? details.created.length : 1;
-			}
+			const details = (event.result as { details?: { kind?: unknown } } | undefined)?.details;
 			// Re-read only when the model actually changed. The next turn's prompt
 			// is built from this variable, so a section corrected now is in front of
 			// the agent immediately rather than at the next session.
@@ -1487,14 +1623,14 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		}
 	});
 
+	/**
+	 * A turn is not the end of the operator's request: it is one assistant message
+	 * plus its tool batch, and pi's agent loop AWAITS this handler before starting
+	 * the next one. So the only work allowed here is the work a review cannot
+	 * afford to lose — appending this turn's prose to the buffer. Everything that
+	 * costs a model call happens once the agent has settled, below.
+	 */
 	pi.on("turn_end", async (event, ctx) => {
-		const wrote = recordsThisTurn;
-		const claims = claimsThisTurn;
-		recordsThisTurn = 0;
-		claimsThisTurn = 0;
-		// Phase two, and only when phase one skipped the ledger. A turn that
-		// recorded as it went needs nothing; a turn that reviewed at length and
-		// wrote nothing is the failure this exists for.
 		const review = assistantText(event.message);
 		if (review.length > 0) {
 			reviewTurns.push(review);
@@ -1511,41 +1647,56 @@ export default function piredExtension(pi: ExtensionAPI): void {
 				};
 			}
 		}
-		// Two reasons to run the second pass, and only one of them is a rescue.
-		//
-		// A turn that settled nothing needs rescuing. But a turn that recorded
-		// plenty still leaves the checklist unanswered: the agent records what it
-		// FINDS, and nothing prompts it to say what it examined and ruled out. Take
-		// nine wrote 242 hypotheses, every one of them confirmed, and coverage read
-		// 2% — the matrix showed vulnerable cells and untested ones and no cleared
-		// ones at all, which is the half of an engagement a findings list already
-		// gives you for free.
-		//
-		// The class roll-call is what asks the question, and gating it on "recorded
-		// nothing" meant a run that went well was never asked.
-		void wrote;
-		// Measured against everything recorded so far, not this turn alone: a short
-		// closing turn must still be able to trigger the checklist pass.
-		//
-		// The `autoExtract` guard is first so that `/extract off` also spares the
-		// ledger reads below, not just the model call.
-		// Gated on new review rather than on the ledger's state. `claims === 0` and
-		// `unanswered > 0` are both permanently true in a real engagement — a class
-		// the extractor calls "not-considered" is never settled, and an agent that
-		// records nothing itself never raises claims — so together they fired a pass
-		// every single turn. Eighteen on one target, none of which settled anything,
-		// each carrying the whole review buffer to a server that answers one call at
-		// a time.
-		if (autoExtract && shouldExtract({
+		await refreshStatus(ctx);
+	});
+
+	/**
+	 * The scribe's moment: pi has finished and will not continue on its own.
+	 *
+	 * Two rules make this cheap. It is not awaited — `agent_settled` handlers are,
+	 * and a pass that blocked here would delay the operator's next prompt instead
+	 * of the agent's next turn, which is the same bug wearing a different hat. And
+	 * it is gated on new review rather than on the ledger's state: `claims === 0`
+	 * and `unanswered > 0` are both permanently true in a real engagement — a
+	 * class the roll-call calls "not-considered" is never settled, and an agent
+	 * that records nothing itself never raises claims — so together they fired a
+	 * pass every single turn. Eighteen on one target, none of which settled
+	 * anything, each carrying the whole review buffer to a server that answers one
+	 * call at a time.
+	 *
+	 * With the scribe off — the default — the same gate is what decides the offer
+	 * is worth making, so an operator who never turns it on is told once that a
+	 * review is sitting in a buffer, and never again.
+	 */
+	pi.on("agent_settled", async (_event, ctx) => {
+		if (!workspace || !recordTool) return;
+		if (!shouldExtract({
 			reviewLength: reviewSoFar().length,
 			lastLength: lastExtractLength,
 			barren: barrenExtractions,
 			min: EXTRACT_MIN_REVIEW,
 			growth: EXTRACT_GROWTH,
-		})) {
-			await runExtraction(ctx, reviewSoFar(), "auto");
+		})) return;
+		if (!scribeAuto) {
+			if (scribeOffered) return;
+			scribeOffered = true;
+			ctx.ui.notify(
+				`pired: ${reviewTurns.length} turn(s) of review buffered and unrecorded — \`/scribe\` writes it to the ledger, \`/scribe on\` does it after every reply`,
+				"info",
+			);
+			return;
 		}
-		await refreshStatus(ctx);
+		startScribe(ctx, false);
+	});
+
+	/**
+	 * The operator typed. Whatever the scribe was doing matters less than that.
+	 *
+	 * On a local server answering one request at a time, dropping this call is
+	 * also what hands the slot back to the agent they are now waiting on.
+	 */
+	pi.on("input", async () => {
+		stopScribe();
 	});
 
 	/**
@@ -1997,41 +2148,69 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	});
 
 	/**
-	 * `/extract` runs the second pass now; `/extract off` stops it running itself.
+	 * `/scribe` writes the review into the ledger now; `/scribe on` lets it happen
+	 * by itself.
+	 *
+	 * Named for the job rather than the mechanism. "Extract" described what the
+	 * code does to a string; what the operator has is someone who sits through the
+	 * review and takes it down — findings, surface, and what was ruled out — so
+	 * that a consultant's conclusions survive the transcript. It also makes the
+	 * off state sayable, which a mode nobody can name never is.
 	 *
 	 * One command rather than two, for the same reason `/panel` is one command:
-	 * the verb and the switch are the same subject, and a second name for the
-	 * switch is a second thing to remember. `off` disables only the automatic
-	 * pass — asking for one by hand keeps working, which is the difference
-	 * between turning a reviewer off and taking it away.
+	 * the verb and the switch are the same subject. Typed bare it SWEEPS — the
+	 * roll-call included — because an explicit ask is exactly when the slower,
+	 * complete answer is the one wanted.
 	 */
+	const scribeCommand = async (args: string, ctx: ExtensionContext): Promise<void> => {
+		const arg = (args ?? "").trim().toLowerCase();
+		if (arg === "off" || arg === "on") {
+			scribeAuto = arg === "on";
+			// Turning it off must also stop the one already running, or "off" is a
+			// setting that takes effect after the thing it disables has finished.
+			if (!scribeAuto) stopScribe();
+			await refreshStatus(ctx);
+			ctx.ui.notify(
+				scribeAuto
+					? "pired: scribe on — after every reply, new review is read into the ledger while you read it. `/scribe` still sweeps the checklist"
+					: "pired: scribe off — `/scribe` writes the review into the ledger when you ask",
+				"info",
+			);
+			return;
+		}
+		if (arg === "status") {
+			ctx.ui.notify(
+				`pired: scribe is ${scribeState()} · ${reviewTurns.length} turn(s) buffered, ${reviewSoFar().length} chars`,
+				"info",
+			);
+			return;
+		}
+		if (reviewTurns.length === 0) {
+			ctx.ui.notify("pired: nothing to write — no review in this session yet", "warning");
+			return;
+		}
+		// The operator asked, so this one is awaited and it sweeps. An automatic
+		// pass already in flight is dropped rather than raced: it is reading a
+		// subset of the same buffer.
+		stopScribe();
+		scribeByHand = true;
+		try {
+			await runScribe(ctx, reviewSoFar(), { trigger: "manual", sweep: arg !== "quick" });
+		} finally {
+			scribeByHand = false;
+		}
+	};
+
+	pi.registerCommand("scribe", {
+		description: "Write the review into the ledger now, checklist included — `on` | `off` | `status` | `quick`",
+		handler: scribeCommand,
+	});
+	// The name this had for its whole life so far. Kept because it is in the
+	// docs, in the muscle memory and in at least one operator's notes, and
+	// because a rename that breaks the command is a rename that gets reverted.
 	pi.registerCommand("extract", {
-		description: "Convert the review into ledger records now — `off` | `on` | `status` control the automatic pass",
-		handler: async (args, ctx) => {
-			const arg = (args ?? "").trim().toLowerCase();
-			if (arg === "off" || arg === "on") {
-				autoExtract = arg === "on";
-				ctx.ui.notify(
-					autoExtract
-						? "pired: automatic extraction on — a turn that leaves the checklist unanswered runs a second pass"
-						: "pired: automatic extraction off for this session — `/extract` still runs one on demand",
-					"info",
-				);
-				return;
-			}
-			if (arg === "status") {
-				ctx.ui.notify(
-					`pired: automatic extraction is ${autoExtract ? "on" : "off"} · ${reviewTurns.length} turn(s) buffered, ${reviewSoFar().length} chars`,
-					"info",
-				);
-				return;
-			}
-			if (reviewTurns.length === 0) {
-				ctx.ui.notify("pired: nothing to extract — no review in this session yet", "warning");
-				return;
-			}
-			await runExtraction(ctx, reviewSoFar(), "manual");
-		},
+		description: "Alias for `/scribe`.",
+		handler: scribeCommand,
 	});
 
 	/**
@@ -2102,7 +2281,7 @@ export default function piredExtension(pi: ExtensionAPI): void {
 			// Say what is missing instead.
 			if (findings.length === 0) {
 				ctx.ui.notify(
-					"pired: nothing to report yet — no findings recorded. The agent records them as it confirms them; `/extract` converts a review it has already written.",
+					"pired: nothing to report yet — no findings recorded. The agent records them as it confirms them; `/scribe` writes up a review it has already produced.",
 					"warning",
 				);
 				return;

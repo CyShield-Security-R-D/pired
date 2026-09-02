@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { layoutStatusLine, type Segment } from "./statusline.ts";
+import { layoutStatusLine, scribeStatus, type Segment } from "./statusline.ts";
 
 /** Stand-ins for pi-tui's visibleWidth/truncateToWidth: ANSI-blind, ASCII-only. */
 const strip = (s: string): string => s.replace(/\x1b\[[0-9;]*m/g, "");
@@ -119,5 +119,42 @@ describe("layoutStatusLine", () => {
 	it("ignores empty segments rather than emitting stray separators", () => {
 		const line = layout([{ text: "pired" }, { text: "" }, { text: "cov 40%" }], [], 40);
 		expect(line).toBe("pired · cov 40%");
+	});
+});
+
+describe("saying what the scribe is doing", () => {
+	// The scribe costs a model call and is off until asked for, so the line has
+	// to carry its state. An operator who assumes their findings are being
+	// written to the ledger and is wrong finds out when they run the report.
+	it("spells the off state out rather than falling silent", () => {
+		expect(scribeStatus("off").text).toContain("off");
+		expect(scribeStatus("off").compact).toContain("off");
+	});
+
+	it("distinguishes armed from working", () => {
+		expect(scribeStatus("on").text).not.toContain("off");
+		expect(scribeStatus("running").text).not.toBe(scribeStatus("on").text);
+		// The ellipsis is the whole difference at a glance: something is in flight.
+		expect(scribeStatus("running").text).toContain("…");
+	});
+
+	it("has a compact gear for every state, and it is never longer", () => {
+		for (const state of ["off", "on", "running"] as const) {
+			const { text, compact } = scribeStatus(state);
+			expect(compact.length).toBeLessThanOrEqual(text.length);
+			expect(compact.length).toBeGreaterThan(0);
+		}
+	});
+
+	it("survives a narrow line as the compact form rather than vanishing", () => {
+		// Priority puts it below the engagement's own numbers, so what matters is
+		// that it downshifts before it drops.
+		const scribe = scribeStatus("off");
+		const line = layout(
+			[{ text: "⦿ engagement" }, { text: scribe.text, compact: scribe.compact, priority: 5 }],
+			[],
+			22,
+		);
+		expect(line).toContain("off");
 	});
 });

@@ -53,7 +53,15 @@ because each exists to stop a specific failure that already happened:
   nothing; `not-considered` writes nothing at all; a rejected finding takes its
   derived hypothesis down with it, so no cell is ever confirmed with nothing in
   the report behind it. Also the review window, which is shaped by the prefix
-  cache — see [commands.md](commands.md#extraction-and-why-it-exists).
+  cache — see [commands.md](commands.md#the-scribe-and-why-it-exists). The cheap
+  pass and the sweep are here too: which classes a roll-call still has a question
+  for, and when an empty reply is an answer rather than a failure.
+- **`extensions/scribe.test.ts`** — *where* that pass runs, which is the half a
+  pure test cannot see. pi awaits every event handler, so the assertions count
+  model calls per event: none at `turn_end` however much review a turn produced,
+  one after `agent_settled`, and an in-flight pass abandoned the moment the
+  operator types. It drives the real extension against a real workspace in a
+  temp directory with only the model mocked.
 - **`eval/grade.test.ts`** — the grader, which decides every number the project
   reports about itself. A grader that is wrong in the agent's favour does not
   look like a bug, it looks like a good result. The cases are written around the

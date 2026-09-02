@@ -116,3 +116,26 @@ export function layoutStatusLine(opts: StatusLineOptions): string {
 	// Mandatory content alone still overflows — truncate rather than corrupt the frame.
 	return truncate([left, right].filter((s) => s.length > 0).join(" ".repeat(minGap)), width);
 }
+
+/** What the scribe is doing, as the status line has to say it. */
+export type ScribeState = "off" | "on" | "running";
+
+/**
+ * How the scribe is named on the status line, in both gears.
+ *
+ * Here rather than in the footer because two surfaces render it — the custom
+ * footer and the plain `setStatus` line pi shows in print, RPC and any host
+ * without the footer — and a mode described one way in one place and another
+ * way elsewhere is a mode the operator has to learn twice.
+ *
+ * The off state is spelled out. It is the default, it means findings are NOT
+ * being written to the ledger unless the agent records them itself, and an
+ * operator who assumes otherwise discovers the gap when they run the report,
+ * which is the worst possible moment. The on state can afford to be quiet: a
+ * pass that is working announces itself when it finishes.
+ */
+export function scribeStatus(state: ScribeState): { text: string; compact: string } {
+	if (state === "running") return { text: "✎ scribe…", compact: "✎…" };
+	if (state === "on") return { text: "✎ scribe", compact: "✎" };
+	return { text: "✎ scribe off", compact: "✎off" };
+}
