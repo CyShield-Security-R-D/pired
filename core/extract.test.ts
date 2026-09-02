@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { applyPlan, classFromCwe, elementArgs, extractionSystemPrompt, extractionUserMessage, hypothesisForFinding, needsRetry, parseExtraction, planExtraction, REVIEW_SEPARATOR, reviewEviction, reviewWindow, rollCallClasses, type Extraction, type PlannedRecord, type RecordOutcome, shouldExtract, extractionThreshold } from "./extract.ts";
+import { applyPlan, classFromCwe, elementArgs, extractionSystemPrompt, extractionUserMessage, hypothesisForFinding, needsRetry, parseExtraction, planExtraction, REVIEW_SEPARATOR, reviewEviction, reviewWindow, rollCallClasses, type Extraction, type PlanLedger, type PlannedRecord, type RecordOutcome, shouldExtract, extractionThreshold } from "./extract.ts";
+import type { Fields } from "./identity.ts";
 
 const GOOD = `{
   "surface": [{"kind":"endpoint","label":"POST /api/login"},{"kind":"endpoint","label":"GET /api/transactions"}],
@@ -359,14 +360,23 @@ function extraction(over: Partial<Extraction> = {}): Extraction {
 	return { surface: [], findings: [], hypotheses: [], classes: [], ...over };
 }
 
-function plan(over: Partial<Extraction> = {}, opts: { known?: string[]; allSurface?: string[] } = {}) {
+function plan(
+	over: Partial<Extraction> = {},
+	opts: { known?: string[]; allSurface?: string[]; ledger?: Partial<PlanLedger> } = {},
+) {
 	return planExtraction({
 		extraction: extraction(over),
 		known: new Set(opts.known ?? []),
 		allSurface: opts.allSurface ?? [],
 		classes: CLASSES,
+		...(opts.ledger
+			? { ledger: { findings: [], hypotheses: [], inventory: [], ...opts.ledger } as PlanLedger }
+			: {}),
 	});
 }
+
+/** A row as the ledger stores it: what `record` wrote, not what the plan offered. */
+const stored = (over: Fields): Fields => ({ v: 1, id: "r1", createdAt: "2026-01-01T00:00:00Z", ...over });
 
 describe("planning the surface", () => {
 	it("records an element the ledger has never seen", () => {
@@ -805,5 +815,162 @@ describe("what a target means depends on what is being recorded", () => {
 			new Map([["FetchController.php:95", "ae6ea1"]]),
 		);
 		expect(seen[0]?.target).toBe("FetchController.php:95");
+	});
+});
+
+
+describe("a plan that has read the ledger", () => {
+	/**
+	 * The pass re-reads a review buffer that only grows, so on the fifth pass most
+	 * of what it offers was recorded on the first. `record` folds a repeat rather
+	 * than writing a second row — but folding one costs a call, and a roll-call
+	 * refutation fans across the whole surface, so forty elements is forty calls a
+	 * pass to conclude forty times that nothing changed.
+	 */
+	it("does not offer a finding that is already recorded", () => {
+		const { records, skipped } = plan(
+			{ findings: [{ title: "SQL injection in login", severity: "critical", class: "sqli", file: "auth.py", line: 30 }] },
+			{ ledger: { findings: [stored({ kind: "finding", title: "SQL injection in login", severity: "critical", class: "sqli", target: "auth.py:30" })] } },
+		);
+		expect(records.filter((r) => r.args.kind === "finding")).toHaveLength(0);
+		expect(skipped.findings).toBe(1);
+		// The cell it implies is a separate question: the finding was recorded, the
+		// coverage it settles was not, and that row is still owed.
+		expect(records.filter((r) => r.args.kind === "hypothesis")).toHaveLength(1);
+	});
+
+	it("still offers one that adds something", () => {
+		// A second sighting carrying a line number, a fuller description or a worse
+		// severity is an update, not a duplicate, and `record` merges it.
+		const { records } = plan(
+			{ findings: [{ title: "SQL injection in login", severity: "critical", class: "sqli", file: "auth.py", line: 30, description: "f-string SQL in the login handler" }] },
+			{ ledger: { findings: [stored({ kind: "finding", title: "SQL injection in login", severity: "critical", class: "sqli", target: "auth.py:30" })] } },
+		);
+		expect(records.filter((r) => r.args.kind === "finding")).toHaveLength(1);
+	});
+
+	it("leaves out a reworded finding in the same place, and says why", () => {
+		// The one rule this pass applies more harshly than the agent does. `record`
+		// writes a near-duplicate and reports it, because when the AGENT records
+		// something that resembles an existing finding it may have found a second
+		// bug. This pass is re-reading prose it has already transcribed.
+		const { records, notes, skipped } = plan(
+			{ findings: [{ title: "SQLi in the login route", severity: "high", file: "auth.py", line: 30 }] },
+			{ ledger: { findings: [stored({ kind: "finding", title: "SQL injection in login", severity: "critical", class: "sqli", target: "auth.py:30" })] } },
+		);
+		expect(records).toHaveLength(0);
+		expect(skipped.findings).toBe(1);
+		expect(notes.join(" ")).toContain("already recorded");
+	});
+
+	it("keeps two different weaknesses at one location apart", () => {
+		// "Missing authentication on /admin" and "Missing authorization on /admin"
+		// are two thirds the same words in the same place. The checklist class is
+		// the only thing that knows they are two bugs, and a client's report needs
+		// both.
+		const { records } = plan(
+			{ findings: [{ title: "Missing authorization on /admin", severity: "high", class: "authz", file: "admin.py", line: 12 }] },
+			{ ledger: { findings: [stored({ kind: "finding", title: "Missing authentication on /admin", severity: "high", class: "sqli", target: "admin.py:12" })] } },
+		);
+		expect(records.filter((r) => r.args.kind === "finding")).toHaveLength(1);
+	});
+
+	it("keeps a genuinely different finding in the same file", () => {
+		const { records } = plan(
+			{ findings: [{ title: "Missing rate limit", severity: "low", class: "authz", file: "auth.py", line: 88 }] },
+			{ ledger: { findings: [stored({ kind: "finding", title: "SQL injection in login", severity: "critical", class: "sqli", target: "auth.py:30" })] } },
+		);
+		expect(records.filter((r) => r.args.kind === "finding")).toHaveLength(1);
+	});
+
+	it("drops the cells a roll-call already settled, and the row when none are left", () => {
+		const { records, skipped } = plan(
+			{ classes: [{ class: "ssti", verdict: "refuted", why: "no template rendering of user input", targets: [] }] },
+			{
+				allSurface: ["e1", "e2"],
+				ledger: {
+					hypotheses: [
+						stored({ kind: "hypothesis", target: "e1", class: "ssti", outcome: "refuted", statement: "no template rendering of user input" }),
+						stored({ kind: "hypothesis", target: "e2", class: "ssti", outcome: "refuted", statement: "no template rendering of user input", id: "r2" }),
+					],
+				},
+			},
+		);
+		expect(records).toHaveLength(0);
+		expect(skipped.cells).toBe(2);
+	});
+
+	it("keeps the cells that are still open", () => {
+		const { records, skipped } = plan(
+			{ classes: [{ class: "ssti", verdict: "refuted", why: "no template rendering of user input", targets: [] }] },
+			{
+				allSurface: ["e1", "e2"],
+				ledger: { hypotheses: [stored({ kind: "hypothesis", target: "e1", class: "ssti", outcome: "refuted", statement: "no template rendering of user input" })] },
+			},
+		);
+		expect(records).toHaveLength(1);
+		expect(records[0]?.args.target).toEqual(["e2"]);
+		expect(skipped.cells).toBe(1);
+	});
+
+	it("offers a stronger claim about a cell that is already settled", () => {
+		// Refuted, then confirmed: that is not a repeat, it is the review changing
+		// its mind with evidence, and the cell must move.
+		const { records } = plan(
+			{ classes: [{ class: "sqli", verdict: "confirmed", why: "f-string SQL", targets: ["e1"] }] },
+			{ ledger: { hypotheses: [stored({ kind: "hypothesis", target: "e1", class: "sqli", outcome: "refuted", statement: "parameterised everywhere" })] } },
+		);
+		expect(records).toHaveLength(1);
+	});
+
+	it("resolves a target the way the ledger stores it before comparing", () => {
+		// The plan speaks the review's own words and the ledger keys a cell on the
+		// element id. Without the map every roll-call target looks new.
+		const { records } = plan(
+			{ classes: [{ class: "sqli", verdict: "confirmed", why: "f-string SQL", targets: ["POST /api/login"] }] },
+			{
+				ledger: {
+					idFor: new Map([["POST /api/login", "e1"]]),
+					hypotheses: [stored({ kind: "hypothesis", target: "e1", class: "sqli", outcome: "confirmed", statement: "f-string SQL" })],
+				},
+			},
+		);
+		expect(records).toHaveLength(0);
+	});
+
+	it("recognises a surface element the label does not match", () => {
+		// "POST /api/login" and "/api/login" are one route; the exact-label check
+		// cannot see that, and two rows would split its coverage.
+		const { records, skipped } = plan(
+			{ surface: [{ kind: "endpoint", label: "/api/login" }] },
+			{ ledger: { inventory: [stored({ kind: "endpoint", method: "POST", path: "/api/login" })] } },
+		);
+		expect(records).toHaveLength(0);
+		expect(skipped.surface).toBe(1);
+	});
+
+	it("writes one row when a single pass names the same thing twice", () => {
+		const { records } = plan(
+			{
+				surface: [{ kind: "endpoint", label: "GET /a" }, { kind: "endpoint", label: "GET /a" }],
+				findings: [
+					{ title: "IDOR on /a", severity: "high", class: "authz", file: "a.py", line: 4 },
+					{ title: "IDOR on /a", severity: "high", class: "authz", file: "a.py", line: 4 },
+				],
+			},
+			{ ledger: {} },
+		);
+		expect(records.filter((r) => r.args.kind === "endpoint")).toHaveLength(1);
+		expect(records.filter((r) => r.args.kind === "finding")).toHaveLength(1);
+	});
+
+	it("does not hang a coverage claim on a finding it decided not to write", () => {
+		// `dependsOnPrevious` means "only if the row before it landed". With the
+		// finding skipped, the row before is whatever happens to precede it.
+		const { records } = plan(
+			{ findings: [{ title: "SQL injection in login", severity: "critical", class: "sqli", file: "auth.py", line: 30 }] },
+			{ ledger: { findings: [stored({ kind: "finding", title: "SQL injection in login", severity: "critical", class: "sqli", target: "auth.py:30" })] } },
+		);
+		expect(records.every((r) => r.dependsOnPrevious !== true)).toBe(true);
 	});
 });

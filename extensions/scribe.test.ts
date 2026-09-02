@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -87,6 +87,17 @@ function host() {
 	piredExtension(api as never);
 	return {
 		notes,
+		/** The ledger on disk, one entry per live row: the stores are append-only. */
+		rows: (store: string): Array<Record<string, unknown>> => {
+			const path = join(cwd, "ws", `${store}.jsonl`);
+			if (!existsSync(path)) return [];
+			const byId = new Map<string, Record<string, unknown>>();
+			for (const line of readFileSync(path, "utf8").split("\n").filter(Boolean)) {
+				const row = JSON.parse(line) as Record<string, unknown>;
+				byId.set(String(row.id), row);
+			}
+			return [...byId.values()];
+		},
 		status: () => status,
 		said: () => notes.join(" | "),
 		fire: async (event: string, payload: unknown = {}) => await events.get(event)?.(payload, ctx),
@@ -274,6 +285,56 @@ describe("/scribe as a switch", () => {
 		h.notes.length = 0;
 		await h.run("scribe", "status");
 		expect(h.said()).toContain("scribe is on");
+	});
+
+	it("writes one row when the same review is written up twice", async () => {
+		// The pass reads a buffer that only grows, so everything it wrote on the
+		// first pass is offered again on the second. Two rows for one bug is a
+		// deliverable that reports it twice and a coverage denominator that counts
+		// one route as two.
+		reset();
+		llm.reply = JSON.stringify({
+			surface: [{ kind: "endpoint", label: "POST /api/login" }],
+			findings: [{
+				title: "SQL injection in login", severity: "critical", cwe: "CWE-89",
+				file: "backend/auth.py", line: 30, description: "f-string SQL",
+			}],
+		});
+		const h = host();
+		await h.fire("session_start");
+		await h.fire("turn_end", turn(1));
+		await h.run("scribe");
+		await h.fire("turn_end", turn(2));
+		await h.run("scribe");
+		expect(h.rows("findings")).toHaveLength(1);
+		// Two elements, and both are real: the route the review mapped, and the file
+		// the finding names — `record` creates the second so the cell it settles
+		// exists. What matters is that the second pass added neither again.
+		expect(h.rows("inventory").filter((r) => r.kind === "endpoint")).toHaveLength(2);
+		// One bug, one cell: the finding's class settles sqli on that file once.
+		expect(h.rows("hypotheses")).toHaveLength(1);
+		expect(h.said()).toContain("already recorded");
+	});
+
+	it("writes one row when the second pass rewords the same finding", async () => {
+		// A model re-reading its own prose paraphrases. `record` writes a
+		// near-duplicate and reports it, because when the AGENT records something
+		// that resembles an existing finding it may have found a second bug; this
+		// pass is transcribing text it has already transcribed, and folds it.
+		reset();
+		llm.reply = JSON.stringify({
+			findings: [{ title: "SQL injection in login", severity: "critical", cwe: "CWE-89", file: "backend/auth.py", line: 30 }],
+		});
+		const h = host();
+		await h.fire("session_start");
+		await h.fire("turn_end", turn(1));
+		await h.run("scribe");
+		llm.reply = JSON.stringify({
+			findings: [{ title: "SQLi in the login handler", severity: "high", file: "backend/auth.py", line: 30 }],
+		});
+		await h.fire("turn_end", turn(2));
+		await h.run("scribe");
+		expect(h.rows("findings")).toHaveLength(1);
 	});
 
 	it("says which state it is in on the status line", async () => {

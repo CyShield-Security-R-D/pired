@@ -85,6 +85,29 @@ default and costs a model call when it is not is a mode you should never have to
 ask about. `/scribe status` also reports how much review is buffered. The setting
 is session-scoped: a new session starts it off.
 
+#### One thing, one row
+
+The pass re-reads a buffer that only grows, so everything it wrote on the first
+pass is offered again on the second. Three rules keep that from becoming a
+ledger full of copies:
+
+- **The plan reads the ledger first.** A finding, an element or a coverage cell
+  that is already recorded is not offered at all — not offered, rather than
+  written and folded, because a roll-call refutation fans across every element on
+  the surface and forty elements is forty `record` calls a pass to conclude forty
+  times that nothing changed. A row that *would* change something — a line number,
+  an evidence path, a worse severity, a stronger verdict on a cell — still goes.
+- **A reworded finding in the same place is the same finding.** `record` writes a
+  near-duplicate and reports it, because when the *agent* records something that
+  resembles an existing finding it may have found a second bug and recall is what
+  cannot be recovered. The scribe is in a different position: it is transcribing
+  prose it has already transcribed, so it folds instead, names what it folded, and
+  stops only when the checklist classes say the two are different weaknesses.
+- **A cell named two ways is one cell.** Measured on LinkAce, "setupHttpRequest"
+  and "setupHttpRequest helper function" were two coverage cells for one thing —
+  and neither resolved to an element, so neither settled anything. A target that
+  contains another, on word boundaries, is now the same target.
+
 The pass re-reads the same buffer each time it runs, so it is built to be cheap
 to re-send: the window it hands the model is cut **at a turn boundary and in
 chunks**, never slid character by character, so appending a turn leaves every

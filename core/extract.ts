@@ -26,6 +26,7 @@
  * ledger writes belong to the adapter.
  */
 
+import { findDuplicate, findNearDuplicate, isNoOp, mergeRecord, type Fields, type IdentityKind } from "./identity.ts";
 import type { Severity } from "./ontology.ts";
 
 /** What the extractor is asked to produce. Deliberately small. */
@@ -555,6 +556,31 @@ export interface PlannedRecord {
 	dependsOnPrevious?: boolean;
 }
 
+/**
+ * The ledger as it stands, so the plan can leave out what is already in it.
+ *
+ * `record` has an identity check of its own and merges a repeat rather than
+ * writing a second row, so this is not the last line of defence — but it is the
+ * one that stops the traffic. This pass re-reads a review buffer that only
+ * grows, so on the fifth pass most of what it offers was recorded on the first:
+ * a roll-call refutation fans across every element on the surface, and forty
+ * elements is forty `record` calls a pass, each reading and re-parsing the
+ * store, to conclude forty times that nothing changed.
+ *
+ * Omitted, the plan behaves as it always did and `record` absorbs the repeats.
+ */
+export interface PlanLedger {
+	findings: Fields[];
+	hypotheses: Fields[];
+	inventory: Fields[];
+	/**
+	 * Label to element id, so a planned target is compared in the form it will be
+	 * STORED in. Without it every roll-call target looks new: the ledger keys a
+	 * cell on the element's id and the plan speaks the review's own words.
+	 */
+	idFor?: Map<string, string>;
+}
+
 export interface PlanInput {
 	extraction: Extraction;
 	/** Labels already in the ledger, so nothing is recorded twice. */
@@ -563,6 +589,15 @@ export interface PlanInput {
 	allSurface: string[];
 	/** Checklist classes and their CWEs, for recovering an omitted class. */
 	classes: Array<{ id: string; cwe?: string[] }>;
+	/** What is already recorded. See PlanLedger. */
+	ledger?: PlanLedger;
+}
+
+/** What the plan left out because the ledger already had it. */
+export interface PlanSkips {
+	surface: number;
+	findings: number;
+	cells: number;
 }
 
 /**
@@ -576,16 +611,74 @@ export interface PlanInput {
  * `target` values are LABELS. The adapter resolves them to ids, because ids for
  * rows this plan creates do not exist until it has run.
  */
-export function planExtraction(input: PlanInput): { records: PlannedRecord[]; notes: string[] } {
-	const { extraction, known, allSurface, classes } = input;
+export function planExtraction(input: PlanInput): { records: PlannedRecord[]; notes: string[]; skipped: PlanSkips } {
+	const { extraction, known, allSurface, classes, ledger } = input;
 	const records: PlannedRecord[] = [];
 	const notes: string[] = [];
+	const skipped: PlanSkips = { surface: 0, findings: 0, cells: 0 };
 	const ids = classes.map((c) => c.id);
 
+	/**
+	 * Rows this plan has already decided to write, so a pass that names the same
+	 * thing twice in one reply writes it once. The extractor does exactly that
+	 * when a review discusses one bug in two places.
+	 */
+	const planned: Record<"findings" | "hypotheses" | "inventory", Fields[]> = {
+		findings: [], hypotheses: [], inventory: [],
+	};
+
+	/**
+	 * Would writing this row change anything already recorded?
+	 *
+	 * The same three rules `record` applies when it decides a repeat is
+	 * "unchanged" — matched, merged, compared — run here so the answer is the
+	 * same one, reached before the call rather than after it. A row that WOULD
+	 * change something still goes: a second sighting that adds a line number, an
+	 * evidence path or a worse severity is an update, not a duplicate.
+	 */
+	const isNew = (kind: IdentityKind, store: keyof typeof planned, patch: Fields): boolean => {
+		if (!ledger) return true;
+		const pool = [...ledger[store], ...planned[store]];
+		const dup = findDuplicate(kind, patch, pool);
+		if (dup) return !isNoOp(dup, mergeRecord(kind, dup, patch));
+		return true;
+	};
+	const remember = (store: keyof typeof planned, patch: Fields): void => {
+		if (ledger) planned[store].push(patch);
+	};
+	/** The form a target is stored in: an element id where the label names one. */
+	const stored = (label: string): string => ledger?.idFor?.get(label) ?? label;
+
 	for (const el of extraction.surface) {
-		if (known.has(el.label)) continue;
-		records.push({ args: elementArgs(el), createsLabel: el.label });
+		if (known.has(el.label)) { skipped.surface += 1; continue; }
+		const args = elementArgs(el);
+		// Beyond the label: "POST /api/login" and "/api/login" are one route, and
+		// the exact-label check above cannot see that.
+		if (!isNew(el.kind, "inventory", { kind: el.kind, ...args })) { skipped.surface += 1; continue; }
+		remember("inventory", { kind: el.kind, ...args });
+		records.push({ args, createsLabel: el.label });
 	}
+
+	/**
+	 * The targets of a cross-product hypothesis that are not already settled this
+	 * way, and whether any survived.
+	 *
+	 * A roll-call refutation fans across the whole recorded surface, so on a
+	 * forty-element engagement it re-offers forty cells every pass. Filtering
+	 * here is the difference between forty `record` calls that conclude nothing
+	 * changed and no call at all.
+	 */
+	const unsettled = (targets: string[], cls: string, outcome: string, statement: string): string[] => {
+		if (!ledger) return targets;
+		const keep: string[] = [];
+		for (const t of targets) {
+			const patch: Fields = { kind: "hypothesis", target: stored(t), class: cls, outcome, statement };
+			if (!isNew("hypothesis", "hypotheses", patch)) { skipped.cells += 1; continue; }
+			remember("hypotheses", patch);
+			keep.push(t);
+		}
+		return keep;
+	};
 
 	for (const v of extraction.classes) {
 		if (v.verdict === "not-considered") continue;
@@ -595,21 +688,20 @@ export function planExtraction(input: PlanInput): { records: PlannedRecord[]; no
 		// what a consultant means by "we checked for SSTI and it is clean". A
 		// CONFIRMATION with no target settles nothing: "it is present somewhere" is
 		// not a cell, and spreading it over the whole surface would be a lie.
-		const targets = v.targets.length > 0 ? v.targets : outcome === "refuted" ? allSurface : [];
-		if (targets.length === 0) {
+		const named = v.targets.length > 0 ? v.targets : outcome === "refuted" ? allSurface : [];
+		if (named.length === 0) {
 			if (outcome === "confirmed") notes.push(`class "${v.class}" confirmed but named no target`);
 			continue;
 		}
-		records.push({
-			args: {
-				kind: "hypothesis", class: v.class, target: targets, outcome,
-				statement: v.why ?? `${v.class}: ${outcome === "refuted" ? "examined and found clean" : "confirmed"} during review`,
-			},
-		});
+		const statement = v.why ?? `${v.class}: ${outcome === "refuted" ? "examined and found clean" : "confirmed"} during review`;
+		const targets = unsettled(named, v.class, outcome, statement);
+		if (targets.length === 0) continue;
+		records.push({ args: { kind: "hypothesis", class: v.class, target: targets, outcome, statement } });
 	}
 
 	for (const h of extraction.hypotheses) {
 		if (!ids.includes(h.class)) { notes.push(`hypothesis class "${h.class}" is not in the checklist`); continue; }
+		if (unsettled([h.target], h.class, h.outcome, h.statement).length === 0) continue;
 		records.push({ args: { kind: "hypothesis", statement: h.statement, class: h.class, target: h.target, outcome: h.outcome } });
 	}
 
@@ -617,14 +709,50 @@ export function planExtraction(input: PlanInput): { records: PlannedRecord[]; no
 		const cls = (f.class && ids.includes(f.class) ? f.class : undefined) ?? classFromCwe(f.cwe, classes);
 		if (f.class && !ids.includes(f.class)) notes.push(`finding "${f.title.slice(0, 30)}…" had class "${f.class}", not in the checklist`);
 		const target = f.file ? `${f.file}${f.line ? `:${f.line}` : ""}` : undefined;
-		records.push({
-			args: {
-				kind: "finding", title: f.title, severity: f.severity,
-				...(cls ? { class: cls } : {}), ...(f.cwe ? { cwe: f.cwe } : {}),
-				...(target ? { target } : {}), ...(f.description ? { description: f.description } : {}),
-				...(f.impact ? { impact: f.impact } : {}), ...(f.remediation ? { remediation: f.remediation } : {}),
-			},
-		});
+		const args: Fields = {
+			kind: "finding", title: f.title, severity: f.severity,
+			...(cls ? { class: cls } : {}), ...(f.cwe ? { cwe: f.cwe } : {}),
+			...(target ? { target } : {}), ...(f.description ? { description: f.description } : {}),
+			...(f.impact ? { impact: f.impact } : {}), ...(f.remediation ? { remediation: f.remediation } : {}),
+		};
+		/**
+		 * Whether this finding is worth a call, and the one place this pass judges
+		 * a repeat more harshly than the agent does.
+		 *
+		 * `record` writes a near-duplicate and reports it, because when the AGENT
+		 * records something that merely resembles an existing finding it may well
+		 * have found a second bug, and losing a real one costs recall. This pass is
+		 * in a different position: it is re-reading prose it has already
+		 * transcribed, so the same bug in the same place under a reworded title is
+		 * the expected case, not the surprising one. It is left out and counted.
+		 */
+		let write = true;
+		if (ledger) {
+			const pool = [...ledger.findings, ...planned.findings];
+			const dup = findDuplicate("finding", args, pool);
+			if (dup) {
+				// Matched outright. Written only if it would change the row it matched —
+				// a line number, an evidence path, a worse severity.
+				write = !isNoOp(dup, mergeRecord("finding", dup, args));
+			} else {
+				const near = findNearDuplicate(args, pool);
+				// Unless the checklist says they are different weaknesses. "Missing
+				// authentication on /admin" and "Missing authorization on /admin" are
+				// two thirds the same words in the same place and two different bugs,
+				// and the classes are the only thing that knows it.
+				const split = cls !== undefined && near?.class !== undefined && cls !== near.class;
+				if (near && !split) {
+					notes.push(`"${f.title.slice(0, 40)}…" reads as the finding already recorded as "${String(near.title).slice(0, 40)}…"`);
+					write = false;
+				}
+			}
+		}
+		if (write) {
+			remember("findings", args);
+			records.push({ args });
+		} else {
+			skipped.findings += 1;
+		}
 		// Coverage is settled by a hypothesis outcome, never by a finding. Without
 		// this a run produces a full report beside an empty matrix.
 		// Settled only if something already claims THIS cell. Testing the class
@@ -636,14 +764,21 @@ export function planExtraction(input: PlanInput): { records: PlannedRecord[]; no
 		) || extraction.hypotheses.some((h) => h.class === cls && h.target === target);
 		if (cls && target && !alreadySettled) {
 			const h = hypothesisForFinding(f, cls, target);
-			records.push({
-				args: { kind: "hypothesis", statement: h.statement, class: h.class, target: h.target, outcome: h.outcome },
-				dependsOnPrevious: true,
-			});
+			if (unsettled([target], cls, h.outcome, h.statement).length > 0) {
+				records.push({
+					args: { kind: "hypothesis", statement: h.statement, class: h.class, target: h.target, outcome: h.outcome },
+					// Only when the finding it stands on is being written by THIS plan.
+					// A finding already in the ledger is a better reason for the cell than
+					// one written a line earlier, and pointing the dependency at whatever
+					// row happens to precede it is how a coverage claim ends up resting on
+					// an unrelated call.
+					...(write ? { dependsOnPrevious: true } : {}),
+				});
+			}
 		}
 	}
 
-	return { records, notes };
+	return { records, notes, skipped };
 }
 
 /** What running a plan produced, for the line the operator is shown. */

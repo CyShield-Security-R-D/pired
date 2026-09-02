@@ -37,6 +37,7 @@ import { complete } from "@earendil-works/pi-ai/compat";
 import type { AssistantMessage, Message, UserMessage } from "@earendil-works/pi-ai/compat";
 import { describePlan, type Ledgers, planCompaction } from "../core/dedupe.ts";
 import { applyPlan, extractionSystemPrompt, extractionUserMessage, needsRetry, parseExtraction, planExtraction, retryNudge, reviewEviction, reviewWindow, rollCallClasses, shouldExtract } from "../core/extract.ts";
+import type { Fields } from "../core/identity.ts";
 import { dismissHint, PANEL_MODES, renderFindingDetail, renderPanel, scrollFramed, type PanelData, type PanelMode, type PanelTone } from "../core/panel.ts";
 import { coverageBrief, renderCoverageBrief } from "../core/coverage.ts";
 import { computeCoverageView, computeEngagementStats, coveragePercent, type CoverageView, type EngagementStats } from "../core/stats.ts";
@@ -1517,8 +1518,19 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		// from a CWE, whether a finding also implies a hypothesis, what is a
 		// duplicate — used to live in a hundred lines of loop right here, where
 		// nothing could reach them.
-		const { records, notes } = planExtraction({
+		// The ledger goes in with the plan. `record` would fold a repeat anyway,
+		// but folding it costs a call — and on a forty-element surface a roll-call
+		// refutation is forty of them, every pass, to conclude forty times that
+		// nothing changed. What the plan can see is already recorded, it does not
+		// offer at all.
+		const { records, notes, skipped } = planExtraction({
 			extraction, known: new Set(idFor.keys()), allSurface, classes: classList,
+			ledger: {
+				findings: (await ws.read("findings")) as unknown as Fields[],
+				hypotheses: (await ws.read("hypotheses")) as unknown as Fields[],
+				inventory: inventory as unknown as Fields[],
+				idFor,
+			},
 		});
 		errors.push(...notes);
 		const applied = await applyPlan(
@@ -1535,6 +1547,9 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		);
 		errors.push(...applied.errors);
 		const wrote = applied.settled + applied.findings;
+		// Everything this pass recognised as already recorded: the rows it never
+		// offered, plus the ones `record` folded into what was there.
+		const folded = applied.repeats + skipped.surface + skipped.findings + skipped.cells;
 
 		await refreshStatus(ctx);
 		const dropped = errors.length > 0 ? ` · ${errors.length} row(s) dropped` : "";
@@ -1544,7 +1559,7 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		// already extracted last turn. Those rows are folded into the ones they
 		// match rather than duplicated, and saying so is the difference between a
 		// quiet pass that did nothing and a quiet pass that had nothing new to do.
-		const again = applied.repeats > 0 ? ` · ${applied.repeats} already recorded` : "";
+		const again = folded > 0 ? ` · ${folded} already recorded` : "";
 		// Said here, on the line the pass already prints, because a second notify
 		// would replace this one rather than follow it — and because now is when
 		// the reviewer still has the context to write the two paragraphs. The
@@ -1553,7 +1568,7 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		// already there did read new review and find it already captured, which is a
 		// result; only a pass that produced nothing at all counts as barren.
 		lastExtractLength = review.length;
-		if (wrote > 0 || applied.repeats > 0) barrenExtractions = 0;
+		if (wrote > 0 || folded > 0) barrenExtractions = 0;
 		else barrenExtractions += 1;
 
 		const unready = await countUnready(ws);
@@ -1565,10 +1580,10 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		ctx.ui.notify(
 			wrote > 0
 				? `pired: scribe — ${applied.surface} surface${settled}, ${applied.findings} findings${untouched}${again}${dropped}${unready}${sweepHint}`
-				: applied.repeats > 0
-					? `pired: scribe — nothing new, ${applied.repeats} row(s) already recorded${untouched}${dropped}${sweepHint}`
+				: folded > 0
+					? `pired: scribe — nothing new, ${folded} row(s) already recorded${untouched}${dropped}${sweepHint}`
 					: `pired: scribe — nothing to write${dropped ? ` (${errors[0]})` : ""}${sweepHint}`,
-			wrote > 0 || applied.repeats > 0 ? "info" : trigger === "manual" ? "warning" : "info",
+			wrote > 0 || folded > 0 ? "info" : trigger === "manual" ? "warning" : "info",
 		);
 	};
 

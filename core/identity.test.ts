@@ -337,3 +337,75 @@ describe("a file named two ways is one place", () => {
 			[f("SSRF", "Fetch.php:95")] as never)).toBeDefined();
 	});
 });
+
+describe("a cell named two ways", () => {
+	// Measured on LinkAce: "setupHttpRequest" and "setupHttpRequest helper
+	// function" were recorded as separate cells, as were "CheckLinksCommand" and
+	// "CheckLinksCommand link checking". Neither target resolved to an element, so
+	// both were stored as written, and one cell became two — each settling nothing.
+	const existing = [rec({ kind: "hypothesis", target: "setupHttpRequest", class: "ssrf", outcome: "confirmed", id: "y1" })];
+
+	it("folds a target that is prose around the same name", () => {
+		expect(findDuplicate("hypothesis", {
+			kind: "hypothesis", target: "setupHttpRequest helper function", class: "ssrf",
+		}, existing)).toMatchObject({ id: "y1" });
+	});
+
+	it("folds it in the other direction too", () => {
+		const wordy = [rec({ kind: "hypothesis", target: "CheckLinksCommand link checking", class: "ssrf", id: "y2" })];
+		expect(findDuplicate("hypothesis", { kind: "hypothesis", target: "CheckLinksCommand", class: "ssrf" }, wordy))
+			.toMatchObject({ id: "y2" });
+	});
+
+	it("ignores a trailing slash, which is the same route", () => {
+		const routes = [rec({ kind: "hypothesis", target: "/api/login", class: "sqli", id: "y3" })];
+		expect(findDuplicate("hypothesis", { kind: "hypothesis", target: "/api/login/", class: "sqli" }, routes))
+			.toMatchObject({ id: "y3" });
+	});
+
+	it("does not let one word swallow a longer one", () => {
+		// "user" inside "users" is not a name match, and merging those two cells
+		// would clear a route nobody tested.
+		const users = [rec({ kind: "hypothesis", target: "users", class: "authz", id: "y4" })];
+		expect(findDuplicate("hypothesis", { kind: "hypothesis", target: "user", class: "authz" }, users)).toBeUndefined();
+	});
+
+	it("will not match on a fragment too short to identify anything", () => {
+		const short = [rec({ kind: "hypothesis", target: "api", class: "authz", id: "y5" })];
+		expect(findDuplicate("hypothesis", { kind: "hypothesis", target: "api gateway routes", class: "authz" }, short))
+			.toBeUndefined();
+	});
+
+	it("keeps two genuinely different targets apart", () => {
+		const two = [rec({ kind: "hypothesis", target: "auth/user.go", class: "authz", id: "y6" })];
+		expect(findDuplicate("hypothesis", { kind: "hypothesis", target: "api/session.go", class: "authz" }, two))
+			.toBeUndefined();
+	});
+});
+
+describe("a finding recorded once against a place and once against nowhere", () => {
+	// From a client engagement: one hardcoded token, recorded against "config.json" and
+	// against "repo:acme-app". The second names no file — it names the engagement —
+	// and it is not a second secret.
+	const existing = [rec({ kind: "finding", title: "Hardcoded Telegram bot token", target: "config.json", severity: "high", id: "f1" })];
+
+	it("folds the recording that names no file", () => {
+		expect(findDuplicate("finding", {
+			kind: "finding", title: "Hardcoded Telegram bot token", target: "repo:acme-app", severity: "high",
+		}, existing)).toMatchObject({ id: "f1" });
+	});
+
+	it("folds one with no target at all", () => {
+		expect(findDuplicate("finding", { kind: "finding", title: "Hardcoded Telegram bot token", severity: "high" }, existing))
+			.toMatchObject({ id: "f1" });
+	});
+
+	it("still keeps the same weakness in two real files apart", () => {
+		// The recall guard. "Missing authorization check" in two routes is two
+		// findings, and a client's report must carry both.
+		const both = [rec({ kind: "finding", title: "Missing authorization check", target: "api/orders.go:31", severity: "high", id: "f2" })];
+		expect(findDuplicate("finding", {
+			kind: "finding", title: "Missing authorization check", target: "api/users.go:12", severity: "high",
+		}, both)).toBeUndefined();
+	});
+});

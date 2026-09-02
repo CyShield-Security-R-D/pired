@@ -19,7 +19,10 @@
  * deliverable that reports the same bug twice.
  *
  * So identity is defined here, once, and `record` refuses to create a second row
- * for something it can already name. Pure module: fields in, verdict out.
+ * for something it can already name. The scribe's planner (core/extract.ts) reads
+ * the same rules a step earlier and does not even offer what they would fold, so
+ * a roll-call that fans across forty elements stops costing forty calls to
+ * conclude forty times that nothing changed. Pure module: fields in, verdict out.
  */
 
 import { SEVERITIES, type Severity } from "./ontology.ts";
@@ -197,6 +200,11 @@ function sameFinding(patch: Fields, existing: Fields): boolean {
 	const there = findingLocation(existing);
 	// Same words, and nothing says they are in different places.
 	if (same(patch.title, existing.title) && sameLocation(here, there)) return true;
+	// Same words, and one of them names no file. "Hardcoded Telegram bot token"
+	// against "repo:acme-app" and against "config.json" is one secret written
+	// down twice, and the recording that names nowhere adds nothing that would
+	// make it a second bug.
+	if (same(patch.title, existing.title) && !(looksLikeFile(here) && looksLikeFile(there))) return true;
 	// Same coordinate, same checklist class: that IS one cell, however the two
 	// were worded. Requiring both classes to be present keeps two genuinely
 	// different bugs on one line (missing authn vs missing authz) apart, since
@@ -224,6 +232,54 @@ export function findNearDuplicate<T extends Fields>(patch: Fields, existing: T[]
 		if (titleOverlap(patch.title, rec.title) >= 0.6) return rec;
 	}
 	return undefined;
+}
+
+/**
+ * Does this location name a file at all?
+ *
+ * A finding's target is usually `path/file.ext:line`, but a review that found a
+ * secret in a config wrote "repo:acme-app" for one recording and "config.json"
+ * for the next. The first names no file — it names the engagement — and two
+ * findings with the same title where one of them is not anywhere in particular
+ * are one finding recorded twice.
+ */
+function looksLikeFile(loc: string | undefined): boolean {
+	if (loc === undefined) return false;
+	return loc.includes("/") || /\.[a-z0-9]{1,6}(:\d+)?$/i.test(loc);
+}
+
+/**
+ * One target named twice.
+ *
+ * A hypothesis's target is a coverage cell's key, so two spellings of one thing
+ * are two cells — one of which nobody will ever settle. Ids and paths are
+ * normalised by `norm`/`normPath`, but a review names things in prose:
+ * measured on LinkAce, "setupHttpRequest" and "setupHttpRequest helper
+ * function" were recorded as separate cells, as were "CheckLinksCommand" and
+ * "CheckLinksCommand link checking".
+ *
+ * So a target that CONTAINS another, on word boundaries, is the same target.
+ * The containment is required to be a whole phrase rather than a substring, so
+ * "user" does not swallow "users", and the shorter side must be four characters
+ * or more, so an initial or a stray token cannot merge two cells that have
+ * nothing to do with each other.
+ */
+const TARGET_MIN = 4;
+
+function sameTarget(a: unknown, b: unknown): boolean {
+	if (same(a, b) || same(a, b, normPath)) return true;
+	const x = norm(a);
+	const y = norm(b);
+	if (x === undefined || y === undefined) return false;
+	const [short, long] = x.length <= y.length ? [x, y] : [y, x];
+	if (short.length < TARGET_MIN) return false;
+	// Word boundaries on both ends: a name at the start, the end, or the middle
+	// of the longer phrase, never half of a longer word.
+	const at = long.indexOf(short);
+	if (at < 0) return false;
+	const before = at === 0 ? " " : long[at - 1] ?? " ";
+	const after = at + short.length >= long.length ? " " : long[at + short.length] ?? " ";
+	return !/[a-z0-9]/.test(before) && !/[a-z0-9]/.test(after);
 }
 
 // --- hypotheses -------------------------------------------------------------
@@ -266,7 +322,7 @@ function isSame(kind: IdentityKind, patch: Fields, existing: Fields): boolean {
 		case "hypothesis":
 			// (target, class) IS the coverage cell. One cell, one row — two rows can
 			// only disagree, and the disagreement is resolved by rank, not by order.
-			return same(patch.target, existing.target) && same(patch.class, existing.class);
+			return sameTarget(patch.target, existing.target) && same(patch.class, existing.class);
 		case "finding":
 			return sameFinding(patch, existing);
 		case "blocker":
