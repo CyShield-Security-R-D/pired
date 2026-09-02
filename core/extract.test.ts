@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyPlan, classFromCwe, elementArgs, extractionSystemPrompt, extractionUserMessage, hypothesisForFinding, parseExtraction, planExtraction, REVIEW_SEPARATOR, reviewEviction, reviewWindow, type Extraction, type PlannedRecord, type RecordOutcome } from "./extract.ts";
+import { applyPlan, classFromCwe, elementArgs, extractionSystemPrompt, extractionUserMessage, hypothesisForFinding, parseExtraction, planExtraction, REVIEW_SEPARATOR, reviewEviction, reviewWindow, type Extraction, type PlannedRecord, type RecordOutcome, shouldExtract, extractionThreshold } from "./extract.ts";
 
 const GOOD = `{
   "surface": [{"kind":"endpoint","label":"POST /api/login"},{"kind":"endpoint","label":"GET /api/transactions"}],
@@ -641,5 +641,41 @@ describe("impact and remediation, transcribed but never composed", () => {
 		});
 		expect(without.records[0]?.args).not.toHaveProperty("impact");
 		expect(without.records[0]?.args).not.toHaveProperty("remediation");
+	});
+});
+
+describe("deciding whether another extraction pass is worth making", () => {
+	const base = { reviewLength: 10_000, lastLength: 0, barren: 0, min: 1200, growth: 2000 };
+
+	it("waits until there is any review at all", () => {
+		expect(shouldExtract({ ...base, reviewLength: 800 })).toBe(false);
+	});
+
+	it("always makes the first pass — that is the rescue", () => {
+		expect(shouldExtract({ ...base, lastLength: 0 })).toBe(true);
+	});
+
+	it("does not run again on a turn that added almost nothing", () => {
+		// The bug: the buffer grows a little every turn, and a pass fired each time.
+		expect(shouldExtract({ ...base, reviewLength: 10_200, lastLength: 10_000 })).toBe(false);
+	});
+
+	it("runs once enough new review has accumulated", () => {
+		expect(shouldExtract({ ...base, reviewLength: 12_000, lastLength: 10_000 })).toBe(true);
+	});
+
+	it("asks for more each time a pass comes back empty", () => {
+		const at = (barren: number) => shouldExtract({ ...base, reviewLength: 14_000, lastLength: 10_000, barren });
+		expect(at(0)).toBe(true);   // 2k needed
+		expect(at(1)).toBe(true);   // 4k needed
+		expect(at(2)).toBe(false);  // 8k needed
+	});
+
+	it("caps the backoff so a long engagement still gets passes", () => {
+		expect(extractionThreshold(2000, 99)).toBe(extractionThreshold(2000, 5));
+	});
+
+	it("recovers immediately once a pass writes something", () => {
+		expect(shouldExtract({ ...base, reviewLength: 13_000, lastLength: 10_000, barren: 0 })).toBe(true);
 	});
 });

@@ -36,7 +36,7 @@ import { renderCoveragePanel, type Tone } from "../core/coverage-panel.ts";
 import { complete } from "@earendil-works/pi-ai/compat";
 import type { AssistantMessage, Message, UserMessage } from "@earendil-works/pi-ai/compat";
 import { describePlan, type Ledgers, planCompaction } from "../core/dedupe.ts";
-import { applyPlan, extractionSystemPrompt, extractionUserMessage, parseExtraction, planExtraction, retryNudge, reviewEviction, reviewWindow } from "../core/extract.ts";
+import { applyPlan, extractionSystemPrompt, extractionUserMessage, parseExtraction, planExtraction, retryNudge, reviewEviction, reviewWindow, shouldExtract } from "../core/extract.ts";
 import { dismissHint, PANEL_MODES, renderFindingDetail, renderPanel, scrollFramed, type PanelData, type PanelMode, type PanelTone } from "../core/panel.ts";
 import { coverageBrief, renderCoverageBrief } from "../core/coverage.ts";
 import { computeCoverageView, computeEngagementStats, coveragePercent, type CoverageView, type EngagementStats } from "../core/stats.ts";
@@ -317,6 +317,11 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	const reviewSoFar = (): string => reviewWindow(reviewTurns, reviewDropped);
 	/** Reviews already extracted, so a quiet turn does not duplicate a previous pass. */
 	const extractedAlready = new Set<string>();
+	/** Review length when a pass last ran, and how many since wrote nothing. */
+	let lastExtractLength = 0;
+	let barrenExtractions = 0;
+	/** New review a pass needs before it is worth making again. */
+	const EXTRACT_GROWTH = 2000;
 	/**
 	 * Whether the second pass runs on its own at turn end.
 	 *
@@ -1436,6 +1441,13 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		// would replace this one rather than follow it — and because now is when
 		// the reviewer still has the context to write the two paragraphs. The
 		// export says the same thing, but by then the report is being handed over.
+		// Whether this pass earned another one. A pass that folded rows into what was
+		// already there did read new review and find it already captured, which is a
+		// result; only a pass that produced nothing at all counts as barren.
+		lastExtractLength = review.length;
+		if (wrote > 0 || applied.repeats > 0) barrenExtractions = 0;
+		else barrenExtractions += 1;
+
 		const unready = await countUnready(ws);
 		ctx.ui.notify(
 			wrote > 0
@@ -1511,16 +1523,21 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		//
 		// The `autoExtract` guard is first so that `/extract off` also spares the
 		// ledger reads below, not just the model call.
-		if (autoExtract && reviewSoFar().length >= EXTRACT_MIN_REVIEW) {
-			const settledClasses = new Set(
-				(await workspace?.read("hypotheses") ?? [])
-					.filter((h) => h.outcome === "confirmed" || h.outcome === "refuted")
-					.map((h) => h.class),
-			);
-			const checklist = await workspace?.readChecklist();
-			const unanswered = (checklist?.classes ?? []).filter((c) => !settledClasses.has(c.id)).length;
-			// Rescue, or a checklist still carrying unanswered classes.
-			if (claims === 0 || unanswered > 0) await runExtraction(ctx, reviewSoFar(), "auto");
+		// Gated on new review rather than on the ledger's state. `claims === 0` and
+		// `unanswered > 0` are both permanently true in a real engagement — a class
+		// the extractor calls "not-considered" is never settled, and an agent that
+		// records nothing itself never raises claims — so together they fired a pass
+		// every single turn. Eighteen on one target, none of which settled anything,
+		// each carrying the whole review buffer to a server that answers one call at
+		// a time.
+		if (autoExtract && shouldExtract({
+			reviewLength: reviewSoFar().length,
+			lastLength: lastExtractLength,
+			barren: barrenExtractions,
+			min: EXTRACT_MIN_REVIEW,
+			growth: EXTRACT_GROWTH,
+		})) {
+			await runExtraction(ctx, reviewSoFar(), "auto");
 		}
 		await refreshStatus(ctx);
 	});

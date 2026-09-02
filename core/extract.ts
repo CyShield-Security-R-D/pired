@@ -686,3 +686,48 @@ export function elementArgs(el: ExtractedElement): Record<string, unknown> {
 	if (el.kind === "host") return { kind: "host", value: el.label };
 	return { kind: el.kind, name: el.label };
 }
+
+/**
+ * Whether an automatic extraction pass is worth making.
+ *
+ * The old condition was `claims === 0 || unanswered > 0`, and both halves are
+ * permanently true in a real engagement: a checklist class that the extractor
+ * reports as "not-considered" is never settled, so something is always
+ * unanswered, and an agent that records nothing itself leaves claims at zero
+ * forever. The fingerprint guard beside it could not help either — it keys on
+ * the review buffer, which grows every turn, so every pass looked new.
+ *
+ * Measured: 18 passes on one target that settled nothing, each carrying the
+ * whole review buffer to a model server that answers one call at a time. The
+ * pass meant to rescue an engagement was consuming it.
+ *
+ * Two rules, both about evidence rather than about the agent's behaviour:
+ * extract only when there is genuinely new review to read, and ask for more of
+ * it each time a pass comes back empty. A model that has said nothing
+ * conclusive in 2,000 characters is not usually one turn away from doing so,
+ * and the backoff resets the moment a pass writes something.
+ */
+export interface ExtractGate {
+	/** Characters of review accumulated so far. */
+	reviewLength: number;
+	/** Review length when a pass last ran; 0 when none has. */
+	lastLength: number;
+	/** Consecutive passes that wrote nothing at all. */
+	barren: number;
+	/** Review required before the first pass. */
+	min: number;
+	/** New review required before another pass. */
+	growth: number;
+}
+
+/** How much new review the next pass needs, given how many came back empty. */
+export function extractionThreshold(growth: number, barren: number): number {
+	return growth * 2 ** Math.min(Math.max(barren, 0), 5);
+}
+
+export function shouldExtract(g: ExtractGate): boolean {
+	if (g.reviewLength < g.min) return false;
+	// The first pass is the rescue the mechanism exists for: never hold it back.
+	if (g.lastLength <= 0) return true;
+	return g.reviewLength - g.lastLength >= extractionThreshold(g.growth, g.barren);
+}
