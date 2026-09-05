@@ -92,14 +92,44 @@ export async function fromLedger(engagementDir: string): Promise<Finding[]> {
 			if (viaInventory && line) m = [hay, viaInventory, line[1]!] as unknown as RegExpExecArray;
 		}
 		if (!m) continue;
-		out.push({
-			file: m[1] as string,
-			line: Number(m[2]),
-			cwe: f.cwe,
-			vuln_class: f.class,
-			severity: f.severity,
-			message: f.title,
-		});
+		// Every location the finding claims, not only the first one written down.
+		//
+		// A finding routinely names several sinks — a route target plus the handler
+		// and the path builder in its description — and taking the first `file:line`
+		// scored it against whichever the reviewer happened to mention first.
+		// Measured on note-mark: all twelve findings carried a file:line, six truth
+		// entries sat in files those findings named, and none matched because the
+		// first location cited was a different file.
+		//
+		// These are locations the reviewer ASSERTED, so counting them is honest —
+		// and they count as reported findings too, so precision pays for the reach
+		// rather than recall getting it for free. Capped, because a record that
+		// names a dozen files is describing a module, not a sink.
+		const claimed: Array<{ file: string; line: number }> = [{ file: m[1] as string, line: Number(m[2]) }];
+		// ONLY the locations the record carries as locations — never every file its
+		// prose happens to name. Scraping the description was tried and measured:
+		// 48 graded findings became 93, not one of them landed in a truth window,
+		// and precision halved from 0.104 to 0.054. A file mentioned while
+		// explaining a bug is context, not a claim about where the bug is.
+		const extra = Array.isArray(f.locations) ? (f.locations as unknown[]).map(String) : [];
+		for (const loc of extra) {
+			const hit = /([\w./-]+\.(?:py|pyi|js|jsx|ts|tsx|go|rb|php|java|cs|rs|kt|scala)):(\d+)/.exec(loc);
+			if (!hit) continue;
+			const file = hit[1] as string;
+			const line = Number(hit[2]);
+			if (claimed.length >= 6) break;
+			if (!claimed.some((c) => c.file === file && c.line === line)) claimed.push({ file, line });
+		}
+		for (const c of claimed) {
+			out.push({
+				file: c.file,
+				line: c.line,
+				cwe: f.cwe,
+				vuln_class: f.class,
+				severity: f.severity,
+				message: f.title,
+			});
+		}
 	}
 	return out;
 }

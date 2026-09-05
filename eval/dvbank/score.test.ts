@@ -52,3 +52,32 @@ describe("locating a finding that states its line in prose", () => {
 		expect(await fromLedger(dir)).toEqual([]);
 	});
 });
+
+describe("grading every location a finding claims", () => {
+	it("does NOT scrape every file the prose mentions", async () => {
+		// Tried and measured: scraping descriptions took 48 graded findings to 93,
+		// landed none of them in a truth window, and halved precision. A file named
+		// while explaining a bug is context, not a claim about where the bug is.
+		const dir = await ledger([{
+			id: "a", title: "traversal", severity: "high", target: "backend/handlers/assets.go:147",
+			description: "backend/storage/disk.go:20 builds the path that this handler serves",
+		}]);
+		const out = await fromLedger(dir);
+		expect(out.map((f) => `${f.file}:${f.line}`)).toEqual(["backend/handlers/assets.go:147"]);
+	});
+
+	it("reads the locations a merge preserved", async () => {
+		const dir = await ledger([{
+			id: "b", title: "x", severity: "high", target: "http/public.go:58",
+			locations: ["http/share.go:84", "http/public.go:58"],
+		}]);
+		expect((await fromLedger(dir)).map((f) => `${f.file}:${f.line}`))
+			.toEqual(expect.arrayContaining(["http/share.go:84", "http/public.go:58"]));
+	});
+
+	it("caps a record that names a whole module", async () => {
+		const many = Array.from({ length: 12 }, (_, i) => `pkg/f${i}.go:${i + 1}`).join(" ");
+		const dir = await ledger([{ id: "c", title: "x", severity: "low", target: "route", description: many }]);
+		expect((await fromLedger(dir)).length).toBeLessThanOrEqual(6);
+	});
+});

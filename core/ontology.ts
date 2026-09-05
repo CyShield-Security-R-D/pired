@@ -314,6 +314,16 @@ export interface FindingRecord extends RecordBase {
 	title: string;
 	severity: Severity;
 	target: WorkRef;
+	/**
+	 * Every location this finding has been recorded against, when it is more than
+	 * one. A bug is often several sinks — a public-share exposure lives in both the
+	 * share handler and the public one — and a merge that kept only the newest
+	 * target lost the rest: measured on filebrowser, http/share.go:84 was recorded
+	 * exactly on a truth entry and overwritten seconds later.
+	 *
+	 * `target` stays the primary, so nothing that reads one location changes.
+	 */
+	locations?: string[];
 	/** Checklist class id, when derived from one. */
 	class?: string;
 	/** Primary CWE, e.g. "CWE-639". */

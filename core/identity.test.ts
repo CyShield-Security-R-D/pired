@@ -409,3 +409,30 @@ describe("a finding recorded once against a place and once against nowhere", () 
 		}, both)).toBeUndefined();
 	});
 });
+
+describe("a finding with more than one sink keeps them all", () => {
+	const f = (target: string, locations?: string[]) =>
+		({ kind: "finding", title: "Public share exposes the sharer's tree", severity: "high", target, ...(locations ? { locations } : {}) });
+
+	it("keeps the earlier location when a later one is merged in", () => {
+		// Measured on filebrowser: http/share.go:84 landed exactly on a truth entry
+		// and was overwritten by http/public.go:58 in the same second.
+		const merged = mergeRecord("finding", f("http/share.go:84"), f("http/public.go:58"));
+		expect(merged.locations).toEqual(["http/share.go:84", "http/public.go:58"]);
+	});
+
+	it("accumulates across successive merges without duplicating", () => {
+		const first = mergeRecord("finding", f("http/share.go:84"), f("http/public.go:47"));
+		const second = mergeRecord("finding", first, f("http/public.go:58"));
+		expect(second.locations).toEqual(["http/share.go:84", "http/public.go:47", "http/public.go:58"]);
+	});
+
+	it("does not add the field when the location never changed", () => {
+		const merged = mergeRecord("finding", f("http/share.go:84"), f("http/share.go:84"));
+		expect(merged.locations).toBeUndefined();
+	});
+
+	it("keeps the newest target as the primary", () => {
+		expect(mergeRecord("finding", f("a.go:1"), f("b.go:2")).target).toBe("b.go:2");
+	});
+});

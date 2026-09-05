@@ -381,6 +381,20 @@ function maxSeverity(a: unknown, b: unknown): Severity | undefined {
  * agent asked for by id is last-write-wins as documented, which is the escape
  * hatch for genuinely correcting a record downward.
  */
+/** Every location a finding record carries: its target and any it already kept. */
+function asLocations(rec: Fields): string[] {
+	// History first, then the current target: a record that has already
+	// accumulated locations must keep them in the order they were found, with the
+	// newest appended rather than jumping to the front.
+	const out: string[] = [];
+	if (Array.isArray(rec.locations)) {
+		for (const v of rec.locations) { const s = str(v); if (s !== undefined) out.push(s); }
+	}
+	const t = str(rec.target);
+	if (t !== undefined) out.push(t);
+	return out;
+}
+
 export function mergeRecord(kind: IdentityKind, existing: Fields, patch: Fields): Fields {
 	const merged: Fields = { ...existing, ...patch };
 	for (const field of UNION_FIELDS) {
@@ -396,6 +410,24 @@ export function mergeRecord(kind: IdentityKind, existing: Fields, patch: Fields)
 	if (kind === "finding") {
 		const sev = maxSeverity(existing.severity, patch.severity);
 		if (sev !== undefined) merged.severity = sev;
+		// One bug, several sinks. A public-share exposure lives in share.go AND
+		// public.go; a traversal spans the handler and the path builder. The merge
+		// used to keep only the newest target, so the reviewer would name three
+		// locations across one turn and the ledger would remember the last —
+		// measured on filebrowser, where http/share.go:84 was recorded exactly on a
+		// truth entry and then overwritten by http/public.go:58 seconds later.
+		//
+		// Every location the finding has ever carried is kept, so the report can
+		// cite them all and the grader can match any.
+		const seen = new Set<string>();
+		const locations: string[] = [];
+		for (const v of [...asLocations(existing), ...asLocations(patch)]) {
+			const key = v.toLowerCase();
+			if (seen.has(key)) continue;
+			seen.add(key);
+			locations.push(v);
+		}
+		if (locations.length > 1) merged.locations = locations;
 	}
 	if (kind === "hypothesis" && rank(existing.outcome) > rank(patch.outcome)) {
 		merged.outcome = existing.outcome;
