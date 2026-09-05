@@ -41,7 +41,7 @@ import type { Fields } from "../core/identity.ts";
 import { dismissHint, PANEL_MODES, renderFindingDetail, renderPanel, scrollFramed, type PanelData, type PanelMode, type PanelTone } from "../core/panel.ts";
 import { coverageBrief, renderCoverageBrief } from "../core/coverage.ts";
 import { labelIndex } from "../core/target.ts";
-import { claimCounts, computeCoverageView, computeEngagementStats, coveragePercent, isDisposed, type CoverageView, type EngagementStats } from "../core/stats.ts";
+import { claimCounts, computeCoverageView, computeEngagementStats, coveragePercent, isDisposed, unwrittenHypotheses, type CoverageView, type EngagementStats } from "../core/stats.ts";
 import { layoutStatusLine, scribeStatus, type ScribeState, type Segment } from "../core/statusline.ts";
 import { createCoreTools } from "../core/tools.ts";
 import { Workspace } from "../core/workspace.ts";
@@ -908,6 +908,7 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		const blockers = (await ws.read("blockers")).filter((b) => b.status === "open");
 		const view = await computeCoverageView(ws);
 		const settled = view ? view.matrix.counts.clear + view.matrix.counts.vulnerable : 0;
+		const unwritten = unwrittenHypotheses(hyps, finds, inv);
 		const tally = <T extends string>(xs: T[]): Record<string, number> => {
 			const m: Record<string, number> = {};
 			for (const x of xs) m[x] = (m[x] ?? 0) + 1;
@@ -944,6 +945,9 @@ export default function piredExtension(pi: ExtensionAPI): void {
 			surface: tally(inv.map((r) => r.kind)),
 			// Claims, not cells — the coverage section above owns cells now. ADR-001.
 			hypotheses: claimCounts(hyps),
+			// Counted as claims for the same reason: "3 confirmed, not written up"
+			// is a number the operator can act on; the cell count behind it is not.
+			unwritten: Object.values(claimCounts(hyps.filter((h) => unwritten.has(h.id)))).reduce((a, b) => a + b, 0),
 			findings: st.findings,
 			// Newest first, and enough of them that a maximised panel has something to
 			// scroll. The rail still renders three; the cap is here only so a very
@@ -2042,6 +2046,9 @@ export default function piredExtension(pi: ExtensionAPI): void {
 			if (data === "c") return "filter:confirmed";
 			if (data === "r") return "filter:refuted";
 			if (data === "o") return "filter:open";
+			// The one filter that names work owed to the client rather than a state
+			// of the ledger: confirmed, and nothing written up for it. ADR-004.
+			if (data === "u") return "filter:unwritten";
 		}
 		// The blockers views are the only ones with anything to do to a row, so
 		// they are the only ones where a letter writes to the ledger. `a` is worth

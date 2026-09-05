@@ -145,10 +145,13 @@ neither was populated once in the whole run. Nothing joins them.
 
 ### Decision
 
-Compute the join **by cell** rather than depending on the model to write the link: a confirmed
-hypothesis is "unwritten" when no finding shares its `(target, class)` and it carries no explicit
-`findingId`. Surface it in three places — an `unwritten` filter in `/hypotheses`, a count in the
-panel's findings section, and an informational line in `record`'s result.
+Compute the join **by cell** rather than depending on the model to write the link — a finding covers
+a hypothesis when they name the same element and the same class, with an explicit `findingId` or
+`hypothesisId` honoured when present — but count in **claims**, not cells: a claim is written up when
+*any* of its cells has a finding.
+
+Surface it in three places — an `unwritten` filter in `/hypotheses`, a count in the panel's findings
+section, and an informational line in `record`'s result.
 
 ### Consequences
 
@@ -156,6 +159,18 @@ panel's findings section, and an informational line in `record`'s result.
 - `record` gains no required field and blocks nothing. This follows the project's standing directive
   to inform rather than script: a harness that refuses to record a finding without a hypothesis id
   teaches the model to invent one.
+- Claim identity is the wording, as in ADR-001, so two ways of saying the same thing are two claims.
+  On the reference ledger that costs one false positive out of three. The error is in the direction
+  of prompting a look, which is what the number is for.
+
+### Corrected during implementation
+
+The first version counted **cells**, and on the reference ledger reported 13 of 14 claims unwritten
+when the true answer was one. `record` fans one piece of reasoning across every target it applies to,
+and a reviewer writes that finding once — so a claim written up against two of its five endpoints
+read as unwritten on the other three. A number that cries wolf on its first engagement is a number
+the operator learns to ignore, which is worse than not having it. Counting claims gives 3, and the
+one class the assessment had identified by hand as never written up (`reflection`) is among them.
 
 ### Rejected
 

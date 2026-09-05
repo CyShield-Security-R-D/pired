@@ -113,6 +113,7 @@ describe("the panel's state", () => {
 		expect(Object.keys(data()).sort()).toEqual([
 			"cells", "coverage", "coveragePct", "engagement", "engagementType", "evidence", "findings",
 			"gaps", "hypotheses", "openBlockers", "recentFindings", "scope", "settled", "surface",
+			"unwritten",
 		]);
 	});
 
@@ -143,6 +144,23 @@ describe("the panel's state", () => {
 		expect(data({ hypotheses, claims }).hypotheses).toEqual({ confirmed: 1 });
 		// Without one, it falls back to counting rows.
 		expect(data({ hypotheses }).hypotheses).toEqual({ confirmed: 3 });
+	});
+
+	// Confirming a hypothesis and writing a finding are separate acts, and only the
+	// second reaches the client. ADR-004.
+	it("reports confirmed work with nothing written up for it, as claims", () => {
+		const hypotheses = [
+			{ id: "h1", class: "sqli", statement: "Raw SQL is interpolated", outcome: "confirmed" },
+			{ id: "h2", class: "sqli", statement: "Raw SQL is interpolated", outcome: "confirmed" },
+		];
+		// Two cells, one claim — the same rollup the hypotheses section uses.
+		const claims = (hyps: unknown[]) => (hyps.length ? { confirmed: 1 } : {});
+		const unwritten = () => new Set(["h1", "h2"]);
+		expect(data({ hypotheses, claims, unwritten }).unwritten).toBe(1);
+	});
+
+	it("owes nothing when no rollup says otherwise", () => {
+		expect(data().unwritten).toBe(0);
 	});
 
 	it("drops disposed findings from the list, so it agrees with the severity chips", () => {

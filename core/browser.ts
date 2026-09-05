@@ -27,6 +27,7 @@
 
 import { CELL_GLYPH } from "./coverage-panel.ts";
 import { elementLabel, recordLabel } from "./target.ts";
+import { unwrittenHypotheses } from "./stats.ts";
 import type { Tone } from "./coverage-panel.ts";
 import { frameLines, RULE } from "./frame.ts";
 import type {
@@ -55,13 +56,17 @@ export type BrowserView =
 	| "findings" | "finding"
 	| "blockers" | "blocker";
 
-/** Outcome filter for the hypotheses list. `open` is anything not yet settled. */
-export type HypothesisFilter = "all" | "confirmed" | "refuted" | "open";
+/**
+ * Outcome filter for the hypotheses list. `open` is anything not yet settled;
+ * `unwritten` is confirmed work no finding has been written for — the one state
+ * that costs the client something and that no view used to name. ADR-004.
+ */
+export type HypothesisFilter = "all" | "confirmed" | "refuted" | "open" | "unwritten";
 
 export type BrowserKey =
 	| "up" | "down" | "pageUp" | "pageDown" | "top" | "bottom"
 	| "in" | "out" | "close" | "switch" | "refresh"
-	| "filter:all" | "filter:confirmed" | "filter:refuted" | "filter:open"
+	| "filter:all" | "filter:confirmed" | "filter:refuted" | "filter:open" | "filter:unwritten"
 	// Blockers only. Two of these write to the ledger, which core does not do, so
 	// the adapter carries them out; they are named here anyway to keep one key
 	// vocabulary rather than a second one hidden in the host.
@@ -89,6 +94,8 @@ export interface HypothesisRow {
 	method?: string;
 	evidence?: string;
 	findingId?: string;
+	/** Confirmed, and no finding covers its cell. See `unwrittenHypotheses`. */
+	unwritten?: boolean;
 }
 
 export interface FindingRow {
@@ -266,6 +273,9 @@ export function buildBrowserModel(input: BuildModelInput): BrowserModel {
 	const progress = (r: SurfaceRow): number => (r.askable === 0 ? 2 : r.settled / r.askable);
 	surface.sort((a, b) => progress(a) - progress(b) || a.label.localeCompare(b.label));
 
+	// Computed once over the whole ledger rather than per row: the join is by cell
+	// and needs every finding to answer for any hypothesis.
+	const unwritten = unwrittenHypotheses(hypotheses, findings, inventory);
 	const rows: HypothesisRow[] = hypotheses.map((h) => {
 		const target = typeof h.target === "string" ? h.target : undefined;
 		return {
@@ -278,6 +288,7 @@ export function buildBrowserModel(input: BuildModelInput): BrowserModel {
 			method: h.method,
 			evidence: h.evidence,
 			findingId: h.findingId,
+			unwritten: unwritten.has(h.id),
 		};
 	});
 
@@ -348,6 +359,7 @@ export function buildBrowserModel(input: BuildModelInput): BrowserModel {
 			confirmed: rows.filter((h) => h.outcome === "confirmed").length,
 			refuted: rows.filter((h) => h.outcome === "refuted").length,
 			open: rows.filter((h) => !settled(h.outcome)).length,
+			unwritten: rows.filter((h) => h.unwritten).length,
 		},
 	};
 }
@@ -362,6 +374,7 @@ export function visibleHypotheses(model: BrowserModel, state: BrowserState): Hyp
 		case "confirmed": return base.filter((h) => h.outcome === "confirmed");
 		case "refuted": return base.filter((h) => h.outcome === "refuted");
 		case "open": return base.filter((h) => h.outcome !== "confirmed" && h.outcome !== "refuted");
+		case "unwritten": return base.filter((h) => h.unwritten);
 		default: return base;
 	}
 }
@@ -502,6 +515,7 @@ export function reduceBrowser(state: BrowserState, key: BrowserKey, model: Brows
 		case "filter:confirmed": return { ...state, filter: "confirmed", cursor: 0, scroll: 0 };
 		case "filter:refuted": return { ...state, filter: "refuted", cursor: 0, scroll: 0 };
 		case "filter:open": return { ...state, filter: "open", cursor: 0, scroll: 0 };
+		case "filter:unwritten": return { ...state, filter: "unwritten", cursor: 0, scroll: 0 };
 		case "out": {
 			if (state.view === "finding") return { ...state, view: "findings", findingId: undefined, cursor: 0, scroll: 0 };
 			if (state.view === "blocker") return { ...state, view: "blockers", blockerId: undefined, cursor: 0, scroll: 0 };
@@ -643,7 +657,7 @@ function footer(o: RenderOptions): string[] {
 						? "↑↓ move · ⏎ open · tab hypotheses · R reload · q close"
 				: state.view === "findings"
 					? "↑↓ move · ⏎ open · tab blockers · R reload · q close"
-					: "↑↓ move · ⏎ open · a/c/r/o filter · tab findings · R reload · q close";
+					: "↑↓ move · ⏎ open · a/c/r/u/o filter · tab findings · R reload · q close";
 	return [ink("muted", o.truncate(keys, width))];
 }
 

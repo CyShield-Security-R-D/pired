@@ -97,7 +97,7 @@ async function main() {
   const load = (rel) => import(pathToFileURL(join(src, rel)).href);
   const { Workspace } = await load("core/workspace.ts");
   const { makeHostServices } = await load("extensions/lib/host.ts");
-  const { computeEngagementStats, computeCoverageView, claimCounts, isDisposed } = await load("core/stats.ts");
+  const { computeEngagementStats, computeCoverageView, claimCounts, isDisposed, unwrittenHypotheses } = await load("core/stats.ts");
   const { renderPanel } = await load("core/panel.ts");
 
   const ws = new Workspace(dir, makeHostServices());
@@ -117,7 +117,7 @@ async function main() {
   const data = buildPanelData({
     name, checklist, scope, stats, view,
     inventory: inv, hypotheses: hyp, findings: fnd, blockers: blk, evidence,
-    claims: claimCounts, isDisposed,
+    claims: claimCounts, isDisposed, unwritten: unwrittenHypotheses,
   });
 
   if (has("json")) {

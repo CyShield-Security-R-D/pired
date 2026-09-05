@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { EndpointRecord, FindingRecord, HypothesisRecord } from "./ontology.ts";
-import { claimCounts, computeCoverageView, computeEngagementStats } from "./stats.ts";
+import type { EndpointRecord, FindingRecord, HypothesisRecord, InventoryRecord } from "./ontology.ts";
+import { claimCounts, computeCoverageView, computeEngagementStats, unwrittenHypotheses } from "./stats.ts";
 import { makeFakeServices } from "./testing/fakes.ts";
 import { Workspace } from "./workspace.ts";
 
@@ -169,3 +169,92 @@ describe("counting claims rather than the cells they were asked of", () => {
 		expect(claimCounts([])).toEqual({});
 	});
 });
+
+/**
+ * The ledger held 120 confirmed cells and zero findings, and the panel,
+ * /findings and /report all said there was nothing. ADR-004.
+ */
+describe("confirmed work that has not reached the report", () => {
+	function hyp(partial: Partial<HypothesisRecord> & Pick<HypothesisRecord, "id">): HypothesisRecord {
+		return {
+			v: 1, kind: "hypothesis", createdAt: "t", statement: "S", target: "e1",
+			class: "sqli", outcome: "confirmed", ...partial,
+		};
+	}
+	function fnd(partial: Partial<FindingRecord> & Pick<FindingRecord, "id">): FindingRecord {
+		return {
+			v: 1, kind: "finding", createdAt: "t", title: "T", severity: "high",
+			target: "e1", class: "sqli", status: "confirmed", ...partial,
+		};
+	}
+
+	it("counts a confirmed claim nobody wrote up", () => {
+		expect([...unwrittenHypotheses([hyp({ id: "h1" })], [])]).toEqual(["h1"]);
+	});
+
+	it("says nothing about refuted or in-flight claims", () => {
+		// Refuting a class is finished work; it belongs in the coverage section of
+		// the report, not in a list of things still owed to the client.
+		const rows = [hyp({ id: "h1", outcome: "refuted" }), hyp({ id: "h2", outcome: "proposed" })];
+		expect(unwrittenHypotheses(rows, []).size).toBe(0);
+	});
+
+	it("treats a finding on the same cell as the write-up, with no link recorded", () => {
+		// Both link fields exist and neither was populated once across a whole
+		// engagement, so a count that depended on them would read zero forever.
+		expect(unwrittenHypotheses([hyp({ id: "h1" })], [fnd({ id: "f1" })]).size).toBe(0);
+	});
+
+	it("honours an explicit link even when the cells do not match", () => {
+		const rows = [hyp({ id: "h1", target: "e1", class: "sqli" })];
+		const found = [fnd({ id: "f1", target: "e9", class: "authz", hypothesisId: "h1" })];
+		expect(unwrittenHypotheses(rows, found).size).toBe(0);
+		// And the other direction, which is the field the hypothesis carries.
+		expect(unwrittenHypotheses([hyp({ id: "h2", findingId: "f9" })], []).size).toBe(0);
+	});
+
+	it("does not let a different class on the same element count as the write-up", () => {
+		const found = [fnd({ id: "f1", target: "e1", class: "authz" })];
+		expect([...unwrittenHypotheses([hyp({ id: "h1", class: "sqli" })], found)]).toEqual(["h1"]);
+	});
+
+	it("joins a claim written as a route to a finding written against the element id", () => {
+		// Resolution follows the same rules the matrix uses, so the two ledgers
+		// agree about what a cell is.
+		const inventory: InventoryRecord[] = [
+			{ v: 1, kind: "endpoint", id: "e1", createdAt: "t", host: "h", method: "POST", path: "/api/login" },
+		];
+		const rows = [hyp({ id: "h1", target: "POST /api/login" })];
+		expect(unwrittenHypotheses(rows, [fnd({ id: "f1", target: "e1" })], inventory).size).toBe(0);
+	});
+
+	// A reviewer writes one finding for one argument, not one per endpoint it was
+	// asked of. Counting cells called 13 of 14 claims unwritten on a real ledger
+	// where the true answer was one.
+	it("treats a claim as written once any of its cells has a finding", () => {
+		const rows = ["e1", "e2", "e3"].map((target, i) =>
+			hyp({ id: `h${i}`, target, statement: "Raw SQL is interpolated" }));
+		expect(unwrittenHypotheses(rows, [fnd({ id: "f1", target: "e1" })]).size).toBe(0);
+	});
+
+	it("still owes the claims that were fanned out beside it and never written", () => {
+		const rows = [
+			hyp({ id: "h1", target: "e1", statement: "Raw SQL is interpolated" }),
+			hyp({ id: "h2", target: "e2", statement: "Raw SQL is interpolated" }),
+			hyp({ id: "h3", target: "e1", class: "ssrf", statement: "url param is fetched server-side" }),
+			hyp({ id: "h4", target: "e2", class: "ssrf", statement: "url param is fetched server-side" }),
+		];
+		// The sqli claim is covered; the ssrf one is not, and both of its rows are
+		// owed because they are the same unwritten argument.
+		expect([...unwrittenHypotheses(rows, [fnd({ id: "f1", target: "e1" })])].sort())
+			.toEqual(["h3", "h4"]);
+	});
+
+	it("does not let a dismissed finding stand in for a write-up", () => {
+		// An accepted risk or a false positive is a decision about a claim, not a
+		// write-up of it — and the report would carry neither.
+		const found = [fnd({ id: "f1", status: "false-positive" })];
+		expect([...unwrittenHypotheses([hyp({ id: "h1" })], found)]).toEqual(["h1"]);
+	});
+});
+

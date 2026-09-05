@@ -78,7 +78,38 @@ describe("buildBrowserModel", () => {
 	});
 
 	it("tallies outcomes for the header", () => {
-		expect(model.counts).toEqual({ all: 2, confirmed: 1, refuted: 1, open: 0 });
+		// unwritten is 0 here because hy2 names the finding it produced.
+		expect(model.counts).toEqual({ all: 2, confirmed: 1, refuted: 1, open: 0, unwritten: 0 });
+	});
+
+	/**
+	 * Confirming a hypothesis and writing a finding are separate acts, and only
+	 * the second reaches the client. A whole engagement sat at 120 confirmed cells
+	 * and 0 findings with every view saying "none recorded". ADR-004.
+	 */
+	describe("confirmed claims nobody has written up", () => {
+		const unwrittenModel = buildBrowserModel({
+			engagement: "airflow", classes: CLASSES, cells, inventory, findings, blockers,
+			hypotheses: [
+				...hypotheses,
+				{ id: "hy3", kind: "hypothesis", class: "ssrf", target: "e2", outcome: "confirmed", statement: "url param is fetched server-side" },
+			] as unknown as HypothesisRecord[],
+		});
+
+		it("counts the ones no finding covers", () => {
+			expect(unwrittenModel.counts.unwritten).toBe(1);
+		});
+
+		it("flags the row, so the list can mark it without a second lookup", () => {
+			const rows = unwrittenModel.hypotheses;
+			expect(rows.find((h) => h.id === "hy3")?.unwritten).toBe(true);
+			expect(rows.find((h) => h.id === "hy2")?.unwritten).toBe(false);
+		});
+
+		it("filters to exactly those rows", () => {
+			const state: BrowserState = { ...initialState("hypotheses"), filter: "unwritten" };
+			expect(visibleHypotheses(unwrittenModel, state).map((h) => h.id)).toEqual(["hy3"]);
+		});
 	});
 });
 

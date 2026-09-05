@@ -5,8 +5,8 @@
 
 import { computeCoverage, coveragePercent } from "./coverage.ts";
 import type { Fields } from "./identity.ts";
-import { attachToElements } from "./target.ts";
-import { DISPOSED_STATUSES, type CoverageMatrix, type HypothesisRecord, type InventoryKind, type Severity } from "./ontology.ts";
+import { attachToElements, buildTargetIndex, resolveElementTarget } from "./target.ts";
+import { DISPOSED_STATUSES, type CoverageMatrix, type FindingRecord, type HypothesisRecord, type InventoryKind, type InventoryRecord, type Severity } from "./ontology.ts";
 import type { Workspace } from "./workspace.ts";
 
 const DEFAULT_SURFACE_KINDS: InventoryKind[] = ["endpoint", "host"];
@@ -110,20 +110,98 @@ export interface EngagementStats {
  * each outcome it actually reached — that is two facts about one claim, not
  * double-counting. See ADR-001.
  */
+/**
+ * The identity of a claim: its class and its wording, however many cells it was
+ * asked of. A blank statement falls back to the row's own id rather than
+ * collapsing every unworded claim into one.
+ */
+function claimKey(h: HypothesisRecord): string {
+	const text = (h.statement ?? "").trim().replace(/\s+/g, " ").toLowerCase();
+	return `${h.class ?? ""}\u0000${text || h.id}`;
+}
+
 export function claimCounts(hypotheses: HypothesisRecord[]): Record<string, number> {
 	const seen = new Map<string, Set<string>>();
 	for (const h of hypotheses) {
 		if (!h.outcome) continue;
-		// A blank statement falls back to the row's own id rather than collapsing
-		// every unwritten claim into one.
-		const text = (h.statement ?? "").trim().replace(/\s+/g, " ").toLowerCase();
-		const key = `${h.class ?? ""}\u0000${text || h.id}`;
+		const key = claimKey(h);
 		const set = seen.get(h.outcome) ?? new Set<string>();
 		set.add(key);
 		seen.set(h.outcome, set);
 	}
 	const out: Record<string, number> = {};
 	for (const [outcome, set] of seen) out[outcome] = set.size;
+	return out;
+}
+
+/** One coverage cell, as a string two ledgers can be joined on. */
+function cellKey(target: string, cls: string): string {
+	return `${target}\u0000${cls}`;
+}
+
+/**
+ * Confirmed work that has not reached the report.
+ *
+ * Confirming a hypothesis and writing a finding are separate acts, and only the
+ * second reaches the client. Measured on a real engagement: the ledger held 120
+ * confirmed cells and zero findings, and every surface agreed there was nothing
+ * — the panel said "none recorded", `/findings` said the same, and `/report`
+ * declined to write. Given time the model did write nine of the ten confirmed
+ * classes up, so it is a window rather than a hole; it is a window an operator
+ * can ship a report in.
+ *
+ * The unit is the CLAIM, not the cell. `record` fans one piece of reasoning
+ * across every target it applies to, and a reviewer who writes that finding up
+ * writes it once — so on the engagement this was built against, a cell-level
+ * count called 13 of 14 claims unwritten when the true answer was one. A claim
+ * is written up when any of its cells has a finding; the rows it did not name
+ * individually are the same argument, not further work owed.
+ *
+ * The join is by cell, because the link fields cannot be relied on:
+ * `FindingRecord.hypothesisId` and `HypothesisRecord.findingId` both exist and
+ * neither was populated once in the whole run, so a count that depended on them
+ * would read zero forever. An explicit link is honoured when it is there, and
+ * otherwise a finding covers a hypothesis when they name the same element and
+ * the same class.
+ *
+ * Targets are resolved through the same rules the coverage matrix uses, so a
+ * claim written as "/api/login" and a finding written against that element's id
+ * are recognised as the same cell rather than counted as unwritten. A disposed
+ * finding covers nothing: an accepted risk or a dismissed false positive is a
+ * decision about a claim, not a write-up of it. See ADR-004.
+ */
+export function unwrittenHypotheses(
+	hypotheses: HypothesisRecord[],
+	findings: FindingRecord[],
+	inventory: InventoryRecord[] = [],
+): Set<string> {
+	const index = buildTargetIndex(inventory as unknown as Fields[]);
+	const resolve = (t: unknown): string | undefined =>
+		typeof t === "string" ? (resolveElementTarget(t, index) ?? t) : undefined;
+
+	const covered = new Set<string>();
+	const linked = new Set<string>();
+	for (const f of findings) {
+		if (isDisposed(f.status)) continue;
+		if (f.hypothesisId) linked.add(f.hypothesisId);
+		const target = resolve(f.target);
+		if (target && f.class) covered.add(cellKey(target, f.class));
+	}
+
+	// First pass: which claims are represented in the report at all.
+	const confirmed = hypotheses.filter((h) => h.outcome === "confirmed");
+	const writtenClaims = new Set<string>();
+	for (const h of confirmed) {
+		const target = resolve(h.target);
+		const byCell = target !== undefined && h.class !== undefined && covered.has(cellKey(target, h.class));
+		if (h.findingId || linked.has(h.id) || byCell) writtenClaims.add(claimKey(h));
+	}
+
+	// Second pass: every row of a claim nothing was written for.
+	const out = new Set<string>();
+	for (const h of confirmed) {
+		if (!writtenClaims.has(claimKey(h))) out.add(h.id);
+	}
 	return out;
 }
 

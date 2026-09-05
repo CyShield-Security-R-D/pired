@@ -69,6 +69,13 @@ export interface PanelData {
 	coverage?: Partial<Record<"clear" | "vulnerable" | "testing" | "blocked" | "not-tested", number>>;
 	surface: Record<string, number>;
 	hypotheses: Record<string, number>;
+	/**
+	 * Confirmed claims no finding covers.
+	 *
+	 * The number that closes the window where the ledger held 120 confirmed cells
+	 * and every view — this panel included — said "none recorded". ADR-004.
+	 */
+	unwritten?: number;
 	findings: Record<Severity, number>;
 	/** Enough of each finding that the panel can show one in full, not just list it. */
 	recentFindings: Array<{
@@ -286,6 +293,11 @@ export function renderPanel(opts: PanelOptions): string[] {
 	if (mode === "state" || mode === "findings") {
 		const sev = SEVERITY_ORDER.filter((s) => (d.findings[s] ?? 0) > 0);
 		section("findings");
+		// Above the tally, not below it: "none recorded" with confirmed work sitting
+		// unwritten next door is the exact reading that let a report ship short.
+		if (d.unwritten) {
+			line(`  ${ink("warn", "!")} ${ink("warn", `${d.unwritten} confirmed, not written up`)}`);
+		}
 		if (sev.length === 0) {
 			line(ink("muted", "  none recorded"));
 		} else {

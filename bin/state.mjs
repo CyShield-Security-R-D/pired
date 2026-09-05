@@ -161,6 +161,7 @@ const rowCounts = (hyps) => tally(hyps.map((h) => h.outcome));
  * @param {number} [o.evidence]
  * @param {(hyps: any[]) => Record<string, number>} [o.claims] Core's claim rollup.
  * @param {(status: string | undefined) => boolean} [o.isDisposed]
+ * @param {(h: any[], f: any[], inv: any[]) => Set<string>} [o.unwritten] Core's confirmed-but-unreported join.
  */
 export function buildPanelData({
 	name,
@@ -175,7 +176,9 @@ export function buildPanelData({
 	evidence = 0,
 	claims = rowCounts,
 	isDisposed = () => false,
+	unwritten = () => new Set(),
 }) {
+	const owed = unwritten(hypotheses, findings, inventory);
 	const open = blockers.filter((b) => b.status === "open");
 	return {
 		engagement: name,
@@ -193,6 +196,9 @@ export function buildPanelData({
 		surface: tally(inventory.map((r) => r.kind)),
 		// Claims; the coverage row above owns cells.
 		hypotheses: claims(hypotheses),
+		// Confirmed work with no finding written for it, counted as claims.
+		unwritten: Object.values(claims(hypotheses.filter((h) => owed.has(h.id))))
+			.reduce((a, b) => a + b, 0),
 		findings: stats?.findings,
 		// Newest first, and only a handful: the panel is a glance, not a report.
 		// Disposed findings are dropped here for the same reason they are dropped

@@ -408,3 +408,37 @@ describe("rows a compact panel does not spend", () => {
 		expect(lines.at(-2)).toContain("alt+p hide");
 	});
 });
+
+/**
+ * The ledger held 120 confirmed cells and 0 findings, and this panel said
+ * "none recorded" — which is true of a review that found nothing and of one
+ * whose whole result is still sitting in the hypotheses ledger. ADR-004.
+ */
+describe("confirmed work that has not been written up", () => {
+	const owed = (over: Partial<PanelData> = {}): string =>
+		renderPanel({
+			mode: "state", width: 100, maxLines: 20, ink, measure, truncate,
+			data: { ...data, ...over },
+		}).join("\n");
+
+	it("says so, even while the findings tally is empty", () => {
+		const out = owed({
+			unwritten: 3,
+			findings: { critical: 0, high: 0, medium: 0, low: 0, info: 0 },
+			recentFindings: [],
+		});
+		expect(out).toContain("3 confirmed, not written up");
+		// The old reading is still there, and is exactly why the line above is.
+		expect(out).toContain("none recorded");
+	});
+
+	it("keeps saying so when findings exist, since the two are different questions", () => {
+		expect(owed({ unwritten: 2 })).toContain("2 confirmed, not written up");
+	});
+
+	it("stays quiet when nothing is owed", () => {
+		expect(owed()).not.toContain("not written up");
+		expect(owed({ unwritten: 0 })).not.toContain("not written up");
+	});
+});
+
