@@ -637,3 +637,44 @@ describe("marking the elements a row could not show", () => {
 	});
 });
 
+/**
+ * `record` writes one claim across every target it applies to, so the widest
+ * column repeated the same sentence for up to 44 consecutive rows. ADR-001.
+ */
+describe("a claim asked of many targets, in the list", () => {
+	const fanned = buildBrowserModel({
+		engagement: "airflow", classes: CLASSES, cells, inventory, findings: [], blockers,
+		hypotheses: [
+			{ id: "a1", kind: "hypothesis", class: "authz", target: "e1", outcome: "confirmed", statement: "authorization is not bound to the caller" },
+			{ id: "a2", kind: "hypothesis", class: "authz", target: "e2", outcome: "confirmed", statement: "authorization is not bound to the caller" },
+			{ id: "a3", kind: "hypothesis", class: "idor", target: "e1", outcome: "confirmed", statement: "the id parameter is not scoped" },
+		] as unknown as HypothesisRecord[],
+	});
+	const lines = renderBrowser({
+		model: fanned, state: initialState("hypotheses"), width: 110, height: 10,
+		ink: (_t: string, x: string) => x, measure: (x: string) => x.length,
+		truncate: (x: string, w: number) => (x.length > w ? x.slice(0, w) : x),
+	});
+
+	it("says the claim once and marks the rows continuing it", () => {
+		const said = lines.filter((l) => l.includes("authorization is not bound"));
+		expect(said).toHaveLength(1);
+		expect(lines.some((l) => l.includes("↳"))).toBe(true);
+	});
+
+	it("still says a different claim in full", () => {
+		expect(lines.some((l) => l.includes("the id parameter is not scoped"))).toBe(true);
+	});
+
+	it("carries the claim on the top row of a scrolled view", () => {
+		// Eliding against a row the reader cannot see would leave a screen of
+		// targets with no statement anywhere on it.
+		const scrolled = renderBrowser({
+			model: fanned, state: { ...initialState("hypotheses"), scroll: 1 }, width: 110, height: 10,
+			ink: (_t: string, x: string) => x, measure: (x: string) => x.length,
+			truncate: (x: string, w: number) => (x.length > w ? x.slice(0, w) : x),
+		});
+		expect(scrolled.some((l) => l.includes("authorization is not bound"))).toBe(true);
+	});
+});
+

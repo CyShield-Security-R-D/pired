@@ -1188,6 +1188,22 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		// off, shipped `scope: undefined` against its own contract. Persist it, so
 		// the panel in the tmux pane can say whether the gate is armed.
 		await workspace.writeScope(scope).catch(() => {});
+		// A scope-clarification blocker parked before the scope file existed stays
+		// open after it authorizes the very host it asks about — scope is loaded
+		// once, and nothing re-reads the blockers against it. Said rather than
+		// answered: only the operator knows whether the question the agent parked
+		// is the one the scope file answers, and auto-closing it would retire a
+		// parked question on a guess.
+		if (scope.authorized && Object.values(scope.targets ?? {}).some((v) => v?.length)) {
+			const stale = (await workspace.read("blockers"))
+				.filter((b) => b.status === "open" && b.type === "scope-clarification").length;
+			if (stale > 0) {
+				ctx.ui.notify(
+					`pired: ${stale} open scope question${stale === 1 ? "" : "s"} may already be settled by the loaded scope — /blockers to review`,
+					"info",
+				);
+			}
+		}
 		await seedChecklist(workspace, pickTargetType(profile, scope));
 		const checklist = await workspace.readChecklist();
 		checklistClasses = checklist?.classes.map((c) => c.title || c.id) ?? [];

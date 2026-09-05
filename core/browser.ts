@@ -806,12 +806,24 @@ function hypothesesBody(o: RenderOptions): string[] {
 	const classW = 14;
 	const targetW = Math.min(24, Math.max(10, Math.floor((width - classW - 8) * 0.35)));
 	const out: string[] = [];
+	// `record` writes one claim across every target it applies to, so the widest
+	// column repeats the same sentence for five, or forty-four, consecutive rows
+	// and carries no information after the first of them. Say it once and let the
+	// rows under it be the targets it was asked of.
+	//
+	// Compared within the visible window rather than the whole list, so the top
+	// row of a scrolled view always carries its claim: eliding against a row the
+	// reader cannot see would leave a screen of targets and no statement at all.
+	let previous: string | undefined;
 	for (const [i, h] of rows.slice(state.scroll, state.scroll + o.height).entries()) {
 		const idx = state.scroll + i;
 		const glyph = ink(OUTCOME_TONE[h.outcome], OUTCOME_GLYPH[h.outcome]);
 		const cls = ink("label", pad(truncate(h.class, classW), classW, measure));
 		const tgt = ink("muted", pad(truncate(h.targetLabel, targetW), targetW, measure));
-		out.push(row(idx === state.cursor, `${glyph} ${cls} ${tgt} ${h.statement}`, width, o));
+		const claim = `${h.class}\u0000${h.statement}`;
+		const said = i > 0 && claim === previous ? ink("muted", "↳") : h.statement;
+		previous = claim;
+		out.push(row(idx === state.cursor, `${glyph} ${cls} ${tgt} ${said}`, width, o));
 	}
 	return out;
 }
