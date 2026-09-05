@@ -114,3 +114,86 @@ describe("notReportReady", () => {
 		expect(md).toContain("bare");
 	});
 });
+
+/**
+ * A client report said `Target: 9d2fdd`, and shipped none of the 231 refutations
+ * the same engagement recorded. Both are what ADR-003 is about.
+ */
+describe("what the report says beyond the findings themselves", () => {
+	const labels: Record<string, string> = { e1: "POST /api/split-bill", e2: "GET /api/me" };
+	const labelFor = (id: string) => labels[id];
+
+	it("names the target the way the reviewer did", () => {
+		const md = exportFindingsMarkdown({ findings: [finding({ id: "a", target: "e1" })], labelFor });
+		expect(md).toContain("- Target: POST /api/split-bill");
+		expect(md).not.toContain("- Target: e1");
+	});
+
+	it("keeps an unresolved target rather than dropping it", () => {
+		// A target is legitimately a raw label when nothing was mapped for it, and
+		// a blank line is worse than an id.
+		const md = exportFindingsMarkdown({ findings: [finding({ id: "a", target: "backend/auth.py:22" })], labelFor });
+		expect(md).toContain("- Target: backend/auth.py:22");
+	});
+
+	it("reports the testing behind the findings, refutations included", () => {
+		const md = exportFindingsMarkdown({
+			findings: [finding({ id: "a" })],
+			labelFor,
+			coverage: {
+				brief: {
+					elements: 46, classes: 19, applicable: 797, settled: 340, percent: 43,
+					untestedClasses: ["xxe"], untestedElements: ["e2"],
+				},
+				classTitles: { xxe: "XXE / unsafe XML & data parsing" },
+				refuted: 231,
+			},
+		});
+		expect(md).toContain("## Coverage");
+		expect(md).toContain("340 of 797 test cases settled (43%)");
+		expect(md).toContain("231 hypotheses were tested and refuted");
+		// Named, not counted: "17 classes untested" is not something a client can act on.
+		expect(md).toContain("- XXE / unsafe XML & data parsing");
+		expect(md).toContain("- GET /api/me");
+	});
+
+	it("says nothing about coverage when no checklist was ever seeded", () => {
+		// Asserting 0% because nobody seeded a checklist is worse than silence.
+		const md = exportFindingsMarkdown({ findings: [finding({ id: "a" })] });
+		expect(md).not.toContain("## Coverage");
+		const empty = exportFindingsMarkdown({
+			findings: [finding({ id: "a" })],
+			coverage: { brief: { elements: 0, classes: 0, applicable: 0, settled: 0, percent: 0, untestedClasses: [], untestedElements: [] } },
+		});
+		expect(empty).not.toContain("## Coverage");
+	});
+
+	it("summarises the tail rather than dumping every untested element", () => {
+		const many = Array.from({ length: 30 }, (_, i) => `x${i}`);
+		const md = exportFindingsMarkdown({
+			findings: [finding({ id: "a" })],
+			coverage: {
+				brief: { elements: 30, classes: 1, applicable: 30, settled: 0, percent: 0, untestedClasses: [], untestedElements: many },
+			},
+		});
+		expect(md).toContain("…and 10 more");
+	});
+
+	// Redaction used to run over the findings array alone. Labels and coverage text
+	// are ledger strings too, and an inventory record can carry a secret — a param
+	// named for a token, a host value with credentials in the URL.
+	it("masks secrets that arrive through a label or the coverage section", () => {
+		const md = exportFindingsMarkdown({
+			findings: [finding({ id: "a", target: "e9" })],
+			loot: [{ v: 1, kind: "loot", id: "l1", createdAt: "t", handle: "cred:x", secret: "hunter2xyz" }],
+			labelFor: () => "GET /login?token=hunter2xyz",
+			coverage: {
+				brief: { elements: 1, classes: 1, applicable: 1, settled: 0, percent: 0, untestedClasses: ["hunter2xyz"], untestedElements: [] },
+				classTitles: { hunter2xyz: "hunter2xyz" },
+			},
+		});
+		expect(md).not.toContain("hunter2xyz");
+		expect(md).toContain("[REDACTED cred:x]");
+	});
+});
+

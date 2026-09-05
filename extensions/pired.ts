@@ -40,6 +40,7 @@ import { applyPlan, extractionSystemPrompt, extractionUserMessage, needsRetry, p
 import type { Fields } from "../core/identity.ts";
 import { dismissHint, PANEL_MODES, renderFindingDetail, renderPanel, scrollFramed, type PanelData, type PanelMode, type PanelTone } from "../core/panel.ts";
 import { coverageBrief, renderCoverageBrief } from "../core/coverage.ts";
+import { labelIndex } from "../core/target.ts";
 import { claimCounts, computeCoverageView, computeEngagementStats, coveragePercent, isDisposed, type CoverageView, type EngagementStats } from "../core/stats.ts";
 import { layoutStatusLine, scribeStatus, type ScribeState, type Segment } from "../core/statusline.ts";
 import { createCoreTools } from "../core/tools.ts";
@@ -2448,9 +2449,30 @@ export default function piredExtension(pi: ExtensionAPI): void {
 				return;
 			}
 			const loot = await workspace.read("loot");
-			const markdown = exportFindingsMarkdown({ findings, loot, engagement: scope.engagement, generatedAt: services.clock.nowIso() });
+			// The two things the export could not say for itself. `Target: 9d2fdd` is
+			// the line naming where the bug is, rendered in the one form a client
+			// cannot read; and a findings list cannot express the classes that were
+			// tested and ruled out. Both are computed here so the exporter stays pure.
+			const labels = labelIndex(await workspace.read("inventory"));
+			const view = await computeCoverageView(workspace).catch(() => undefined);
+			const hypotheses = await workspace.read("hypotheses");
+			const markdown = exportFindingsMarkdown({
+				findings, loot, engagement: scope.engagement, generatedAt: services.clock.nowIso(),
+				labelFor: (id) => labels.get(id),
+				coverage: view
+					? {
+						brief: coverageBrief(view.matrix),
+						classTitles: Object.fromEntries(view.classes.map((c) => [c.id, c.title])),
+						refuted: hypotheses.filter((h) => h.outcome === "refuted").length,
+					}
+					: undefined,
+			});
 			const rel = await workspace.writeArtifact("findings.md", markdown);
-			ctx.ui.notify(`pired: exported ${findings.length} finding(s) -> ${rel}${describeUnready(notReportReady(findings).length)}`, "info");
+			// An absolute path, because the workspace is not anywhere the operator
+			// navigated to: "artifacts/findings.md" is relative to a directory they
+			// would have to go and look up.
+			const written = join(workspace.dir, rel);
+			ctx.ui.notify(`pired: exported ${findings.length} finding(s) -> ${written}${describeUnready(notReportReady(findings).length)}`, "info");
 		},
 	});
 }

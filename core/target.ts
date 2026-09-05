@@ -25,6 +25,53 @@
  */
 
 import type { Fields } from "./identity.ts";
+import type { InventoryRecord, LedgerRecord } from "./ontology.ts";
+
+/**
+ * How an inventory record names itself, by kind.
+ *
+ * The other half of this module's job. `resolveElementTarget` turns what the
+ * reviewer wrote into an id; this turns an id back into what the reviewer would
+ * have written — and both belong wherever the id<->name relation lives, not in a
+ * TUI model an exporter cannot import. Moved here from `core/browser.ts`, which
+ * re-exports it. See ADR-003.
+ */
+export function elementLabel(rec: InventoryRecord): string {
+	switch (rec.kind) {
+		case "host": return rec.value;
+		case "service": return `${rec.proto}/${rec.port}${rec.name ? ` ${rec.name}` : ""}`;
+		case "endpoint": return `${rec.method ? `${rec.method} ` : ""}${rec.path}`;
+		case "param": return rec.name + (rec.location ? ` (${rec.location})` : "");
+		case "tech": return rec.name + (rec.version ? ` ${rec.version}` : "");
+		default: return (rec as { id: string }).id;
+	}
+}
+
+/**
+ * How any ledger record names itself to a person.
+ *
+ * Every view that has to say "this one" — a tool result reporting what a repeat
+ * matched, the duplicate sweep listing what it would fold — needs the same
+ * answer, and an id is not it. Kept beside elementLabel so there is one place
+ * where a record's human name is decided.
+ */
+export function recordLabel(rec: LedgerRecord): string {
+	if (rec.kind === "finding") return rec.title;
+	if (rec.kind === "hypothesis") return `${rec.class} on ${rec.target}`;
+	if (rec.kind === "blocker") return rec.question;
+	if (rec.kind === "loot") return rec.handle;
+	return elementLabel(rec);
+}
+
+/**
+ * An id -> label lookup over a whole inventory.
+ *
+ * Three call sites built this map by hand before it had a name, and a fourth was
+ * about to: the exporter, which had been shipping raw ids into client reports.
+ */
+export function labelIndex(inventory: InventoryRecord[]): Map<string, string> {
+	return new Map(inventory.map((r) => [r.id, elementLabel(r)]));
+}
 
 /** Lowercased, whitespace-collapsed, no trailing slash — the form two spellings share. */
 function key(v: unknown): string | undefined {

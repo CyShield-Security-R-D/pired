@@ -26,6 +26,7 @@
  */
 
 import { CELL_GLYPH } from "./coverage-panel.ts";
+import { elementLabel, recordLabel } from "./target.ts";
 import type { Tone } from "./coverage-panel.ts";
 import { frameLines, RULE } from "./frame.ts";
 import type {
@@ -198,33 +199,10 @@ const OUTCOME_GLYPH: Record<HypothesisOutcome, string> = {
 	confirmed: "▲", refuted: "●", testing: "◐", proposed: "·", inconclusive: "⊘",
 };
 
-/** How an inventory record names itself, by kind. */
-export function elementLabel(rec: InventoryRecord): string {
-	switch (rec.kind) {
-		case "host": return rec.value;
-		case "service": return `${rec.proto}/${rec.port}${rec.name ? ` ${rec.name}` : ""}`;
-		case "endpoint": return `${rec.method ? `${rec.method} ` : ""}${rec.path}`;
-		case "param": return rec.name + (rec.location ? ` (${rec.location})` : "");
-		case "tech": return rec.name + (rec.version ? ` ${rec.version}` : "");
-		default: return (rec as { id: string }).id;
-	}
-}
-
-/**
- * How any ledger record names itself to a person.
- *
- * Every view that has to say "this one" — a tool result reporting what a repeat
- * matched, the duplicate sweep listing what it would fold — needs the same
- * answer, and an id is not it. Kept beside elementLabel so there is one place
- * where a record's human name is decided.
- */
-export function recordLabel(rec: LedgerRecord): string {
-	if (rec.kind === "finding") return rec.title;
-	if (rec.kind === "hypothesis") return `${rec.class} on ${rec.target}`;
-	if (rec.kind === "blocker") return rec.question;
-	if (rec.kind === "loot") return rec.handle;
-	return elementLabel(rec);
-}
+// Moved to core/target.ts, which already owns the id<->name relation and, unlike
+// this file, can be imported by the exporter without dragging the whole TUI model
+// along. Re-exported so every existing importer is untouched. See ADR-003.
+export { elementLabel, recordLabel };
 
 // --- model -----------------------------------------------------------------
 
