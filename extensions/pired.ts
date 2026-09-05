@@ -1303,7 +1303,13 @@ export default function piredExtension(pi: ExtensionAPI): void {
 				const labels = new Map<string, string>();
 				for (const rec of await ws.read("inventory")) {
 					const label = elementLabel(rec as Parameters<typeof elementLabel>[0]);
-					if (label) labels.set(rec.id, label);
+					if (!label) continue;
+					// Say where it lives when the element knows. A gap list naming only
+					// routes cannot direct a code review: measured across 17 misses on the
+					// application corpus, the vulnerable file was opened every time and
+					// recorded as surface never, so the matrix never held a file to point at.
+					const file = (rec as unknown as { file?: string }).file;
+					labels.set(rec.id, file ? `${label} (${file})` : label);
 				}
 				text = renderCoverageBrief(coverageBrief(view.matrix), (id) => labels.get(id));
 			}

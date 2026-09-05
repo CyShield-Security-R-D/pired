@@ -217,6 +217,9 @@ export function renderCoverageBrief(
 		lines.push(`Classes not yet asked of anything recorded: ${brief.untestedClasses.join(", ")}.`);
 	}
 	if (brief.untestedElements.length > 0) {
+		// The label, and the file it lives in when the element records one. A gap
+		// list that can only say "GET /api/notes/{id}/assets" names a route; the
+		// reviewer needs the handler, and the answer key is written in files.
 		const named = brief.untestedElements.map((id) => labelFor(id) ?? id);
 		const shown = named.slice(0, limit).join(", ");
 		// Say what was left out rather than trailing an ellipsis: a truncated list

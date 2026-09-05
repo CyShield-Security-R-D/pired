@@ -254,7 +254,8 @@ const RECORD_DESCRIPTION = `Record engagement state to the durable workspace. On
 - model: section[what|actors|invariants|boundaries|flows], text — the TARGET MODEL: the bigger picture every other record hangs off. what it is for, who its actors are, the invariants that must hold, where untrusted data crosses in, the flows that matter. Recording a section REPLACES it, because understanding gets corrected; this is the one record you are meant to rewrite. It is injected into every future session, so it is how a later you starts already knowing the target instead of re-deriving it. Write it early and correct it as you learn — and treat 'invariants' as your hypothesis generator: every rule that must hold is a question about what breaks it, and those are the bugs no checklist lists and no scanner sees.
 - note: text
 - evidence: name, content — saves raw output to the workspace and returns the path to cite (this is how you create the file that 'evidence' fields reference)
-- host: value (+ip, tech[]); service: host, port (+proto, name); endpoint: path (+host, method, params[], auth); param: name (+endpoint, location); tech: name (+host, version)
+- host: value (+ip, tech[]); service: host, port (+proto, name); endpoint: path (+host, method, params[], auth, file); param: name (+endpoint, location, file)
+  'file' is where the element lives in the source — the handler a route dispatches to. Reviewing code, give it: coverage is classes x the surface you recorded, so a matrix of routes alone can never point at a file, and a finding on that element inherits a location the report can cite.; tech: name (+host, version)
 - hypothesis: statement, target (surface id), class (checklist id) (+approach, outcome[proposed|testing|confirmed|refuted|inconclusive], evidence). One test case: the class you tested, the element you tested it against, and what came back. 'target' and 'class' also accept lists, recording the cross product in one call — use it when one piece of reasoning settles several test cases at once.
 - finding: title, severity[info|low|medium|high|critical] (+target, class, cwe, cvss, description, repro, evidence[], status)
   A finding is anything worth carrying into the report, not only a proven vulnerability. Use severity=info for an observation that costs nothing now but may matter later — a missing dependency pin, an unpinned base image, a permissive default, a lead you could not finish. 'target' is optional and accepts a recorded element id OR a raw string (a file path, a module, a component) when no element fits; give one when you can, and record the finding either way rather than leaving it in notes.
@@ -285,6 +286,7 @@ const RECORD_PARAMETERS: JsonSchema = {
 		value: { type: "string" }, ip: { type: "string" }, tech: { type: "array", items: { type: "string" } },
 		host: { type: "string" }, port: { type: "integer" }, proto: { type: "string" }, name: { type: "string", description: "Name for param/tech; for kind=evidence, the filename to save under (e.g. \"sqli-login.txt\")." }, version: { type: "string" },
 		endpoint: { type: "string" }, method: { type: "string" }, path: { type: "string" }, params: { type: "array", items: { type: "string" } }, auth: { type: "string" }, location: { type: "string" },
+		file: { type: "string" },
 		statement: { type: "string" },
 		// `anyOf`, not a bare description. These two were the only properties in the
 		// schema with no type at all, and a typeless property is not something a

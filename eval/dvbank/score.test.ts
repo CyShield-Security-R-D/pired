@@ -81,3 +81,21 @@ describe("grading every location a finding claims", () => {
 		expect((await fromLedger(dir)).length).toBeLessThanOrEqual(6);
 	});
 });
+
+describe("a finding recorded against a route", () => {
+	it("resolves to the handler file the element records", async () => {
+		// Measured: findings targeting "POST /api/notes/{id}/assets" resolved to
+		// nothing, because only elements whose PATH was a file path could name one.
+		const dir = await mkdtemp(join(tmpdir(), "score-route-"));
+		await writeFile(join(dir, "inventory.jsonl"), JSON.stringify({
+			v: 1, kind: "endpoint", id: "e1", createdAt: "", host: "h", method: "POST",
+			path: "/api/notes/{id}/assets", file: "backend/handlers/assets.go",
+		}));
+		await writeFile(join(dir, "findings.jsonl"), JSON.stringify({
+			v: 1, kind: "finding", id: "f1", createdAt: "", title: "traversal", severity: "high",
+			target: "POST /api/notes/{id}/assets", description: "the upload handler joins the name at line 147",
+		}));
+		expect(await fromLedger(dir)).toEqual([
+			expect.objectContaining({ file: "backend/handlers/assets.go", line: 147 })]);
+	});
+});

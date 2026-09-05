@@ -265,10 +265,26 @@ export interface EndpointRecord extends RecordBase {
 	params?: string[];
 	/** Auth requirement, e.g. "none" | "session" | "bearer". */
 	auth?: string;
+	/**
+	 * The source file that implements this element, when the review is of code.
+	 *
+	 * Surface is recorded as routes; findings and answer keys are written in
+	 * files, and the two never met. Coverage is `classes x surface`, so a matrix
+	 * built only from routes can never point at a file — measured across 17 misses
+	 * on the application corpus, the vulnerable file was OPENED every single time
+	 * and recorded as surface not once.
+	 *
+	 * `file` is what lets a cell name a place on disk: the gap list can say which
+	 * file is untested, and a finding recorded against the route inherits somewhere
+	 * the report can cite and the grader can read.
+	 */
+	file?: string;
 }
 
 export interface ParamRecord extends RecordBase {
 	kind: "param";
+	/** The source file this parameter is read in. See EndpointRecord.file. */
+	file?: string;
 	/** Inventory id of the owning endpoint, when known. */
 	endpoint?: string;
 	name: string;

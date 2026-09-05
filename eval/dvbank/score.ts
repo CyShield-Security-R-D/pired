@@ -48,9 +48,19 @@ export async function fromLedger(engagementDir: string): Promise<Finding[]> {
 	// recall — a worse failure than under-counting.
 	const inventory = new Map<string, string>();
 	for (const r of await ws.read("inventory")) {
-		const rec = r as unknown as { id: string; path?: string; value?: string };
-		const file = rec.path ?? rec.value;
-		if (file && /\.(?:py|pyi|js|jsx|ts|tsx|go|rb|php|java|cs|rs|kt|scala)$/.test(file)) inventory.set(rec.id, file);
+		const rec = r as unknown as { id: string; path?: string; value?: string; file?: string; method?: string };
+		// `file` first: a surface element records where it lives, so a route knows
+		// its handler. Without it the only elements that could name a file were the
+		// ones whose PATH happened to be a file path, which is why a finding
+		// recorded against "POST /api/notes/{id}/assets" resolved to nothing.
+		const src = rec.file ?? rec.path ?? rec.value;
+		if (src && /\.(?:py|pyi|js|jsx|ts|tsx|go|rb|php|java|cs|rs|kt|scala)$/.test(src)) {
+			inventory.set(rec.id, src);
+			// Also reachable by the words the reviewer used for it, since a finding
+			// cites the route far more often than the element id.
+			if (rec.path) inventory.set(`${rec.method ?? ""} ${rec.path}`.trim(), src);
+			if (rec.path) inventory.set(rec.path, src);
+		}
 	}
 
 	const out: Finding[] = [];
