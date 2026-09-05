@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { EndpointRecord, FindingRecord } from "./ontology.ts";
-import { computeCoverageView, computeEngagementStats } from "./stats.ts";
+import type { EndpointRecord, FindingRecord, HypothesisRecord } from "./ontology.ts";
+import { claimCounts, computeCoverageView, computeEngagementStats } from "./stats.ts";
 import { makeFakeServices } from "./testing/fakes.ts";
 import { Workspace } from "./workspace.ts";
 
@@ -108,5 +108,64 @@ describe("claims recorded before the element they name", () => {
 		// account for, and only the operator can decide whether the thing it names
 		// should have been mapped as surface.
 		expect(view?.unattached).toBe(1);
+	});
+});
+
+/**
+ * Measured on a real engagement: the panel read "confirmed 120" over a ledger
+ * holding 15 distinct claims, because `record` writes the (target x class) cross
+ * product and every row is a cell. Cells are what the coverage bar counts; this
+ * is what the hypotheses section counts. ADR-001.
+ */
+describe("counting claims rather than the cells they were asked of", () => {
+	function hyp(partial: Partial<HypothesisRecord> & Pick<HypothesisRecord, "id">): HypothesisRecord {
+		return {
+			v: 1, kind: "hypothesis", createdAt: "t", statement: "S", target: "e1",
+			class: "sqli", outcome: "confirmed", ...partial,
+		};
+	}
+
+	it("folds one claim asked of many targets into one", () => {
+		const rows = ["e1", "e2", "e3", "e4"].map((target, i) =>
+			hyp({ id: `h${i}`, target, statement: "Raw SQL queries interpolate registration input" }));
+		expect(claimCounts(rows)).toEqual({ confirmed: 1 });
+	});
+
+	it("keeps the same words asked of a different class apart", () => {
+		expect(claimCounts([
+			hyp({ id: "h1", class: "sqli", statement: "User input reaches a sink" }),
+			hyp({ id: "h2", class: "cmdi", statement: "User input reaches a sink" }),
+		])).toEqual({ confirmed: 2 });
+	});
+
+	it("ignores whitespace and case, which a re-worded claim differs by and nothing else", () => {
+		expect(claimCounts([
+			hyp({ id: "h1", statement: "Raw SQL is interpolated" }),
+			hyp({ id: "h2", target: "e2", statement: "  raw   sql IS interpolated  " }),
+		])).toEqual({ confirmed: 1 });
+	});
+
+	it("counts a claim under each outcome it actually reached", () => {
+		// Confirmed on one route and refuted on another is two facts about one
+		// claim, not the same fact counted twice.
+		expect(claimCounts([
+			hyp({ id: "h1", target: "e1", outcome: "confirmed" }),
+			hyp({ id: "h2", target: "e2", outcome: "refuted" }),
+			hyp({ id: "h3", target: "e3", outcome: "refuted" }),
+		])).toEqual({ confirmed: 1, refuted: 1 });
+	});
+
+	it("does not collapse every unwritten claim into one", () => {
+		// A blank statement falls back to the row's own id. Two claims nobody
+		// bothered to word are still two claims.
+		expect(claimCounts([
+			hyp({ id: "h1", statement: "" }),
+			hyp({ id: "h2", target: "e2", statement: "   " }),
+		])).toEqual({ confirmed: 2 });
+	});
+
+	it("has nothing to say about a row with no outcome yet", () => {
+		expect(claimCounts([hyp({ id: "h1", outcome: undefined })])).toEqual({});
+		expect(claimCounts([])).toEqual({});
 	});
 });

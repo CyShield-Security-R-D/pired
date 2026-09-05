@@ -40,7 +40,7 @@ import { applyPlan, extractionSystemPrompt, extractionUserMessage, needsRetry, p
 import type { Fields } from "../core/identity.ts";
 import { dismissHint, PANEL_MODES, renderFindingDetail, renderPanel, scrollFramed, type PanelData, type PanelMode, type PanelTone } from "../core/panel.ts";
 import { coverageBrief, renderCoverageBrief } from "../core/coverage.ts";
-import { computeCoverageView, computeEngagementStats, coveragePercent, type CoverageView, type EngagementStats } from "../core/stats.ts";
+import { claimCounts, computeCoverageView, computeEngagementStats, coveragePercent, isDisposed, type CoverageView, type EngagementStats } from "../core/stats.ts";
 import { layoutStatusLine, scribeStatus, type ScribeState, type Segment } from "../core/statusline.ts";
 import { createCoreTools } from "../core/tools.ts";
 import { Workspace } from "../core/workspace.ts";
@@ -926,13 +926,23 @@ export default function piredExtension(pi: ExtensionAPI): void {
 			cells: view?.matrix.applicable,
 			settled,
 			gaps: view ? view.matrix.counts["not-tested"] + view.matrix.counts.blocked : undefined,
+			// The cell breakdown the coverage section was always designed to carry.
+			// The renderer has drawn this row since the panel shipped and no caller
+			// ever filled it, so the one place cells could be named as cells was
+			// blank while the hypotheses section counted them under another word.
+			coverage: view?.matrix.counts,
 			surface: tally(inv.map((r) => r.kind)),
-			hypotheses: tally(hyps.map((h) => h.outcome)),
+			// Claims, not cells — the coverage section above owns cells now. ADR-001.
+			hypotheses: claimCounts(hyps),
 			findings: st.findings,
 			// Newest first, and enough of them that a maximised panel has something to
 			// scroll. The rail still renders three; the cap is here only so a very
 			// long engagement cannot make every frame quadratic.
-			recentFindings: finds.slice(-200).reverse().map((f) => ({
+			// Same denominator as the severity chips above, which come from
+			// EngagementStats and drop disposed findings. Listing a dismissed false
+			// positive under a chip row that excludes it makes the two halves of one
+			// section disagree about the same ledger.
+			recentFindings: finds.filter((f) => !isDisposed(f.status)).slice(-200).reverse().map((f) => ({
 				severity: f.severity, title: f.title, id: f.id, cwe: f.cwe, class: f.class,
 				status: f.status, description: f.description, repro: f.repro,
 				evidence: f.evidence,

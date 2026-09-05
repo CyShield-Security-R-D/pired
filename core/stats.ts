@@ -6,7 +6,7 @@
 import { computeCoverage, coveragePercent } from "./coverage.ts";
 import type { Fields } from "./identity.ts";
 import { attachToElements } from "./target.ts";
-import { DISPOSED_STATUSES, type CoverageMatrix, type InventoryKind, type Severity } from "./ontology.ts";
+import { DISPOSED_STATUSES, type CoverageMatrix, type HypothesisRecord, type InventoryKind, type Severity } from "./ontology.ts";
 import type { Workspace } from "./workspace.ts";
 
 const DEFAULT_SURFACE_KINDS: InventoryKind[] = ["endpoint", "host"];
@@ -92,6 +92,39 @@ export interface EngagementStats {
 	coveragePct?: number;
 	surface: number;
 	blockers: number;
+}
+
+/**
+ * One claim, however many cells it was asked of.
+ *
+ * `record` takes lists for `target` and `class` and writes the cross product, and
+ * hypothesis identity is `(target, class)` — so a row is a coverage cell, not a
+ * piece of reasoning. One argument about authentication, put to 44 endpoints, is
+ * 44 rows, and a panel that labelled them "confirmed 44" invited the operator to
+ * read 44 discovered bugs. Measured on a real engagement: 120 confirmed rows
+ * carrying 15 distinct claims.
+ *
+ * Cells are what the coverage bar counts. This is what the hypotheses section
+ * counts, so the two numbers stop competing to describe the same ledger. A claim
+ * asked of several cells and settled differently across them is counted under
+ * each outcome it actually reached — that is two facts about one claim, not
+ * double-counting. See ADR-001.
+ */
+export function claimCounts(hypotheses: HypothesisRecord[]): Record<string, number> {
+	const seen = new Map<string, Set<string>>();
+	for (const h of hypotheses) {
+		if (!h.outcome) continue;
+		// A blank statement falls back to the row's own id rather than collapsing
+		// every unwritten claim into one.
+		const text = (h.statement ?? "").trim().replace(/\s+/g, " ").toLowerCase();
+		const key = `${h.class ?? ""}\u0000${text || h.id}`;
+		const set = seen.get(h.outcome) ?? new Set<string>();
+		set.add(key);
+		seen.set(h.outcome, set);
+	}
+	const out: Record<string, number> = {};
+	for (const [outcome, set] of seen) out[outcome] = set.size;
+	return out;
 }
 
 /** Is this finding settled — accepted, dismissed or set aside — rather than open work? */

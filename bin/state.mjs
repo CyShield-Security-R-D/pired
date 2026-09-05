@@ -80,6 +80,39 @@ export function engagementType(checklist) {
  * @param {Array<{ status: string; question: string; priority: string }>} [input.blockers]
  * @param {number} [input.evidence]
  */
+/**
+ * Hypothesis rows counted by outcome — the fallback when nobody hands us core's
+ * claim rollup.
+ *
+ * @param {{outcome?: string}[]} hyps
+ * @returns {Record<string, number>}
+ */
+const rowCounts = (hyps) => tally(hyps.map((h) => h.outcome));
+
+/**
+ * The panel's data, and the two pure functions it will not import.
+ *
+ * This file is plain JS so the `--json` contract can be tested without a build
+ * step, which also means it cannot reach `core/*.ts` — node refuses to strip
+ * types under node_modules, which is the whole reason `pired-state.mjs` mirrors
+ * the sources to a cache first. So the two rollups that must agree with the TUI
+ * are injected by the caller that already has the mirrored core loaded, rather
+ * than reimplemented here where they would drift. See ADR-001.
+ *
+ * @param {object} o
+ * @param {string} o.name
+ * @param {any} [o.checklist]
+ * @param {any} [o.scope]
+ * @param {any} [o.stats]
+ * @param {any} [o.view]
+ * @param {any[]} [o.inventory]
+ * @param {any[]} [o.hypotheses]
+ * @param {any[]} [o.findings]
+ * @param {any[]} [o.blockers]
+ * @param {number} [o.evidence]
+ * @param {(hyps: any[]) => Record<string, number>} [o.claims] Core's claim rollup.
+ * @param {(status: string | undefined) => boolean} [o.isDisposed]
+ */
 export function buildPanelData({
 	name,
 	checklist,
@@ -91,6 +124,8 @@ export function buildPanelData({
 	findings = [],
 	blockers = [],
 	evidence = 0,
+	claims = rowCounts,
+	isDisposed = () => false,
 }) {
 	const open = blockers.filter((b) => b.status === "open");
 	return {
@@ -103,11 +138,19 @@ export function buildPanelData({
 		cells: view?.matrix.applicable,
 		settled: view ? view.matrix.counts.clear + view.matrix.counts.vulnerable : undefined,
 		gaps: view ? view.matrix.counts["not-tested"] + view.matrix.counts.blocked : undefined,
+		// The cell breakdown the coverage section was designed to carry and no
+		// caller ever filled in.
+		coverage: view?.matrix.counts,
 		surface: tally(inventory.map((r) => r.kind)),
-		hypotheses: tally(hypotheses.map((h) => h.outcome)),
+		// Claims; the coverage row above owns cells.
+		hypotheses: claims(hypotheses),
 		findings: stats?.findings,
 		// Newest first, and only a handful: the panel is a glance, not a report.
-		recentFindings: findings.slice(-6).reverse().map((f) => ({ severity: f.severity, title: f.title })),
+		// Disposed findings are dropped here for the same reason they are dropped
+		// from `stats.findings` — otherwise the chips and the list below them
+		// disagree about the same ledger.
+		recentFindings: findings.filter((f) => !isDisposed(f.status)).slice(-6).reverse()
+			.map((f) => ({ severity: f.severity, title: f.title })),
 		openBlockers: open.map((b) => ({ question: b.question, priority: b.priority })),
 		evidence,
 	};

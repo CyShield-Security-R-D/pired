@@ -111,8 +111,48 @@ describe("the panel's state", () => {
 
 	it("keeps every documented field present, so a status bar can rely on the shape", () => {
 		expect(Object.keys(data()).sort()).toEqual([
-			"cells", "coveragePct", "engagement", "engagementType", "evidence", "findings",
+			"cells", "coverage", "coveragePct", "engagement", "engagementType", "evidence", "findings",
 			"gaps", "hypotheses", "openBlockers", "recentFindings", "scope", "settled", "surface",
+		]);
+	});
+
+	// The panel's renderer has drawn the cell breakdown since it shipped, and no
+	// caller ever set it — so the section that owns cells was blank while the
+	// hypotheses section counted them under a different word. ADR-001.
+	it("passes the cell breakdown through, so the coverage section can name cells as cells", () => {
+		const counts = { clear: 98, vulnerable: 7, testing: 3, blocked: 2, "not-tested": 60, "n/a": 4 };
+		expect(data({ view: { matrix: { applicable: 170, counts } } }).coverage).toEqual(counts);
+	});
+
+	it("has no cell breakdown to report when there is no matrix", () => {
+		expect(data({ view: undefined }).coverage).toBeUndefined();
+	});
+
+	// state.mjs is plain JS and cannot import core, so the rollups that must agree
+	// with the TUI are handed in by pired-state.mjs. The defaults are the old
+	// row-counting behaviour, which is wrong on a cross-product ledger but is at
+	// least the behaviour every existing caller already had.
+	it("counts claims with the rollup it is given, not one of its own", () => {
+		const hypotheses = [
+			{ id: "h1", class: "sqli", statement: "Raw SQL is interpolated", outcome: "confirmed" },
+			{ id: "h2", class: "sqli", statement: "Raw SQL is interpolated", outcome: "confirmed" },
+			{ id: "h3", class: "sqli", statement: "Raw SQL is interpolated", outcome: "confirmed" },
+		];
+		// One claim asked of three cells.
+		const claims = () => ({ confirmed: 1 });
+		expect(data({ hypotheses, claims }).hypotheses).toEqual({ confirmed: 1 });
+		// Without one, it falls back to counting rows.
+		expect(data({ hypotheses }).hypotheses).toEqual({ confirmed: 3 });
+	});
+
+	it("drops disposed findings from the list, so it agrees with the severity chips", () => {
+		const findings = [
+			{ id: "f1", severity: "high", title: "Real one", status: "confirmed" },
+			{ id: "f2", severity: "high", title: "Dismissed one", status: "false-positive" },
+		];
+		const isDisposed = (status: string | undefined) => status === "false-positive";
+		expect(data({ findings, isDisposed }).recentFindings).toEqual([
+			{ severity: "high", title: "Real one" },
 		]);
 	});
 });
