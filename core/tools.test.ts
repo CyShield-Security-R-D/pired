@@ -1247,3 +1247,65 @@ describe("macro digest on record", () => {
 		expect(out).toMatch(/Recorded finding/);
 	});
 });
+
+/**
+ * Confirming a hypothesis and writing a finding are separate acts, and only the
+ * second reaches the client. Across a whole engagement not one of twenty
+ * findings carried a hypothesisId, so nothing linked a finding to the reasoning
+ * that produced it. Both nudges inform; neither refuses. ADR-004.
+ */
+describe("joining a finding to the reasoning behind it", () => {
+	it("says what still has to happen when a hypothesis is confirmed", async () => {
+		const { ctx, record } = await setup();
+		const res = await record.execute({
+			kind: "hypothesis", statement: "dag_id is not scoped", target: "e1", class: "authz", outcome: "confirmed",
+		}, ctx);
+		expect(textOf(res)).toContain("only a finding reaches the report");
+	});
+
+	it("stays quiet about it when the hypothesis was refuted", async () => {
+		// Refuting is finished work. Nothing is owed to the report for it beyond
+		// the coverage section, which the export writes on its own.
+		const { ctx, record } = await setup();
+		const res = await record.execute({
+			kind: "hypothesis", outcome: "refuted", target: "e1", class: "authz",
+			statement: "the route decorator resolves the caller and compares owner_id before the query runs",
+		}, ctx);
+		expect(textOf(res)).not.toContain("only a finding reaches the report");
+	});
+
+	it("names the hypothesis a finding looks like the write-up of", async () => {
+		const { ctx, record } = await setup();
+		const hyp = await record.execute({
+			kind: "hypothesis", statement: "dag_id is not scoped", target: "e1", class: "authz", outcome: "confirmed",
+		}, ctx);
+		const id = (hyp.details as { ids?: string[]; id?: string }).ids?.[0] ?? (hyp.details as { id: string }).id;
+		const res = await record.execute({
+			kind: "finding", title: "IDOR", severity: "high", target: "e1", class: "authz",
+		}, ctx);
+		expect(textOf(res)).toContain(`hypothesisId=${id}`);
+	});
+
+	it("says nothing when the finding already carries the link", async () => {
+		const { ctx, record } = await setup();
+		await record.execute({
+			kind: "hypothesis", statement: "dag_id is not scoped", target: "e1", class: "authz", outcome: "confirmed",
+		}, ctx);
+		const res = await record.execute({
+			kind: "finding", title: "IDOR", severity: "high", target: "e1", class: "authz", hypothesisId: "whatever",
+		}, ctx);
+		expect(textOf(res)).not.toContain("Link them with");
+	});
+
+	it("does not suggest a hypothesis from a different class", async () => {
+		const { ctx, record } = await setup();
+		await record.execute({
+			kind: "hypothesis", statement: "dag_id is not scoped", target: "e1", class: "authz", outcome: "confirmed",
+		}, ctx);
+		const res = await record.execute({
+			kind: "finding", title: "SQLi", severity: "high", target: "e1", class: "sqli",
+		}, ctx);
+		expect(textOf(res)).not.toContain("Link them with");
+	});
+});
+

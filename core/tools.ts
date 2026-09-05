@@ -218,6 +218,18 @@ function recordDetails(record: LedgerRecord, outcome: WriteOutcome): Record<stri
 	return base;
 }
 
+/**
+ * What a confirmation still owes the client.
+ *
+ * Confirming settles the coverage cell; only a finding reaches the report, and
+ * the two are separate acts — one engagement sat at 120 confirmed cells with an
+ * empty findings ledger while every view said "none recorded". Said at the
+ * moment the next action is obvious and cheap, and never enforced. ADR-004.
+ */
+const CONFIRMED_OWES =
+	" Confirmed settles the coverage cell; only a finding reaches the report — " +
+	"record kind=finding for this, with hypothesisId to link them.";
+
 function recordSummary(kind: string, record: LedgerRecord, outcome: WriteOutcome): string {
 	// A repeat is told plainly what it matched, and that nothing was lost. The
 	// agent that re-recorded something usually did it because the first call
@@ -789,9 +801,11 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 					return out;
 				});
 				const repeats = ids.length - created.length;
+				const owed = outcome === "confirmed" ? CONFIRMED_OWES : "";
 				return text(
 					`Recorded ${created.length} hypotheses (${targets.length} target(s) x ${classes.length} class(es)), outcome=${outcome}.` +
-					(repeats > 0 ? ` ${repeats} cell(s) were already recorded and were updated in place, not duplicated.` : ""),
+					(repeats > 0 ? ` ${repeats} cell(s) were already recorded and were updated in place, not duplicated.` : "") +
+					owed,
 					{ kind, ids, created },
 				);
 			}
@@ -1139,8 +1153,31 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 					`Recorded separately rather than risk losing one of them. If they are the same issue, fold the detail into ` +
 					`${near.id} with record id=${near.id}, then retire this one with record id=${written.id} delete=true reason="duplicate of ${near.id}".`
 				: "";
+			// The id that would join the two ledgers, offered rather than demanded.
+			//
+			// Across a whole engagement not one of twenty findings carried a
+			// hypothesisId, so nothing linked a finding to the reasoning that
+			// produced it. Coverage does not need the link — it joins by cell — but
+			// a reader of the ledger does. Naming the candidate is cheaper than
+			// asking for it, and nothing is rejected for its absence.
+			let linkage = "";
+			// A single hypothesis does not take the cross-product return above, so the
+			// same thing has to be said on the way out of the general path.
+			if (kind === "hypothesis" && written.kind === "hypothesis" && written.outcome === "confirmed") {
+				linkage = CONFIRMED_OWES;
+			}
+			if (kind === "finding" && written.kind === "finding" && !written.hypothesisId) {
+				const match = (await deps.workspace.read("hypotheses")).find((h) =>
+					h.outcome === "confirmed" && h.class === written.class
+					&& typeof h.target === "string" && h.target === written.target
+					&& !h.findingId);
+				if (match) {
+					linkage = `\nThis looks like the write-up of hypothesis ${match.id}. ` +
+						`Link them with record id=${written.id} hypothesisId=${match.id}.`;
+				}
+			}
 			const digest = await macroDigest(deps, deps.surfaceKinds ?? DEFAULT_SURFACE_KINDS);
-			return text(recordSummary(kind, written, outcome) + warning + unlocated + pulled + incomplete + digest, recordDetails(written, outcome));
+			return text(recordSummary(kind, written, outcome) + warning + unlocated + pulled + incomplete + linkage + digest, recordDetails(written, outcome));
 		},
 	};
 }
