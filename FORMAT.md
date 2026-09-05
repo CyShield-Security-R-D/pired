@@ -80,12 +80,19 @@ Single JSON object at the workspace root.
   "formatVersion": 1,
   "engagement": "acme-webapp-2026",
   "createdAt": "2026-08-23T14:00:00Z",
+  "originPath": "/home/you/clients/acme/webapp",   // optional; see below
   "stores": {
     "inventory": 1, "hypotheses": 1, "findings": 1,
     "blockers": 1, "loot": 1
   }
 }
 ```
+
+`originPath` is the directory the engagement was first opened from, written once and never updated.
+An engagement is keyed on that directory's basename, so `~/clientA/backend` and `~/clientB/backend`
+resolve to one ledger; recording the origin is what lets a later session say so. **Optional, and its
+absence means unknown rather than mismatched** — every engagement created before it existed has
+none. Adding it is not a `formatVersion` bump (§3).
 
 ## 6. `scope.json`
 

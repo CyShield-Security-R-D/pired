@@ -144,7 +144,9 @@ pired-state --no-frame            # drop the border
 pired-state --json                # the underlying data, unrendered
 ```
 
-With no `--engagement` it picks the most recently modified engagement under `~/.pired/engagements/`.
+With no `--engagement` it picks the engagement named by the current directory, and falls back to the most recently modified one under `~/.pired/engagements/` when the directory names none. The fallback is what a status bar run from nowhere in particular needs; the directory rule is what a pane beside a session needs, and on a box with a hundred engagements "newest" alone is a coin flip that will happily draw another client's panel.
+
+`--help` lists the flags.
 
 `--json` emits exactly the structure the renderer consumes — engagement, type, scope, coverage, surface, hypotheses, findings, recent findings, open blockers, evidence count — which is the supported way to drive your own status bar or dashboard.
 

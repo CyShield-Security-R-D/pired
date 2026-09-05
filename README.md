@@ -195,6 +195,8 @@ pi -e ./extensions/pired.ts -e ./extensions/hosts.ts --pired-profile review -p "
 
 - **Findings** — `/findings` browses them and `/report` exports a Markdown report; engagement state lives in `~/.pired/engagements/<name>/` (see [`FORMAT.md`](./FORMAT.md)).
 
+- **The report carries its own coverage** — the exported Markdown ends with what was tested, not only what was found: cases settled, the hypotheses that ruled a class out against specific surface, and the classes and surface nobody reached, named rather than counted. A findings list answers "what did you find" and cannot answer "what did you look at", and the second question is what separates an assessment from a scanner run. Targets read as `POST /api/split-bill` rather than as the inventory id behind them.
+
 - **Report-grade findings** — a finding carries what the flaw is, what it costs the client in their terms, and the concrete fix; `record` says which of the three is still missing, and the exported report marks an unwritten section rather than quietly leaving it out. CVSS vectors are validated against the version they claim — v4.0 by default, v3.1 when an engagement requires it — so a v3.1 vector cannot enter the ledger under a v4.0 label. `recall finding id=<id>` reads one back in full, which is what a rewrite pass (or a delegated technical writer — see `skills/ops-technical-writer`) works from.
 
 - **Correcting the ledger** — tell the agent a finding is not real, that the client has accepted the risk, or to set it aside, and it records the decision as a status with your reason; the finding keeps its place in the report and leaves the open count. A row that should never have been recorded can be retired outright. Nothing is erased: the ledger is append-only, so every version is still in the file above the tombstone. `/dedupe` folds duplicates an older engagement already accumulated into one row each, moving every reference onto the surviving id so no coverage is lost — it shows what it would do and writes only when you say so.
@@ -216,10 +218,11 @@ The transcript is the conversation; the ledger is the artifact. Coverage you can
 │  ▲ 7  ● 98  ◐ 3  ⊘ 2                                 │
 │                                                      │
 ├─ scope ──────────────────────────────────────────────┤
-│  ● authorized enforce                                │
+│  ● authorized · gate enforce                         │
 │  domains 1 · cidrs 1                                 │
 │                                                      │
 ├─ findings ───────────────────────────────────────────┤
+│  ! 1 confirmed, not written up                       │
 │  ⬤ crit 1  ⬤ high 2  ⬤ med 3                         │
 │  ▸ SQLi in /api/transfer amount                      │
 │                                                      │
@@ -228,6 +231,8 @@ The transcript is the conversation; the ledger is the artifact. Coverage you can
 ```
 
 `/panel` toggles it, `alt+p` does the same without leaving the editor, and `pired --no-panel` starts without it. The dismiss hint is platform-aware — macOS terminals send Option+P as `π` rather than as Meta, so a Mac is told `/panel to hide` instead of a key it cannot press.
+
+The coverage section counts **cells** and the hypotheses section counts **claims** — `record` fans one piece of reasoning across every target it applies to, so the two are different numbers over the same ledger — and the `!` line counts confirmed claims that no finding has been written for yet, because confirming settles a cell and only a finding reaches the client.
 
 Alongside it: a status line carrying findings-by-severity, coverage and the **armed state of the scope gate**; `/coverage` for the full checklist × surface matrix; and blocker dialogs that put the agent's parked questions in front of you the moment they are recorded, so "never stall" doesn't quietly become "never finish" — with `/blockers` — a browsable list of every parked question, waiting ones first, answerable in place — as the way back to any you waved away.
 

@@ -20,6 +20,21 @@ So an empty matrix is reported as empty, never as finished. `recall gaps` and `r
 
 This is a deliberate trade. pired cannot know what it was not told about — so the number it reports is honest about its own denominator rather than pretending to a completeness it cannot verify. It is why the system prompt pushes the agent to record inventory as it discovers it, and why the coverage view's empty state says *"no surface recorded yet — run recon, or record inventory"* rather than showing 100%.
 
+## Cells and claims
+
+A cell is the unit of coverage; a **claim** is the unit of reasoning, and they are not the same
+number. `record` takes lists for `target` and `class` and writes the cross product, so one argument
+— *"raw SQL queries interpolate registration input"* — asked of five routes is five cells and one
+claim.
+
+The panel splits them deliberately: the coverage section counts cells, the hypotheses section counts
+claims, keyed on `(class, statement)` with whitespace and case normalised. Reporting both under the
+word "confirmed" overstated what a real engagement had found by roughly eight times. The same
+distinction decides when confirmed work counts as written up — a claim is written up when *any* of
+its cells has a finding, because a reviewer writes one finding for one argument, not one per
+endpoint. See [ADR-001](decisions.md#adr-001--the-panel-counts-claims-the-coverage-bar-counts-cells)
+and [ADR-004](decisions.md#adr-004--confirmed-work-that-has-not-reached-the-report-is-surfaced-not-enforced).
+
 ## Cell statuses
 
 | Status | Glyph | Means |

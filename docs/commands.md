@@ -16,7 +16,7 @@ Everything pired adds to pi. pi's own commands (`/model`, `/reload`, sessions, �
 | `/surface` | Browse the recorded attack surface: one row per element, a coverage bar across the checklist, and drill-down into any element's classes. |
 | `/hypotheses` | Browse every hypothesis — confirmed, refuted and open — with outcome filters and full detail. |
 | `/findings` | Browse findings, worst first; select one to read its description, repro and evidence. |
-| `/report` | Write findings to Markdown in the engagement workspace. |
+| `/report` | Write findings to Markdown in the engagement workspace, with a Coverage section: what was settled, what was refuted, and what nobody reached. Prints the absolute path. |
 | `/blockers` | Browse what needs you: every parked question, waiting ones first, with `a` to answer the one under the cursor. |
 | `/scribe` | Write the review into the ledger now — findings, surface, and a verdict on every checklist class. |
 | `/scribe on` \| `off` \| `status` | Let it run by itself after every reply (off by default), or report its state. |
@@ -207,7 +207,13 @@ pired [--profile review|recon|pentest] [--provider NAME] [--model ID]
 | `--no-theme` | — | Keep your own pi theme instead of pired's. |
 | `--no-panel` | — | Start without the engagement panel (it is shown by default). |
 | `--prompt` | — | One-shot prompt (pi's `-p`), for scripted runs. |
+| `--help` | — | pired's own flags. `pired -- --help` still reaches pi's. |
 | `-- …` | — | Everything after `--` is passed to pi verbatim. |
+
+An unrecognised profile is refused rather than coerced: `pired --profile pentst` exits non-zero
+and names the three. `review` is the one profile that pre-authorizes the scope gate, so silently
+falling back to it turned a typo into a read-only audit that started up looking exactly like the
+pentest that was asked for.
 
 The launcher always passes `--approve`. To run pired without it, invoke pi directly:
 

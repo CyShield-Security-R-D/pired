@@ -14,7 +14,7 @@ The workspace is kept **outside the target tree** so loot and notes never land i
 
 ```
 ~/.pired/engagements/acme-webapp/
-  manifest.json        format + per-store versions
+  manifest.json        format + per-store versions + the directory it came from
   scope.json           the authorized scope, as loaded
   checklist.json       the vuln classes for this engagement
   inventory.jsonl      the attack surface — what EXISTS

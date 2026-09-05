@@ -80,7 +80,7 @@ Other extensions' statuses are not swallowed: they are carried on a second line,
 │  ▲ 7  ● 98  ◐ 3  ⊘ 2                                 │
 │                                                      │
 ├─ scope ──────────────────────────────────────────────┤
-│  ● authorized enforce                                │
+│  ● authorized · gate enforce                         │
 │  domains 1 · cidrs 1                                 │
 │                                                      │
 ├─ surface ────────────────────────────────────────────┤
@@ -88,11 +88,12 @@ Other extensions' statuses are not swallowed: they are carried on a second line,
 │  param                88  service               6    │
 │                                                      │
 ├─ hypotheses ─────────────────────────────────────────┤
-│  ▲ confirmed                                      7  │
-│  ● refuted                                       98  │
-│  ◐ testing                                        3  │
+│  ▲ confirmed                                      3  │
+│  ● refuted                                       21  │
+│  ◐ testing                                        1  │
 │                                                      │
 ├─ findings ───────────────────────────────────────────┤
+│  ! 1 confirmed, not written up                       │
 │  ⬤ crit 1  ⬤ high 2  ⬤ med 3                         │
 │  ▸ SQLi in /api/transfer amount                      │
 │  ▸ IDOR on /api/accounts/{id}                        │
@@ -101,6 +102,10 @@ Other extensions' statuses are not swallowed: they are carried on a second line,
 │                                        alt+p to hide │
 ╰──────────────────────────────────────────────────────╯
 ```
+
+**Two sections, two units.** The coverage section counts **cells** — one weakness class asked of one recorded element — and the hypotheses section counts **claims**, the distinct pieces of reasoning behind them. `record` takes lists for `target` and `class` and writes the cross product, so one argument about authentication put to 44 endpoints is 44 cells and one claim. Reporting both under the word "confirmed" overstated what had been found by roughly eight times on a real engagement, which is why the headings are load-bearing: the section is what says which unit you are reading. See [ADR-001](decisions.md#adr-001--the-panel-counts-claims-the-coverage-bar-counts-cells).
+
+The `!` line above the severity tally counts confirmed claims no finding has been written for. Confirming settles a coverage cell; only a finding reaches the client, and the two are separate acts — an engagement can sit at a full hypotheses ledger with `none recorded` under it. `/hypotheses` and its `u` filter is where you go from there. See [ADR-004](decisions.md#adr-004--confirmed-work-that-has-not-reached-the-report-is-surfaced-not-enforced).
 
 It is anchored top-right and capped at half the screen height, so it covers older, already-read transcript rather than the live region you are actually reading. It never takes the keyboard.
 
@@ -251,7 +256,7 @@ A row never contradicts its glyph. Where a cell is settled but no hypothesis is 
 
 From the maximized panel, `⏎` hands off here. The panel is a dashboard — it tells you there are twelve findings; reading one properly is this view's job, and building a second selectable list inside a fixed layout would only duplicate it.
 
-`/hypotheses` lists them flat, with `a` / `c` / `r` / `o` filtering to all, confirmed, refuted, or open. **The refuted ones are the point.** Confirmed hypotheses become findings; refuted ones are the evidence that everything else was checked — the difference between "we found three bugs" and "we tested 174 hypotheses across 10 endpoints and three held". `⏎` opens one in full: statement, class, target, method, evidence path, and the finding it produced.
+`/hypotheses` lists them flat, with `a` / `c` / `r` / `u` / `o` filtering to all, confirmed, refuted, unwritten, or open. A claim asked of many targets is written once with `↳` under it, because `record` fans one piece of reasoning across every target it applies to and the sentence would otherwise repeat down forty-four rows. **The refuted ones are the point.** Confirmed hypotheses become findings; refuted ones are the evidence that everything else was checked — the difference between "we found three bugs" and "we tested 174 hypotheses across 10 endpoints and three held". `⏎` opens one in full: statement, class, target, method, evidence path, and the finding it produced.
 
 ### What needs you
 
@@ -284,7 +289,7 @@ This replaced a forced march through those dialogs, one per open blocker. A moda
 | `⏎` `→` `l` | drill in |
 | `Esc` `←` `h` | back, and out of the browser at the top level |
 | `Tab` | cycle coverage → surface → hypotheses → findings → blockers, keeping the filter |
-| `a` `c` `r` `o` | filter all / confirmed / refuted / open (hypotheses) |
+| `a` `c` `r` `u` `o` | filter all / confirmed / refuted / unwritten / open (hypotheses) |
 | `a` `x` `f` | answer, dismiss, waiting/all (blockers) |
 | `q` | close |
 
