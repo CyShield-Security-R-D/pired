@@ -177,9 +177,13 @@ function extractFields(kind: LedgerKind, a: Record<string, unknown>): Record<str
 		case "service":
 			return defined({ host: str(a.host), port: num(a.port), proto: str(a.proto), name: str(a.name) });
 		case "endpoint":
-			return defined({ host: str(a.host), method: str(a.method), path: str(a.path), params: strArr(a.params), auth: str(a.auth) });
+			// `file` is where the route is implemented. Without it in this list the
+			// schema accepted the argument and the write dropped it: measured across
+			// five targets, the agent passed `file` on 97 of 290 surface calls and
+			// the ledger recorded it 0 times.
+			return defined({ host: str(a.host), method: str(a.method), path: str(a.path), params: strArr(a.params), auth: str(a.auth), file: str(a.file) });
 		case "param":
-			return defined({ name: str(a.name), endpoint: str(a.endpoint), location: str(a.location) });
+			return defined({ name: str(a.name), endpoint: str(a.endpoint), location: str(a.location), file: str(a.file) });
 		case "tech":
 			return defined({ name: str(a.name), host: str(a.host), version: str(a.version) });
 		case "hypothesis":

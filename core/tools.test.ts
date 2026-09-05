@@ -1309,3 +1309,21 @@ describe("joining a finding to the reasoning behind it", () => {
 	});
 });
 
+
+describe("a surface element remembers where it lives", () => {
+	it("keeps the file an endpoint is implemented in", async () => {
+		// The schema accepted `file` and the write dropped it: measured across five
+		// targets, the agent passed it on 97 of 290 surface calls and the ledger
+		// recorded it 0 times, so coverage still had no file to point at.
+		const { ws, ctx, record } = await setup();
+		await record.execute({ kind: "endpoint", path: "/api/notes/{id}/assets", method: "POST",
+			file: "backend/handlers/assets.go" }, ctx);
+		expect((await ws.read("inventory"))[0]).toMatchObject({ file: "backend/handlers/assets.go" });
+	});
+
+	it("keeps the file a param is read in", async () => {
+		const { ws, ctx, record } = await setup();
+		await record.execute({ kind: "param", name: "noteID", file: "backend/handlers/assets.go" }, ctx);
+		expect((await ws.read("inventory"))[0]).toMatchObject({ file: "backend/handlers/assets.go" });
+	});
+});
