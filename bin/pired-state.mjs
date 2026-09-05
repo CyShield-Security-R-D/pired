@@ -18,9 +18,9 @@
 import { copyFile, mkdir, readdir, readFile, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, dirname, sep } from "node:path";
+import { basename, join, dirname, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { buildPanelData, stripAnsi, truncateToWidth, pickNewest } from "./state.mjs";
+import { buildPanelData, stripAnsi, truncateToWidth, pickEngagement, STATE_USAGE } from "./state.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const ENG = join(homedir(), ".pired", "engagements");
@@ -63,17 +63,28 @@ const arg = (n, d) => {
 };
 const has = (n) => process.argv.includes(`--${n}`);
 
-async function newestEngagement() {
+// `--help` used to render a panel, which is a confusing thing for a help flag to
+// do — and none of the flags below were reachable from the terminal at all.
+if (has("help") || process.argv.includes("-h")) {
+  process.stdout.write(STATE_USAGE);
+  process.exit(0);
+}
+
+/** Every engagement on the box, with the mtime the fallback rule sorts on. */
+async function engagementEntries() {
   const dirs = await readdir(ENG).catch(() => []);
-  const entries = await Promise.all(dirs.map(async (name) => ({
+  return Promise.all(dirs.map(async (name) => ({
     name,
     mtimeMs: await stat(join(ENG, name)).then((s) => s.mtimeMs).catch(() => -1),
   })));
-  return pickNewest(entries);
 }
 
 async function main() {
-  const name = arg("engagement") ?? (await newestEngagement());
+  const asked = arg("engagement");
+  const chosen = asked
+    ? { name: asked, reason: "asked" }
+    : pickEngagement({ cwdName: basename(process.cwd()), entries: await engagementEntries() });
+  const name = chosen.name;
   if (!name || !existsSync(join(ENG, name))) {
     process.stderr.write("no engagement found\n");
     process.exit(2);

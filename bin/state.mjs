@@ -51,6 +51,55 @@ export function pickNewest(entries) {
 }
 
 /**
+ * Which engagement this invocation is about.
+ *
+ * "Most recently modified anywhere under ~/.pired/engagements" is fine on a box
+ * with one engagement and a coin flip on a consultant's, where there are
+ * hundreds. Run inside a target directory it drew an unrelated client's panel,
+ * because another engagement's directory happened to have a newer mtime — and
+ * the whole point of the tmux pane is that it is showing you the engagement you
+ * are working in.
+ *
+ * The directory's own name wins when it names an engagement that exists;
+ * otherwise the old behaviour, which is still the right answer for a status bar
+ * running from nowhere in particular. The caller reports which rule fired, so a
+ * surprising answer is legible rather than mysterious.
+ *
+ * @param {{ cwdName?: string; entries: Array<{ name: string; mtimeMs: number }> }} o
+ * @returns {{ name: string | undefined; reason: "cwd" | "newest" }}
+ */
+export function pickEngagement({ cwdName, entries }) {
+	if (cwdName && entries.some((e) => e.name === cwdName)) return { name: cwdName, reason: "cwd" };
+	return { name: pickNewest(entries), reason: "newest" };
+}
+
+/**
+ * Usage for `pired-state --help`, which used to render a panel instead.
+ *
+ * Here rather than in the entry script for the same reason as the launcher's:
+ * the script is excluded from coverage because its decisions live in this file.
+ * ADR-006.
+ */
+export const STATE_USAGE = `pired-state — render the engagement panel outside the TUI
+
+Usage:
+  pired-state [options]
+
+Options:
+  --engagement <name>  Which engagement            (default: the current directory's, else the newest)
+  --mode <mode>        state | coverage | findings | blockers   (default: state)
+  --width <n>          Columns                     (default: $COLUMNS, else 44)
+  --lines <n>          Rows                        (default: 24)
+  --no-frame           Drop the border
+  --watch              Redraw on an interval
+  --every <seconds>    Interval for --watch        (default: 5)
+  --json               The underlying data, unrendered
+  --help               This message
+
+Engagements live in ~/.pired/engagements/.
+`;
+
+/**
  * The label for a checklist's target type, or the raw type when it is unknown.
  *
  * @param {{ targetType?: string } | undefined} checklist

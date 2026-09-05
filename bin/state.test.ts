@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildPanelData, engagementType, pickNewest, stripAnsi, tally, truncateToWidth } from "./state.mjs";
+import { buildPanelData, engagementType, pickEngagement, pickNewest, STATE_USAGE, stripAnsi, tally, truncateToWidth } from "./state.mjs";
 
 /**
  * `pired-state --json` is a published interface: the docs invite people to hang
@@ -179,3 +179,42 @@ describe("fitting a coloured line into a pane", () => {
 		expect(truncateToWidth("abc", 0)).toBe("…");
 	});
 });
+
+/**
+ * "Newest anywhere under ~/.pired/engagements" is fine on a box with one
+ * engagement and a coin flip on a consultant's. Run inside a target directory it
+ * drew an unrelated client's panel, because a different engagement happened to
+ * have a newer mtime.
+ */
+describe("choosing an engagement for the directory you are standing in", () => {
+	const entries = [
+		{ name: "acmebank", mtimeMs: 1 },
+		{ name: "filebrowser_filebrowser-fetgso", mtimeMs: 99 },
+	];
+
+	it("prefers the engagement the current directory names", () => {
+		expect(pickEngagement({ cwdName: "acmebank", entries }))
+			.toEqual({ name: "acmebank", reason: "cwd" });
+	});
+
+	it("falls back to the newest when the directory names no engagement", () => {
+		// A status bar run from nowhere in particular still wants an answer.
+		expect(pickEngagement({ cwdName: "some-unrelated-dir", entries }))
+			.toEqual({ name: "filebrowser_filebrowser-fetgso", reason: "newest" });
+		expect(pickEngagement({ entries }).reason).toBe("newest");
+	});
+
+	it("has nothing to offer when there are no engagements at all", () => {
+		expect(pickEngagement({ cwdName: "acmebank", entries: [] }))
+			.toEqual({ name: undefined, reason: "newest" });
+	});
+
+	it("documents the flags the script actually accepts", () => {
+		// --help used to render a panel, which is a confusing thing for a help flag
+		// to do, and left every flag below undiscoverable.
+		for (const flag of ["--engagement", "--mode", "--width", "--lines", "--no-frame", "--watch", "--every", "--json"]) {
+			expect(STATE_USAGE).toContain(flag);
+		}
+	});
+});
+

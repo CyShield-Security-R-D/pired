@@ -26,7 +26,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { argValue, buildPiArgs, findPi, launchPlan } from "./launch.mjs";
+import { argValue, buildPiArgs, findPi, launchPlan, PIRED_USAGE, resolveProfile, wantsHelp } from "./launch.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const EXT = join(ROOT, "extensions", "pired.ts");
@@ -35,6 +35,22 @@ const EXT = join(ROOT, "extensions", "pired.ts");
 const HOSTS_EXT = join(ROOT, "extensions", "hosts.ts");
 const THEME = join(ROOT, "themes", "pired.json");
 const argv = process.argv.slice(2);
+
+// Before anything that can fail: `pired --help` used to reach pi, so pired's own
+// flags were unreachable from the terminal the operator was already in.
+if (wantsHelp(argv)) {
+	process.stdout.write(PIRED_USAGE);
+	process.exit(0);
+}
+
+// A misspelled profile silently became `review` — the one profile that
+// pre-authorizes the scope gate — so a typo turned a pentest into a read-only
+// audit that started up looking identical. ADR-006.
+const asked = resolveProfile(argv);
+if (asked.error) {
+	process.stderr.write(`${asked.error}\n`);
+	process.exit(2);
+}
 
 if (!existsSync(EXT)) {
 	process.stderr.write(`pired: extension not found at ${EXT}\n`);

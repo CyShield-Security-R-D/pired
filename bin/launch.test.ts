@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { join } from "node:path";
-import { argValue, buildPiArgs, findPi, hasFlag, launchPlan, partition, quoteForWindows } from "./launch.mjs";
+import { argValue, buildPiArgs, findPi, hasFlag, launchPlan, partition, PIRED_USAGE, quoteForWindows, resolveProfile, wantsHelp } from "./launch.mjs";
 
 /**
  * The launcher, which until now was the only shipping code in the project with
@@ -76,7 +76,9 @@ describe("the pi command line", () => {
 		expect(args).not.toContain("/pired/extensions/hosts.ts");
 	});
 
-	it("takes a profile it knows and ignores one it does not", () => {
+	it("takes a profile it knows, and still falls back safely for one it does not", () => {
+		// The command line stays valid either way; refusing to launch is the entry
+		// script's job, and it consults resolveProfile before it gets here.
 		expect(buildPiArgs({ ...base, argv: ["--profile", "pentest"] })).toContain("pentest");
 		expect(buildPiArgs({ ...base, argv: ["--profile", "wizard"] })).toContain("review");
 	});
@@ -259,3 +261,58 @@ describe("deciding how to spawn", () => {
 			.toBe("cmd.exe");
 	});
 });
+
+/**
+ * `--profile pentst` used to become `review` without a word. The fallback
+ * direction was safe; the silence was not — `review` is the one profile that
+ * pre-authorizes the scope gate, so the typo started a read-only audit that came
+ * up looking exactly like the pentest the operator meant to run. ADR-006.
+ */
+describe("deciding what the operator asked for", () => {
+	it("names the profile when it recognises it", () => {
+		expect(resolveProfile(["--profile", "pentest"])).toEqual({ profile: "pentest" });
+		expect(resolveProfile(["--profile", "recon"])).toEqual({ profile: "recon" });
+	});
+
+	it("defaults to review when no profile was asked for, without complaining", () => {
+		expect(resolveProfile([])).toEqual({ profile: "review" });
+		expect(resolveProfile(["-c"])).toEqual({ profile: "review" });
+	});
+
+	it("says so when the profile is not one of the three", () => {
+		const { profile, error } = resolveProfile(["--profile", "pentst"]);
+		expect(profile).toBe("review");
+		expect(error).toContain("pentst");
+		expect(error).toContain("review, recon, pentest");
+	});
+
+	it("treats a bare --profile as no profile rather than as a typo", () => {
+		// argValue does not swallow the next flag, so there is nothing to reject.
+		expect(resolveProfile(["--profile", "--resume"]).error).toBeUndefined();
+	});
+});
+
+describe("asking for help", () => {
+	it("recognises both spellings", () => {
+		expect(wantsHelp(["--help"])).toBe(true);
+		expect(wantsHelp(["-h"])).toBe(true);
+		expect(wantsHelp(["--profile", "review"])).toBe(false);
+	});
+
+	it("leaves pi's own --help alone once passthrough has started", () => {
+		// `pired -- --help` is a request for pi's help, and answering it here would
+		// make pired's help unavoidable.
+		expect(wantsHelp(["--", "--help"])).toBe(false);
+	});
+
+	it("documents every flag the launcher actually owns", () => {
+		// The list drifting out of step with the code is the failure this catches:
+		// a flag added to OWN_*_FLAGS and not to the usage is one nobody can find.
+		for (const flag of ["--profile", "--target", "--provider", "--model", "--thinking", "--prompt", "--no-panel", "--no-theme", "--fullscreen"]) {
+			expect(PIRED_USAGE).toContain(flag);
+		}
+		// And it points at pi for everything it does not own.
+		expect(PIRED_USAGE).toContain("pi --help");
+	});
+});
+

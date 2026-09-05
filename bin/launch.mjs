@@ -26,6 +26,81 @@ export const OWN_BOOL_FLAGS = ["no-theme", "no-panel", "fullscreen"];
 export const PROFILES = ["review", "recon", "pentest"];
 
 /**
+ * pired's own flags, for `pired --help`.
+ *
+ * `--help` is not one of pired's flags, so `partition` forwarded it to pi and
+ * `pired --help` printed pi's help — every flag below was documented only in a
+ * comment at the top of pired.mjs and in docs/commands.md, neither of which is
+ * reachable from the terminal the operator is already sitting in.
+ *
+ * A constant rather than a heredoc in the entry script, because the entry script
+ * is excluded from coverage on the grounds that its decisions live here. ADR-006.
+ */
+export const PIRED_USAGE = `pired — security assessment harness (a pi extension)
+
+Usage:
+  pired [options] [-- <pi options>]
+
+Options:
+  --profile <name>       review | recon | pentest        (default: review)
+  --target <dir>         Directory to run in             (default: .)
+  --provider <name>      LLM provider, e.g. lmstudio, openai-codex
+  --model <id>           Model id, e.g. qwen3.8-27b
+  --thinking <level>     off | low | medium | high | max (default: high)
+  --prompt <text>        Run one prompt non-interactively and exit
+  --no-panel             Start without the engagement panel
+  --no-theme             Start without the pired theme
+  --fullscreen           Take the alternate screen instead of rendering inline
+  --help                 This message
+
+Anything else is passed through to pi, so \`pired -c\`, \`pired -r\` and
+\`pired --session <id>\` work directly. Use \`--\` when a value would
+otherwise look like a flag. \`pi --help\` lists pi's own options.
+
+Profiles:
+  review    read-only code audit; no network gate, works with no config
+  recon     passive/light enumeration; blocked until a scope authorizes it
+  pentest   active testing;        blocked until a scope authorizes it
+`;
+
+/**
+ * Did the operator ask for help before anything else could go wrong?
+ *
+ * Checked before the profile is validated, so `pired --profile nonsense --help`
+ * explains itself rather than complaining.
+ *
+ * @param {string[]} argv
+ * @returns {boolean}
+ */
+export function wantsHelp(argv) {
+	const stop = argv.indexOf("--");
+	const own = stop >= 0 ? argv.slice(0, stop) : argv;
+	return own.includes("--help") || own.includes("-h");
+}
+
+/**
+ * The profile, or what to say about the one that was asked for.
+ *
+ * An unknown profile used to become `review` in silence. The fallback direction
+ * was safe; the silence was not. `review` is the one profile that pre-authorizes
+ * the scope gate, so `pired --profile pentst` started a read-only audit that
+ * looked exactly like the pentest the operator thought they had launched — and
+ * they would find out from the transcript, if at all. See ADR-006.
+ *
+ * @param {string[]} argv
+ * @returns {{ profile: string; error?: string }}
+ */
+export function resolveProfile(argv) {
+	const asked = argValue(argv, "profile");
+	if (asked === undefined) return { profile: "review" };
+	if (PROFILES.includes(asked)) return { profile: asked };
+	return {
+		profile: "review",
+		error: `pired: unknown profile "${asked}" — expected ${PROFILES.join(", ")}`,
+	};
+}
+
+/**
  * The value after `--name`, or `def`.
  *
  * A flag given without a value takes the default rather than swallowing the next
@@ -141,8 +216,7 @@ export function findPi({ env = {}, platform, root, argv1, exists, resolvePackage
  * @returns {string[]}
  */
 export function buildPiArgs({ exts, theme, argv, exists = () => true }) {
-	const profileArg = argValue(argv, "profile");
-	const profile = PROFILES.includes(profileArg) ? profileArg : "review";
+	const profile = resolveProfile(argv).profile;
 	// One -e per extension, and only for the ones that are there: a partial or
 	// older install should lose the piece it is missing, not fail to start.
 	const args = [

@@ -185,7 +185,7 @@ describe("what the report says beyond the findings themselves", () => {
 	it("masks secrets that arrive through a label or the coverage section", () => {
 		const md = exportFindingsMarkdown({
 			findings: [finding({ id: "a", target: "e9" })],
-			loot: [{ v: 1, kind: "loot", id: "l1", createdAt: "t", handle: "cred:x", secret: "hunter2xyz" }],
+			loot: [{ v: 1, kind: "loot", id: "l1", createdAt: "t", type: "password", handle: "cred:x", secret: "hunter2xyz" }],
 			labelFor: () => "GET /login?token=hunter2xyz",
 			coverage: {
 				brief: { elements: 1, classes: 1, applicable: 1, settled: 0, percent: 0, untestedClasses: ["hunter2xyz"], untestedElements: [] },
