@@ -249,6 +249,15 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	 */
 	let targetModel = "";
 
+	/**
+	 * The directory this engagement was created in, when it is not this one.
+	 *
+	 * Held so the banner can say it too — a notification scrolls away, and the
+	 * question "am I appending to the right client's ledger" is one the operator
+	 * wants answered every time they look up, not once at startup. ADR-005.
+	 */
+	let foreignOrigin: string | undefined;
+
 	pi.registerFlag("pired-profile", { description: "pired profile: review | recon | pentest", type: "string", default: "review" });
 	// The panel is the operator's view of the ledger, so it is on by default:
 	// state you have to summon is state you check less often than you should.
@@ -1144,7 +1153,25 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		gate = createScopeGate(scope);
 
 		const dir = scope.workspace ? expandHome(scope.workspace) : join(homedir(), ".pired", "engagements", scope.engagement);
-		workspace = await Workspace.open(dir, scope.engagement, services);
+		// Recorded once, so a later session opening the same engagement name from a
+		// different directory can notice. ADR-005.
+		workspace = await Workspace.open(dir, scope.engagement, services, { originPath: ctx.cwd });
+		// An engagement is keyed on the target directory's basename, so
+		// ~/clientA/backend and ~/clientB/backend are one append-only ledger. For a
+		// tool whose first promise is that client code never leaves the box, mixing
+		// two clients inside the box is the wrong failure to leave silent. Nothing
+		// moves on its own: the operator decides, with `engagement` or `workspace`
+		// in the scope file. A manifest written before this existed has no origin at
+		// all, and unknown must not read as mismatched.
+		const manifest = await workspace.readManifest().catch(() => undefined);
+		if (manifest?.originPath && manifest.originPath !== ctx.cwd) {
+			foreignOrigin = manifest.originPath;
+			ctx.ui.notify(
+				`pired: engagement "${scope.engagement}" was created in ${manifest.originPath}. ` +
+				"Its ledger is shared with this directory — set `engagement` or `workspace` in pired.scope.json to separate them.",
+				"warning",
+			);
+		}
 		// Every bash call the agent makes inherits this process's environment, so
 		// exporting the workspace here is what makes `> "$PIRED_WORKSPACE/evidence/x"`
 		// work in a shell whose cwd is the target. Without it the only way to write
@@ -1208,6 +1235,7 @@ export default function piredExtension(pi: ExtensionAPI): void {
 					surface: stats?.surface,
 					coveragePct: stats?.coveragePct,
 					findings: stats?.findingsTotal,
+					foreignOrigin,
 				});
 			} catch {}
 		}
@@ -2190,7 +2218,7 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	// rather than fail to load the extension at all.
 	pi.registerEntryRenderer?.<{
 		engagement: string; cwd?: string; profile: string; scope: string; model?: string;
-		surface?: number; coveragePct?: number; findings?: number;
+		surface?: number; coveragePct?: number; findings?: number; foreignOrigin?: string;
 	}>("pired-welcome", (entry, _options, theme) => {
 		const info = entry.data;
 		if (!info) return undefined;

@@ -69,6 +69,11 @@ export interface WorkspaceServices {
 }
 
 export interface WorkspaceOptions {
+	/**
+	 * The directory this engagement is being opened from, recorded once at
+	 * creation so a later session can notice it is somewhere else. ADR-005.
+	 */
+	originPath?: string;
 	/** Give up acquiring a writer lock after this long. */
 	lockTimeoutMs?: number;
 	/** Treat an existing lock older than this as stale and steal it. */
@@ -77,7 +82,9 @@ export interface WorkspaceOptions {
 	lockRetryMs?: number;
 }
 
-const DEFAULT_OPTIONS: Required<WorkspaceOptions> = {
+// originPath is not a default: it is written once into the manifest and never
+// read back off `this.opts`.
+const DEFAULT_OPTIONS: Required<Omit<WorkspaceOptions, "originPath">> = {
 	lockTimeoutMs: 5000,
 	lockStaleMs: 30_000,
 	lockRetryMs: 50,
@@ -87,7 +94,7 @@ export class Workspace {
 	readonly dir: string;
 	private fs: Fs;
 	private clock: Clock;
-	private opts: Required<WorkspaceOptions>;
+	private opts: Required<Omit<WorkspaceOptions, "originPath">>;
 
 	constructor(dir: string, services: WorkspaceServices, opts?: WorkspaceOptions) {
 		this.dir = dir;
@@ -104,7 +111,7 @@ export class Workspace {
 		opts?: WorkspaceOptions,
 	): Promise<Workspace> {
 		const ws = new Workspace(dir, services, opts);
-		await ws.ensure(engagement);
+		await ws.ensure(engagement, opts?.originPath);
 		return ws;
 	}
 
@@ -116,7 +123,15 @@ export class Workspace {
 		return joinPath(this.dir, name);
 	}
 
-	async ensure(engagement: string): Promise<void> {
+	/**
+	 * Create the workspace if it is not there, and record where it came from.
+	 *
+	 * `originPath` is written once, with the manifest, and never updated — the
+	 * question it answers is "which directory made this engagement", and an
+	 * answer that follows the most recent session around cannot be compared
+	 * against anything.
+	 */
+	async ensure(engagement: string, originPath?: string): Promise<void> {
 		await this.fs.mkdirp(this.dir);
 		await this.fs.mkdirp(joinPath(this.dir, "evidence"));
 		await this.fs.mkdirp(joinPath(this.dir, "artifacts"));
@@ -127,6 +142,7 @@ export class Workspace {
 				engagement,
 				createdAt: this.clock.nowIso(),
 				stores: {},
+				...(originPath ? { originPath } : {}),
 			};
 			await this.writeJsonAtomic(manifestPath, manifest);
 		}

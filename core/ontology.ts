@@ -165,6 +165,18 @@ export interface WorkspaceManifest {
 	createdAt: IsoTimestamp;
 	/** Store name -> schema version currently on disk. */
 	stores: Partial<Record<StoreName, number>>;
+	/**
+	 * The directory this engagement was opened from, first time.
+	 *
+	 * An engagement is keyed on the target directory's basename, so
+	 * ~/clientA/backend and ~/clientB/backend are one ledger — and for a tool
+	 * whose first promise is that client code never leaves the box, mixing two
+	 * clients inside the box is the wrong failure to leave open. Recording where
+	 * it came from is what lets a later session notice. Absent on every
+	 * engagement created before this existed, and absent means unknown, not
+	 * mismatched. See ADR-005.
+	 */
+	originPath?: string;
 }
 
 // ---------------------------------------------------------------------------

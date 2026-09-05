@@ -251,3 +251,32 @@ describe("Workspace target model", () => {
 		expect((await ws.readModelSections()).size).toBe(0);
 	});
 });
+
+/**
+ * Two clients with a repository called `backend` share one engagement directory,
+ * because the key is the basename. Recording where it came from is what lets a
+ * later session notice. ADR-005.
+ */
+describe("remembering which directory made the engagement", () => {
+	it("records the origin with the manifest", async () => {
+		const services = makeFakeServices();
+		const ws = await Workspace.open("/w", "backend", services, { originPath: "/home/me/clientA/backend" });
+		expect((await ws.readManifest())?.originPath).toBe("/home/me/clientA/backend");
+	});
+
+	it("does not rewrite the origin when a second directory opens the same engagement", async () => {
+		// The question is "which directory made this", and an answer that follows
+		// the newest session around cannot be compared against anything.
+		const services = makeFakeServices();
+		await Workspace.open("/w", "backend", services, { originPath: "/home/me/clientA/backend" });
+		const second = await Workspace.open("/w", "backend", services, { originPath: "/home/me/clientB/backend" });
+		expect((await second.readManifest())?.originPath).toBe("/home/me/clientA/backend");
+	});
+
+	it("leaves it unset when nobody said, so unknown does not read as mismatched", async () => {
+		const services = makeFakeServices();
+		const ws = await Workspace.open("/w", "backend", services);
+		expect((await ws.readManifest())?.originPath).toBeUndefined();
+	});
+});
+

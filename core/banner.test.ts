@@ -229,3 +229,33 @@ describe("where you are", () => {
 		expect(at("~/work/acme/api", 27)).not.toContain("~/work/acme/api");
 	});
 });
+
+/**
+ * An engagement is keyed on the target directory's basename, so ~/clientA/backend
+ * and ~/clientB/backend are one append-only ledger. ADR-005.
+ */
+describe("an engagement that belongs to another directory", () => {
+	const base = {
+		engagement: "backend", cwd: "~/clientB/backend", profile: "review", scope: "off",
+	};
+	const draw = (info: Parameters<typeof renderBanner>[0]["info"], width = 72) =>
+		renderBanner({ info, width, ink: (_t, x) => x, measure: (x) => x.length, truncate: (x) => x }).join("\n");
+
+	it("says where the ledger came from when it is not here", () => {
+		expect(draw({ ...base, foreignOrigin: "~/clientA/backend" })).toContain("~/clientA/backend");
+	});
+
+	it("says nothing at all when the engagement is where it was made", () => {
+		// Absence of an origin means unknown — every engagement created before this
+		// existed has none — and unknown must not read as mismatched.
+		expect(draw(base)).not.toContain("shared with");
+	});
+
+	it("keeps the warning even on a terminal too narrow for the directory row", () => {
+		// Every other fact is convenience. This one says the ledger being written to
+		// belongs to somebody else's engagement.
+		const narrow = draw({ ...base, foreignOrigin: "~/clientA/backend" }, 46);
+		expect(narrow).toContain("clientA");
+	});
+});
+

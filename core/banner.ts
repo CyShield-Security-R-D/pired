@@ -74,6 +74,14 @@ export interface BannerInfo {
 	surface?: number;
 	coveragePct?: number;
 	findings?: number;
+	/**
+	 * Where this engagement was created, when that is not where we are now.
+	 *
+	 * An engagement is keyed on the directory's basename, so two clients with a
+	 * repository called `backend` share one ledger. A notification scrolls away;
+	 * this is the line the operator looks up at. ADR-005.
+	 */
+	foreignOrigin?: string;
 }
 
 export interface BannerOptions {
@@ -114,6 +122,9 @@ function facts(info: BannerInfo, compact = false): Array<[string, string]> {
 	// Dropped when compact: the engagement name is this directory's basename, so
 	// on a terminal counting rows the path mostly repeats the line above it.
 	if (info.cwd && !compact) rows.push(["directory", shortPath(info.cwd, 44)]);
+	// Never dropped, not even when compact. Every other row is convenience; this
+	// one says the ledger you are about to write to belongs to somewhere else.
+	if (info.foreignOrigin) rows.push(["shared with", shortPath(info.foreignOrigin, 44)]);
 	rows.push(["profile", `${info.profile} · scope ${info.scope}`]);
 	if (info.model) rows.push(["model", info.model]);
 	// Only when the engagement already holds work. A fresh one showing
