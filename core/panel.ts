@@ -248,7 +248,10 @@ export function renderPanel(opts: PanelOptions): string[] {
 	if (mode === "state") {
 		if (d.scope) {
 			section("scope");
-			line(`  ${ink(d.scope.authorized ? "good" : "warn", d.scope.authorized ? "● authorized" : "○ NOT authorized")} ${ink("muted", d.scope.mode)}`);
+			// "authorized off" collapsed two different facts into one ambiguous line —
+			// and it is the exact state a review engagement sits in, where it reads as
+			// "authorization is off" rather than "authorized, gate not enforcing".
+			line(`  ${ink(d.scope.authorized ? "good" : "warn", d.scope.authorized ? "● authorized" : "○ NOT authorized")} ${ink("muted", `· gate ${d.scope.mode}`)}`);
 			const t = d.scope.targets ?? {};
 			const listed = (["domains", "ips", "cidrs", "urls"] as const)
 				.filter((k) => t[k]?.length)

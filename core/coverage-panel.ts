@@ -31,8 +31,8 @@ export const CELL_GLYPH: Record<CoverageStatus, string> = {
 	"n/a": "–",
 };
 
-const LEGEND: CoverageStatus[] = ["clear", "vulnerable", "testing", "blocked", "not-tested"];
-const LEGEND_WORD: Record<CoverageStatus, string> = {
+export const LEGEND: CoverageStatus[] = ["clear", "vulnerable", "testing", "blocked", "not-tested"];
+export const LEGEND_WORD: Record<CoverageStatus, string> = {
 	clear: "clear",
 	vulnerable: "vulnerable",
 	testing: "testing",
@@ -199,8 +199,9 @@ export function renderCoveragePanel(opts: CoveragePanelOptions): string[] {
 		const statuses = byClass.get(cls.id) ?? [];
 		const shown = statuses.slice(0, barWidth);
 		const overflow = statuses.length - shown.length;
-		// Reserve room for the "+N" marker inside the bar rather than past it.
-		const marker = overflow > 0 ? `+${overflow}` : "";
+		// Reserve room for the "+N" marker inside the bar rather than past it, and
+		// keep a space before it: "·········+29" reads as one token.
+		const marker = overflow > 0 ? ` +${overflow}` : "";
 		const cells = (marker ? shown.slice(0, Math.max(0, barWidth - marker.length)) : shown)
 			.map((st) => ink(st, CELL_GLYPH[st]))
 			.join("");

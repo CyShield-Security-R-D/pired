@@ -207,8 +207,9 @@ describe("renderBrowser", () => {
 
 	it("renders only the viewport slice", () => {
 		const body = renderBrowser(opts(initialState(), 80, 1));
-		// top edge + tally + rule + 1 row + rule + legend + bottom edge
-		expect(body).toHaveLength(7);
+		// top edge + tally + rule + 1 row + rule + glyph key + keys + bottom edge.
+		// The surface view draws glyphs, so it also draws the key for them.
+		expect(body).toHaveLength(8);
 	});
 
 	it("shows a class with no hypothesis as not tested", () => {
@@ -588,3 +589,51 @@ describe("blockers", () => {
 		expect(text).not.toMatch(/↓ \d+ more/);
 	});
 });
+
+/**
+ * The only glyph legend in the codebase was in renderCoveragePanel, which is
+ * reached from the welcome box alone — so the box glanced at on startup
+ * explained the glyphs and the matrix read for minutes at a time did not.
+ */
+describe("the key to the glyphs, in the view that draws them", () => {
+	const drawn = (view: Parameters<typeof initialState>[0]) =>
+		renderBrowser(opts(initialState(view), 100, 20)).join("\n");
+
+	it("keys the matrix", () => {
+		const out = drawn("coverage");
+		expect(out).toContain("vulnerable");
+		expect(out).toContain("untested");
+	});
+
+	it("keys the surface list too, which draws the same strip", () => {
+		expect(drawn("surface")).toContain("untested");
+	});
+
+	it("spends no row on it where nothing is drawn in glyphs", () => {
+		// The findings and blockers lists have no strip, and a key to symbols that
+		// are not on screen is a row taken from the rows that are.
+		expect(drawn("findings")).not.toContain("untested");
+		expect(drawn("blockers")).not.toContain("untested");
+	});
+});
+
+describe("marking the elements a row could not show", () => {
+	it("separates the +N from the strip it is not part of", () => {
+		// "·········+29" reads as one token, and the reader has to work out that
+		// the digits are not another cell.
+		const wide = buildBrowserModel({
+			engagement: "airflow", classes: CLASSES, cells, blockers,
+			inventory: Array.from({ length: 40 }, (_, i) => ({
+				id: `x${i}`, kind: "endpoint", method: "GET", path: `/api/${i}`, host: "h1",
+			})) as unknown as InventoryRecord[],
+			hypotheses: [], findings: [],
+		});
+		const out = renderBrowser({
+			model: wide, state: initialState("coverage"), width: 100, height: 20,
+			ink: (_t: string, x: string) => x, measure: (x: string) => x.length,
+			truncate: (x: string, w: number) => (x.length > w ? x.slice(0, w) : x),
+		}).join("\n");
+		expect(out).toMatch(/ \+\d+/);
+	});
+});
+

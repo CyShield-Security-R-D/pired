@@ -25,7 +25,7 @@
  * allowed. The adapter translates; this decides.
  */
 
-import { CELL_GLYPH } from "./coverage-panel.ts";
+import { CELL_GLYPH, LEGEND, LEGEND_WORD } from "./coverage-panel.ts";
 import { elementLabel, recordLabel } from "./target.ts";
 import { unwrittenHypotheses } from "./stats.ts";
 import type { Tone } from "./coverage-panel.ts";
@@ -686,7 +686,12 @@ function surfaceBody(o: RenderOptions): string[] {
 	const slice = model.surface.slice(state.scroll, state.scroll + o.height);
 	for (const [i, r] of slice.entries()) {
 		const idx = state.scroll + i;
-		const bar = r.statuses.slice(0, barLen).map((s) => ink(s, CELL_GLYPH[s])).join("");
+		// Mark what did not fit, exactly as coverageBody does. Dropping it silently
+		// misreports the surface: 40 classes drawn as 24, with nothing saying so.
+		const hidden = r.statuses.length - barLen;
+		const mark = hidden > 0 ? ` +${hidden}` : "";
+		const bar = r.statuses.slice(0, Math.max(0, barLen - mark.length))
+			.map((s) => ink(s, CELL_GLYPH[s])).join("") + (mark ? ink("muted", mark) : "");
 		const count = `${r.settled}/${r.askable}`;
 		const flag = r.findings > 0 ? ink("vulnerable", ` ★${r.findings}`) : "";
 		const label = pad(truncate(r.label, labelW), labelW, measure);
@@ -725,8 +730,10 @@ function coverageBody(o: RenderOptions): string[] {
 		// Reserve room for the "+N" inside the bar rather than past it, exactly as
 		// renderCoveragePanel does. Dropping elements with no marker misreports the
 		// surface: 41 elements silently drawn as 24.
+		// A space before the marker, because "·········+29" reads as one token and
+		// the reader has to work out that the digits are not part of the strip.
 		const hidden = n - barLen;
-		const marker = hidden > 0 ? `+${hidden}` : "";
+		const marker = hidden > 0 ? ` +${hidden}` : "";
 		const cells = statuses.slice(0, Math.max(0, barLen - marker.length))
 			.map((st) => ink(st, CELL_GLYPH[st])).join("");
 		const bar = cells + (marker ? ink("muted", marker) : "");
@@ -1117,8 +1124,21 @@ export function renderBrowser(o: RenderOptions): string[] {
 		? pad(keys, Math.max(0, contentW - co.measure(more)), co.measure) + more
 		: keys;
 
-	// Chrome is two borders, the tally, two rules and the legend.
-	const CHROME = 6;
+	/**
+	 * The glyph key, for the views that actually draw glyphs.
+	 *
+	 * The only real legend in the codebase lived in `renderCoveragePanel`, which
+	 * is reached from the welcome box alone — so the box you glance at on startup
+	 * explained the glyphs, and the matrix you sit and read them in did not. The
+	 * `?`/`▲`/`●` table was in docs/ui.md, which is not where a reader is.
+	 */
+	const glyphKey = ["coverage", "surface", "class", "element"].includes(o.state.view)
+		? LEGEND.map((st) => `${o.ink(st, CELL_GLYPH[st])} ${o.ink("muted", LEGEND_WORD[st])}`).join("  ")
+		: "";
+
+	// Chrome is two borders, the tally, two rules and the legend — plus the glyph
+	// key on the views that draw one.
+	const CHROME = glyphKey ? 7 : 6;
 	const budget = o.maxLines ?? Number.MAX_SAFE_INTEGER;
 	if (budget < CHROME + 1) {
 		// Too short to box. A bare list beats a frame with its bottom sliced off.
@@ -1130,6 +1150,7 @@ export function renderBrowser(o: RenderOptions): string[] {
 		...header(tally, co),
 		...body.slice(0, rows),
 		RULE,
+		...(glyphKey ? [glyphKey] : []),
 		legend,
 	].map((l) => (l.startsWith(RULE) ? l : ` ${l}`));
 

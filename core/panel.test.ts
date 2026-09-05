@@ -442,3 +442,26 @@ describe("confirmed work that has not been written up", () => {
 	});
 });
 
+describe("saying whether the gate is armed", () => {
+	const scoped = (scope: PanelData["scope"]): string =>
+		renderPanel({
+			mode: "state", width: 100, maxLines: 20, ink, measure, truncate,
+			data: { ...data, scope },
+		}).join("\n");
+
+	it("keeps authorization and gate mode as two facts, not one phrase", () => {
+		// "● authorized off" is the state a review engagement sits in, and it reads
+		// as "authorization is off" rather than "authorized, gate not enforcing" —
+		// which is the same ambiguity that made the model refuse to start.
+		const out = scoped({ mode: "off", authorized: true, targets: {} });
+		expect(out).toContain("● authorized");
+		expect(out).toContain("gate off");
+	});
+
+	it("still leads with the refusal when nothing is authorized", () => {
+		const out = scoped({ mode: "enforce", authorized: false, targets: {} });
+		expect(out).toContain("NOT authorized");
+		expect(out).toContain("gate enforce");
+	});
+});
+
