@@ -67,8 +67,26 @@ SAST (semgrep/opengrep), secrets scanners, and dependency/SCA widen coverage fas
 </profile>`,
 };
 
+/** Does this scope actually name anything to touch? */
+function hasTargets(scope: EngagementScope): boolean {
+	const t = scope.targets ?? {};
+	return Boolean(t.domains?.length || t.ips?.length || t.cidrs?.length || t.urls?.length);
+}
+
+/**
+ * What the model is allowed to touch, and what to do when the answer is "nothing
+ * in particular".
+ *
+ * The gentle branch used to be selected on `scope === undefined`, which
+ * `defaultScope` made unreachable: a `review` session got an object with the gate
+ * off and an empty target list, and rendered "no targets" one line above "touch
+ * only these targets". A capable model reads that as written and stops before it
+ * starts — on a fresh engagement the first prompt was answered with a refusal and
+ * a parked blocker, in the profile the docs describe as working with no
+ * configuration at all. Select on what the scope says instead. See ADR-002.
+ */
 function scopeBlock(scope: EngagementScope | undefined): string {
-	if (!scope) {
+	if (!scope || (scope.mode === "off" && !hasTargets(scope))) {
 		return `<scope>
 No engagement scope is loaded. Offensive and network actions are blocked until a scope file is present and marked authorized. Read-only local work (e.g. code review) is still fine.
 </scope>`;

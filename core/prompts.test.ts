@@ -136,6 +136,41 @@ describe("buildSystemPrompt", () => {
 		}
 	});
 
+	// The branch that says "read-only local work is still fine" was selected on
+	// `scope === undefined`, and `defaultScope` never returns undefined. So a
+	// review session read "no targets" directly above "touch only these targets"
+	// and answered its first prompt with a refusal and a parked blocker. See
+	// ADR-002.
+	describe("a review engagement with the gate off", () => {
+		const reviewDefault: EngagementScope = {
+			v: 1, engagement: "acmebank", authorized: true, mode: "off", targets: {},
+		};
+
+		it("is told read-only local work is fine, not that nothing is in scope", () => {
+			const p = buildSystemPrompt({ profile: "review", scope: reviewDefault });
+			expect(p).toMatch(/read-only local work/i);
+			expect(p).not.toMatch(/Touch only these targets/);
+		});
+
+		it("keeps the gate language once the scope actually names a target", () => {
+			const p = buildSystemPrompt({
+				profile: "review",
+				scope: { ...reviewDefault, targets: { domains: ["*.acme.test"] } },
+			});
+			expect(p).toMatch(/Touch only these targets/);
+			expect(p).toContain("*.acme.test");
+		});
+
+		it("still refuses for an unauthorized enforce engagement with no targets", () => {
+			const p = buildSystemPrompt({
+				profile: "pentest",
+				scope: { v: 1, engagement: "acme", authorized: false, mode: "enforce", targets: {} },
+			});
+			expect(p).toMatch(/Touch only these targets/);
+			expect(p).toMatch(/NOT authorized/);
+		});
+	});
+
 	describe("the coverage matrix, in words a tester already has", () => {
 		// "Cell" and "gap" are pired's private jargon. The mechanism was explained
 		// in them and never bridged to the vocabulary a consultant and a model both
