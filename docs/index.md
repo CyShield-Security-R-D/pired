@@ -30,6 +30,7 @@ For the full first-run flow, including blackbox engagements, see [Quickstart](qu
 - [Profiles](profiles.md) — `review`, `recon`, `pentest`, and what each one changes.
 - [Scope](scope.md) — the scope file, the matching rules, and what the gate does and does not protect.
 - [Coverage](coverage.md) — checklist × surface, how a cell is settled, and how the percentage is computed.
+- [Decisions](decisions.md) — the architecture decisions, what was rejected, and why.
 - [Commands and keys](commands.md) — slash commands, shortcuts, CLI flags, environment variables.
 
 ## Interface
