@@ -58,6 +58,34 @@ export async function fromLedger(engagementDir: string): Promise<Finding[]> {
 		const hay = [f.target, f.description, f.repro, f.title, ...(f.evidence ?? [])].filter(Boolean).join(" ");
 		let m = /([\w./-]+\.(?:py|pyi|js|jsx|ts|tsx|go|rb|php|java|cs|rs|kt|scala)):(\d+)/.exec(hay);
 		if (!m) {
+			// A file named in the record and a line stated in its prose are the same
+			// two facts as `file:line`, written the way people write them. Both come
+			// from the finding itself, so this invents nothing — it is strictly safer
+			// than the inventory fallback below, which takes the file from elsewhere.
+			//
+			// Measured: a finding reading "(http/share.go shareDeleteHandler) calls
+			// store.Share.Delete(hash) directly (line 80)" is an exact hit on a truth
+			// entry at http/share.go:80, and was dropped for want of a colon. On one
+			// Ruby target every one of six findings was lost this way.
+			//
+			// Anchored on the LINE, then the nearest file named before it — a record
+			// that walks through several files ("config.py is fine; the sink is in
+			// handlers/upload.go at line 55") must pair the line with the file it was
+			// talking about, not with the first file it happened to mention.
+			const FILE = /[\w./-]+\.(?:py|pyi|js|jsx|ts|tsx|go|rb|php|java|cs|rs|kt|scala)\b/g;
+			const line = /\bline[s]?\s+(\d+)/i.exec(hay);
+			if (line) {
+				let before: string | undefined;
+				let after: string | undefined;
+				for (const hit of hay.matchAll(FILE)) {
+					if (hit.index < line.index) before = hit[0];
+					else { after ??= hit[0]; }
+				}
+				const file = before ?? after;
+				if (file) m = [hay, file, line[1]!] as unknown as RegExpExecArray;
+			}
+		}
+		if (!m) {
 			// file from the inventory + a line stated in the finding's own text
 			const viaInventory = f.target ? inventory.get(f.target) : undefined;
 			const line = /\bline[s]?\s+(\d+)/i.exec(hay);
