@@ -118,6 +118,43 @@ interface Row {
 
 const rows: Row[] = [];
 
+/**
+ * Pull the findings object out of a reply that is mostly prose.
+ *
+ * Brace-counting rather than a regex, because a regex cannot tell a brace inside
+ * a string literal from one that opens an object, and review prose is full of
+ * both. Returns undefined when nothing parses — an unreadable reply is a failed
+ * run, not a zero score.
+ */
+function extractFindings(raw: string): Finding[] | undefined {
+	const key = raw.lastIndexOf('"findings"');
+	if (key < 0) return undefined;
+	for (let i = key; i >= 0; i--) {
+		if (raw[i] !== "{") continue;
+		let depth = 0;
+		let inString = false;
+		let escaped = false;
+		for (let j = i; j < raw.length; j++) {
+			const c = raw[j];
+			if (escaped) { escaped = false; continue; }
+			if (c === "\\") { escaped = true; continue; }
+			if (c === '"') { inString = !inString; continue; }
+			if (inString) continue;
+			if (c === "{") depth += 1;
+			else if (c === "}") {
+				depth -= 1;
+				if (depth !== 0) continue;
+				try {
+					const o = JSON.parse(raw.slice(i, j + 1)) as { findings?: Finding[] };
+					if (Array.isArray(o.findings)) return o.findings;
+				} catch { /* not this one; try an earlier brace */ }
+				break;
+			}
+		}
+	}
+	return undefined;
+}
+
 const jobs = targets.map((m) => async (): Promise<void> => {
 	const started = Date.now();
 	const name = `${m.id}-${RUN_ID}`;
@@ -162,15 +199,18 @@ const jobs = targets.map((m) => async (): Promise<void> => {
 
 	let findings: Finding[] = [];
 	try {
-		// The LAST balanced object in the reply: a review that reasons in prose on
-		// the way to its answer will contain earlier braces, and the contract asks
-		// for the object at the end.
+		// The reply is prose followed by the object the prompt asked for, and prose
+		// contains braces — code snippets, sample payloads. Taking the first `{` and
+		// running to the last `}` spanned all of it and failed to parse on 3 of 5
+		// targets whose replies each ended in a perfectly good findings object.
+		//
+		// So: anchor on the LAST "findings" key, walk left to each candidate `{`,
+		// and scan forward tracking string state until the braces balance. The first
+		// candidate that parses AND carries a findings array wins.
 		const raw = stdout;
 		await writeFile(outFile, raw).catch(() => {});
-		const objects = [...raw.matchAll(/\{[\s\S]*?"findings"[\s\S]*$/g)].map((x) => x[0]);
-		const candidate = objects.length > 0 ? (objects[objects.length - 1] as string) : raw;
-		const mm = /\{[\s\S]*\}/.exec(candidate);
-		findings = dedupe((JSON.parse(mm ? mm[0] : candidate) as { findings?: Finding[] }).findings ?? []);
+		findings = dedupe(extractFindings(raw) ?? []);
+		if (extractFindings(raw) === undefined) throw new Error("no findings object in the reply");
 	} catch (e) {
 		if (ok) {
 			ok = false;
