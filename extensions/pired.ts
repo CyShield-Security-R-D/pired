@@ -1149,6 +1149,13 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		// work in a shell whose cwd is the target. Without it the only way to write
 		// evidence where the ledger looks for it is to paste an absolute path.
 		process.env.PIRED_WORKSPACE = dir;
+		// The scope is read from the target directory, so anything outside this
+		// process cannot see it. `pired-state` reads it from the workspace and had
+		// been finding nothing there since it shipped — its scope section never
+		// rendered, and `--json`, which the docs invite people to hang a status bar
+		// off, shipped `scope: undefined` against its own contract. Persist it, so
+		// the panel in the tmux pane can say whether the gate is armed.
+		await workspace.writeScope(scope).catch(() => {});
 		await seedChecklist(workspace, pickTargetType(profile, scope));
 		const checklist = await workspace.readChecklist();
 		checklistClasses = checklist?.classes.map((c) => c.title || c.id) ?? [];
