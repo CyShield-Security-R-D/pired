@@ -338,9 +338,15 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	 * never awaited, and abandoned the moment the operator types. What is left in
 	 * the hot path is appending a string to an array.
 	 *
-	 * Session-scoped, like the rest of this state: a new session starts it off.
+	 * Session-scoped, like the rest of this state: a new session starts it off —
+	 * unless PIRED_SCRIBE=on says otherwise. An unattended run has no operator to
+	 * type `/scribe on`, so a headless engagement could not enable the scribe at
+	 * all: measured across three corpus passes, it ran zero times and the arm was
+	 * scored with the mechanism switched off. The env var is the same affordance
+	 * PIRED_RAIL_WIDTH already uses, and it changes nothing for an interactive
+	 * session, where the command remains the way in.
 	 */
-	let scribeAuto = false;
+	let scribeAuto = process.env.PIRED_SCRIBE?.trim().toLowerCase() === "on";
 	/**
 	 * The pass in flight, so a second cannot start and the first can be dropped.
 	 *
