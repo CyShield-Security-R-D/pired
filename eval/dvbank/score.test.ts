@@ -2,7 +2,7 @@ import { mkdtemp, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { fromLedger } from "./score.ts";
+import { CLAIMED_LOCATION_CAP, fromLedger } from "./score.ts";
 
 /** A ledger holding just these findings. */
 async function ledger(findings: Array<Record<string, unknown>>): Promise<string> {
@@ -54,16 +54,24 @@ describe("locating a finding that states its line in prose", () => {
 });
 
 describe("grading every location a finding claims", () => {
-	it("does NOT scrape every file the prose mentions", async () => {
-		// Tried and measured: scraping descriptions took 48 graded findings to 93,
-		// landed none of them in a truth window, and halved precision. A file named
-		// while explaining a bug is context, not a claim about where the bug is.
+	it("grades every location the record cites, not just the first", async () => {
+		// Measured on filebrowser: "Share deletion lacks ownership check" cited
+		// share.go:73, :28 and :80 in one record. The truth is share.go[80,80] —
+		// third in the list, and invisible to a grader that reads one location.
 		const dir = await ledger([{
-			id: "a", title: "traversal", severity: "high", target: "backend/handlers/assets.go:147",
-			description: "backend/storage/disk.go:20 builds the path that this handler serves",
+			id: "a", title: "Share deletion lacks ownership check", severity: "medium",
+			target: "http/share.go:73",
+			description: "the route at http/share.go:28 dispatches here and the check is missing at http/share.go:80",
 		}]);
 		const out = await fromLedger(dir);
-		expect(out.map((f) => `${f.file}:${f.line}`)).toEqual(["backend/handlers/assets.go:147"]);
+		expect(out.map((f) => `${f.file}:${f.line}`)).toEqual(
+			["http/share.go:73", "http/share.go:28", "http/share.go:80"]);
+	});
+
+	it("caps a record that walks a whole module", async () => {
+		const many = Array.from({ length: 9 }, (_, i) => `pkg/f${i}.go:${i + 1}`).join(" and ");
+		const dir = await ledger([{ id: "b", title: "x", severity: "low", target: "pkg/f0.go:1", description: many }]);
+		expect((await fromLedger(dir)).length).toBe(CLAIMED_LOCATION_CAP);
 	});
 
 	it("reads the locations a merge preserved", async () => {

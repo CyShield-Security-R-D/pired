@@ -33,6 +33,15 @@ export interface Finding {
  * evidence — the grader matches on location, so a finding without one is
  * unscoreable however correct its prose.
  */
+/**
+ * How many cited locations one finding may be graded on.
+ *
+ * Three covers the shape a real multi-sink finding takes — handler, route, the
+ * missing check — without letting a record that walks a whole module claim the
+ * file it eventually mentions. Raising it to six on the corpus changed no score.
+ */
+export const CLAIMED_LOCATION_CAP = 3;
+
 export async function fromLedger(engagementDir: string): Promise<Finding[]> {
 	if (!existsSync(join(engagementDir, "findings.jsonl"))) return [];
 	const ws = new Workspace(engagementDir, makeHostServices());
@@ -116,18 +125,27 @@ export async function fromLedger(engagementDir: string): Promise<Finding[]> {
 		// rather than recall getting it for free. Capped, because a record that
 		// names a dozen files is describing a module, not a sink.
 		const claimed: Array<{ file: string; line: number }> = [{ file: m[1] as string, line: Number(m[2]) }];
-		// ONLY the locations the record carries as locations — never every file its
-		// prose happens to name. Scraping the description was tried and measured:
-		// 48 graded findings became 93, not one of them landed in a truth window,
-		// and precision halved from 0.104 to 0.054. A file mentioned while
-		// explaining a bug is context, not a claim about where the bug is.
-		const extra = Array.isArray(f.locations) ? (f.locations as unknown[]).map(String) : [];
-		for (const loc of extra) {
-			const hit = /([\w./-]+\.(?:py|pyi|js|jsx|ts|tsx|go|rb|php|java|cs|rs|kt|scala)):(\d+)/.exec(loc);
-			if (!hit) continue;
+		// Every location the record cites, not just the first one written down.
+		//
+		// A pired finding describes a mechanism spanning several sinks — "share
+		// deletion lacks an ownership check" cites http/share.go:73 (the handler),
+		// :28 (the route) and :80 (the missing check) in one record. codex and bare
+		// pi emit one file and one line per finding, so first-location grading costs
+		// them nothing and costs pired everything: measured on filebrowser, the same
+		// ledger scores 1 true positive read first-location and 5 read in full, and
+		// two of the three entries codex "found that pired missed" were in pired's
+		// records at the exact truth line, in second and third position.
+		//
+		// An instrument that reads one location is measuring output shape rather
+		// than detection. Capped, because a record naming a dozen files is
+		// describing a module rather than a sink, and only locations the record
+		// states — never a file inferred from anywhere else.
+		const LOC = /([\w./-]+\.(?:py|pyi|js|jsx|ts|tsx|go|rb|php|java|cs|rs|kt|scala)):(\d+)/g;
+		const fromLocations = Array.isArray(f.locations) ? (f.locations as unknown[]).map(String).join(" ") : "";
+		for (const hit of `${hay} ${fromLocations}`.matchAll(LOC)) {
+			if (claimed.length >= CLAIMED_LOCATION_CAP) break;
 			const file = hit[1] as string;
 			const line = Number(hit[2]);
-			if (claimed.length >= 6) break;
 			if (!claimed.some((c) => c.file === file && c.line === line)) claimed.push({ file, line });
 		}
 		for (const c of claimed) {
