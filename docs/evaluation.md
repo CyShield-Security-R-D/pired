@@ -102,9 +102,43 @@ The reference challenger runs the real contract from `core/challenge.ts` against
 
 No real finding destroyed and no decoy blessed. The three claims it does not settle are the ones no request settles — it parks the entitlement question with the operator instead of guessing, which is the behaviour ADR-007 is built around and the failure that put an unverified IDOR in a client's report.
 
-### What it does not measure
+### With a model in the loop
 
-That an agent devises the right probe. The control comes from the key, so this is the ceiling of the contract, not a capability number. Putting a model in the loop against this same target is the next tier and has not been run.
+```bash
+npm run assay:field-t1 -- --passes 3 --arm blind --arm spec
+```
+
+The model gets the finding, the brief `core/challenge.ts` builds for its class, credentials for the principals an engagement would hold, and one tool that reaches the target. It never sees a claim's truth, separator, trap or control — it has to work out which requests settle the claim. Its verdict then goes through `judge()` exactly as a real run would, and a downgrade is fed back in the same words `record` uses, so the agent gets the one chance to supply what was missing that the product already gives it.
+
+Two arms, because the interesting variable is information rather than cleverness. **blind** has no target model, so the access-control pair is unanswerable and the correct behaviour is to leave it suspected. **spec** carries the actors and invariants a `model.md` would hold.
+
+deepseek/deepseek-v4-flash-0731, three passes per arm, mean and range:
+
+| arm | contract | sensitivity | specificity | resolution |
+|---|---|---|---|---|
+| blind | judged | 0.83 (0.75–1.00) | 0.89 (0.83–1.00) | 0.57 (0.40–0.80) |
+| blind | raw, no contract | 0.75 (0.50–1.00) | 0.89 (0.83–1.00) | 0.73 (0.60–0.90) |
+| **spec** | **judged** | **1.00** | **1.00** | 0.80 (0.70–0.90) |
+| spec | raw, no contract | 1.00 | 1.00 | 0.97 (0.90–1.00) |
+
+**The entitlement information is what separates the arms.** Given a target model the model never destroyed a real finding and never blessed a decoy across three passes. Without one it did both.
+
+**The burden of proof does measurable work, and not enough of it.** Scoring the same passes with the contract removed drops blind sensitivity from 0.83 to 0.75: it rescued one real finding the model tried to refute with nothing behind it. Two got past it. The cost is the resolution column — 0.57 against 0.73 — which is the contract converting unsupported conclusions into `suspected`, on purpose.
+
+### The hole this found
+
+Blind specificity is 0.89 with the contract and 0.89 without it: **`judge()` prevented no false confirmation at all.** In two of three blind passes it confirmed `/api/reports/1` — the internal dashboard that is intended behaviour — and the entitlement it supplied reads:
+
+> `"Established from the target model: report 1 has a single owner alice with no share/collaborator fields…"`
+
+There is no target model in the blind arm. The model fabricated the provenance, then reasoned from the credentials blurb the harness supplies as engagement context.
+
+`judge()` requires entitlement to be **non-empty**, not **grounded**. So the strongest guard in the design is satisfiable by an assertion, which is the original failure — an IDOR confirmed without establishing entitlement — surviving its own fix. `core/challenge.ts` already has `modelAnswersEntitlement()` for exactly this question and `judge()` does not call it; the fix is to require entitlement to cite where it came from, the way a refutation must cite `basis`, and to check that the citation resolves. That change is not made here, because changing the contract in the same commit that measures it would leave the new behaviour unmeasured.
+
+### What it still does not measure
+
+Whether an agent finds bugs. This is a verification instrument end to end: every claim is handed to it already written.
+
 
 ## The benchmark
 
