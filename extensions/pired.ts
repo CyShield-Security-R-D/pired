@@ -26,6 +26,7 @@ import {
 	buildBrowserModel, detailRowCount, elementLabel, initialState, reduceBrowser, renderBrowser, selectedBlocker, visibleBlockers, type BrowserKey, type BrowserModel, type BrowserState, type BrowserTone, type BrowserView,
 } from "../core/browser.ts";
 import { type BannerTone, renderBanner } from "../core/banner.ts";
+import { blockerDialog, SKIP_OPTION } from "../core/dialog.ts";
 import { exportFindingsMarkdown, notReportReady } from "../core/export.ts";
 import { bannerColumns, BROWSER_CHROME, OVERLAY, OVERLAY_HEIGHT_SHARE, railColumns } from "../core/layout.ts";
 import type { BlockerRecord, Checklist, EngagementScope, Severity, TargetType } from "../core/ontology.ts";
@@ -852,19 +853,24 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	 * way back to it.
 	 */
 	const answerOne = async (ctx: ExtensionContext, b: BlockerRecord): Promise<boolean> => {
-		const title = `pired · ${b.type.replace(/-/g, " ")}`;
-		const detail = b.context ? `${b.question}\n\n${b.context}` : b.question;
+		// The question lives in the title because that is the only string pi's
+		// selector and input dialogs render, and it is fitted to the screen it
+		// will be drawn on because the selector does not scroll — see
+		// core/dialog.ts. railTui's terminal over process.stdout for the reason
+		// railRows gives: it is the size pi is actually laying out for.
+		const d = blockerDialog(b, {
+			columns: railTui?.terminal?.columns ?? process.stdout.columns,
+			rows: railTui?.terminal?.rows ?? process.stdout.rows,
+		});
 		try {
 			let answer: string | undefined;
-			if (b.type === "approval") {
-				// A yes/no gate — the destructive-action case, where the wrong
-				// default is the expensive one, so nothing is pre-selected.
-				answer = (await ctx.ui.confirm(title, detail)) ? "approved" : "denied";
-			} else if (b.options && b.options.length > 0) {
-				answer = await ctx.ui.select(title, [...b.options, "skip for now"]);
-				if (answer === "skip for now") answer = undefined;
+			if (d.shape === "confirm") {
+				answer = (await ctx.ui.confirm(d.title, d.detail)) ? "approved" : "denied";
+			} else if (d.shape === "select") {
+				answer = await ctx.ui.select(d.title, d.options ?? []);
+				if (answer === SKIP_OPTION) answer = undefined;
 			} else {
-				answer = await ctx.ui.input(title, b.type === "credential-request" ? "value (stored in the workspace)" : "answer");
+				answer = await ctx.ui.input(d.title, d.placeholder);
 			}
 			if (!answer) return false;
 			await settleBlocker(ctx, b, "answered", answer);

@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { ExtensionSelectorComponent, initTheme } from "@earendil-works/pi-coding-agent";
+import { blockerDialog } from "../core/dialog.ts";
 import piredExtension, { describeUnready } from "./pired.ts";
 
 /**
@@ -245,5 +247,55 @@ describe("saying a finding is not report-ready", () => {
 		expect(describeUnready(2)).toContain("/skill:ops-technical-writer");
 		expect(describeUnready(1)).toContain("1 needs impact + remediation");
 		expect(describeUnready(0)).toBe("");
+	});
+});
+
+/**
+ * The dialog, drawn by the components pi will actually draw it with.
+ *
+ * core/dialog.test.ts asserts the strings. This asserts what reaches the
+ * screen, because the shipped bug was invisible at the string level: the
+ * question was passed in a `detail` argument, the argument was correct, and
+ * pi's selector renders no such thing.
+ */
+describe("a blocker on screen", () => {
+	const blocker = {
+		kind: "blocker", id: "BLK-001", askedAt: "2026-09-07T10:00:00Z", type: "decision",
+		question: "The staging host 10.0.4.11 answers on 8080 but is not in the SOW's CIDR. Test it?",
+		options: ["in scope — test it", "out of scope — leave it"],
+		context: "Found via reverse DNS on the in-scope range.",
+		priority: "high", status: "open",
+	} as const;
+
+	/** The dialog as the terminal would show it: real component, ink stripped. */
+	function draw(columns: number, rows: number, context: string = blocker.context): string[] {
+		initTheme("dark");
+		const d = blockerDialog({ ...blocker, context } as never, { columns, rows });
+		const drawn = new ExtensionSelectorComponent(d.title, d.options ?? [], () => {}, () => {}, {});
+		return drawn.render(columns).map((l) => l.replace(/\x1b\[[0-9;]*m/g, "").trimEnd());
+	}
+
+	it("prints the question above the choices, which it did not before", () => {
+		const lines = draw(80, 24);
+		const question = lines.findIndex((l) => l.includes("The staging host 10.0.4.11"));
+		const firstChoice = lines.findIndex((l) => l.includes("in scope — test it"));
+		expect(question).toBeGreaterThan(-1);
+		expect(question).toBeLessThan(firstChoice);
+		expect(lines.some((l) => l.includes("skip for now"))).toBe(true);
+	});
+
+	// The failure this trades against: prose long enough to push the choices past
+	// the bottom of the terminal. pi's main screen shows the last `rows` lines it
+	// rendered, so anything over that count scrolls off the top unread — which
+	// would hide the question again, and take a choice with it.
+	it("keeps the whole dialog inside the terminal, at every size worth having", () => {
+		const paste = Array.from({ length: 80 }, (_, i) => `open port ${i} — a service banner nobody trimmed`).join("\n");
+		for (const [columns, rows] of [[80, 24], [100, 30], [120, 60], [60, 20], [200, 24]] as const) {
+			const lines = draw(columns, rows, paste);
+			expect(lines.length, `${columns}x${rows}`).toBeLessThanOrEqual(rows);
+			// And the question survived the trim, which is the point of the trim.
+			expect(lines.some((l) => l.includes("The staging host"))).toBe(true);
+			expect(lines.some((l) => l.includes("skip for now"))).toBe(true);
+		}
 	});
 });

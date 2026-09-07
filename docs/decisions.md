@@ -344,3 +344,64 @@ writing is worth less than one recorded honestly as `suspected`. This follows AD
 
 **Running the challenge automatically at `/report`.** Re-testing is traffic, detection risk and load
 on a client's production system, and on a timed engagement that is the operator's call.
+
+---
+
+## ADR-007 — A blocker's question travels in the dialog title, fitted to the terminal
+
+**Status:** accepted · 2026-09-07
+
+### Context
+
+An operator reported seeing the choices and no question when pired asked them to settle a blocker.
+
+pi's extension dialogs render exactly one string of prose. `ExtensionSelectorComponent` draws its
+`title` and its options and nothing else; `ExtensionInputComponent` takes a placeholder and names the
+parameter `_placeholder` — it never reads it. Only `confirm` accepts a second string, and pi
+implements it by joining the pair (`showExtensionConfirm` builds `${title}\n${message}`) and handing
+the result to the same selector.
+
+`answerOne` was built as though all three took a title and a detail. It passed `pired · decision` as
+the title and left `question` and `context` in a `detail` argument that two of the three shapes
+discard. So the `approval` path — the one shape that happened to match pi's API — showed the
+question, and `decision`, `input`, `scope-clarification` and `credential-request` did not. The
+browser's detail pane has led with the question since it was written (`blockerLines`,
+`core/browser.ts`); the dialog was the one place that did not.
+
+### Decision
+
+Build the dialog in `core/dialog.ts` and put the question in the title, which is the string every
+shape renders. The heading (`pired · <type>`) leads, the question follows, the context follows that.
+
+The prose is then fitted to the terminal, because the selector is a plain `Container`: it draws every
+line it is handed, has no viewport of its own, and pi's main screen shows the last `rows` lines it
+rendered. Untrimmed prose therefore trades the reported bug for its mirror image — the question on
+screen and the choices scrolled off the top. The budget is the terminal's rows less pi's own frame
+(six rows, plus the key-hint line, which wraps to two below about 44 columns), less the options, less
+three rows for pired's footer. What does not fit is replaced by a marker naming `/blockers`, which
+holds the untruncated record.
+
+Precedence under pressure is question, then context, then heading — the heading is only the
+blocker's type, and an operator can answer without it. The last row is never surrendered: pi renders
+the title through `theme.fg`, so even an empty title arrives as ANSI codes and costs a line, and
+that line is better spent on the first line of the question than on a blank.
+
+### Consequences
+
+- The extension passes `railTui.terminal` dimensions in, for the reason `railRows` gives: on a pipe
+  or inside a multiplexer `process.stdout` describes a different screen.
+- `SELECT_FRAME`/`INPUT_FRAME` and the two hint strings encode pi's component internals. They were
+  measured against the real components, and `extensions/pired.test.ts` renders through those
+  components so the numbers cannot drift silently.
+- A dialog can still overflow when pi's own frame plus the options exceeds the terminal — eight
+  choices need seventeen rows before any prose. pired contributes one row to that case and no more.
+
+### Rejected
+
+**Sending the question through `ui.notify` before opening the dialog.** It survives one frame, is
+gone before the operator reads the options, and pi's status line replaces the previous message in
+place — the same reason `describeUnready` rides on a line that is already being printed.
+
+**A custom component via `ui.custom`.** It would give a scrollable context pane, and it would mean
+owning selection, focus, and key handling for a dialog pi already draws correctly. The rail earns
+that cost because pi has no side panel; a picker is not the same case.
