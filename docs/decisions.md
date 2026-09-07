@@ -320,15 +320,23 @@ system.
 - `record` gains no required field and refuses nothing. It reports what a finding has not yet shown,
   per the standing directive to inform rather than script.
 
-### Not yet measured
+### Measured since
 
-There is no pentest evaluation instrument in this repository. `eval/corpus`, DVBank and the misses
-analysis are all `review`; `eval/forge` states in its own header that it is a plumbing fixture, not
-a capability benchmark. The numbers above are code-review numbers and are cited for the design
-argument they support, not as evidence about live testing. `KeyCell.poc` is the hook a Field corpus
-would hang off, and the honest test of this feature is sensitivity and specificity measured against
-one: does it keep findings whose PoC still fires, and kill deliberately bogus ones. Until that
-exists, the safety property is structural rather than measured — which is why it is structural.
+`eval/field` was built to answer this and is described in [evaluation](evaluation.md#field--the-verification-instrument):
+a live target where every real bug has a decoy beside it producing the same observation on the wire.
+Against it, the contract here scores **sensitivity 1.00, specificity 1.00, resolution 0.70** with no
+model in the loop — no real finding destroyed, no decoy blessed, and the three claims it declines to
+settle are exactly the ones no request settles.
+
+Two things the instrument changed as soon as it ran. It showed that the `idor` control as originally
+shipped — unauthenticated probe plus an unrelated id — does **not** catch a share grant, and that a
+third *principal* does; the contract now asks for one. And it showed the first version of the score
+had a degenerate winner: suspecting every claim scored 1.00 on both rates, because it never asserts
+anything wrong. `resolution` exists for that reason.
+
+What is still not measured is whether an *agent* devises the right probe: the control comes from the
+key, so this is the ceiling of the contract rather than a capability number. The code-review figures
+above remain code-review figures, cited for the design argument they support.
 
 ### Rejected
 

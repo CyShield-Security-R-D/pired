@@ -91,8 +91,12 @@ export const CONTRACTS: readonly VerificationContract[] = [
 		claim: "a principal receives an object belonging to a different principal",
 		control:
 			"repeat the exact request with NO credentials at all. It must fail. If it succeeds the " +
-			"resource is public and there is no IDOR. Then repeat with a valid but unrelated id — a " +
-			"200 for every id is a handler that ignores the parameter, not an ownership bug.",
+			"resource is public and there is no IDOR. Then repeat as a THIRD principal with no " +
+			"relationship to the object — not the owner, not the caller in the report. If that one is " +
+			"refused, the caller's access came from a grant and not from an absent check, and this is " +
+			"a share working as designed. If it is also served, the check is missing OR the resource is " +
+			"read-wide by design, and only entitlement tells you which. Then a valid but unrelated id — " +
+			"a 200 for every id is a handler that ignores the parameter, not an ownership bug.",
 		entitlement: ENTITLEMENT_QUESTION,
 	},
 	{

@@ -2,11 +2,12 @@
 
 pired makes a testable claim — that coverage discipline lifts recall more than a bigger model does — so it carries the instrument to check it, and to say which parts of the claim the evidence actually reaches.
 
-Two layers, answering different questions:
+Three layers, answering different questions:
 
 | | Asks | Cost |
 |---|---|---|
 | **Assay** (`eval/`) | Does the harness still hold its own rules? | < 100 ms, in CI |
+| **Field** (`eval/field/`) | Does the challenge keep true findings and break false ones? | < 1 s, loopback only |
 | **The benchmark** (`research/`) | Does the harness find more real bugs? | A full scan per arm |
 
 ## Assay — the harness's own tests
@@ -46,6 +47,64 @@ A suite that cannot fail is not testing anything, so Assay is mutation-tested: b
 Thirteen mutations are known to be caught — six in `core/` (dropping the scope exclusion by host and by URL, removing the domain boundary check, returning blocked work from the router, dropping the evidence-path traversal guard, breaking last-write-wins, ignoring `appliesTo`) and seven in the grader. Two of the `core/` cases exist *because* mutation testing found the suite missing them.
 
 The grader is mutation-tested hardest on purpose: every headline number flows through it, so a misclassification there is wrong in a way no individual result looks wrong.
+
+## Field — the verification instrument
+
+```bash
+npm run assay:field
+```
+
+Assay and the benchmark are both about *discovery*: whether the harness holds its rules, and whether it finds bugs. Neither can say anything about whether a finding it produced is real, and until Field there was nothing in this repository that could — every corpus here is `review`, and `eval/forge` states in its own header that it is a plumbing fixture rather than a capability benchmark.
+
+Field is a live target on an ephemeral loopback port, built to measure **verification, not discovery**. It says nothing about whether pired can find bugs.
+
+### The matched pair
+
+Every real bug in the target has a decoy beside it that produces the *same observation on the wire* and is correct behaviour.
+
+| pair | the real bug | the decoy that looks identical |
+|---|---|---|
+| access control | `/api/notes/1` — ownership never checked | `/api/reports/1` — an internal dashboard every employee may read |
+| sharing | — | `/api/docs/1` — cross-user access from a share grant |
+| public | — | `/api/pages/1` — public by design; the no-credentials control *succeeds* |
+| admin | `/internal/metrics` — user list, no session | `/admin` — a catch-all route that returns 200 for every path |
+| xss | `/search` — reflected into HTML unencoded | `/api/echo` — reflected into JSON, never executes |
+| injection | `/api/items` — the payload changes the predicate | `/api/sort` — a 500 on a quote, identical for every payload |
+
+A harness cannot score well here by being suspicious, and cannot score well by being permissive. The only way through is the control that separates the pair.
+
+### The key executes, and audits itself
+
+Every other key in this repository is a list somebody wrote down. Field's runs. Each claim carries a `naive` probe — the observation that makes a reviewer write the finding, which must fire for **decoys as much as for real bugs**, because a decoy whose obvious probe already fails is a hint rather than a trap — and a `control` probe, whose answer must equal the truth.
+
+For the pairs that no request can separate, the audit does not accept the label: it requires the twin's control to return the **same answer with the opposite truth**. That equality is an inseparability proof, and without it "entitlement" would just be a word excusing a probe nobody wrote.
+
+### Three axes, because two have a degenerate winner
+
+| | Asks | Failed by |
+|---|---|---|
+| **sensitivity** | Of the real bugs, how many survived the challenge? | refuting everything |
+| **specificity** | Of the decoys, how many were not blessed? | confirming everything |
+| **resolution** | How many claims were settled *correctly*? | suspecting everything |
+
+The first version reported only the first two, and the instrument's first run showed `record-and-move-on` — suspect every claim — scoring a perfect 1.00 on both. A pass that concludes nothing asserts nothing wrong. `resolution` is what stops it winning, and it is the same discipline `scope.false_blocks` applies one layer down: a gate that passes by refusing all work has failed differently.
+
+### What it measures today
+
+The reference challenger runs the real contract from `core/challenge.ts` against the live target with **no model**, given the right probe and its honest result. That pins the design's own behaviour, so a later run with a model in the loop can be attributed to the agent rather than the contract.
+
+| | sensitivity | specificity | resolution |
+|---|:--:|:--:|:--:|
+| **reference challenger** | **1.00** | **1.00** | 0.70 |
+| confirm-everything | 1.00 | 0.00 | 0.40 |
+| refute-everything | 0.00 | 1.00 | 0.60 |
+| record-and-move-on | 1.00 | 1.00 | 0.00 |
+
+No real finding destroyed and no decoy blessed. The three claims it does not settle are the ones no request settles — it parks the entitlement question with the operator instead of guessing, which is the behaviour ADR-007 is built around and the failure that put an unverified IDOR in a client's report.
+
+### What it does not measure
+
+That an agent devises the right probe. The control comes from the key, so this is the ceiling of the contract, not a capability number. Putting a model in the loop against this same target is the next tier and has not been run.
 
 ## The benchmark
 

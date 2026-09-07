@@ -48,7 +48,8 @@
     "assay:compounding": "node --experimental-strip-types eval/compounding.ts",
     "assay:corpus": "node --experimental-strip-types eval/corpus/fetch.ts",
     "assay:corpus-scan": "node --experimental-strip-types eval/corpus/run.ts",
-    "assay:progress": "node --experimental-strip-types eval/progress.ts"
+    "assay:progress": "node --experimental-strip-types eval/progress.ts",
+    "assay:field": "node --experimental-strip-types eval/field/run.ts"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
