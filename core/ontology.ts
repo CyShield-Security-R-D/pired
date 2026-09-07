@@ -69,9 +69,49 @@ export const SEVERITIES = ["info", "low", "medium", "high", "critical"] as const
 export type Severity = (typeof SEVERITIES)[number];
 
 export const FINDING_STATUSES = [
-	"open", "confirmed", "triaged", "reported", "false-positive", "accepted-risk", "ignored",
+	"suspected", "open", "confirmed", "triaged", "reported", "refuted", "false-positive", "accepted-risk", "ignored",
 ] as const;
 export type FindingStatus = (typeof FINDING_STATUSES)[number];
+
+/**
+ * What a finding's status says about how hard anybody looked.
+ *
+ * The operator prompt tells the agent to record a plausible lead rather than
+ * drop it — "verification calibrates confidence and severity, it does not erase
+ * a lead" — which is the right bet when the costliest outcome is a missed
+ * vulnerability. But the ledger had no way to say which findings were in that
+ * state: a lead recorded as a hedge and a bug reproduced against a live target
+ * were both `open`, rendered identically, and reached the client in the same
+ * list. That is how an unverified IDOR reaches a report.
+ *
+ * `suspected` is that missing state, and it is the default for anything nobody
+ * has challenged yet. `confirmed` now has to be earned: the claim was tested,
+ * its control case failed, and the entitlement question was answered.
+ *
+ * `refuted` is the challenge breaking a finding on cited grounds. It is kept
+ * distinct from `false-positive`, which is the operator's own judgement — three
+ * months later "who decided this was not real, the tool or the consultant?" is
+ * a question the row has to be able to answer.
+ */
+export const UNVERIFIED_STATUS: FindingStatus = "suspected";
+
+/**
+ * How a claim came to be made — the provenance a consultant needs before
+ * signing a report.
+ *
+ * `scanner` is a hit nobody re-issued by hand; `inferred` is reasoning over
+ * code or configuration with no request behind it; `observed` is a response
+ * somebody actually saw; `reproduced` is observed twice with the control case
+ * run. The prompt already says to verify scanner hits, and nothing recorded
+ * whether that happened, so a nuclei line and a hand-built proof were the same
+ * row.
+ */
+export const FINDING_SOURCES = ["scanner", "inferred", "observed", "reproduced"] as const;
+export type FindingSource = (typeof FINDING_SOURCES)[number];
+
+/** What challenging a finding concluded. */
+export const CHALLENGE_VERDICTS = ["stands", "amended", "refuted", "unresolved"] as const;
+export type ChallengeVerdict = (typeof CHALLENGE_VERDICTS)[number];
 
 /**
  * Statuses that settle a finding without deleting it.
@@ -86,7 +126,7 @@ export type FindingStatus = (typeof FINDING_STATUSES)[number];
  * Deleting is the separate act, and it is for something that should never have
  * been recorded at all.
  */
-export const DISPOSED_STATUSES = ["false-positive", "accepted-risk", "ignored"] as const;
+export const DISPOSED_STATUSES = ["refuted", "false-positive", "accepted-risk", "ignored"] as const;
 export type DisposedStatus = (typeof DISPOSED_STATUSES)[number];
 
 export const BLOCKER_TYPES = [
@@ -325,6 +365,52 @@ export interface HypothesisRecord extends RecordBase {
 // findings.jsonl
 // ---------------------------------------------------------------------------
 
+/**
+ * The record a challenge leaves behind.
+ *
+ * Append-only in spirit: a challenge never deletes a finding and never lowers
+ * one out of the ledger. The worst it can do is mark it `refuted`, and a
+ * refuted finding is still exported — in its own section, with this record
+ * beside it — so a wrong refutation is visible to the consultant rather than
+ * silently dropping a real bug. That is the whole safety argument for letting a
+ * machine challenge findings at all.
+ */
+export interface Verification {
+	verdict: ChallengeVerdict;
+	/** When it was challenged. A proof reproduced on day 1 is not a proof on day 5. */
+	at: IsoTimestamp;
+	/**
+	 * The control case and what it returned.
+	 *
+	 * The load-bearing field. A finding is not proven by the attack working; it
+	 * is proven by the attack working AND the control failing. An IDOR whose
+	 * unauthenticated control also succeeds is a public resource, not a bug.
+	 */
+	control?: string;
+	/**
+	 * Where the refutation is grounded — `file:line`, an evidence path, or the
+	 * model section that settles entitlement.
+	 *
+	 * A refutation with no basis is not a refutation. `judge()` downgrades one to
+	 * `unresolved` rather than letting it settle a finding, for the same reason
+	 * `eval/key.ts` rejects a `clear` truth cell with no `why`: an unsupported
+	 * clear claim is an assertion, not a result.
+	 */
+	basis?: string[];
+	/**
+	 * Whether the target was reachable and the session valid when this ran.
+	 *
+	 * Re-running a whole engagement's findings against an expired token would
+	 * refute every one of them. "The attack no longer works" and "I can no longer
+	 * reach the target" are different verdicts and only the first belongs to the
+	 * finding, so a refutation is not trusted unless this is true.
+	 */
+	live?: boolean;
+	/** The entitlement question, when the class has one, and how it was settled. */
+	entitlement?: string;
+	notes?: string;
+}
+
 export interface FindingRecord extends RecordBase {
 	kind: "finding";
 	title: string;
@@ -364,6 +450,18 @@ export interface FindingRecord extends RecordBase {
 	/** Workspace-relative evidence/artifact paths. */
 	evidence?: string[];
 	status: FindingStatus;
+	/**
+	 * How the claim arose, before anybody challenged it. See FINDING_SOURCES.
+	 */
+	source?: FindingSource;
+	/**
+	 * What happened when this finding was challenged.
+	 *
+	 * Written by the challenge pass, never by the reviewer that made the claim.
+	 * Absent means nobody has looked twice, which is why `suspected` is the
+	 * default status rather than `open`.
+	 */
+	verification?: Verification;
 	/**
 	 * Why the finding carries the status it does.
 	 *

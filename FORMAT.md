@@ -171,7 +171,7 @@ the surface elements coverage is computed over.
 
 Refuted and inconclusive hypotheses are **retained** (no-retest + report rigor).
 
-### 8.3 `findings.jsonl` — confirmed vulns (what's REAL)
+### 8.3 `findings.jsonl` — the defect ledger
 
 ```jsonc
 {
@@ -189,18 +189,48 @@ Refuted and inconclusive hypotheses are **retained** (no-retest + report rigor).
   "evidence":["evidence/f3a9-req.http","artifacts/f3a9-screenshot.png"],
   "status":"confirmed",          // see below
   "reason":"client accepted; compensating control in the WAF",  // why it carries that status
+  "source":"reproduced",         // "scanner" | "inferred" | "observed" | "reproduced"
+  "verification":{               // written by a challenge, never by the reviewer that made the claim
+    "verdict":"stands",          // "stands" | "amended" | "refuted" | "unresolved"
+    "at":"2026-09-07T14:02:11Z",
+    "control":"same request with no cookie returned 401; an unrelated note id returned 404",
+    "entitlement":"model.md actors: notes are private to their owner; there is no sharing feature",
+    "basis":["evidence/f3a9-anon.txt"],
+    "live":true
+  },
   "hypothesisId":"y7"
 }
 ```
 
-`status` is one of `open`, `confirmed`, `triaged`, `reported`, `false-positive`,
-`accepted-risk`, `ignored`. The last three are *disposed*: the finding stays in
-the ledger and in the report, keeps its history, and leaves the open-findings
-count that the header, the statusline and `recall status` show. They are how a
-decision — the client accepted the risk, the operator judged it not real, it was
-set aside — is recorded without deleting anything, and `reason` is what a client
-asks about three months later. Deleting is the separate act, and it is for a row
-that should never have been recorded at all.
+`status` is one of `suspected`, `open`, `confirmed`, `triaged`, `reported`,
+`refuted`, `false-positive`, `accepted-risk`, `ignored`. The last four are
+*disposed*: the finding stays in the ledger and in the report, keeps its history,
+and leaves the open-findings count that the header, the statusline and `recall
+status` show. They are how a decision — the client accepted the risk, the
+operator judged it not real, it was set aside — is recorded without deleting
+anything, and `reason` is what a client asks about three months later. Deleting
+is the separate act, and it is for a row that should never have been recorded at
+all.
+
+`suspected` is the default, and it means nobody has challenged this yet. It
+exists because the operator prompt asks the agent to record a plausible lead
+rather than drop one, and until there was a word for that state a hedge and a
+proven bug were both `open` and reached the client in one list. `confirmed` has
+to be earned: the class's control case was run and, for the access-control
+classes, entitlement was established. `refuted` is a challenge breaking the
+finding on cited grounds — kept distinct from `false-positive`, which is the
+operator's own judgement, because "who decided this was not real, the tool or the
+consultant?" is a question the row has to be able to answer.
+
+`source` says how the claim arose before anybody challenged it, so a consultant
+signing a report can tell a scanner line nobody re-issued from a hand-built
+proof.
+
+`verification` is written by the challenge pass. `control` is the load-bearing
+field: a finding is not proven by the attack working, it is proven by the attack
+working **and** the control failing — an IDOR whose unauthenticated control also
+succeeds is a public resource. A refutation carries `basis`; one without it is
+recorded as `unresolved` and settles nothing. See [ADR-007](docs/decisions.md).
 
 `description`, `impact` and `remediation` are the three sections a client's report
 is read for — what it is, what it costs us, what we do about it — and the export

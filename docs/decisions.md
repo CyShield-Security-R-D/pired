@@ -237,3 +237,110 @@ disk, spawn or print.
   `bin/launch.test.ts`. Reversing it means deliberately rewriting that test, not deleting it: the
   fallback direction was safe, the silence was not, and `review` is the one profile that
   pre-authorizes the scope gate.
+
+---
+
+## ADR-007 — A challenge can refuse to settle a finding, but never to keep one
+
+**Status:** accepted · 2026-09-07
+
+### Context
+
+The operator prompt tells the agent that the costliest outcome is a missed vulnerability, and that
+a plausible-but-unproven lead should be recorded rather than dropped — "verification calibrates
+confidence and severity, it does not erase a lead". That is the right bet. It had a cost the ledger
+never carried: a lead recorded as a hedge and a bug proven against a live target were both `open`,
+rendered identically in `/findings` and in the export, and reached the client in one list.
+
+pired flagged IDORs on the strength of one principal reading another's object, with nobody having
+established that the principal was not *meant* to — a share link, a shared tenant, a collaborator
+role, an admin. In the ledger such a claim looks identical to a proven bug, which is how a
+false-positive IDOR reaches a report.
+
+Two things follow from that, and the second is the one that shapes the design.
+
+**Re-running the request cannot settle it.** An access-control finding is a claim about *intent*,
+and intent is not in the response, not in the code, and not in any number of repeat requests. A
+share link and a broken ownership check return the same 200.
+
+**Nothing shape-based separates a good finding from a bad one.** Replaying three archived corpus
+passes (218 findings, 201 with an extractable location, 30 landing in a truth window) against the
+answer keys: description, remediation, impact and CWE are present on 100% of findings, so a
+completeness check flags nothing; evidence is cited by 65% of findings that miss the key and 67% of
+those that hit it; no finding cites a line outside its file. The best deterministic signal found —
+whether the cited line's ±3 window contains an identifier from the finding's own prose — flags 22%
+of findings that miss against 10% that hit, and applying it as a filter takes three passes from 2,
+5 and 4 unique truth entries to 1, 3 and 2. It deletes half of everything true. A severity floor at
+`high` costs those same passes 0, 3 and 2 entries.
+
+(The keys are patch-derived, so "not in the key" is not "false" and the precision figures are lower
+bounds — `research/04`. The relative claim is what matters here: the checks do not separate what the
+key confirms from the rest.)
+
+So verification cannot be a filter on the record. The discriminating information is in the target,
+or — for the access-control classes — in the target model and the operator's head.
+
+### Decision
+
+A challenge pass with a **symmetric burden of proof and an asymmetric failure mode**.
+
+- **To confirm:** the control case must have been run, and for the access-control classes
+  entitlement must be settled. `core/challenge.ts` carries a per-class contract naming both.
+- **To refute:** a cited basis is required (`file:line`, an evidence path, a model section), and the
+  target must have been live when the challenge ran.
+- **Missing either bar lands the finding on `suspected`** — not confirmed, not refuted, still in the
+  ledger. `judge()` has no input that removes a finding.
+
+`suspected` is a new status and the default for anything nobody has challenged; `refuted` is a new
+disposed status, kept distinct from `false-positive` so the row can say whether the tool or the
+consultant made the call. `FindingRecord` gains `source` (scanner · inferred · observed ·
+reproduced) and `verification`.
+
+The export separates confirmed from suspected and **renders refuted findings in their own section
+with the grounds that broke them**.
+
+Invocation is a pull: `recall challenge` for the queue, `recall challenge id=<id>` for the brief.
+Nothing fires on its own, because re-running a proof is traffic against a client's production
+system.
+
+### Consequences
+
+- Retaining refuted findings *is* the safety mechanism. A wrong refutation is visible in the
+  document rather than a bug that quietly left it, and that is the only basis on which it is safe to
+  let a machine challenge findings at all.
+- A consultant can hand over a document whose confirmed section is defensible and whose suspected
+  section is honestly labelled, instead of choosing between shipping everything and shipping nothing.
+- The entitlement question routes to a `scope-clarification` blocker, which is already a dialog in
+  front of the operator. Answering it in the target model's `actors`/`invariants` settles every
+  later finding on the same surface.
+- The brief is built from the record and the class contract, never from the conversation that
+  produced the finding. The scribe — a pass that re-read the agent's own review buffer — cost 2.5x
+  the wall clock and moved precision from 0.059 to 0.038 (`research/11`). A verifier that inherits
+  the finder's reasoning agrees with it.
+- `record` gains no required field and refuses nothing. It reports what a finding has not yet shown,
+  per the standing directive to inform rather than script.
+
+### Not yet measured
+
+There is no pentest evaluation instrument in this repository. `eval/corpus`, DVBank and the misses
+analysis are all `review`; `eval/forge` states in its own header that it is a plumbing fixture, not
+a capability benchmark. The numbers above are code-review numbers and are cited for the design
+argument they support, not as evidence about live testing. `KeyCell.poc` is the hook a Field corpus
+would hang off, and the honest test of this feature is sensitivity and specificity measured against
+one: does it keep findings whose PoC still fires, and kill deliberately bogus ones. Until that
+exists, the safety property is structural rather than measured — which is why it is structural.
+
+### Rejected
+
+**Deleting or hiding refuted findings.** It makes a wrong refutation invisible, which converts a
+verification feature into a machine for losing real bugs.
+
+**A severity floor, or any confidence score computed from the record.** Measured above: both cost
+more true findings than they remove false ones, because at this precision the noise and the signal
+have the same shape.
+
+**Blocking `record` until a finding is proven.** A finding the tool argued the reviewer out of
+writing is worth less than one recorded honestly as `suspected`. This follows ADR-004.
+
+**Running the challenge automatically at `/report`.** Re-testing is traffic, detection risk and load
+on a client's production system, and on a timed engagement that is the operator's call.

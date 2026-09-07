@@ -11,6 +11,7 @@
  */
 
 import { buildBrowserModel, recordLabel } from "./browser.ts";
+import { auditFinding, challengeBrief, judge, SEVERITY_RANK, verdictPatch } from "./challenge.ts";
 import { computeCoverage, coveragePercent, findGaps, selectNext } from "./coverage.ts";
 import { CVSS_DEFAULT_VERSION, CVSS_EXAMPLE, cvssVersion, validateCvss } from "./cvss.ts";
 import { type Fields, findDuplicate, findNearDuplicate, type IdentityKind, isNoOp, mergeRecord } from "./identity.ts";
@@ -19,12 +20,16 @@ import { buildTargetIndex, resolveElementTarget, type TargetIndex } from "./targ
 import { computeCoverageView, computeEngagementStats, isDisposed } from "./stats.ts";
 import { CELL_GLYPH, renderCoveragePanel } from "./coverage-panel.ts";
 import {
+	type BlockerRecord,
 	BLOCKER_STATUSES,
 	BLOCKER_TYPES,
+	FINDING_SOURCES,
 	FINDING_STATUSES,
 	HYPOTHESIS_OUTCOMES,
+	type FindingRecord,
 	MODEL_SECTION_HELP,
 	MODEL_SECTIONS,
+	UNVERIFIED_STATUS,
 	type HypothesisRecord,
 	type InventoryKind,
 	type InventoryRecord,
@@ -51,7 +56,7 @@ type RecordKind = (typeof RECORD_KINDS)[number];
 type LedgerKind = Exclude<RecordKind, "note" | "evidence" | "model">;
 
 const RECALL_QUERIES = [
-	"status", "next", "coverage", "surface", "gaps", "inventory", "hypotheses", "findings", "finding", "loot", "blockers", "notes", "model",
+	"status", "next", "coverage", "surface", "gaps", "inventory", "hypotheses", "findings", "finding", "challenge", "loot", "blockers", "notes", "model",
 ] as const;
 
 /**
@@ -78,7 +83,7 @@ const DEFAULTS: Partial<Record<LedgerKind, Record<string, unknown>>> = {
 	service: { proto: "tcp" },
 	endpoint: { method: "GET" },
 	hypothesis: { outcome: "proposed" },
-	finding: { status: "open" },
+	finding: { status: UNVERIFIED_STATUS },
 	blocker: { type: "decision", priority: "medium", status: "open" },
 	loot: { type: "password" },
 };
@@ -189,7 +194,7 @@ function extractFields(kind: LedgerKind, a: Record<string, unknown>): Record<str
 		case "hypothesis":
 			return defined({ statement: str(a.statement), target: asList(a.target)[0], class: asList(a.class)[0], method: str(a.approach) ?? str(a.method), outcome: oneOf(a.outcome, HYPOTHESIS_OUTCOMES), evidence: str(a.evidence), findingId: str(a.findingId) });
 		case "finding":
-			return defined({ title: str(a.title), severity: oneOf(a.severity, SEVERITIES), target: str(a.target), class: str(a.class), cwe: str(a.cwe), cvss: str(a.cvss), description: str(a.description), impact: str(a.impact), remediation: str(a.remediation), repro: str(a.repro), evidence: strArr(a.evidence), status: oneOf(a.status, FINDING_STATUSES), reason: str(a.reason), hypothesisId: str(a.hypothesisId) });
+			return defined({ title: str(a.title), severity: oneOf(a.severity, SEVERITIES), target: str(a.target), class: str(a.class), cwe: str(a.cwe), cvss: str(a.cvss), description: str(a.description), impact: str(a.impact), remediation: str(a.remediation), repro: str(a.repro), evidence: strArr(a.evidence), status: oneOf(a.status, FINDING_STATUSES), reason: str(a.reason), hypothesisId: str(a.hypothesisId), source: oneOf(a.source, FINDING_SOURCES), verification: a.verification as FindingRecord["verification"] });
 		case "blocker":
 			return defined({ type: oneOf(a.blockerType, BLOCKER_TYPES), question: str(a.question), context: str(a.context), options: strArr(a.options), blocks: strArr(a.blocks), priority: oneOf(a.priority, PRIORITIES), status: oneOf(a.status, BLOCKER_STATUSES), answer: str(a.answer) });
 		case "loot":
@@ -264,7 +269,7 @@ const RECORD_DESCRIPTION = `Record engagement state to the durable workspace. On
 - finding: title, severity[info|low|medium|high|critical] (+target, class, cwe, cvss, description, repro, evidence[], status)
   A finding is anything worth carrying into the report, not only a proven vulnerability. Use severity=info for an observation that costs nothing now but may matter later — a missing dependency pin, an unpinned base image, a permissive default, a lead you could not finish. 'target' is optional and accepts a recorded element id OR a raw string (a file path, a module, a component) when no element fits; give one when you can, and record the finding either way rather than leaving it in notes.
   A finding is a section of a document a client pays for, so it is written as one: 'description' says what the flaw is and where, 'impact' says what it costs THEM — the records exposed, the money moved, the service lost, the obligation breached — and 'remediation' says the concrete change that fixes it (the control to add, the call to replace; never "sanitize input"). 'repro' is numbered steps a third party can follow. Write impact in the client's terms, not the tool's: "any logged-in customer can read all 40k customer records, including national IDs" beats "confidentiality impact is high".
-  status[open|confirmed|triaged|reported|false-positive|accepted-risk|ignored] is how a finding is settled without losing it. When the operator says a finding is not real, set status=false-positive; when they say the risk is accepted, status=accepted-risk; when they want it set aside, status=ignored. All three keep the row and its history, drop it out of the open-findings count, and take a 'reason' — which is what a client asks for three months later. Prefer them to deleting.
+  status[suspected|open|confirmed|triaged|reported|refuted|false-positive|accepted-risk|ignored] is how a finding is settled without losing it. New findings are 'suspected': recorded, not yet challenged. 'confirmed' is earned, not asserted — pass 'control' (the case that had to FAIL for this to mean anything: the unauthenticated request, the false payload, the absent guard) and, for access-control classes, 'entitlement' (how you established the caller was not MEANT to reach the resource — reading another user's object is a bug when the reader was not entitled and a feature when they were, and the response looks identical). To refute, pass 'basis' (file:line, an evidence path, or the model section that settles it) and 'live'. Short of either bar the finding stays 'suspected' and nothing is lost. 'recall challenge' lists what is unchallenged; 'recall challenge id=<id>' returns the brief. When the operator says a finding is not real, set status=false-positive; when they say the risk is accepted, status=accepted-risk; when they want it set aside, status=ignored. All three keep the row and its history, drop it out of the open-findings count, and take a 'reason' — which is what a client asks for three months later. Prefer them to deleting.
 - blocker: question (+blockerType, priority[low|medium|high], options[], blocks[] (work ids this gates), status[open|answered|dismissed], answer)
   A parked question stays open until someone closes it, and an open blocker is one you keep routing around. When the operator answers it — in a dialog, or just by telling you in chat that it is decided or already handled — write that down: \`recall blockers\` gives you the id, then \`record kind=blocker id=<id> status=answered answer=<what they said>\`. Answers given in the UI arrive on their own; you do not need a tool call to read them.
 - loot: handle (e.g. cred:web-admin), secret (+lootType, username, target, source)
@@ -315,6 +320,10 @@ const RECORD_PARAMETERS: JsonSchema = {
 		approach: { type: "string" }, outcome: { enum: HYPOTHESIS_OUTCOMES },
 		content: { type: "string", description: "For kind=evidence: the raw output to save to the file." },
 		title: { type: "string" }, severity: { enum: SEVERITIES }, cwe: { type: "string" }, cvss: { type: "string", description: `CVSS vector. v4.0 by default, e.g. "${CVSS_EXAMPLE["4.0"]}"; a v3.1 vector is accepted when the engagement requires one.` }, description: { type: "string", description: "What the flaw is and where: the mechanism, in plain language." }, impact: { type: "string", description: "What it costs the client in their terms — records exposed, money moved, service lost, obligation breached." }, remediation: { type: "string", description: "The concrete change that fixes it: the control to add, the call to replace. Not \"sanitize input\"." }, repro: { type: "string" }, status: { type: "string" }, evidence: { type: "array", items: { type: "string" }, description: "Workspace-relative paths to evidence files you wrote (e.g. [\"evidence/sqli-login.txt\"]). Not inline text." },
+		control: { type: "string", description: "For kind=finding: the control case you ran and what it returned — the request that had to FAIL for the finding to mean anything." },
+		basis: { type: "array", items: { type: "string" }, description: "For kind=finding: the grounds for a refutation or a severity change — file:line, an evidence path, or the model section that settles it." },
+		live: { type: "boolean", description: "For kind=finding: was the target reachable and the session valid when you challenged it? A refutation against a dead session refutes nothing." },
+		entitlement: { type: "string", description: "For kind=finding: how you established the caller was (or was not) meant to reach the resource. Required to confirm an access-control finding." },
 		question: { type: "string" }, blockerType: { enum: BLOCKER_TYPES }, priority: { enum: PRIORITIES }, options: { type: "array", items: { type: "string" } }, blocks: { type: "array", items: { type: "string" } }, context: { type: "string" },
 		handle: { type: "string" }, lootType: { enum: LOOT_TYPES }, username: { type: "string" }, secret: { type: "string" }, source: { type: "string" }, notes: { type: "string" },
 		delete: { type: "boolean", description: "With 'id': retire that record. For something that should never have been recorded — ask the operator first." },
@@ -903,6 +912,78 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 				}
 			}
 
+			// Settling a finding is checked, not taken on trust.
+			//
+			// `status=refuted` is one word, and without this the model could write it
+			// over any finding it felt unsure about — which is precisely the machine
+			// for losing real bugs this whole mechanism exists to not be. The burden
+			// of proof therefore lives in the tool rather than in the prompt: a
+			// refutation needs cited grounds and a live target, a confirmation needs
+			// the control case and (for the access-control classes) entitlement, and
+			// anything short of either lands on `suspected`.
+			//
+			// Nothing is rejected and nothing is lost. The write always happens; what
+			// the tool decides is which of three retained states it lands in, and it
+			// says why.
+			let downgrade = "";
+			if (kind === "finding") {
+				// `verification` is an output of the check below, never an input to it.
+				// Accepting one would let a caller hand in the conclusion it is
+				// supposed to have earned, which is the one field that must not be
+				// forgeable.
+				delete a.verification;
+				const wanted = oneOf(a.status, FINDING_STATUSES);
+				if (wanted === "confirmed" || wanted === "refuted") {
+					const existing = str(a.id) ? (await deps.workspace.read("findings")).find((f) => f.id === str(a.id)) : undefined;
+					const subject = {
+						...(existing ?? {}),
+						kind: "finding",
+						title: str(a.title) ?? existing?.title ?? "(untitled)",
+						severity: oneOf(a.severity, SEVERITIES) ?? existing?.severity ?? "info",
+						class: str(a.class) ?? existing?.class,
+						status: existing?.status ?? UNVERIFIED_STATUS,
+					} as FindingRecord;
+					const outcome = judge(subject, {
+						verdict: wanted === "confirmed" ? "stands" : "refuted",
+						control: str(a.control),
+						basis: strArr(a.basis) ?? (str(a.reason) && wanted === "refuted" ? undefined : undefined),
+						live: typeof a.live === "boolean" ? a.live : undefined,
+						entitlement: str(a.entitlement),
+						notes: str(a.reason),
+					}, ctx.services.clock.nowIso());
+					const patch = verdictPatch(outcome);
+					a.status = patch.status;
+					a.verification = patch.verification;
+					if (outcome.downgraded) {
+						downgrade =
+							`\nRecorded as ${patch.status}, not ${wanted}: ${outcome.downgraded}\n` +
+							"The finding is kept exactly as it was — nothing was lost. Re-run it with the missing " +
+							"piece and record the outcome again.";
+					}
+					if (outcome.blocker) {
+						// Written straight to the store rather than through the general
+						// path, which is mid-flight on a finding right now. The operator
+						// is the only one who can answer this, and the blocker machinery
+						// already puts the question in front of them as a dialog.
+						let parked: string | undefined;
+						await deps.workspace.upsert("blockers", (current) => {
+							const dup = current.find((b) => b.status === "open" && b.question === outcome.blocker?.question);
+							if (dup) { parked = dup.id; return undefined; }
+							parked = ctx.services.ids.newId();
+							return [{
+								v: RECORD_VERSION, id: parked, kind: "blocker", createdAt: ctx.services.clock.nowIso(),
+								type: outcome.blocker?.type, question: outcome.blocker?.question,
+								context: outcome.blocker?.context, priority: "high", status: "open",
+							} as unknown as BlockerRecord];
+						});
+						if (parked) downgrade += `\nParked blocker ${parked} so the operator can answer it.`;
+					}
+					if (outcome.wasReported) {
+						downgrade += "\nThis finding was already REPORTED to the client. Changing it now is a conversation with the operator, not an edit — say so before you move on.";
+					}
+				}
+			}
+
 			// A CVSS vector is checked against the version it claims, not taken on
 			// trust.
 			//
@@ -1182,8 +1263,41 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 						`Link them with record id=${written.id} hypothesisId=${match.id}.`;
 				}
 			}
+			// What this finding has not yet shown, said while the reviewer still has
+			// the context to go and show it.
+			//
+			// The failure this closes: an IDOR was recorded because one principal
+			// could read another's object, with nobody having established that the
+			// principal was not MEANT to — a share link, a shared tenant, a
+			// collaborator role — and it reached the client's report. Re-running the
+			// request cannot settle that; the target model or the operator can.
+			//
+			// Informational, never a refusal. A finding recorded as a lead is worth
+			// more than a finding the tool argued the reviewer out of writing, and
+			// `suspected` is now a status the report renders honestly on its own.
+			let unverified = "";
+			if (kind === "finding" && written.kind === "finding" && !isDisposed(written.status)) {
+				const evidence: Record<string, string> = {};
+				for (const rel of written.evidence ?? []) {
+					const body = await deps.workspace.readRelative(rel);
+					if (body !== undefined) evidence[rel] = body;
+				}
+				const gaps = auditFinding({
+					finding: written, evidence,
+					targetModel: await deps.workspace.readModel().catch(() => undefined),
+				});
+				const blocking = gaps.filter((g) => g.blocking);
+				if (blocking.length > 0) {
+					unverified =
+						`\nRecorded as ${written.status}. Before this can be confirmed:\n` +
+						blocking.map((g) => `- ${g.detail}`).join("\n") +
+						`\nChallenge it with \`recall challenge id=${written.id}\`, which returns the brief for this class.`;
+				}
+				const advisory = gaps.filter((g) => !g.blocking).map((g) => `- ${g.detail}`);
+				if (advisory.length > 0) unverified += `\nAlso worth fixing:\n${advisory.join("\n")}`;
+			}
 			const digest = await macroDigest(deps, deps.surfaceKinds ?? DEFAULT_SURFACE_KINDS);
-			return text(recordSummary(kind, written, outcome) + warning + unlocated + pulled + incomplete + linkage + digest, recordDetails(written, outcome));
+			return text(recordSummary(kind, written, outcome) + warning + unlocated + pulled + incomplete + linkage + downgrade + unverified + digest, recordDetails(written, outcome));
 		},
 	};
 }
@@ -1297,6 +1411,51 @@ export function createRecallTool(deps: ToolDeps): ToolDefinition {
 							`${f.id} [${f.severity}/${f.status}] ${f.title} (${f.target})${f.reason ? ` — ${f.reason}` : ""}`,
 						).join("\n") + truncated(Math.min(limit, fs.length), fs.length, "findings", "open first")
 						: "(no findings)");
+				}
+				case "challenge": {
+					// The brief for challenging one finding, or the queue of what is
+					// unchallenged.
+					//
+					// Deliberately a pull, not a push. Re-running a proof touches a
+					// client's production system again — that is traffic, detection risk
+					// and load — so nothing here fires on its own; the operator asks for
+					// it. The brief is built from the RECORD and the class contract, never
+					// from the conversation that produced the finding: the scribe pass,
+					// which re-read the agent's own review buffer, cost 2.5x the wall
+					// clock and moved precision from 0.059 to 0.038, because a verifier
+					// that inherits the finder's reasoning agrees with it.
+					const id = str(a.id);
+					const all = await deps.workspace.read("findings");
+					const model = await deps.workspace.readModel().catch(() => undefined);
+					if (!id) {
+						const queue = all
+							.filter((f) => !isDisposed(f.status) && f.status !== "confirmed")
+							.sort((x, y) => SEVERITY_RANK[y.severity] - SEVERITY_RANK[x.severity]);
+						if (queue.length === 0) return text("Nothing unchallenged. Every live finding has been through a challenge.");
+						const lines = queue.slice(0, limit).map((f) => {
+							const gaps = auditFinding({ finding: f, targetModel: model }).filter((g) => g.blocking);
+							return `${f.id} [${f.severity}/${f.status}] ${f.title}` +
+								(gaps.length > 0 ? `\n    needs: ${gaps.map((g) => g.kind).join(", ")}` : "\n    needs: nothing visible without re-running it");
+						});
+						return text(
+							`${queue.length} finding(s) not yet confirmed, worst first:\n${lines.join("\n")}\n\n` +
+							"`recall challenge id=<id>` returns the brief for one. Challenge it in a fresh context — " +
+							"a verifier that has already read the reasoning behind a claim agrees with it.",
+						);
+					}
+					const found = all.find((f) => f.id === id);
+					if (!found) return text(`No live finding ${id}. Use 'recall findings' for what is there.`);
+					const evidence: Record<string, string> = {};
+					for (const rel of found.evidence ?? []) {
+						const body = await deps.workspace.readRelative(rel);
+						if (body !== undefined) evidence[rel] = body;
+					}
+					const gaps = auditFinding({ finding: found, evidence, targetModel: model });
+					return text(
+						`${challengeBrief(found, gaps)}\n\n` +
+						"Record the outcome with `record id=" + found.id + " status=confirmed|refuted reason=\"...\"` — " +
+						"a refutation needs the grounds in 'reason', and the finding is kept either way.",
+					);
 				}
 				case "finding": {
 					// One finding, whole.

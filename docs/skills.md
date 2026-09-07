@@ -53,6 +53,7 @@ skills/
 |---|---|
 | `ops-scope-safety` | Reading the scope, knowing the gate's limits, gating intrusive actions. |
 | `ops-evidence` | Redirecting bulky output to `evidence/`, pulling only summaries into context. |
+| `ops-challenge-finding` | Breaking a finding before a client reads it: the control case, entitlement, and what a refutation has to cite. |
 | `ops-finding-writeup` | Promoting a confirmed hypothesis to a report-grade finding, de-duped. |
 | `ops-severity-cvss` | Severity, a CVSS v3.1 vector, and the right CWE, with worked examples. |
 | `ops-loot-credentials` | Stable handles, referring by handle instead of reprinting plaintext. |

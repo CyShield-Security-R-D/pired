@@ -19,7 +19,7 @@ One tool for all state; the `kind` picks the shape.
 | `param` | `name` | `endpoint`, `location` |
 | `tech` | `name` | `host`, `version` |
 | `hypothesis` | `statement`, `target`, `class` | `approach`, `outcome`, `evidence` |
-| `finding` | `title`, `severity`, `target` | `class`, `cwe`, `cvss`, `description`, `repro`, `evidence[]`, `status` |
+| `finding` | `title`, `severity`, `target` | `class`, `cwe`, `cvss`, `description`, `repro`, `evidence[]`, `status`, `source` |
 | `blocker` | `question` | `blockerType`, `priority`, `options[]`, `blocks[]`, `context` |
 | `loot` | `handle`, `secret` | `lootType`, `username`, `target`, `source` |
 
@@ -125,6 +125,7 @@ recall query=<query> [limit=50]
 | `inventory` | Recorded surface. |
 | `hypotheses` | Each with outcome, class, target. |
 | `findings` | Each with severity, status, target. |
+| `challenge` | What is unchallenged, worst first. With `id=<finding>`, the brief for breaking that one: the class's control case, the entitlement question, and what its evidence does not yet show. |
 | `blockers` | Open blockers only. |
 | `loot` | **Handles only** — never secrets. |
 | `notes` | The engagement notebook. |

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { FindingRecord, LootRecord } from "./ontology.ts";
-import { exportFindingsJson, exportFindingsMarkdown, notReportReady } from "./export.ts";
+import { exportFindingsJson, exportFindingsMarkdown, groupFindings, notReportReady } from "./export.ts";
 
 function finding(partial: Partial<FindingRecord> & Pick<FindingRecord, "id">): FindingRecord {
 	return { v: 1, kind: "finding", createdAt: "t", title: "T", severity: "high", target: "e1", status: "confirmed", ...partial };
@@ -197,3 +197,68 @@ describe("what the report says beyond the findings themselves", () => {
 	});
 });
 
+describe("separating what was verified from what was not", () => {
+	it("does not present an unchallenged lead as a finding", () => {
+		// The shipped incident: an IDOR was recorded because one principal could
+		// read another's object, with nobody having established that the principal
+		// was not MEANT to. It rendered exactly like the proven findings around it
+		// and the client read it as one.
+		const md = exportFindingsMarkdown({
+			findings: [
+				finding({ id: "f1", title: "ProvenBug", status: "confirmed" }),
+				finding({ id: "f2", title: "UnprovenIdor", status: "suspected", class: "idor" }),
+			],
+		});
+		expect(md).toContain("### Confirmed");
+		expect(md).toContain("### Suspected — not yet verified");
+		expect(md).toMatch(/1 confirmed/);
+		expect(md).toMatch(/1 suspected/);
+		// The warning is in the document, not only in a status field, because the
+		// failure to avoid is a reader skimming headings.
+		expect(md).toMatch(/not\*\* survived a challenge|have \*\*not\*\*/);
+		expect(md.indexOf("ProvenBug")).toBeLessThan(md.indexOf("UnprovenIdor"));
+	});
+
+	it("keeps a refuted finding in the report, with the grounds that broke it", () => {
+		// Tracking a refuted finding is the point: a refutation is a claim too, and
+		// one that was itself wrong has to be visible in the document rather than
+		// silently absent from it.
+		const md = exportFindingsMarkdown({
+			findings: [finding({
+				id: "f3", title: "RefutedThing", status: "refuted",
+				verification: { verdict: "refuted", at: "2026-09-07T00:00:00Z", basis: ["app/policies/note_policy.rb:14"], live: true },
+			})],
+		});
+		expect(md).toContain("### Challenged and refuted");
+		expect(md).toContain("RefutedThing");
+		expect(md).toContain("app/policies/note_policy.rb:14");
+		expect(md).toMatch(/Verdict: refuted/);
+	});
+
+	it("shows the control case behind a confirmation, so the verdict can be weighed", () => {
+		const md = exportFindingsMarkdown({
+			findings: [finding({
+				id: "f4", status: "confirmed", class: "idor",
+				verification: {
+					verdict: "stands", at: "t", live: true,
+					control: "same request with no cookie returned 401",
+					entitlement: "model.md actors: notes are private to their owner",
+				},
+			})],
+		});
+		expect(md).toContain("Control case: same request with no cookie returned 401");
+		expect(md).toContain("Entitlement: model.md actors");
+	});
+
+	it("groups by what the status says about verification, not by severity", () => {
+		const g = groupFindings([
+			finding({ id: "a", status: "suspected" }), finding({ id: "b", status: "open" }),
+			finding({ id: "c", status: "confirmed" }), finding({ id: "d", status: "reported" }),
+			finding({ id: "e", status: "refuted" }), finding({ id: "f", status: "accepted-risk" }),
+		]);
+		expect(g.suspected.map((f) => f.id)).toEqual(["a", "b"]);
+		expect(g.confirmed.map((f) => f.id)).toEqual(["c", "d"]);
+		expect(g.refuted.map((f) => f.id)).toEqual(["e"]);
+		expect(g.closed.map((f) => f.id)).toEqual(["f"]);
+	});
+});

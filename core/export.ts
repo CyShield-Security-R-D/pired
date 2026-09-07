@@ -110,6 +110,44 @@ export function notReportReady(findings: FindingRecord[]): FindingRecord[] {
 	return findings.filter((f) => !f.description || !f.impact || !f.remediation);
 }
 
+/**
+ * How a finding is presented depends on whether anybody challenged it.
+ *
+ * The operator prompt asks the agent to record a plausible lead rather than drop
+ * it, which is the right instruction and produced a report in which an
+ * unverified IDOR sat beside proven bugs in one undifferentiated list. The
+ * client read it as a finding, because that is what a findings list means.
+ *
+ * So the export separates them, and the separation is the deliverable: a
+ * consultant can hand over a document whose "confirmed" section is defensible
+ * and whose "suspected" section is honestly labelled, instead of choosing
+ * between shipping everything and shipping nothing.
+ *
+ * Refuted findings are KEPT and rendered with the grounds that broke them. A
+ * refutation is a claim too, and a client — or the consultant, a week later —
+ * has to be able to see what it rested on. It is also the safety net on
+ * automated challenging: a wrong refutation is visible in the document rather
+ * than a bug that quietly left the report.
+ */
+export interface FindingGroups {
+	confirmed: FindingRecord[];
+	suspected: FindingRecord[];
+	refuted: FindingRecord[];
+	/** Accepted risk, ignored, or judged a false positive by the operator. */
+	closed: FindingRecord[];
+}
+
+export function groupFindings(findings: FindingRecord[]): FindingGroups {
+	const groups: FindingGroups = { confirmed: [], suspected: [], refuted: [], closed: [] };
+	for (const f of findings) {
+		if (f.status === "refuted") groups.refuted.push(f);
+		else if (f.status === "false-positive" || f.status === "accepted-risk" || f.status === "ignored") groups.closed.push(f);
+		else if (f.status === "confirmed" || f.status === "triaged" || f.status === "reported") groups.confirmed.push(f);
+		else groups.suspected.push(f);
+	}
+	return groups;
+}
+
 export function exportFindingsMarkdown(rawInput: ExportInput): string {
 	const input = redactedInput(rawInput);
 	const findings = input.findings;
@@ -119,11 +157,23 @@ export function exportFindingsMarkdown(rawInput: ExportInput): string {
 	out.push(`# pired findings${input.engagement ? ` — ${input.engagement}` : ""}`);
 	if (input.generatedAt) out.push(`\nGenerated: ${input.generatedAt}`);
 
+	const groups = groupFindings(findings);
+	const live = [...groups.confirmed, ...groups.suspected];
+
 	out.push("\n## Summary\n");
 	const summary = SEVERITY_DESC.filter((s) => counts[s] > 0).map((s) => `- ${s}: ${counts[s]}`);
 	out.push(summary.length ? summary.join("\n") : "No findings recorded.");
 	out.push(`\nTotal: ${findings.length} finding${findings.length === 1 ? "" : "s"}`);
-	const incomplete = notReportReady(findings);
+	// The line that would have caught the shipped IDOR. A severity tally answers
+	// "how bad", never "how sure", and a reader who is told 12 findings and not
+	// told that 9 of them are unverified leads has been told the wrong thing.
+	out.push(
+		`\n- ${groups.confirmed.length} confirmed (challenged: control case run)` +
+		`\n- ${groups.suspected.length} suspected (recorded as leads, not yet verified)` +
+		`\n- ${groups.refuted.length} refuted` +
+		(groups.closed.length > 0 ? `\n- ${groups.closed.length} closed by the operator` : ""),
+	);
+	const incomplete = notReportReady(live);
 	if (incomplete.length > 0) {
 		out.push(
 			`\n> **${incomplete.length} finding${incomplete.length === 1 ? " is" : "s are"} not report-ready** — ` +
@@ -132,39 +182,90 @@ export function exportFindingsMarkdown(rawInput: ExportInput): string {
 	}
 
 	out.push("\n## Findings\n");
-	if (findings.length === 0) {
+	if (live.length === 0 && groups.refuted.length === 0 && groups.closed.length === 0) {
 		out.push("_None._");
 	}
-	for (const f of findings) {
-		out.push(`### [${f.severity.toUpperCase()}] ${f.title}  (${f.id})`);
-		// The resolved element name, falling back to whatever was recorded. A target
-		// is legitimately a raw label when nothing was mapped for it, so the id is
-		// never dropped — it is only translated when there is a translation.
-		const target = (typeof f.target === "string" ? input.labelFor?.(f.target) : undefined) ?? f.target;
-		const meta = [`- Target: ${target}`, `- Status: ${f.status}`];
-		if (f.class) meta.push(`- Class: ${f.class}`);
-		if (f.cwe) meta.push(`- CWE: ${f.cwe}`);
-		if (f.cvss) meta.push(`- CVSS: ${f.cvss}`);
-		if (f.reason) meta.push(`- Rationale: ${f.reason}`);
-		out.push(meta.join("\n"));
-		// The three sections a client's report is read for, in the order it is read
-		// in: what it is, what it costs us, what we do about it. Written out even
-		// when empty — a heading marked "not recorded" is caught by whoever reviews
-		// the document; a section that silently is not there is not.
-		for (const [heading, body] of [
-			["Description", f.description],
-			["Business impact", f.impact],
-			["Remediation", f.remediation],
-		] as const) {
-			out.push(`\n**${heading}**\n\n${body ?? MISSING}`);
-		}
-		if (f.repro) out.push(`\n**Reproduction**\n\n${f.repro}`);
-		if (f.evidence?.length) out.push(`\n**Evidence**\n${f.evidence.map((e) => `- ${e}`).join("\n")}`);
-		out.push("");
+
+	if (groups.confirmed.length > 0) {
+		out.push("### Confirmed\n");
+		out.push("_Challenged: the control case was run and, for access-control findings, entitlement was established._\n");
+		for (const f of groups.confirmed) out.push(...renderFinding(f, input));
+	}
+
+	if (groups.suspected.length > 0) {
+		out.push("### Suspected — not yet verified\n");
+		// Stated in the document rather than left to the status line, because the
+		// failure to avoid is a reader skimming headings. A finding recorded as a
+		// hedge reads as a finding to anybody who does not check the metadata.
+		out.push(
+			"> These were recorded as leads and have **not** survived a challenge: the control case was " +
+			"not run, or — for access control — nobody established that the caller was not entitled to " +
+			"the resource. They are not confirmed vulnerabilities and must not be presented as such. " +
+			"They are listed because dropping an unproven lead is how real bugs get lost.\n",
+		);
+		for (const f of groups.suspected) out.push(...renderFinding(f, input));
+	}
+
+	if (groups.refuted.length > 0) {
+		out.push("### Challenged and refuted\n");
+		out.push(
+			"> Recorded, then broken on the grounds shown. Kept so the reasoning is auditable — and so " +
+			"a refutation that was itself wrong is visible here rather than absent from the document.\n",
+		);
+		for (const f of groups.refuted) out.push(...renderFinding(f, input));
+	}
+
+	if (groups.closed.length > 0) {
+		out.push("### Closed by the operator\n");
+		for (const f of groups.closed) out.push(...renderFinding(f, input));
 	}
 
 	out.push(...coverageSection(input));
 	return `${out.join("\n")}\n`;
+}
+
+/** One finding, as the report renders it. */
+function renderFinding(f: FindingRecord, input: ExportInput): string[] {
+	const out: string[] = [];
+	out.push(`#### [${f.severity.toUpperCase()}] ${f.title}  (${f.id})`);
+	// The resolved element name, falling back to whatever was recorded. A target
+	// is legitimately a raw label when nothing was mapped for it, so the id is
+	// never dropped — it is only translated when there is a translation.
+	const target = (typeof f.target === "string" ? input.labelFor?.(f.target) : undefined) ?? f.target;
+	const meta = [`- Target: ${target}`, `- Status: ${f.status}`];
+	if (f.class) meta.push(`- Class: ${f.class}`);
+	if (f.cwe) meta.push(`- CWE: ${f.cwe}`);
+	if (f.cvss) meta.push(`- CVSS: ${f.cvss}`);
+	if (f.source) meta.push(`- Source: ${f.source}`);
+	if (f.reason) meta.push(`- Rationale: ${f.reason}`);
+	out.push(meta.join("\n"));
+	// The three sections a client's report is read for, in the order it is read
+	// in: what it is, what it costs us, what we do about it. Written out even
+	// when empty — a heading marked "not recorded" is caught by whoever reviews
+	// the document; a section that silently is not there is not.
+	for (const [heading, body] of [
+		["Description", f.description],
+		["Business impact", f.impact],
+		["Remediation", f.remediation],
+	] as const) {
+		out.push(`\n**${heading}**\n\n${body ?? MISSING}`);
+	}
+	if (f.repro) out.push(`\n**Reproduction**\n\n${f.repro}`);
+	if (f.evidence?.length) out.push(`\n**Evidence**\n${f.evidence.map((e) => `- ${e}`).join("\n")}`);
+	// What the challenge actually did, so a reader can weigh the verdict rather
+	// than take it. A confirmation with no control shown and a refutation with no
+	// basis are both visible here as what they are.
+	const v = f.verification;
+	if (v) {
+		const lines = [`- Verdict: ${v.verdict}${v.live === false ? " (target was not reachable)" : ""}`, `- Challenged: ${v.at}`];
+		if (v.control) lines.push(`- Control case: ${v.control}`);
+		if (v.entitlement) lines.push(`- Entitlement: ${v.entitlement}`);
+		if (v.basis?.length) lines.push(`- Grounds: ${v.basis.join(", ")}`);
+		if (v.notes) lines.push(`- Notes: ${v.notes}`);
+		out.push(`\n**Verification**\n${lines.join("\n")}`);
+	}
+	out.push("");
+	return out;
 }
 
 /**

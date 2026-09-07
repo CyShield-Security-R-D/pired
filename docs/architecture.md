@@ -8,7 +8,7 @@ extensions/
   pired.ts     the pi adapter: tools, scope gate, prompt, commands, UI
   hosts.ts     LLM providers: the "Add a custom provider…" entry in /login, and /provider
   lib/         node host services · core→pi tool bridge · provider registration
-skills/        opt-in methodology (39)
+skills/        opt-in methodology (42)
 checklists/    coverage class templates (4)
 bin/           the launcher and the external panel renderer
 themes/        the pired theme

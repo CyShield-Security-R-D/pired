@@ -33,12 +33,16 @@ describe("record tool", () => {
 		expect((res.details as { id: string }).id).toBe(inv[0]?.id);
 	});
 
-	it("defaults hypothesis outcome to proposed and finding status to open", async () => {
+	it("defaults hypothesis outcome to proposed and finding status to suspected", async () => {
+		// A finding nobody has challenged is `suspected`, not `open`. The two used
+		// to be the same word, so a lead recorded as a hedge and a bug proven
+		// against a live target rendered identically and reached the client in one
+		// list — which is how an unverified IDOR reaches a report.
 		const { ws, ctx, record } = await setup();
 		await record.execute({ kind: "hypothesis", statement: "IDOR on /user", target: "e1", class: "authz" }, ctx);
 		await record.execute({ kind: "finding", title: "IDOR", severity: "high", target: "e1" }, ctx);
 		expect((await ws.read("hypotheses"))[0]?.outcome).toBe("proposed");
-		expect((await ws.read("findings"))[0]?.status).toBe("open");
+		expect((await ws.read("findings"))[0]?.status).toBe("suspected");
 	});
 
 	it("updates an existing record by id, preserving createdAt", async () => {
@@ -47,7 +51,9 @@ describe("record tool", () => {
 		const id = (created.details as { id: string }).id;
 		const createdAt = (await ws.read("findings"))[0]?.createdAt;
 		svc.clock.advance(5000);
-		await record.execute({ kind: "finding", id, status: "confirmed" }, ctx);
+		// `confirmed` is earned rather than asserted, so the update carries the
+		// control case with it — see "settling a finding is checked" below.
+		await record.execute({ kind: "finding", id, status: "confirmed", control: "unauthenticated request returned 401" }, ctx);
 		const findings = await ws.read("findings");
 		expect(findings).toHaveLength(1);
 		expect(findings[0]?.status).toBe("confirmed");
@@ -1325,5 +1331,169 @@ describe("a surface element remembers where it lives", () => {
 		const { ws, ctx, record } = await setup();
 		await record.execute({ kind: "param", name: "noteID", file: "backend/handlers/assets.go" }, ctx);
 		expect((await ws.read("inventory"))[0]).toMatchObject({ file: "backend/handlers/assets.go" });
+	});
+});
+
+describe("challenging a finding", () => {
+	it("tells the reviewer what an access-control finding has not yet shown", async () => {
+		// The shipped incident: an IDOR recorded because one principal could read
+		// another's object, with nobody having established that the principal was
+		// not MEANT to. Said at the moment of recording, while the reviewer still
+		// has the context to go and settle it — and never as a refusal, because a
+		// lead the tool argued somebody out of writing is worth less than one
+		// recorded honestly as suspected.
+		const { ctx, record } = await setup();
+		const res = await record.execute({
+			kind: "finding", title: "IDOR on GET /api/notes/{id}", severity: "high",
+			target: "notes.py:42", class: "idor",
+		}, ctx);
+		const out = textOf(res);
+		expect(out).toContain("Recorded as suspected");
+		expect(out).toMatch(/entitlement not established/i);
+		expect(out).toMatch(/recall challenge id=/);
+	});
+
+	it("does not ask an injection finding who the resource is for", async () => {
+		// sqli is settled by a differential on the wire. Only the access-control
+		// classes turn on intent, and asking everywhere is how a useful prompt
+		// becomes noise the model learns to skip.
+		const { ctx, record } = await setup();
+		const out = textOf(await record.execute({
+			kind: "finding", title: "SQLi in search", severity: "high", target: "search.py:9", class: "sqli",
+		}, ctx));
+		expect(out).not.toMatch(/entitlement not established/i);
+	});
+
+	it("lists what is unchallenged, worst first", async () => {
+		const { ctx, record, recall } = await setup();
+		await record.execute({ kind: "finding", title: "Verbose errors", severity: "low", target: "app.py:3", class: "misconfig" }, ctx);
+		await record.execute({ kind: "finding", title: "IDOR on notes", severity: "critical", target: "notes.py:42", class: "idor" }, ctx);
+		const out = textOf(await recall.execute({ query: "challenge" }, ctx));
+		expect(out.indexOf("IDOR on notes")).toBeLessThan(out.indexOf("Verbose errors"));
+		expect(out).toMatch(/2 finding\(s\) not yet confirmed/);
+		expect(out).toMatch(/fresh context/);
+	});
+
+	it("returns a brief built from the record and the class contract", async () => {
+		const { ctx, record, recall } = await setup();
+		const made = await record.execute({
+			kind: "finding", title: "IDOR on notes", severity: "high", target: "notes.py:42", class: "idor",
+			description: "Any session can read /api/notes/{id} for any id.",
+		}, ctx);
+		const id = (made.details as { id: string }).id;
+		const out = textOf(await recall.execute({ query: "challenge", id }, ctx));
+		expect(out).toMatch(/BREAK this claim/);
+		expect(out).toMatch(/NO credentials at all/);
+		expect(out).toMatch(/who is this resource FOR/);
+		// The finding survives whatever the challenge concludes.
+		expect(out).toMatch(/kept either way/);
+	});
+
+	it("says so when there is nothing left to challenge", async () => {
+		const { ctx, record, recall } = await setup();
+		await record.execute({
+			kind: "finding", title: "Proven", severity: "high", target: "a.py:1", status: "confirmed",
+			control: "the guard is absent on this route and present on its siblings",
+		}, ctx);
+		expect(textOf(await recall.execute({ query: "challenge" }, ctx))).toMatch(/Nothing unchallenged/);
+	});
+
+	it("reports on a finding id that is not there rather than throwing", async () => {
+		const { ctx, recall } = await setup();
+		expect(textOf(await recall.execute({ query: "challenge", id: "nope" }, ctx))).toMatch(/No live finding nope/);
+	});
+});
+
+describe("settling a finding is checked, not taken on trust", () => {
+	async function idor(): Promise<{ ctx: ToolContext; ws: Workspace; record: ToolDefinition; id: string }> {
+		const { ws, ctx, record } = await setup();
+		const made = await record.execute({
+			kind: "finding", title: "IDOR on notes", severity: "high", target: "notes.py:42", class: "idor",
+		}, ctx);
+		return { ctx, ws, record, id: (made.details as { id: string }).id };
+	}
+
+	it("will not let one word withdraw a finding", async () => {
+		// `status=refuted` is cheap to type and would otherwise be the whole
+		// mechanism for losing a real bug. The burden of proof lives in the tool
+		// rather than in the prompt, and the finding is kept either way.
+		const { ctx, ws, record, id } = await idor();
+		const out = textOf(await record.execute({ kind: "finding", id, status: "refuted" }, ctx));
+		expect(out).toMatch(/Recorded as suspected, not refuted/);
+		expect(out).toMatch(/no basis cited/);
+		expect(out).toMatch(/nothing was lost/);
+		const kept = (await ws.read("findings")).find((f) => f.id === id);
+		expect(kept?.status).toBe("suspected");
+		expect(kept).toBeDefined();
+	});
+
+	it("refuses a refutation made against a target that was not reachable", async () => {
+		// Re-verifying a whole engagement on its last day against a rotated
+		// credential would otherwise refute every true finding it holds.
+		const { ctx, ws, record, id } = await idor();
+		await record.execute({ kind: "finding", id, status: "refuted", basis: ["notes.py:50"], live: false }, ctx);
+		expect((await ws.read("findings")).find((f) => f.id === id)?.status).toBe("suspected");
+	});
+
+	it("records the refutation, and its grounds, when both bars are met", async () => {
+		const { ctx, ws, record, id } = await idor();
+		await record.execute({
+			kind: "finding", id, status: "refuted", live: true,
+			basis: ["app/models/share.py:31"],
+			control: "a third user with no share grant got 403",
+			reason: "share grant makes the access intended",
+		}, ctx);
+		const f = (await ws.read("findings")).find((x) => x.id === id);
+		expect(f?.status).toBe("refuted");
+		expect(f?.verification).toMatchObject({ verdict: "refuted", live: true, basis: ["app/models/share.py:31"] });
+	});
+
+	it("parks the entitlement question with the operator instead of confirming an IDOR", async () => {
+		// The shipped incident, at the moment it would have shipped: the request
+		// succeeded, and whether the caller was meant to make it is not something
+		// re-running it can answer.
+		const { ctx, ws, record, id } = await idor();
+		const out = textOf(await record.execute({
+			kind: "finding", id, status: "confirmed", live: true, control: "no-cookie request returned 401",
+		}, ctx));
+		expect((await ws.read("findings")).find((f) => f.id === id)?.status).toBe("suspected");
+		expect(out).toMatch(/Parked blocker/);
+		const blockers = await ws.read("blockers");
+		expect(blockers[0]).toMatchObject({ type: "scope-clarification", status: "open" });
+		expect(blockers[0]?.question).toMatch(/meant to be able to reach/);
+	});
+
+	it("confirms once the control ran and entitlement is settled", async () => {
+		const { ctx, ws, record, id } = await idor();
+		await record.execute({
+			kind: "finding", id, status: "confirmed", live: true,
+			control: "no-cookie request returned 401; an unrelated id returned 404",
+			entitlement: "model.md actors: notes are private to their owner, no sharing feature",
+		}, ctx);
+		const f = (await ws.read("findings")).find((x) => x.id === id);
+		expect(f?.status).toBe("confirmed");
+		expect(f?.verification?.entitlement).toMatch(/private to their owner/);
+	});
+
+	it("ignores a verification handed in by the caller", async () => {
+		// The one field that must not be forgeable: it is the conclusion the check
+		// is supposed to have earned.
+		const { ctx, ws, record, id } = await idor();
+		await record.execute({
+			kind: "finding", id, status: "refuted",
+			verification: { verdict: "refuted", at: "t", basis: ["made-up.go:1"], live: true },
+		}, ctx);
+		const f = (await ws.read("findings")).find((x) => x.id === id);
+		expect(f?.status).toBe("suspected");
+		expect(f?.verification?.basis).toBeUndefined();
+	});
+
+	it("says so when a finding the client has already read is being changed", async () => {
+		const { ctx, record, id } = await idor();
+		await record.execute({ kind: "finding", id, status: "reported" }, ctx);
+		const out = textOf(await record.execute({
+			kind: "finding", id, status: "refuted", live: true, basis: ["share.py:31"],
+		}, ctx));
+		expect(out).toMatch(/already REPORTED to the client/);
 	});
 });
