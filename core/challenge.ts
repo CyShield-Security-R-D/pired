@@ -121,6 +121,17 @@ export const CONTRACTS: readonly VerificationContract[] = [
 		entitlement: ENTITLEMENT_QUESTION,
 	},
 	{
+		class: "dataexposure",
+		claim: "a response carries fields the caller is not entitled to see",
+		control:
+			"name the field, then read the same object as a principal who should not see it and show the " +
+			"field present and populated. A field that is null or absent for everyone is not exposure, and " +
+			"a field the client's own interface renders to this user is not a leak. Check the serializer " +
+			"rather than the database row: an API that over-fetches internally and filters on the way out " +
+			"is doing the right thing.",
+		entitlement: ENTITLEMENT_QUESTION,
+	},
+	{
 		class: "sqli",
 		claim: "attacker input alters the query the database executes",
 		control:
@@ -131,6 +142,15 @@ export const CONTRACTS: readonly VerificationContract[] = [
 		class: "nosqli",
 		claim: "attacker input alters the query the datastore executes",
 		control: "a true/false operator pair must produce different result sets. A 500 on a malformed operator is a parse failure.",
+	},
+	{
+		class: "injection",
+		claim: "attacker input changes the meaning of a query, filter or command the server builds",
+		control:
+			"a true-payload and a false-payload must diverge, and the divergence must track the boolean — " +
+			"the same discipline sqli takes, because LDAP, XPath and expression filters fail the same way. " +
+			"A 500 on a malformed payload is a parse error and a payload echoed back is reflection. Name " +
+			"which engine you reached: 'injection' with no engine behind it is a guess about a syntax error.",
 	},
 	{
 		class: "xss",
@@ -154,6 +174,25 @@ export const CONTRACTS: readonly VerificationContract[] = [
 		control: "a timing or out-of-band probe must fire. Output that merely contains the payload string is reflection.",
 	},
 	{
+		class: "codeinj",
+		claim: "attacker input reaches an evaluator that will execute it",
+		control:
+			"trace the path from the entry point to the eval/exec/Function call and show that nothing " +
+			"between them constrains what arrives — then make it compute. An arithmetic probe must return " +
+			"the product, not the literal. eval() over a constant, or over a value the code itself built, " +
+			"is not this finding however alarming the call site looks.",
+	},
+	{
+		class: "reflection",
+		claim: "attacker input selects the class, method or attribute that gets invoked",
+		control:
+			"show the input reaching the dispatch with no allowlist between, and name one thing reachable " +
+			"through it that an allowlist would have refused. The finding is never that reflection is used; " +
+			"it is what else the name resolves to. Dispatch over a fixed table of names is a lookup table. " +
+			"Both jinja2 sandbox escapes in research/09 are this shape — `attr` reaching `format` was " +
+			"reachable precisely because the set of resolvable names was never bounded.",
+	},
+	{
 		class: "ssrf",
 		claim: "the server can be made to issue a request to an attacker-chosen destination",
 		control:
@@ -163,7 +202,12 @@ export const CONTRACTS: readonly VerificationContract[] = [
 	{
 		class: "traversal",
 		claim: "a path outside the intended root is read or written",
-		control: "the response must contain the contents of a file outside the root. A 500 or an empty 200 is not traversal.",
+		control:
+			"the response must contain the contents of a file outside the root. A 500 or an empty 200 is " +
+			"not traversal. Against source rather than a running target: show the concatenation and the " +
+			"absence of containment. A join under a root that is then resolved and checked with startsWith " +
+			"is containment; the same check applied BEFORE resolving `..` and symlinks is not, and an " +
+			"allowlist of basenames is. Say which of those the code does.",
 	},
 	{
 		class: "upload",
@@ -201,6 +245,51 @@ export const CONTRACTS: readonly VerificationContract[] = [
 		control:
 			"use it. A secret that does not authenticate is a stale string, and a test fixture is not a " +
 			"breach. Say which system it was checked against.",
+	},
+	{
+		class: "crypto",
+		claim: "a cryptographic choice fails to provide the property the code relies on it for",
+		control:
+			"name the property — confidentiality, integrity, unpredictability, one-wayness — and show the " +
+			"break in terms of that property. MD5 for a password hash is a break; MD5 for a cache key is " +
+			"not. A static IV, an ECB mode, a token from Math.random(): say what an attacker recovers, " +
+			"forges or predicts with it, and roughly what it costs them.",
+		ceiling: "medium",
+		ceilingWhy:
+			"naming a weak primitive is an observation. What it lets an attacker read, forge or predict is " +
+			"the finding, and showing that is what lifts this",
+	},
+	{
+		class: "sca",
+		claim: "a dependency with a known vulnerability is present AND reachable from this application",
+		control:
+			"take the version from the resolved lockfile, never from the manifest range and never from " +
+			"memory — a range is not a version — and name the advisory id. Then show the vulnerable " +
+			"function is actually called from this codebase, by what, with what input. This is the class " +
+			"most often written from recollection; read the file.",
+		ceiling: "medium",
+		ceilingWhy: "a CVE in a package the application never calls is inventory, not exploitability",
+	},
+	{
+		class: "iac",
+		claim: "a deployed configuration grants or exposes more than the design requires",
+		control:
+			"name the file, the resource, and what it lets someone do who should not — then establish that " +
+			"this file is what actually runs. A permissive compose file written for a laptop is not the " +
+			"production posture, and a module nothing instantiates configures nothing. Say how you know it " +
+			"is deployed.",
+	},
+	{
+		class: "logging",
+		claim: "a secret or personal datum reaches a log or an error response, or a security-relevant event is not recorded",
+		control:
+			"show the value at the sink — the log line, the response body — not the variable name at the " +
+			"call site. A field called `password` that is redacted before the write is the control working. " +
+			"Then say who reads that log: the client's own operators and a third-party aggregator are " +
+			"different findings.",
+		ceiling: "low",
+		ceilingWhy:
+			"a log the client already controls carries less than one shipped off the box. Say where it goes",
 	},
 	{
 		class: "ratelimit",
@@ -253,6 +342,84 @@ export const CONTRACTS: readonly VerificationContract[] = [
 		entitlement: "is this information actually non-public? Check it is not already in the client's docs, repo, or marketing site.",
 	},
 	{
+		class: "inventory",
+		claim: "an undocumented, deprecated or non-production version of the API is reachable and serves data",
+		control:
+			"reach it and get a real response — a v1 still answering after v2 shipped, a staging host " +
+			"returning production records. Then show it does something the current version refuses: an old " +
+			"endpoint that behaves identically is duplication, not exposure. A path listed in a spec is " +
+			"documentation, and a 404 is not a version.",
+		ceiling: "medium",
+		ceilingWhy: "an old version that behaves like the current one is an inventory observation until it is shown to bypass something",
+	},
+	{
+		class: "unsafe-consumption",
+		claim: "data from an upstream API is trusted where it should be validated",
+		control:
+			"show the upstream value reaching a sink or a decision with nothing between, then say how an " +
+			"attacker gets to influence it — a caller-supplied upstream URL, a takeover of the upstream " +
+			"name, a redirect the client follows. Without a route to the upstream this is a note about " +
+			"coupling.",
+		ceiling: "medium",
+		ceilingWhy: "trusting an upstream nobody can influence is a robustness concern; name the route to it and this lifts",
+	},
+	{
+		class: "outdated-service",
+		claim: "the running version is vulnerable and the vulnerable feature is enabled",
+		control:
+			"get the version from the service, not from a scanner's guess, and name the advisory. Then " +
+			"check the behaviour: distributions backport fixes, so a banner reading 1.2.3 on a patched " +
+			"package is a version string and not a vulnerability. A CVE list keyed off a banner is an " +
+			"inventory observation with a severity attached to it.",
+		ceiling: "medium",
+		ceilingWhy: "a banner is a version claim; without a check of the service's actual behaviour this does not reach high",
+	},
+	{
+		class: "smb-rpc",
+		claim: "SMB or RPC exposure permits an operation the deployment does not intend",
+		control:
+			"perform the operation: list the shares, read a file, enumerate the users. A null session that " +
+			"binds and returns nothing is a bind, not access. Then say where you reached it from — a file " +
+			"share answering the VLAN it exists to serve is the design, and the finding is reach from a " +
+			"segment or a principal that should not have had it.",
+	},
+	{
+		class: "snmp",
+		claim: "an SNMP community or configuration exposes data or accepts writes",
+		control:
+			"read something real with the string — the interface table, the ARP cache, the running config — " +
+			"and say what came back. `public` answering with nothing is not the finding. For write access, " +
+			"do not write: park an approval blocker and say what a write would reach.",
+		ceiling: "medium",
+		ceilingWhy:
+			"a read-only community returning a device's own interface list is exposure; RW, or a config " +
+			"carrying credentials, is what carries high",
+	},
+	{
+		class: "dns",
+		claim: "the DNS configuration hands an attacker something they can use",
+		control:
+			"complete it. A zone transfer must be shown with the records it returned; a dangling CNAME must " +
+			"be shown pointing at a name that is actually registrable, checked against the provider rather " +
+			"than inferred from an NXDOMAIN. A refused transfer and a subdomain pointing at a live service " +
+			"are both the system working.",
+		ceiling: "low",
+		ceilingWhy:
+			"a zone transfer is reconnaissance until you name what those hostnames reach. A proven takeover " +
+			"is a different result and lifts this",
+	},
+	{
+		class: "segmentation",
+		claim: "a host reaches a network or service the segmentation policy forbids",
+		control:
+			"show the connection succeeding from the source segment, and name the policy it violates. A " +
+			"flat network that was always meant to be flat is a design opinion, not a control failure.",
+		entitlement:
+			"which segmentation policy does this break? Take it from the target model's invariants or the " +
+			"engagement's rules of engagement, or ask the operator. Reachability with no stated policy " +
+			"behind it describes the network rather than finding anything wrong with it.",
+	},
+	{
 		class: "logic",
 		claim: "the application permits a sequence its rules forbid",
 		control:
@@ -265,9 +432,33 @@ export const CONTRACTS: readonly VerificationContract[] = [
 
 const BY_CLASS = new Map(CONTRACTS.map((c) => [c.class, c]));
 
+/**
+ * Checklist ids that name a contract written under a different id.
+ *
+ * The four shipped checklists were written per target type and never agreed a
+ * vocabulary: `web.json` calls it `traversal`, `code-review.json` calls it
+ * `pathtrav`, and they are the same claim about the same containment failure.
+ * Before this the code-review id resolved to nothing and every path-traversal
+ * finding in a code review was challenged against the generic bar.
+ *
+ * `record` already knows the pair is confusable — it grew a spelling suggester
+ * after a live run spent a third of a session working out why `traversal`
+ * settled no cell against a checklist spelling it `pathtrav` (`core/tools.ts`).
+ * So this is a fact about the shipped data, not a convenience, and the honest
+ * place for it is next to the contracts it redirects into.
+ *
+ * An alias may not shadow a real contract id and must point at one that exists;
+ * `challenge.test.ts` asserts both, and asserts that every class any shipped
+ * checklist names resolves through here to exactly one contract.
+ */
+export const CLASS_ALIASES: Readonly<Record<string, string>> = {
+	pathtrav: "traversal",
+};
+
 /** The contract for a class, when one is written. Unknown classes get the generic bar. */
 export function contractFor(cls: string | undefined): VerificationContract | undefined {
-	return cls === undefined ? undefined : BY_CLASS.get(cls);
+	if (cls === undefined) return undefined;
+	return BY_CLASS.get(cls) ?? BY_CLASS.get(CLASS_ALIASES[cls] ?? "");
 }
 
 /**
@@ -288,6 +479,7 @@ export type GapKind =
 	| "provenance"
 	| "unre-issued-scanner-hit"
 	| "no-evidence"
+	| "unusable-evidence"
 	| "no-response"
 	| "no-control"
 	| "entitlement"
@@ -324,6 +516,43 @@ function hasResponse(text: string): boolean {
 /** An HTTP request is in this text somewhere. */
 function hasRequest(text: string): boolean {
 	return /^\s*(?:>\s*)?(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+\S/m.test(text) || /\bcurl\b/.test(text);
+}
+
+/**
+ * A `path.ext:line` citation or a fenced excerpt — the static analogue of a
+ * response on the wire.
+ *
+ * The bar is deliberately a citation and not merely code-shaped text. An excerpt
+ * nobody can find again does not let a challenger re-read the guard, which is
+ * the whole of what a static control case consists of.
+ */
+function hasCitation(text: string): boolean {
+	return /[\w./-]+\.[A-Za-z]{1,6}:\d+/.test(text) || /^\s*```/m.test(text);
+}
+
+/** Where this finding's proof lives: on the wire, in the source, or nowhere yet. */
+export type EvidenceShape = "wire" | "static" | "neither";
+
+/**
+ * Classify the proof rather than assume it.
+ *
+ * The audit was written on a live engagement, where evidence is a
+ * request/response pair, and it asked every finding for one. `review` — the
+ * read-only code-review profile, the one that needs no configuration and so the
+ * one a first-time user runs — has no wire at all. A finding citing the very
+ * snippet that contains the bug was told its evidence "contains no HTTP
+ * response. A request nobody kept the answer to proves nothing", blocking, on a
+ * demand the engagement cannot satisfy and the reviewer cannot act on. Every
+ * code-review-only class added since (`sca`, `iac`, `crypto`, `logging`,
+ * `reflection`, `codeinj`) would have inherited it.
+ *
+ * Wire is checked first, because a transcript that also quotes a source line is
+ * still a transcript and still owes a response.
+ */
+export function evidenceShape(text: string): EvidenceShape {
+	if (hasResponse(text) || hasRequest(text)) return "wire";
+	if (hasCitation(text)) return "static";
+	return "neither";
 }
 
 /**
@@ -403,20 +632,37 @@ export function auditFinding(input: AuditInput): Gap[] {
 		});
 	}
 
+	// The finding's own location counts towards a static citation: a review that
+	// records `target=src/auth/session.py:88` and pastes the function beside it
+	// has cited the line, and asking it to repeat the path inside the file is
+	// paperwork.
+	const located = [f.target, ...(f.locations ?? [])].filter((x): x is string => typeof x === "string").join("\n");
+	const shape = evidenceShape(`${evidenceText}\n${located}`);
+
 	if (cited.length === 0) {
 		gaps.push({
 			kind: "no-evidence",
-			detail: "no evidence cited. Save the request/response pair and cite the workspace path.",
+			detail: "no evidence cited. Save the request/response pair, or the file:line and the code at it, and cite the workspace path.",
 			blocking: true,
 		});
 	} else if (Object.keys(input.evidence ?? {}).length > 0) {
-		if (!hasResponse(evidenceText)) {
+		if (shape === "neither") {
+			gaps.push({
+				kind: "unusable-evidence",
+				detail:
+					`cited evidence (${cited.join(", ")}) holds neither an HTTP response nor a file:line ` +
+					"citation. A challenger has to be able to go back to the thing that proves this — the " +
+					"transcript on a live target, the line in the source on a review — and there is nothing " +
+					"here to go back to.",
+				blocking: true,
+			});
+		} else if (shape === "wire" && !hasResponse(evidenceText)) {
 			gaps.push({
 				kind: "no-response",
 				detail: `cited evidence (${cited.join(", ")}) contains no HTTP response. A request nobody kept the answer to proves nothing.`,
 				blocking: true,
 			});
-		} else if (!hasRequest(evidenceText)) {
+		} else if (shape === "wire" && !hasRequest(evidenceText)) {
 			gaps.push({
 				kind: "no-response",
 				detail: `cited evidence (${cited.join(", ")}) contains a response but no request — the claim cannot be tied to what was sent.`,
@@ -426,7 +672,13 @@ export function auditFinding(input: AuditInput): Gap[] {
 	}
 
 	const control = contract?.control ?? GENERIC_CONTROL;
-	const needsTwo = contract?.entitlement !== undefined;
+	// Two authentication contexts is what an access-control control case looks
+	// like ON THE WIRE, and only there. A code review proves the same claim by
+	// showing the guard that the sibling operation has and this one does not, so
+	// demanding two Cookie headers from a source excerpt asks for something the
+	// evidence could never contain — it falls through to the recorded-control
+	// check below, which is the right question for that medium.
+	const needsTwo = contract?.entitlement !== undefined && shape === "wire";
 	if (cited.length > 0 && evidenceText.length > 0 && needsTwo && !showsTwoPrincipals(evidenceText)) {
 		gaps.push({
 			kind: "no-control",

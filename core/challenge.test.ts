@@ -1,7 +1,8 @@
+import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
-	auditFinding, challengeBrief, type ChallengeReport, contractFor, judge,
-	modelAnswersEntitlement, verdictPatch,
+	auditFinding, challengeBrief, type ChallengeReport, CLASS_ALIASES, CONTRACTS, contractFor,
+	evidenceShape, judge, modelAnswersEntitlement, verdictPatch,
 } from "./challenge.ts";
 import type { FindingRecord } from "./ontology.ts";
 
@@ -197,6 +198,57 @@ describe("the audit that costs no traffic", () => {
 		expect(modelAnswersEntitlement(undefined)).toBe(false);
 	});
 
+	it("does not demand an HTTP response from a code review, which has no wire", () => {
+		// The audit was written on a live engagement and asked every finding for a
+		// request/response pair. `review` — the read-only profile that needs no
+		// configuration, so the one a first-time user runs — has no wire at all: a
+		// finding citing the snippet that contains the bug was told, blocking, that
+		// its evidence "contains no HTTP response". Every code-review-only class
+		// added since (sca, iac, crypto, logging, reflection, codeinj) would have
+		// inherited that.
+		const gaps = auditFinding({
+			finding: finding({ class: "codeinj", target: "src/api/run.js:42", evidence: ["evidence/codeinj.md"], source: "observed" }),
+			evidence: {
+				"evidence/codeinj.md":
+					"src/api/run.js:42\n\n    const out = eval(req.body.expr);\n\nNo validation between the router and this call.\n",
+			},
+		});
+		expect(gaps.some((g) => g.kind === "no-response")).toBe(false);
+		expect(gaps.some((g) => g.kind === "unusable-evidence")).toBe(false);
+	});
+
+	it("still blocks evidence that is neither a transcript nor a citation", () => {
+		// The gap the wire check was actually catching, kept: a challenger has to be
+		// able to go back to the thing that proves this, and prose about a file is
+		// not somewhere to go back to.
+		const gaps = auditFinding({
+			finding: finding({ class: "sca", target: "e1", evidence: ["evidence/sca.md"] }),
+			evidence: { "evidence/sca.md": "The version of the library in use here is old and has known issues.\n" },
+		});
+		expect(gaps.some((g) => g.kind === "unusable-evidence" && g.blocking)).toBe(true);
+	});
+
+	it("asks a source excerpt for the guard rather than for two Cookie headers", () => {
+		// Two authentication contexts is what an access-control control case looks
+		// like ON THE WIRE and nowhere else. Demanding it of a code excerpt asks for
+		// something the evidence could never contain; the recorded-control check is
+		// the right question for that medium, and it is what fires here.
+		const gaps = auditFinding({
+			finding: finding({ class: "authz", target: "app/api/orders.py:88", evidence: ["evidence/authz.md"] }),
+			evidence: { "evidence/authz.md": "app/api/orders.py:88 — the update handler, unlike the sibling delete handler at :104, calls no policy check.\n" },
+			targetModel: "## actors\n\nOrders belong to the account that created them; staff see all of them.\n",
+		});
+		const control = gaps.find((g) => g.kind === "no-control");
+		expect(control?.detail).not.toMatch(/one authentication context/);
+		expect(control?.detail).toMatch(/control case not recorded/);
+	});
+
+	it("reads a transcript as a transcript even when it also quotes a source line", () => {
+		expect(evidenceShape("GET /a HTTP/1.1\n\nHTTP/1.1 200 OK\n\nsee app/api.py:12")).toBe("wire");
+		expect(evidenceShape("```\nrun(cmd)\n```")).toBe("static");
+		expect(evidenceShape("it looked wrong to me")).toBe("neither");
+	});
+
 	it("flags severity above what a class carries on its base case, without blocking", () => {
 		// Missing headers reported as high is the most common severity inflation in
 		// a report, and it is a correction rather than a reason to hold the finding.
@@ -221,11 +273,61 @@ describe("the brief the challenger is given", () => {
 		expect(challengeBrief(finding({ class: "sqli" }))).not.toMatch(/who is this resource FOR/);
 	});
 
-	it("has a contract for every class the shipped checklists name", () => {
-		// A class with no contract falls back to the generic bar, which is fine; a
-		// class the checklist ships and nobody thought about is worth knowing.
+	it("names the entitlement question for a class that turns on intent and not for one that does not", () => {
 		expect(contractFor("idor")?.entitlement).toBeDefined();
 		expect(contractFor("sqli")?.entitlement).toBeUndefined();
 		expect(contractFor("nonesuch")).toBeUndefined();
+	});
+});
+
+describe("the registry every checklist class has to resolve through", () => {
+	// This block reads the shipped checklists off disk, which no other core test
+	// does. The point is precisely that the DATA and the table cannot drift
+	// apart: a list of class ids written into the test would go stale with the
+	// same edit that broke the thing, and this test would keep passing. It is
+	// also how the gap was found — the test that used to sit here was named "has
+	// a contract for every class the shipped checklists name" and asserted three
+	// ids by hand, while seventeen of the forty-two shipped classes resolved to
+	// nothing and were challenged against the generic bar.
+	const dir = new URL("../checklists/", import.meta.url);
+	const files = readdirSync(dir).filter((f) => f.endsWith(".json"));
+	const classesOf = (file: string): { id: string; title?: string }[] =>
+		JSON.parse(readFileSync(new URL(file, dir), "utf8")).classes;
+
+	it("ships checklists to check", () => {
+		// A glob that matched nothing would make every assertion below vacuous.
+		expect(files.length).toBeGreaterThan(0);
+		expect(files.flatMap(classesOf).length).toBeGreaterThan(0);
+	});
+
+	for (const file of files) {
+		it(`resolves every class in ${file} to exactly one contract`, () => {
+			const unresolved = classesOf(file)
+				.filter((c) => contractFor(c.id) === undefined)
+				.map((c) => `${c.id} (${c.title})`);
+			expect(unresolved).toEqual([]);
+		});
+	}
+
+	it("keeps aliases pointing at contracts that exist and shadowing none", () => {
+		for (const [alias, canonical] of Object.entries(CLASS_ALIASES)) {
+			// An alias that is also a real class id would silently never fire, and
+			// the class it was meant to redirect would keep the wrong contract.
+			expect(CONTRACTS.map((c) => c.class)).not.toContain(alias);
+			expect(CONTRACTS.map((c) => c.class)).toContain(canonical);
+		}
+	});
+
+	it("routes the code-review spelling of path traversal to the traversal contract", () => {
+		// The pair `record` grew a spelling suggester for: web.json says
+		// `traversal`, code-review.json says `pathtrav`, and a live run spent a
+		// third of a session working out why the cell would not settle.
+		expect(contractFor("pathtrav")).toBe(contractFor("traversal"));
+		expect(contractFor("pathtrav")?.control).toMatch(/outside the root/);
+	});
+
+	it("declares no contract twice", () => {
+		const ids = CONTRACTS.map((c) => c.class);
+		expect(ids.length).toBe(new Set(ids).size);
 	});
 });

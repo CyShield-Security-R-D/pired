@@ -355,7 +355,7 @@ on a client's production system, and on a timed engagement that is the operator'
 
 ---
 
-## ADR-007 — A blocker's question travels in the dialog title, fitted to the terminal
+## ADR-008 — A blocker's question travels in the dialog title, fitted to the terminal
 
 **Status:** accepted · 2026-09-07
 
@@ -413,3 +413,82 @@ place — the same reason `describeUnready` rides on a line that is already bein
 **A custom component via `ui.custom`.** It would give a scrollable context pane, and it would mean
 owning selection, focus, and key handling for a dialog pi already draws correctly. The rail earns
 that cost because pi has no side panel; a picker is not the same case.
+
+---
+
+## ADR-009 — One verification contract per checklist class, and the medium decides what proof looks like
+
+**Status:** accepted · 2026-09-08
+
+### Context
+
+ADR-007 gives every weakness class a contract naming the control case that has to fail. The
+contracts were written from a live web engagement and the checklists were written per target type,
+and the two were never reconciled. Counted across the four shipped files: **16 of the 42
+distinct class ids
+resolved to no contract** and fell through to `GENERIC_CONTROL` — the whole of `code-review.json`'s
+static half (`sca`, `iac`, `crypto`, `logging`, `reflection`, `codeinj`), five of the thirteen
+network classes, the API classes `dataexposure`, `inventory` and `unsafe-consumption`, the generic
+`injection` that `api.json` and `web.json` both ship, and `pathtrav`.
+
+Two of those are the same claim under two names. `web.json` says `traversal`, `code-review.json` says
+`pathtrav`; `record` already grew a spelling suggester for that exact pair after a live run spent a
+third of a session working out why `traversal` settled no cell (`core/tools.ts`).
+
+The test that should have caught all of it was named *"has a contract for every class the shipped
+checklists name"* and asserted three ids by hand. A test whose name is a claim its body does not
+check is worse than no test: it is the reason nobody looked.
+
+Separately, and only visible once the static classes were written: `auditFinding` demands an HTTP
+response from every finding that cites readable evidence. On `review` — the read-only profile that
+needs no configuration, and therefore the one a first-time user runs — there is no wire. A finding
+citing the snippet that contains the bug is told, blocking, that its evidence *"contains no HTTP
+response. A request nobody kept the answer to proves nothing"*, and an access-control finding is told
+its source excerpt "shows one authentication context". Both are demands the engagement cannot
+satisfy, on the profile most likely to be somebody's first.
+
+### Decision
+
+1. **Write the fifteen missing contracts**, and route the sixteenth — `pathtrav` — to `traversal`
+   through a `CLASS_ALIASES` map rather than duplicating the text. An alias may not shadow a real contract id
+   and must point at one that exists.
+2. **Make the test read the shipped checklists off disk** and assert that every class in every file
+   resolves to exactly one contract. This is the only core test that touches the filesystem, and
+   deliberately: a list of ids written into the test goes stale with the same edit that breaks the
+   thing it was meant to catch.
+3. **Classify the evidence instead of assuming it.** `evidenceShape` returns `wire` when a
+   request or response is present, `static` when a `file:line` citation or a fenced excerpt is —
+   counting the finding's own `target`/`locations` — and `neither` otherwise. The response check runs
+   only on `wire`; the two-principals check, which is what an access-control control case looks like
+   on the wire and nowhere else, runs only on `wire`; and `neither` blocks under its own gap kind,
+   `unusable-evidence`.
+
+### Consequences
+
+- No finding stops being challenged. `static` evidence falls through to the recorded-control check,
+  which is the right question for that medium — a code review proves an authorization claim by
+  showing the guard the sibling operation has and this one does not.
+- The blocking gap that used to fire on every code-review finding now fires only when the evidence
+  genuinely leads nowhere, and says so in words a reviewer can act on.
+- The new contracts carry ceilings on the classes whose base case is an observation — `sca` (a CVE in
+  a package nothing calls), `outdated-service` (a banner is a version claim, and distributions
+  backport), `inventory`, `crypto`, `logging`, `dns`, `snmp`, `unsafe-consumption`. Ceiling gaps are
+  advisory, never blocking, so a finding that earns more than the ceiling is corrected rather than
+  held.
+- `segmentation` gets an `entitlement` question for the same reason `logic` has one: reachability
+  with no stated policy behind it describes the network rather than finding anything wrong with it,
+  and no probe answers which policy was meant to hold.
+
+### Rejected
+
+**A per-class `medium` field on the contract.** `sqli` and `authz` appear in both a live checklist
+and `code-review.json`, so the medium is a property of the engagement and the evidence, not of the
+class. Reading it off the evidence handles the mixed case for free and cannot be set wrong.
+
+**Rewriting the existing contracts' control text.** `eval/field` scores the shipped contracts at
+sensitivity 1.00 / specificity 1.00 / resolution 0.70 (ADR-007). Only `traversal` was touched, and
+only to add the static reading it now owes `pathtrav`.
+
+**Accepting any code-shaped text as a static citation.** An excerpt nobody can find again does not
+let a challenger re-read the guard, which is the whole of what a static control case consists of. The
+bar is a citation.
