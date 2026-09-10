@@ -92,11 +92,11 @@ curl -fsSL https://raw.githubusercontent.com/mamgad/pired/main/install.sh | sh
 powershell -c "irm https://raw.githubusercontent.com/mamgad/pired/main/install.ps1 | iex"
 ```
 
-On macOS and Linux the script surveys the box, prints exactly what it will install and where, asks once, and then does all of it — Node.js when it is missing or older than 22.19, pi, pired, the extension registration that makes a bare `pi` load the security layer, and the PATH line that makes the command typeable. `--dry-run` prints the plan and stops; `-y` skips the question.
+Both scripts survey the box, print exactly what they will install and where, ask once, and then do all of it — Node.js when it is missing or older than 22.19, pi, pired, the extension registration that makes a bare `pi` load the security layer, and the PATH entry that makes the command typeable. On macOS and Linux `--dry-run` prints the plan and stops and `-y` skips the question; on Windows those are `PIRED_DRY_RUN=1` and `PIRED_YES=1`, because the documented `irm | iex` install has no way to pass arguments.
 
 **It never asks for root.** A vanilla Ubuntu has neither Node nor git, and neither absence is worth a `sudo`: Node comes from nodejs.org as a checksum-verified user-owned tarball under `~/.local/share/pired`, and a `github:` source is fetched over HTTPS when there is no git to clone with. Everything it writes lives in `~/.local/share/pired`, `~/.pi` and `~/.pired` — `rm -rf` those three and the box is as it was. No daemon, no service, no shell hooks beyond the one PATH line it shows you first.
 
-Windows gets its own script because npm lays a global install out differently there and PATH is a registry value, not a line in a dotfile — it offers to add the npm prefix to your user PATH, and points you at Git for Windows if the box has no `bash`, since that is what pi runs the tools through. It expects Node.js >= 22.19 to be there already rather than installing it for you.
+Windows gets its own script because npm lays a global install out differently there and PATH is a registry value, not a line in a dotfile. **It never needs administrator either.** The MSI from nodejs.org does, so it is not used: Node arrives as the per-user `.zip`, checksum-verified against the same `SHASUMS256.txt`, unpacked under `%LOCALAPPDATA%\pired` and pointed at by a directory junction — none of which needs elevation, and neither does the `HKCU` PATH entry. The one thing it will not install for you is `bash`: pi runs the tools through it, but Git for Windows is a ~250MB install with shell integration and file associations, so the script reports it and points you at `winget` or pi's own managed copy.
 
 ```bash
 pired          # review the current directory

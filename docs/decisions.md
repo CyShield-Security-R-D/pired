@@ -492,3 +492,87 @@ only to add the static reading it now owes `pathtrav`.
 **Accepting any code-shaped text as a static citation.** An excerpt nobody can find again does not
 let a challenger re-read the guard, which is the whole of what a static control case consists of. The
 bar is a citation.
+
+---
+
+## ADR-010 — Both installers bring their own Node.js, and neither takes elevation to do it
+
+**Status:** accepted
+
+### Context
+
+`install.sh` surveyed the box, printed a plan, asked once, and then installed Node.js when it was
+missing or below 22.19 — a user-owned tarball under `~/.local/share/pired`, verified against
+nodejs.org's `SHASUMS256.txt`. `install.ps1` did none of that. It hard-stopped:
+
+    node not found. Install Node.js >= 22.19 and re-run.
+
+and `README.md` documented the asymmetry as intended. The two scripts had also drifted apart on
+consent. The shell script asks one question covering everything it is about to do, and says why:
+*"a second prompt later for the PATH line would be asking twice for one decision."* The PowerShell
+script asked nothing up front, started installing immediately, and asked a single mid-flight
+question about PATH after the install had already happened.
+
+The gap looked like a platform constraint but was not one. The canonical Windows Node install is the
+MSI, which does need administrator — but nodejs.org ships a per-user `.zip` for every architecture in
+the same checksum manifest the shell script already parses, and the PowerShell script already wrote
+the user's PATH through `HKCU\Environment` without elevation.
+
+### Decision
+
+Both scripts survey, plan, ask once, and then install everything in the plan — Node.js included.
+
+On Windows that means: the `node-vX.Y.Z-win-<arch>.zip` from the same `SHASUMS256.txt`, `Get-FileHash`
+to verify it, `System.IO.Compression.ZipFile` to unpack it, and a **directory junction** at
+`node\current`. A junction, not a symlink: creating a symlink needs administrator or Developer Mode,
+a junction needs neither, and both give the property that an upgrade is one repoint and the PATH
+entry never changes.
+
+The npm prefix is the *parent* of the Node tree, not the tree itself — `%LOCALAPPDATA%\pired`, so the
+next Node upgrade repoints the junction without taking pi and pired with it. This is the same reason
+the shell script gives, and the same trap: under a private Node, `npm prefix --global` answers with
+the versioned directory behind the junction.
+
+The single approval now covers the PATH entries, so the trailing PATH prompt is gone.
+
+### Consequences
+
+- Windows needs two PATH entries where Unix needs one. The Windows zip puts `node.exe` and `npm.cmd`
+  at the root of the extracted tree, so there is no `bin/` to collapse the runtime and the shims
+  into, and a plain user cannot create the symlinks that would fake one. That is the honest cost.
+- `PIRED_YES` and `PIRED_DRY_RUN` are environment variables rather than a `param()` block, because
+  the documented install pipes the file into `iex`, which cannot pass arguments.
+- A `pi` already on PATH is ignored when the run brings its own Node — it belongs to the runtime
+  being stepped in front of, and counting it would leave the new Node without a pi at all. The shell
+  script already guarded this with `[ "$DO_NODE" = 0 ]`; the port initially missed it.
+- pi's own installer parks a standalone Node at `%LOCALAPPDATA%\pi-node\current` — read out of
+  `pi.dev/install.ps1`, and the Windows counterpart of the `~/.local/share/pi-node` the shell script
+  already adopts. Both are adopted when new enough, ours first, so the two installers do not each
+  own a Node. Adoption also prepends the copy to `$env:PATH` in-process: pi puts its Node on the
+  *user* PATH, which only reaches shells started afterwards, and this may be one that started
+  before.
+- Adopting pi's Node does **not** move the prefix to `%LOCALAPPDATA%\pired`. That is the prefix only
+  for a tree this script owns and can upgrade; pi's copy keeps npm's own answer, which is what the
+  shell script does in the same case.
+- `Get-ComparablePath` normalises separator style as well as case and trailing slash. npm reports
+  forward slashes for directories `Get-Command` reports with backslashes, and every PATH and prefix
+  comparison in the script runs through it.
+- TLS 1.2 is forced before the download. Windows PowerShell 5.1 inherits the .NET Framework's
+  `SecurityProtocol`, which on an un-patched box is still TLS 1.0; nodejs.org refuses it, and the
+  failure surfaces as "the underlying connection was closed" rather than as a protocol error.
+
+### Rejected
+
+**Installing Git for Windows when there is no `bash`.** pi runs every tool through bash, so a Windows
+box without one cannot execute a single command — but Git for Windows is a ~250MB install that adds
+shell integration and file associations, which is well outside what "no daemon, no service, no shell
+hooks" can promise on someone's behalf. It stays a plan row and a pointer at `winget` or pi's own
+managed copy.
+
+**Using the MSI, elevating just for Node.** It is the one step that would have made the script ask
+for administrator, and an installer for a security tool that takes rights it does not need teaches
+the wrong habit on the very first command.
+
+**Merging the two scripts.** npm's global layout and PATH storage differ enough that the merged
+script would be mostly branches. They stay separate and are kept honest by this file.
+
