@@ -23,10 +23,34 @@ pired-ledger scope                           # what the engagement authorizes
 ```
 Repeat a key to build a list (`evidence=a.js:1 evidence=b.js:2`). **Put these lines in the task prompt** — a child that is not told the command exists will report its results as prose, and prose is not the ledger.
 
+## 0c. Verifying a test case — part of the coverage loop, not of a direct request
+
+**This is the routine one.** A hypothesis recorded `refuted` turns its coverage cell `clear`, and that cell counts toward the percentage the client is handed. It is the only verdict in the harness nothing revisits — findings get challenged, clearances were taken at their word. During a normal engagement, hand them out:
+
+```bash
+pired-ledger recall cleared                      # cells a refutation settled, oldest first
+pired-ledger recall challenge id=<hypothesis id> # the brief for one
+```
+
+`recall cleared` is the list to sample from — `gaps` and `next` will never show these, because a cleared cell is settled and the router moves on. It shows oldest first on purpose: a cell cleared in the first hour was cleared by an agent that had not yet read the code it was clearing. Cells already re-checked drop off, so the same one is not handed out twice.
+
+That brief inverts the usual framing: the child's job is to *disagree with the clearance*, by finding the input the refutation did not consider or the call path it did not follow. It arrives carrying the class contract, the element, the target model, and the findings the engagement has recorded nearby — the same class confirmed on a neighbouring route is exactly the sort of thing that overturns a clearance, and none of it is the reasoning that produced the verdict.
+
+Sample rather than sweep. One cell per class, or the ones cleared earliest, buys most of the value; challenging every refutation costs more than the engagement.
+
+Record the verdict against the hypothesis, with what it was grounded in:
+```bash
+pired-ledger record kind=hypothesis id=<id> outcome=refuted basis=core/db.js:41 live=true \
+    statement="<the mechanism you checked>"
+```
+That writes a `verification` on the row — `stands` if the clearance held, `amended` if it was overturned — which is what lets the report say a cell was independently checked, and what keeps it off the next `recall cleared`. Like a finding's, it is earned by recording the verdict and cannot be asserted.
+
+**When the operator asked for specific test cases, do them yourself.** A direct request is addressed to you; answering it by spawning a child and relaying the result is slower, loses your context, and is not what was asked. Delegation belongs to the coverage loop you are driving on your own initiative — not to work someone just handed you.
+
 ## 1. When to delegate
 Delegate work that is **noisy** (floods context) or **needs a fresh, skeptical pass**:
 - **Isolated recon / enumeration** — a full subdomain sweep, a directory brute, per-host service enum. The child does the grinding; you get back a distilled inventory + proposed hypotheses, not 4,000 lines.
-- **Adversarial verification** — hand a borderline hypothesis to a child whose job is to *break* it: try to refute, demand reproducible evidence, return `confirmed | refuted | inconclusive` with proof. This is the false-positive gate before a finding.
+- **Adversarial verification** — two directions, and both are worth a child. Hand a borderline hypothesis to one whose job is to *break* it (the false-positive gate before a finding), and hand a *cleared* cell to one whose job is to break the clearance (§0c — the false-negative gate, which is the costlier miss).
 - **Bounded research** — "what CVEs affect nginx 1.18 + this module?" — answered in a child, summary returned.
 
 Do **not** delegate: the core planning/coverage loop, final finding decisions, or anything needing your accumulated context. Keep judgment in the parent.
@@ -52,7 +76,7 @@ spawn role=verify task="Try to REFUTE hypothesis y7: 'GET /api/user?id= is IDOR-
 ## 4. Invariants & limits (don't fight them)
 Harness-owned in `enforce` mode (PLAN.md §11):
 - **Depth 1** — sub-agents cannot spawn sub-agents. Don't design multi-level plans.
-- **Caps** — a few per turn, a bounded number per engagement, plus a per-child token ceiling. Spend delegation where isolation/verification pays off, not on trivial tasks.
+- **Caps are real now.** The scope gate counts spawns and refuses past `maxAgents` (default **8** per session, set it in the scope file; `0` disables delegation). Spend the budget where isolation or verification pays off, not on trivial tasks — when it is gone the gate says so and the rest of the work happens in this session.
 - **Scope is NOT inherited — restate it, every time.** The gate is `createScopeGate` and it lives in the parent's tool pipeline; a child that never loaded pired runs *outside* it. There is nothing stopping a child touching an out-of-scope host except the boundary you write into its task prompt. Name the authorized targets explicitly in every handoff, and have the child run `pired-ledger scope` and stay inside what it prints. Treat any delegated network action as unguarded work you authorized personally.
 - **Sequential, not parallel** — locally one GPU serves serially, so delegation buys cleanliness and rigor, not speed. Don't fan out expecting concurrency.
 

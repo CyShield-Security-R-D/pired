@@ -37,7 +37,7 @@
 
 import {
 	type BlockerType, type ChallengeVerdict, DISPOSED_STATUSES, type FindingRecord, type FindingStatus,
-	type Severity, type Verification,
+	type HypothesisRecord, type Severity, type Verification,
 } from "./ontology.ts";
 
 // ---------------------------------------------------------------------------
@@ -1087,4 +1087,115 @@ export function unchallengedBrief(findings: FindingRecord[]): string {
 		+ "`recall challenge id=<id>` returns the brief for one — it is built from the record and the "
 		+ "class contract, never from the conversation, so it can be handed to a fresh agent that has "
 		+ "not seen the reasoning that produced the claim.";
+}
+
+/** What the ledger already knows around a cell, for a verifier that arrives cold. */
+export interface HypothesisContext {
+	/** Human label for the element under test — the route, the file, the host. */
+	element?: string;
+	/** The engagement's working theory of the target (`model.md`). */
+	targetModel?: string;
+	/** Findings already recorded on this element, or on this class elsewhere. */
+	neighbours?: FindingRecord[];
+	/** Other hypotheses that touched the same element. */
+	siblings?: HypothesisRecord[];
+}
+
+/** Neighbouring rows named before the list becomes a count. */
+const BRIEF_NEIGHBOURS = 6;
+
+/** Longest target-model excerpt carried into a brief before it costs more than it informs. */
+const BRIEF_MODEL_BUDGET = 1200;
+
+/**
+ * The brief for challenging one test case.
+ *
+ * `challengeBrief` challenges a *claim that something is broken*. This
+ * challenges the opposite, and the opposite is where the harness was blind: a
+ * hypothesis recorded `refuted` turns its coverage cell `clear`, that cell
+ * counts toward the percentage handed to the client, and nothing ever looks
+ * again. The costliest outcome in this whole system is a missed vulnerability,
+ * and a wrong refutation is the one path to it that carried no second look at
+ * all — findings get challenged, refutations were taken at their word.
+ *
+ * So the framing inverts. Against a finding the verifier tries to break the
+ * claim; here it tries to break the *clearance*, which means finding the input
+ * the refutation did not consider or the path it did not follow.
+ *
+ * It carries more of the ledger than the finding brief does, deliberately. A
+ * finding arrives with its own evidence and reproduction; a cleared cell
+ * arrives with almost nothing, so what makes the second look worth paying for
+ * is everything the engagement has learned *since* — the same class confirmed
+ * on a neighbouring element, the invariant the target model has since named.
+ * None of that is the reasoning that produced the refutation, which the
+ * verifier still must not see.
+ */
+export function hypothesisBrief(h: HypothesisRecord, ctx: HypothesisContext = {}): string {
+	const contract = contractFor(h.class);
+	const cleared = h.outcome === "refuted";
+	const out: string[] = [];
+
+	out.push(`Challenge hypothesis ${h.id}: "${h.statement}" [class ${h.class}, outcome ${h.outcome}]`);
+	out.push("");
+	out.push(cleared
+		? "The agent that ran this test case concluded it is CLEAR, and that verdict is why the "
+			+ "coverage matrix counts this cell as settled. Your job is to disagree with it. You have not "
+			+ "seen the reasoning that produced it and you do not need it."
+		: "Nobody has settled this test case. Your job is to settle it — in either direction, and a "
+			+ "refutation counts. You have not seen the reasoning behind it and you do not need it.");
+	out.push("");
+	out.push(`Test case: ${h.class}, asked of ${ctx.element ?? h.target ?? "(no element recorded)"}`);
+	if (h.method) out.push(`Method stated: ${h.method}`);
+	if (h.evidence) out.push(`Evidence on file: ${h.evidence}`);
+	out.push("");
+	out.push(`For this to be a bug: ${contract?.claim ?? "the described effect actually occurs"}`);
+	out.push(`The control case: ${contract?.control ?? GENERIC_CONTROL}`);
+	if (contract?.entitlement) out.push(`The entitlement question: ${contract.entitlement}`);
+
+	// Capped, for the same reason the target model is. This brief is read by a
+	// child, which has the least context room in the system — an engagement with
+	// forty findings of one class would otherwise send all forty.
+	const known: string[] = [];
+	for (const f of (ctx.neighbours ?? []).slice(0, BRIEF_NEIGHBOURS)) {
+		known.push(`- ${f.id} [${f.severity}/${f.status}] ${f.title}${f.class ? ` (class ${f.class})` : ""}`);
+	}
+	for (const sib of (ctx.siblings ?? []).filter((sib) => sib.id !== h.id).slice(0, BRIEF_NEIGHBOURS)) {
+		known.push(`- ${sib.id} [${sib.class}/${sib.outcome}] ${sib.statement}`);
+	}
+	const dropped = Math.max(0, (ctx.neighbours?.length ?? 0) - BRIEF_NEIGHBOURS)
+		+ Math.max(0, (ctx.siblings ?? []).filter((sib) => sib.id !== h.id).length - BRIEF_NEIGHBOURS);
+	if (dropped > 0) known.push(`- (+${dropped} more — \`recall findings\` and \`recall hypotheses\` for the rest)`);
+	if (known.length > 0) {
+		out.push("");
+		out.push("What the ledger already knows here — none of it is the refutation's reasoning:");
+		out.push(...known);
+	}
+
+	const model = ctx.targetModel?.trim();
+	if (model) {
+		out.push("");
+		out.push("The engagement's working theory of this target:");
+		out.push(model.length > BRIEF_MODEL_BUDGET
+			? `${model.slice(0, BRIEF_MODEL_BUDGET)}\n… truncated — \`recall model\` for the rest.`
+			: model);
+	}
+
+	out.push("");
+	out.push("Rules:");
+	if (cleared) {
+		out.push("- A refutation is only as good as its basis. Look for the input it did not consider, the "
+			+ "call path it did not follow, or the sanitiser that does not do what its name says.");
+		out.push("- Agreeing is a real result, but say what you checked: \"parameterized at core/db.js:41 and "
+			+ "no other path reaches it\" is a refutation; \"I could not find anything\" is not.");
+	} else {
+		out.push("- Run the control case. Output that merely contains the payload is not the effect.");
+		out.push("- Ruling the class out is a result. Record it, with the specific reason.");
+	}
+	out.push("- Prove the target is reachable BEFORE concluding anything failed. A dead session refutes nothing.");
+	out.push("- Re-run the read, never the write. Nothing destructive; park an approval blocker instead.");
+	out.push("");
+	out.push("Return: verdict (vulnerable|clear|unresolved), what you ran and what came back, and the "
+		+ "file:line or evidence path that grounds it. If vulnerable, record a finding against this class "
+		+ "and element. If clear, record the hypothesis outcome again with your basis in the reason.");
+	return out.join("\n");
 }

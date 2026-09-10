@@ -2,10 +2,10 @@ import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
 	auditFinding, challengeBrief, type ChallengeReport, CLASS_ALIASES, CONTRACTS, contractFor,
-	evidenceShape, isUnchallenged, judge, modelAnswersEntitlement, unchallengedBrief, unchallengedQueue,
+	evidenceShape, GENERIC_CONTROL, hypothesisBrief, isUnchallenged, judge, modelAnswersEntitlement, unchallengedBrief, unchallengedQueue,
 	verdictPatch,
 } from "./challenge.ts";
-import type { FindingRecord } from "./ontology.ts";
+import type { FindingRecord, HypothesisRecord } from "./ontology.ts";
 
 const NOW = "2026-09-07T12:00:00Z";
 
@@ -406,5 +406,90 @@ describe("unchallengedBrief", () => {
 	it("is empty when nothing is waiting, so it costs no prompt", () => {
 		expect(unchallengedBrief([])).toBe("");
 		expect(unchallengedBrief([finding({ status: "confirmed" }), finding({ status: "refuted" })])).toBe("");
+	});
+});
+
+describe("hypothesisBrief", () => {
+	const hyp = (over: Partial<HypothesisRecord> = {}): HypothesisRecord => ({
+		v: 1, id: "y7", kind: "hypothesis", createdAt: "t0",
+		statement: "q reaches db.query but the call is parameterized at core/db.js:41",
+		target: "e1", class: "sqli", outcome: "refuted",
+		...over,
+	} as HypothesisRecord);
+
+	/**
+	 * The gap this exists for: `refuted` turns a coverage cell `clear`, that cell
+	 * counts toward the percentage handed to the client, and nothing ever looks
+	 * again. Findings are challenged; clearances were taken at their word — and a
+	 * wrong clearance is the missed vulnerability the whole harness is built
+	 * against.
+	 */
+	it("asks a verifier to break the clearance, not the claim", () => {
+		const out = hypothesisBrief(hyp());
+		expect(out).toMatch(/concluded it is CLEAR/);
+		expect(out).toMatch(/disagree with it/);
+		expect(out).toMatch(/not seen the reasoning/);
+	});
+
+	it("frames an unsettled case as one to settle, either way", () => {
+		const out = hypothesisBrief(hyp({ outcome: "inconclusive" }));
+		expect(out).toMatch(/Nobody has settled/);
+		expect(out).toMatch(/a refutation counts/);
+		expect(out).not.toMatch(/concluded it is CLEAR/);
+	});
+
+	it("carries the class contract, so the verifier knows what would count", () => {
+		const out = hypothesisBrief(hyp());
+		expect(out).toContain(contractFor("sqli")?.claim);
+		expect(out).toContain(contractFor("sqli")?.control);
+	});
+
+	it("falls back to the generic bar for a class with no contract", () => {
+		expect(hypothesisBrief(hyp({ class: "not-a-class" }))).toContain(GENERIC_CONTROL);
+	});
+
+	/**
+	 * What makes a second look worth paying for. A cleared cell arrives with
+	 * almost nothing of its own, so the value is everything the engagement has
+	 * learned since — the same class confirmed next door is exactly what
+	 * overturns a clearance.
+	 */
+	it("brings what the ledger learned nearby, and says it is not the refutation's reasoning", () => {
+		const out = hypothesisBrief(hyp(), {
+			element: "GET /search (core/search.js)",
+			neighbours: [finding({ id: "f2", title: "SQLi in /login", severity: "high", class: "sqli" })],
+			siblings: [hyp({ id: "y9", class: "authz", statement: "no ownership check", outcome: "confirmed" })],
+		});
+		expect(out).toContain("GET /search (core/search.js)");
+		expect(out).toContain("f2");
+		expect(out).toContain("SQLi in /login");
+		expect(out).toContain("y9");
+		expect(out).toMatch(/none of it is the refutation's reasoning/);
+	});
+
+	/** The brief is for a cold agent; handing it its own row back is noise. */
+	it("does not list the hypothesis under challenge among its own siblings", () => {
+		const out = hypothesisBrief(hyp(), { siblings: [hyp()] });
+		expect(out.match(/y7/g)).toHaveLength(1);
+	});
+
+	it("carries the target model, truncating rather than trailing off", () => {
+		const long = "x".repeat(5000);
+		const out = hypothesisBrief(hyp(), { targetModel: long });
+		expect(out).toMatch(/truncated/);
+		expect(out).toContain("recall model");
+		expect(out.length).toBeLessThan(4000);
+	});
+
+	it("says nothing about a model or neighbours when there are none", () => {
+		const out = hypothesisBrief(hyp());
+		expect(out).not.toMatch(/working theory/);
+		expect(out).not.toMatch(/already knows here/);
+	});
+
+	it("demands grounds either way, and forbids the empty refutation", () => {
+		const out = hypothesisBrief(hyp());
+		expect(out).toMatch(/I could not find anything/);
+		expect(out).toMatch(/file:line or evidence path/);
 	});
 });

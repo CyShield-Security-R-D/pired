@@ -284,6 +284,18 @@ Repeating a key builds a list, as `evidence` does above. Exit status is `0` on s
 
 `scope` prints what the engagement authorizes — and says plainly that it reports the boundary rather than enforcing one. **Scope is not inherited by a child**: `createScopeGate` lives in the parent's tool pipeline, and a child outside the extension is outside the gate. Restate the authorized targets in every handoff. See [`ops-delegation`](skills.md).
 
+### Subagent budget
+
+pired ships no spawn machinery — delegation comes from whichever subagent package is loaded — but the scope gate sees the call, so the cap is real:
+
+```jsonc
+{ "maxAgents": 8, "agentTools": ["spawn"] }   // in the scope file
+```
+
+`maxAgents` defaults to **8 per session**; `0` disables delegation entirely. Past the budget the gate refuses with a reason, and the work continues in the current session. It is per session rather than per engagement because the gate is built at session start — a restarted run gets a fresh budget.
+
+`agentTools` only matters if the loaded package names its tool something other than `spawn`, `subagent` or `delegate`. A name the gate does not recognise **fails open** — the cap never fires — so set it if your package differs.
+
 ## Environment variables
 
 | Variable | Default | Meaning |

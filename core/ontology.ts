@@ -255,6 +255,25 @@ export interface EngagementScope {
 	 */
 	targetType?: TargetType;
 	/**
+	 * Most subagents this session may spawn. Defaults to DEFAULT_MAX_AGENTS.
+	 *
+	 * A runaway fan-out is not a scope violation but it is the same shape of
+	 * problem: unbounded work the operator did not ask for, on their budget and
+	 * their client's systems. `0` forbids delegation outright.
+	 */
+	maxAgents?: number;
+	/**
+	 * Tool names that spawn a subagent, when the loaded package does not use one
+	 * of the defaults.
+	 *
+	 * pired ships no spawn machinery — the tool belongs to whichever subagent
+	 * package is loaded — so the cap has to recognise it by name. Getting the
+	 * name wrong fails open (the cap never fires) rather than blocking a
+	 * legitimate tool, which is the safer of the two mistakes but is worth
+	 * knowing about.
+	 */
+	agentTools?: string[];
+	/**
 	 * When true, a recognized network command whose target could not be parsed
 	 * (e.g. `curl localhost`, a shell variable) is BLOCKED under `enforce` mode
 	 * instead of allowed. Fail-closed for the unverifiable case; default is
@@ -373,6 +392,20 @@ export interface HypothesisRecord extends RecordBase {
 	evidence?: string;
 	/** Set when outcome=confirmed and a finding was created. */
 	findingId?: string;
+	/**
+	 * What happened when this test case was looked at a second time.
+	 *
+	 * A hypothesis recorded `refuted` turns its coverage cell `clear`, and that
+	 * cell counts toward the percentage handed to the client. Until this field
+	 * existed a re-check left the row byte-identical to before, so "one agent
+	 * said clear" and "two independent agents said clear" were the same ledger —
+	 * the second look could not be reported and could not be deduplicated.
+	 *
+	 * Unlike a finding's `verification` this is not judged against a contract:
+	 * there is no control case for "clear". It records that a second pass ran
+	 * and what it was grounded in, which is the claim it is entitled to make.
+	 */
+	verification?: Verification;
 }
 
 // ---------------------------------------------------------------------------

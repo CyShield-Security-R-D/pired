@@ -984,3 +984,91 @@ categories for a report rather than as test cases with a control, which is what 
 orchestrator wrapping binwalk, radare2, cve-bin-tool and QEMU — running it under pired is an
 orchestrator inside an orchestrator, and its mean run is ~14 hours on a 25MB image. Better named in a
 skill as an optional deep scan than depended on.
+
+---
+
+## ADR-016 — A cleared cell is a claim too, and the fan-out that checks it is bounded
+
+**Status:** accepted
+
+### Context
+
+ADR-007 made a finding earn `confirmed`. ADR-014 made it visible that a finding was waiting. Both act
+on claims that something is **broken**. The opposite claim was never checked at all.
+
+`core/coverage.ts:104` — a hypothesis recorded `refuted` turns its cell `clear`, and `clear` counts
+toward the coverage percentage handed to the client. Nothing revisited it: `recall gaps` and
+`recall next` route to `not-tested` by construction, so a settled cell is invisible to the router,
+and there was no verb that could even enumerate one. A wrong clearance is the missed vulnerability
+this whole system is built against, and it was the one verdict carrying no second look.
+
+A first implementation of the hypothesis brief was reviewed before it shipped and failed on three
+counts, each worth recording because each is a general trap:
+
+1. **A capability with no trigger.** `recall challenge id=<hypothesis>` worked, and nothing routed to
+   it — the same failure ADR-014 had just fixed for findings, repeated one commit later.
+2. **No trace.** A full re-check left the row byte-identical, so "one agent said clear" and "two
+   independent agents said clear" were the same ledger. The work could not be reported and the same
+   cell would be handed out forever.
+3. **Unbounded context.** Neighbouring findings were selected by class across the whole engagement
+   with no cap, in a brief whose entire purpose is to be read by a child — the process in the system
+   with the least context room.
+
+Separately, `PLAN.md` §11 has listed hard caps as harness-owned since the beginning and nothing
+implemented one. `spawn` sat in the gate's local-tools set and was waved straight through, so a model
+that decided to fan out could spawn until something else ran out.
+
+### Decision
+
+**`recall cleared`** lists the cells a refutation settled, oldest first, excluding any already
+re-checked. Oldest first is the sampling heuristic made mechanical: a cell cleared in the first hour
+was cleared by an agent that had not yet read the code it was clearing.
+
+**`hypothesisBrief`** inverts the framing — the job is to break the *clearance*, by finding the input
+the refutation did not consider or the path it did not follow. It carries more of the ledger than the
+finding brief does, and deliberately: a finding arrives with its own evidence, a cleared cell arrives
+with almost nothing, so the value of the second look is everything the engagement has learned since.
+Capped at six neighbours and six siblings, with the remainder as a count.
+
+**`HypothesisRecord.verification`** records that a second pass ran and what it was grounded in —
+`stands` when the clearance held, `amended` when it was overturned. It is deleted from caller input
+and written by the record path, the same rule as a finding's. Unlike a finding's it is *not* judged
+against a contract, because there is no control case for "clear"; it claims only that a second pass
+happened and cites its basis, which is what it is entitled to claim.
+
+**The gate counts spawns** and refuses past `scope.maxAgents`, default **8** per session, `0` to
+disable delegation. Per session rather than per engagement because the gate is built at session start
+and a counter is all it can honestly hold — a fresh session gets a fresh budget, which is what an
+operator restarting a run expects.
+
+**Delegating verification belongs to the coverage loop, not to a direct request.** When the operator
+names the work, do the work; answering a direct request by spawning a child and relaying the result
+is slower, loses the context that made the request answerable, and is not what was asked. This is
+ADR-012's rule applied one level down.
+
+### Consequences
+
+- The three flaws above were found by reviewing the implementation before shipping it, and the
+  forgeable-`verification` bug was found by a test written *for* that review. Both are the argument
+  for the review, not against the design.
+- `spawn` left the local-tools set. Anything the gate does not recognise as a spawn tool fails open —
+  the cap never fires — which is the safer of the two mistakes but is why `scope.agentTools` exists.
+  pired ships no spawn machinery, so it is recognising another package's tool by name.
+- `recall challenge` now resolves a finding id first and a hypothesis id second, so its miss message
+  names both stores.
+
+### Rejected
+
+**Nudging about cleared cells in the standing brief**, the way ADR-014 does for findings. Unverified
+findings are few; cleared cells are one per settled cell and would be hundreds on a real engagement.
+A line naming them every turn would be noise, and noise in that block is how the block stops being
+read. `recall cleared` is a pull for the same reason challenging is.
+
+**Judging a hypothesis verdict against a contract.** The contracts say what proves a class is
+present. Nothing states what proves one absent, and inventing a bar would either be trivially
+satisfiable or would make honest clearances impossible to record.
+
+**Enforcing the agent cap per engagement rather than per session.** It would need the count in the
+ledger and would make a restarted run inherit a spent budget with no obvious way to reset it. Per
+session is weaker and predictable; the strong version is a config decision the operator can already
+make by setting `maxAgents` low.

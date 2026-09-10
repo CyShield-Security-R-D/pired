@@ -11,12 +11,12 @@
  */
 
 import { buildBrowserModel, recordLabel } from "./browser.ts";
-import { auditFinding, challengeBrief, judge, SEVERITY_RANK, unchallengedQueue, verdictPatch } from "./challenge.ts";
+import { auditFinding, challengeBrief, hypothesisBrief, judge, SEVERITY_RANK, unchallengedQueue, verdictPatch } from "./challenge.ts";
 import { computeCoverage, coveragePercent, findGaps, selectNext } from "./coverage.ts";
 import { CVSS_DEFAULT_VERSION, CVSS_EXAMPLE, cvssVersion, validateCvss } from "./cvss.ts";
 import { type Fields, findDuplicate, findNearDuplicate, type IdentityKind, isNoOp, mergeRecord } from "./identity.ts";
 import { locateAcrossFiles, locateSink, sinkHints } from "./locate.ts";
-import { buildTargetIndex, resolveElementTarget, type TargetIndex } from "./target.ts";
+import { buildTargetIndex, elementLabel, resolveElementTarget, type TargetIndex } from "./target.ts";
 import { computeCoverageView, computeEngagementStats, isDisposed } from "./stats.ts";
 import { CELL_GLYPH, renderCoveragePanel } from "./coverage-panel.ts";
 import {
@@ -56,7 +56,7 @@ type RecordKind = (typeof RECORD_KINDS)[number];
 type LedgerKind = Exclude<RecordKind, "note" | "evidence" | "model">;
 
 const RECALL_QUERIES = [
-	"status", "next", "coverage", "surface", "gaps", "inventory", "hypotheses", "findings", "finding", "challenge", "loot", "blockers", "notes", "model",
+	"status", "next", "coverage", "surface", "gaps", "cleared", "inventory", "hypotheses", "findings", "finding", "challenge", "loot", "blockers", "notes", "model",
 ] as const;
 
 /**
@@ -192,7 +192,9 @@ function extractFields(kind: LedgerKind, a: Record<string, unknown>): Record<str
 		case "tech":
 			return defined({ name: str(a.name), host: str(a.host), version: str(a.version) });
 		case "hypothesis":
-			return defined({ statement: str(a.statement), target: asList(a.target)[0], class: asList(a.class)[0], method: str(a.approach) ?? str(a.method), outcome: oneOf(a.outcome, HYPOTHESIS_OUTCOMES), evidence: str(a.evidence), findingId: str(a.findingId) });
+			// `verification` is written by the challenge path below, never taken
+			// from the caller — same rule as a finding's, and for the same reason.
+			return defined({ statement: str(a.statement), target: asList(a.target)[0], class: asList(a.class)[0], method: str(a.approach) ?? str(a.method), outcome: oneOf(a.outcome, HYPOTHESIS_OUTCOMES), evidence: str(a.evidence), findingId: str(a.findingId), verification: a.verification as HypothesisRecord["verification"] });
 		case "finding":
 			return defined({ title: str(a.title), severity: oneOf(a.severity, SEVERITIES), target: str(a.target), class: str(a.class), cwe: str(a.cwe), cvss: str(a.cvss), description: str(a.description), impact: str(a.impact), remediation: str(a.remediation), repro: str(a.repro), evidence: strArr(a.evidence), status: oneOf(a.status, FINDING_STATUSES), reason: str(a.reason), hypothesisId: str(a.hypothesisId), source: oneOf(a.source, FINDING_SOURCES), verification: a.verification as FindingRecord["verification"] });
 		case "blocker":
@@ -686,6 +688,32 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 			// The bar is deliberately low — name the mechanism you checked — because
 			// the goal is to make an empty refutation impossible, not to make an
 			// honest one laborious.
+			// Earned, never asserted — the same rule as a finding's, and it needs the
+			// same delete: the shape builder passes `verification` straight through,
+			// so without this a caller could hand in the conclusion it is supposed
+			// to have reached.
+			if (kind === "hypothesis") delete a.verification;
+
+			// A re-record carrying a basis is a second look at a settled cell, not a
+			// first one. Writing it down is what makes the challenge reportable —
+			// before this the row came back byte-identical and the work vanished.
+			if (kind === "hypothesis" && str(a.id) && strArr(a.basis)?.length) {
+				const before = (await deps.workspace.read("hypotheses")).find((h) => h.id === str(a.id));
+				if (before) {
+					const now = oneOf(a.outcome, HYPOTHESIS_OUTCOMES) ?? before.outcome;
+					a.verification = {
+						// `stands` when the second pass agreed, `amended` when it moved the
+						// verdict — the cell's answer changed, which is the whole point of
+						// paying for the look.
+						verdict: now === before.outcome ? "stands" : "amended",
+						at: ctx.services.clock.nowIso(),
+						basis: strArr(a.basis),
+						...(typeof a.live === "boolean" ? { live: a.live } : {}),
+						...(str(a.reason) ? { notes: str(a.reason) } : {}),
+					} satisfies HypothesisRecord["verification"];
+				}
+			}
+
 			if (kind === "hypothesis" && oneOf(a.outcome, HYPOTHESIS_OUTCOMES) === "refuted") {
 				const why = str(a.statement);
 				const targets = asList(a.target).length;
@@ -1395,6 +1423,54 @@ export function createRecallTool(deps: ToolDeps): ToolDefinition {
 					const inv = await deps.workspace.read("inventory");
 					return text(inv.length ? briefInventory(inv.slice(0, limit)) + truncated(Math.min(limit, inv.length), inv.length, "records") : "(no inventory)");
 				}
+				case "cleared": {
+					/**
+					 * The cells a refutation settled, oldest first, that nothing has
+					 * looked at twice.
+					 *
+					 * `gaps` and `next` route to `not-tested`, so a `clear` cell is
+					 * invisible to both — it is settled, and the router is built to move
+					 * on. That is right for planning and wrong for assurance: a wrong
+					 * clearance is the missed vulnerability this whole harness is built
+					 * against, and it was the one verdict with no way to even enumerate
+					 * it, let alone challenge it.
+					 *
+					 * Oldest first because a cell cleared in the first hour was cleared
+					 * by an agent that had not yet read the code it was clearing.
+					 */
+					const wanted = str(a.class);
+					const hyps = await deps.workspace.read("hypotheses");
+					const settled = hyps.filter((h) => h.outcome === "refuted");
+					const byCell = new Map<string, (typeof settled)[number]>();
+					for (const h of settled) {
+						// The newest row per cell is the one that counts; anything above
+						// it in the file has been superseded.
+						byCell.set(`${h.target}\u0000${h.class}`, h);
+					}
+					const open = [...byCell.values()]
+						.filter((h) => h.verification === undefined)
+						.filter((h) => !wanted || h.class === wanted)
+						.sort((x, y) => String(x.createdAt).localeCompare(String(y.createdAt)));
+
+					const rechecked = [...byCell.values()].length - open.length;
+					if (open.length === 0) {
+						return text(settled.length === 0
+							? "No cleared cells yet. Nothing has been ruled out, so there is nothing to re-check."
+							: `Every cleared cell has been through a second look (${rechecked}).`);
+					}
+
+					const labels = new Map((await deps.workspace.read("inventory")).map((r) => [r.id, elementLabel(r)]));
+					const lines = open.slice(0, limit).map((h) =>
+						`${h.id} [${h.class}] ${labels.get(String(h.target)) ?? h.target}: ${h.statement}`);
+					return text(
+						`${open.length} cleared cell(s) nothing has re-checked, oldest first` +
+						`${rechecked > 0 ? ` (${rechecked} already re-checked)` : ""}:\n${lines.join("\n")}` +
+						truncated(Math.min(limit, open.length), open.length, "cleared cells") +
+						"\n\n`recall challenge id=<id>` returns the brief for one. Sample rather than sweep — one per " +
+						"class, or the oldest — and hand it to a fresh agent: the job is to break the clearance, and a " +
+						"verifier that has read the reasoning behind it agrees with it.",
+					);
+				}
 				case "hypotheses": {
 					const hyps = await deps.workspace.read("hypotheses");
 					return text(hyps.length ? hyps.slice(0, limit).map((h) => `${h.id} [${h.outcome}] ${h.class} on ${h.target}: ${h.statement}`).join("\n") + truncated(Math.min(limit, hyps.length), hyps.length, "hypotheses") : "(no hypotheses)");
@@ -1444,7 +1520,35 @@ export function createRecallTool(deps: ToolDeps): ToolDefinition {
 						);
 					}
 					const found = all.find((f) => f.id === id);
-					if (!found) return text(`No live finding ${id}. Use 'recall findings' for what is there.`);
+					if (!found) {
+						// An id that is not a finding may still be a test case. A cleared
+						// cell is the one verdict in this system nothing ever revisits —
+						// `refuted` turns the cell `clear` and it counts toward the
+						// coverage handed to the client — so it is worth being able to
+						// challenge one by name.
+						const hyp = (await deps.workspace.read("hypotheses")).find((h) => h.id === id);
+						if (!hyp) return text(`No live finding or hypothesis ${id}. Use 'recall findings' or 'recall gaps' for what is there.`);
+
+						const inventory = await deps.workspace.read("inventory");
+						const element = inventory.find((r) => r.id === hyp.target);
+						const hyps = await deps.workspace.read("hypotheses");
+						// Everything the engagement has learned around this cell since the
+						// verdict was written. It is what makes a second look worth paying
+						// for, and none of it is the reasoning that produced the verdict.
+						const neighbours = all.filter((f) =>
+							!isDisposed(f.status) && (f.target === hyp.target || (f.class !== undefined && f.class === hyp.class)));
+						const siblings = hyps.filter((h) => h.target === hyp.target);
+						return text(
+							`${hypothesisBrief(hyp, {
+								...(element ? { element: elementLabel(element) } : {}),
+								...(model ? { targetModel: model } : {}),
+								neighbours,
+								siblings,
+							})}\n\n` +
+							"Record the outcome with `record kind=hypothesis id=" + hyp.id + " outcome=refuted|confirmed " +
+							"reason=\"...\"` — the grounds go in 'reason', and a confirmation means recording the finding too.",
+						);
+					}
 					const evidence: Record<string, string> = {};
 					for (const rel of found.evidence ?? []) {
 						const body = await deps.workspace.readRelative(rel);

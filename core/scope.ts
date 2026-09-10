@@ -274,8 +274,33 @@ export function checkCommandScope(command: string, scope: EngagementScope): Scop
 
 /** Tools that never touch the network directly; always allowed by the scope gate. */
 const LOCAL_TOOLS = new Set<string>([
-	"record", "recall", "spawn", "read", "write", "edit", "grep", "find", "ls", "note",
+	"record", "recall", "read", "write", "edit", "grep", "find", "ls", "note",
 ]);
+
+/**
+ * How many subagents one session may spawn before the gate says no.
+ *
+ * PLAN.md §11 has always listed hard caps as harness-owned, and nothing
+ * implemented one: `spawn` sat in the local-tools set and was waved through, so
+ * a model that decided to fan out could spawn until something else ran out.
+ * Delegation is not a scope violation, but it is the same shape of problem —
+ * unbounded work nobody asked for, on the operator's budget and the client's
+ * systems — and the gate is already the place that says no to that.
+ *
+ * Eight is enough for the patterns `ops-delegation` describes (a verifier per
+ * cleared cell of a class, a scout per host) and low enough that a loop is
+ * caught in one session rather than one invoice.
+ */
+export const DEFAULT_MAX_AGENTS = 8;
+
+/**
+ * Tool names taken to mean "spawn a subagent".
+ *
+ * pired ships no spawn machinery, so the cap has to recognise someone else's
+ * tool by name. Wrong name means the cap never fires, which is why it is
+ * overridable per engagement rather than only a constant here.
+ */
+const AGENT_TOOLS = new Set<string>(["spawn", "subagent", "delegate"]);
 
 /** A property name that plausibly holds a network destination (matched case-insensitively). */
 function isTargetKey(key: string): boolean {
@@ -322,7 +347,29 @@ function collectTargetsFromArgs(args: unknown): { urls: string[]; hosts: string[
  * pired's own tools and local file tools are always allowed.
  */
 export function createScopeGate(scope: EngagementScope): Gate {
+	const maxAgents = typeof scope.maxAgents === "number" && scope.maxAgents >= 0
+		? scope.maxAgents
+		: DEFAULT_MAX_AGENTS;
+	const agentTools = scope.agentTools?.length ? new Set(scope.agentTools) : AGENT_TOOLS;
+	// Per session, not per engagement: the gate is built at session start and a
+	// counter is all it can honestly hold. A fresh session gets a fresh budget,
+	// which is the behaviour an operator restarting a run expects.
+	let spawned = 0;
+
 	return (call: ToolCall): GateDecision => {
+		if (agentTools.has(call.name)) {
+			if (spawned >= maxAgents) {
+				return {
+					allow: false,
+					reason: maxAgents === 0
+						? "Delegation is disabled for this engagement (maxAgents=0). Do the work in this session."
+						: `Subagent budget spent: ${maxAgents} already spawned this session. Finish or record what `
+							+ "the existing ones returned, and do the rest here — or raise maxAgents in the scope file.",
+				};
+			}
+			spawned++;
+			return { allow: true };
+		}
 		if (LOCAL_TOOLS.has(call.name)) return { allow: true };
 
 		if (call.name === "bash") {

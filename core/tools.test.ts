@@ -1398,9 +1398,14 @@ describe("challenging a finding", () => {
 		expect(textOf(await recall.execute({ query: "challenge" }, ctx))).toMatch(/Nothing unchallenged/);
 	});
 
-	it("reports on a finding id that is not there rather than throwing", async () => {
+	it("reports on an id that is in neither store rather than throwing", async () => {
+		// `challenge` resolves a finding id first and a hypothesis id second, so
+		// the miss has to name both — an operator who typed a hypothesis id and
+		// was told "no finding" would go looking in the wrong ledger.
 		const { ctx, recall } = await setup();
-		expect(textOf(await recall.execute({ query: "challenge", id: "nope" }, ctx))).toMatch(/No live finding nope/);
+		const out = textOf(await recall.execute({ query: "challenge", id: "nope" }, ctx));
+		expect(out).toMatch(/No live finding or hypothesis nope/);
+		expect(out).toMatch(/recall gaps/);
 	});
 });
 
@@ -1495,5 +1500,94 @@ describe("settling a finding is checked, not taken on trust", () => {
 			kind: "finding", id, status: "refuted", live: true, basis: ["share.py:31"],
 		}, ctx));
 		expect(out).toMatch(/already REPORTED to the client/);
+	});
+});
+
+describe("cleared cells and their second look", () => {
+	const CLEARED = "parameterized at core/db.js:41 with placeholders and no other call site concatenates it";
+
+	async function withCleared() {
+		const kit = await setup();
+		const { ctx, record } = kit;
+		await record.execute({ kind: "host", value: "repo:shop" }, ctx);
+		const e1 = (await record.execute({ kind: "endpoint", host: "h1", method: "GET", path: "/search" }, ctx)
+			.then((r) => (r.details as { id: string }).id));
+		await record.execute({ kind: "hypothesis", target: e1, class: "sqli", outcome: "refuted", statement: CLEARED }, ctx);
+		return { ...kit, e1 };
+	}
+
+	/**
+	 * `gaps` and `next` route to `not-tested`, so a cleared cell is invisible to
+	 * both — settled, and the router moves on. Right for planning, wrong for
+	 * assurance: a wrong clearance is the missed vulnerability the harness is
+	 * built against, and there was no way to even enumerate one.
+	 */
+	it("lists what a refutation settled, which gaps will never show", async () => {
+		const { ctx, recall } = await withCleared();
+		expect(textOf(await recall.execute({ query: "gaps" }, ctx))).not.toContain("sqli");
+		const out = textOf(await recall.execute({ query: "cleared" }, ctx));
+		expect(out).toContain("sqli");
+		expect(out).toContain("1 cleared cell");
+	});
+
+	it("says so rather than listing nothing when nothing has been ruled out", async () => {
+		const { ctx, recall } = await setup();
+		expect(textOf(await recall.execute({ query: "cleared" }, ctx))).toMatch(/Nothing has been ruled out/);
+	});
+
+	/**
+	 * The flaw this closes: a re-check used to leave the row byte-identical, so
+	 * the work could not be reported and the same cell would be challenged
+	 * forever.
+	 */
+	it("drops a cell once it has been re-checked, and counts it", async () => {
+		const { ctx, record, recall, ws } = await withCleared();
+		const id = (await ws.read("hypotheses"))[0]?.id as string;
+		await record.execute(
+			{ kind: "hypothesis", id, outcome: "refuted", statement: CLEARED, basis: ["core/db.js:41"], live: true },
+			ctx,
+		);
+		const out = textOf(await recall.execute({ query: "cleared" }, ctx));
+		expect(out).toMatch(/Every cleared cell has been through a second look \(1\)/);
+	});
+
+	it("writes what the second look was grounded in", async () => {
+		const { ctx, record, ws } = await withCleared();
+		const id = (await ws.read("hypotheses"))[0]?.id as string;
+		await record.execute(
+			{ kind: "hypothesis", id, outcome: "refuted", statement: CLEARED, basis: ["core/db.js:41"], live: true, reason: "re-checked cold" },
+			ctx,
+		);
+		const after = (await ws.read("hypotheses")).find((h) => h.id === id);
+		expect(after?.verification).toMatchObject({ verdict: "stands", basis: ["core/db.js:41"], live: true, notes: "re-checked cold" });
+	});
+
+	/** A second look that moved the verdict is the one that paid for itself. */
+	it("marks the verdict amended when the clearance was overturned", async () => {
+		const { ctx, record, ws } = await withCleared();
+		const id = (await ws.read("hypotheses"))[0]?.id as string;
+		await record.execute({ kind: "hypothesis", id, outcome: "confirmed", basis: ["core/search.js:88"] }, ctx);
+		const after = (await ws.read("hypotheses")).find((h) => h.id === id);
+		expect(after?.verification?.verdict).toBe("amended");
+	});
+
+	/** Same rule as a finding's verification: it is earned, never handed in. */
+	it("refuses a verification the caller tried to assert", async () => {
+		const { ctx, record, ws } = await withCleared();
+		const id = (await ws.read("hypotheses"))[0]?.id as string;
+		await record.execute(
+			{ kind: "hypothesis", id, outcome: "refuted", statement: CLEARED, verification: { verdict: "stands", at: "forged" } },
+			ctx,
+		);
+		const after = (await ws.read("hypotheses")).find((h) => h.id === id);
+		expect(after?.verification).toBeUndefined();
+	});
+
+	it("narrows to one class when asked", async () => {
+		const { ctx, record, recall, e1 } = await withCleared();
+		await record.execute({ kind: "hypothesis", target: e1, class: "authz", outcome: "refuted", statement: "every handler calls requireOwner() before the load, checked on all four" }, ctx);
+		const out = textOf(await recall.execute({ query: "cleared", class: "authz" }, ctx));
+		expect(out).toContain("authz");
+		expect(out).not.toContain("sqli");
 	});
 });

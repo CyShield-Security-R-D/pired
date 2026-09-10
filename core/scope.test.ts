@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { EngagementScope } from "./ontology.ts";
-import { checkCommandScope, createScopeGate, extractTargets, isHostInScope, isUrlInScope, pickTargetType, summarizeScope } from "./scope.ts";
+import type { GateDecision } from "./ports.ts";
+import { checkCommandScope, createScopeGate, DEFAULT_MAX_AGENTS, extractTargets, isHostInScope, isUrlInScope, pickTargetType, summarizeScope } from "./scope.ts";
 
 const scope: EngagementScope = {
 	v: 1,
@@ -289,5 +290,76 @@ describe("pickTargetType", () => {
 	it("defaults review to code review, and everything unrecognised to web", () => {
 		expect(pickTargetType("review", eng())).toBe("code-review");
 		expect(pickTargetType("pentest", eng())).toBe("web");
+	});
+});
+
+describe("the subagent budget", () => {
+	const eng = (over: Partial<EngagementScope> = {}): EngagementScope => ({
+		v: 1, engagement: "e", authorized: true, mode: "off", targets: {}, ...over,
+	});
+	const spawn = { name: "spawn", args: { task: "enumerate" } };
+	/** createScopeGate is synchronous; narrow once rather than at every call site. */
+	const decide = (gate: ReturnType<typeof createScopeGate>, call: { name: string; args: object }): GateDecision =>
+		gate(call) as GateDecision;
+
+	/**
+	 * PLAN.md §11 has always listed hard caps as harness-owned and nothing
+	 * implemented one: `spawn` sat in the local-tools set and was waved through,
+	 * so a model that decided to fan out could spawn until something else ran
+	 * out of patience or money.
+	 */
+	it("lets the budget through and then stops, saying why", () => {
+		const gate = createScopeGate(eng({ maxAgents: 2 }));
+		expect(decide(gate, spawn)).toEqual({ allow: true });
+		expect(decide(gate, spawn)).toEqual({ allow: true });
+		const denied = decide(gate, spawn);
+		expect(denied.allow).toBe(false);
+		expect(denied.reason).toMatch(/budget spent: 2/);
+		expect(denied.reason).toMatch(/maxAgents/);
+	});
+
+	it("defaults to eight when the engagement does not say", () => {
+		const gate = createScopeGate(eng());
+		for (let i = 0; i < DEFAULT_MAX_AGENTS; i++) expect(decide(gate, spawn).allow, `spawn ${i + 1}`).toBe(true);
+		expect(decide(gate, spawn).allow).toBe(false);
+	});
+
+	it("forbids delegation outright at zero, and says that rather than a budget", () => {
+		const denied = decide(createScopeGate(eng({ maxAgents: 0 })), spawn);
+		expect(denied.allow).toBe(false);
+		expect(denied.reason).toMatch(/Delegation is disabled/);
+	});
+
+	/** The cap is on fan-out, not on working: nothing else it does is rationed. */
+	it("counts only spawns, and never rations the local tools", () => {
+		const gate = createScopeGate(eng({ maxAgents: 1 }));
+		for (let i = 0; i < 20; i++) {
+			expect(decide(gate, { name: "record", args: {} })).toEqual({ allow: true });
+			expect(decide(gate, { name: "recall", args: {} })).toEqual({ allow: true });
+		}
+		expect(decide(gate, spawn).allow).toBe(true);
+		expect(decide(gate, spawn).allow).toBe(false);
+	});
+
+	/**
+	 * pired ships no spawn machinery, so the cap recognises someone else's tool
+	 * by name. A name it does not know fails open — the cap never fires — which
+	 * is safer than blocking a legitimate tool, and is why it is overridable.
+	 */
+	it("takes the engagement's own tool name when the package uses a different one", () => {
+		const gate = createScopeGate(eng({ maxAgents: 1, agentTools: ["fan_out"] }));
+		expect(decide(gate, { name: "spawn", args: {} }).allow).toBe(true);   // no longer counted
+		expect(decide(gate, { name: "fan_out", args: {} }).allow).toBe(true);
+		expect(decide(gate, { name: "fan_out", args: {} }).allow).toBe(false);
+	});
+
+	it("gives a fresh session a fresh budget", () => {
+		const scope = eng({ maxAgents: 1 });
+		expect(decide(createScopeGate(scope), spawn).allow).toBe(true);
+		expect(decide(createScopeGate(scope), spawn).allow).toBe(true);
+	});
+
+	it("ignores a nonsense budget rather than locking delegation out", () => {
+		expect(decide(createScopeGate(eng({ maxAgents: -3 })), spawn).allow).toBe(true);
 	});
 });
