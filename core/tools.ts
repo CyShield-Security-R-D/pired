@@ -11,7 +11,7 @@
  */
 
 import { buildBrowserModel, recordLabel } from "./browser.ts";
-import { auditFinding, challengeBrief, judge, SEVERITY_RANK, verdictPatch } from "./challenge.ts";
+import { auditFinding, challengeBrief, judge, SEVERITY_RANK, unchallengedQueue, verdictPatch } from "./challenge.ts";
 import { computeCoverage, coveragePercent, findGaps, selectNext } from "./coverage.ts";
 import { CVSS_DEFAULT_VERSION, CVSS_EXAMPLE, cvssVersion, validateCvss } from "./cvss.ts";
 import { type Fields, findDuplicate, findNearDuplicate, type IdentityKind, isNoOp, mergeRecord } from "./identity.ts";
@@ -1428,9 +1428,9 @@ export function createRecallTool(deps: ToolDeps): ToolDefinition {
 					const all = await deps.workspace.read("findings");
 					const model = await deps.workspace.readModel().catch(() => undefined);
 					if (!id) {
-						const queue = all
-							.filter((f) => !isDisposed(f.status) && f.status !== "confirmed")
-							.sort((x, y) => SEVERITY_RANK[y.severity] - SEVERITY_RANK[x.severity]);
+						// The same predicate the standing brief counts with, so what the
+						// block says is waiting and what this hands back cannot disagree.
+						const queue = unchallengedQueue(all);
 						if (queue.length === 0) return text("Nothing unchallenged. Every live finding has been through a challenge.");
 						const lines = queue.slice(0, limit).map((f) => {
 							const gaps = auditFinding({ finding: f, targetModel: model }).filter((g) => g.blocking);

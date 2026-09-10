@@ -813,3 +813,74 @@ fix that breaks on their next release.
 **Making the CLI enforce scope.** A gate a process may decline to call is not a gate. Reporting the
 boundary honestly is worth more than a check that produces false confidence, and the safety fix is
 the correction to `ops-delegation`, not a flag here.
+
+---
+
+## ADR-014 — A claim waiting for a second look is said out loud, and can be handed to a fresh agent
+
+**Status:** accepted
+
+### Context
+
+ADR-007 built the contract that settles a finding and ADR-009 gave every checklist class its own
+verification bar. Both work: against `eval/field` the contract scores sensitivity 1.00, specificity
+1.00, resolution 0.70 with no model in the loop.
+
+Nothing ever said a claim was waiting.
+
+`suspected` is the default status precisely because an absent `verification` means *nobody has looked
+twice* rather than *examined and cleared* — so a finding could sit unverified for an entire
+engagement with the whole apparatus installed and idle. The standing `<pired-coverage>` block names
+untested **cells** and says nothing about unverified **claims**, and the only entry point was `recall
+challenge`, a tool call the reviewer had to think to make. That is the same failure the coverage
+block was built for and measured at: 30 `read`, 20 `bash`, 3 `record` — and **1 `recall`** across
+five sessions.
+
+There was also no way for the operator to ask for a second look at one finding, and nothing to hand a
+subagent when they wanted one — even though the brief had been shaped for exactly that since ADR-007,
+built from the record and the class contract rather than from the conversation, because a verifier
+that inherits the finder's reasoning agrees with it (precision 0.059 → 0.038, at 2.5× the wall
+clock).
+
+### Decision
+
+**The standing brief says what is unverified**, beside what is untested. `unchallengedBrief` renders
+one line naming the worst three and counting the rest; it is empty when nothing is waiting, so it
+costs no prompt on an engagement that has none.
+
+**`/challenge` is the on-demand trigger.** No argument lists the queue; an id prints that finding's
+brief plus the one line needed to delegate it.
+
+**`isUnchallenged` is exported and shared.** The `recall challenge` queue and the standing brief now
+count with the same predicate — two copies would be two answers to the same question, which is the
+argument `pired-state` already makes for reading through pired's own derivation rather than the
+`.jsonl`.
+
+Delegation names `pired-ledger` (ADR-013) rather than pasting the brief into a task string: a child
+fetches its own brief, and a task prompt carrying a full brief is a task prompt nobody reads.
+
+### Consequences
+
+- The two triggers the operator asked for are both covered — on demand via `/challenge`, and by the
+  agent's own judgement via the standing line — without either one *making* the decision. Choosing
+  what to spend a challenge on stays the reviewer's call, for the reason invocation was a pull in the
+  first place: re-running a proof touches the client's system again.
+- Verified end to end through the CLI rather than by unit test alone: a child confirming without the
+  control case was recorded `suspected` with the reason, the same child with a real blind-timing
+  control (`;sleep 9` → 9.04s vs `;sleep 0` → 0.07s) was promoted to `confirmed`, and the finding
+  left the queue. `verification` remains non-forgeable — `record` deletes any handed in.
+- The brief grows with the engagement only up to three named findings; past that it is a count.
+
+### Rejected
+
+**Firing a challenge automatically once a finding lands.** It would re-run a proof against a client's
+production system without anyone asking, which is the thing `recall challenge` was deliberately made
+a pull to avoid. Saying a claim is waiting is not the same as settling it.
+
+**Spawning the verifier from inside the extension.** `spawn` belongs to pi-subagents, not to pired,
+and reaching for another package's tool from an extension is a coupling that breaks on their next
+release. Naming the two commands a child needs is enough, and works whatever spawns it.
+
+**A `verification` field the caller can set.** It is the one field that must not be forgeable — a
+caller handing in the conclusion it is supposed to have earned is exactly the failure ADR-007 exists
+to prevent. `record` deletes it and computes its own.

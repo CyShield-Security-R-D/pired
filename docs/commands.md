@@ -17,6 +17,7 @@ Everything pired adds to pi. pi's own commands (`/model`, `/reload`, sessions, �
 | `/hypotheses` | Browse every hypothesis — confirmed, refuted and open — with outcome filters and full detail. |
 | `/findings` | Browse findings, worst first; select one to read its description, repro and evidence. |
 | `/report` | Write findings to Markdown in the engagement workspace, with a Coverage section: what was settled, what was refuted, and what nobody reached. Prints the absolute path. |
+| `/challenge` | What is still unverified: the queue of findings no challenge has settled, or `/challenge <id>` for the brief on one — the brief a fresh subagent can be handed. |
 | `/blockers` | Browse what needs you: every parked question, waiting ones first, with `a` to answer the one under the cursor. |
 | `/scribe` | Write the review into the ledger now — findings, surface, and a verdict on every checklist class. |
 | `/scribe on` \| `off` \| `status` | Let it run by itself after every reply (off by default), or report its state. |
@@ -116,6 +117,30 @@ retry, when a reply comes back as prose, is appended as a third message rather
 than prepended as a new prompt, for the same reason. The call carries a cache key
 of its own, derived from the engagement, so it does not share a stream with the
 conversation.
+
+### `/challenge` — what is still unverified
+
+`suspected` is the default status because an absent verification means *nobody has looked twice*, not *examined and cleared*. The contract that settles a claim has existed since [ADR-007](decisions.md); what did not exist was anything to say a claim was waiting — so a finding could sit unverified for a whole engagement with the machinery installed and idle.
+
+Two things now say it.
+
+`/challenge` with no argument lists every live finding no challenge has settled, worst first. With an id it prints that finding's brief: what the class contract requires, the control case that has to fire, and the gaps already visible without touching the target.
+
+The same line rides in the agent's standing context block, beside the coverage matrix — the matrix says which cells are untested, this says which claims are unverified.
+
+**The brief is built from the record and the class contract, never from the conversation.** That is what makes it safe to hand to a subagent: it opens with *"You have not seen the reasoning that produced it and you do not need it."* A verifier that inherits the finder's reasoning agrees with it — measured at precision 0.059 → 0.038, for 2.5× the wall clock.
+
+So a delegated verifier needs nothing from the parent conversation:
+
+```bash
+pired-ledger recall challenge id=f3                       # the child fetches its own brief
+pired-ledger record kind=finding id=f3 status=confirmed \
+    control="blind timing: ;sleep 9 -> 9.04s vs ;sleep 0 -> 0.07s"
+```
+
+The verdict is judged against the class contract on the way in and **cannot be asserted** — `record` deletes any `verification` handed to it and computes its own. A confirmation with no control case is recorded as `suspected` with the reason, and the finding is kept exactly as it was.
+
+Invocation stays a pull, deliberately: re-running a proof touches the client's system again, so nothing here fires on its own.
 
 ### `/blockers` — what needs you
 

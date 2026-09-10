@@ -35,8 +35,9 @@
  * host reads evidence files and runs the requests, and hands the text in here.
  */
 
-import type {
-	BlockerType, ChallengeVerdict, FindingRecord, FindingStatus, Severity, Verification,
+import {
+	type BlockerType, type ChallengeVerdict, DISPOSED_STATUSES, type FindingRecord, type FindingStatus,
+	type Severity, type Verification,
 } from "./ontology.ts";
 
 // ---------------------------------------------------------------------------
@@ -920,4 +921,58 @@ export function challengeBrief(finding: FindingRecord, gaps: Gap[] = []): string
 	out.push("");
 	out.push("Return: verdict (stands|amended|refuted|unresolved), the control and its result, basis[] for any refutation or severity change, whether the target was live, and how entitlement was settled if this class needs it.");
 	return out.join("\n");
+}
+
+/**
+ * Whether nobody has looked at this finding twice.
+ *
+ * `suspected` is the default status precisely because an absent `verification`
+ * means unexamined rather than examined-and-cleared, so the queue is everything
+ * still live that no challenge has settled. Exported because two places ask the
+ * question — the `recall challenge` queue and the standing brief — and a second
+ * copy of this predicate is a second answer to it.
+ */
+export function isUnchallenged(finding: Pick<FindingRecord, "status">): boolean {
+	if ((DISPOSED_STATUSES as readonly string[]).includes(finding.status ?? "")) return false;
+	return finding.status !== "confirmed";
+}
+
+/** Everything unsettled, worst first — a challenge budget is spent top-down. */
+export function unchallengedQueue(findings: FindingRecord[]): FindingRecord[] {
+	return findings
+		.filter(isUnchallenged)
+		.slice()
+		.sort((a, b) => SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity]);
+}
+
+/** How many of the queue to name before the rest becomes a count. */
+const BRIEF_NAMED = 3;
+
+/**
+ * The unchallenged findings, as a line for the standing brief.
+ *
+ * ADR-007 built the contract that settles a claim and left nothing to say a
+ * claim was waiting: a finding could sit at `suspected` for a whole engagement
+ * with the challenge machinery installed and idle, because consulting the
+ * ledger is exactly what a reviewer does not do — measured at one `recall` per
+ * session. The coverage block fixed that for untested *cells*; this is the same
+ * fix for unverified *claims*.
+ *
+ * States the fact and asks for nothing, for the reason the coverage block does:
+ * choosing what to spend a challenge on is the reviewer's judgement, and
+ * re-running a proof touches a client's system again — so this can inform the
+ * decision but must not make it.
+ */
+export function unchallengedBrief(findings: FindingRecord[]): string {
+	const queue = unchallengedQueue(findings);
+	if (queue.length === 0) return "";
+
+	const named = queue.slice(0, BRIEF_NAMED).map((f) => `${f.id} [${f.severity}] ${f.title}`);
+	const rest = queue.length - named.length;
+	const list = rest > 0 ? `${named.join("; ")}; +${rest} more` : named.join("; ");
+	const subject = queue.length === 1 ? "1 finding has" : `${queue.length} findings have`;
+	return `${subject} been through no challenge: ${list}. `
+		+ "`recall challenge id=<id>` returns the brief for one — it is built from the record and the "
+		+ "class contract, never from the conversation, so it can be handed to a fresh agent that has "
+		+ "not seen the reasoning that produced the claim.";
 }

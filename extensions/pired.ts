@@ -26,10 +26,11 @@ import {
 	buildBrowserModel, detailRowCount, elementLabel, initialState, reduceBrowser, renderBrowser, selectedBlocker, visibleBlockers, type BrowserKey, type BrowserModel, type BrowserState, type BrowserTone, type BrowserView,
 } from "../core/browser.ts";
 import { type BannerTone, renderBanner } from "../core/banner.ts";
+import { auditFinding, challengeBrief, unchallengedBrief, unchallengedQueue } from "../core/challenge.ts";
 import { blockerDialog, SKIP_OPTION } from "../core/dialog.ts";
 import { exportFindingsMarkdown, notReportReady } from "../core/export.ts";
 import { bannerColumns, BROWSER_CHROME, OVERLAY, OVERLAY_HEIGHT_SHARE, railColumns } from "../core/layout.ts";
-import type { BlockerRecord, Checklist, EngagementScope, Severity, TargetType } from "../core/ontology.ts";
+import type { BlockerRecord, Checklist, EngagementScope, FindingRecord, Severity, TargetType } from "../core/ontology.ts";
 import type { Gate, ToolContext, ToolDefinition } from "../core/ports.ts";
 import { buildSystemPrompt, PIRED_PROFILES, type PiredProfile } from "../core/prompts.ts";
 import { createScopeGate } from "../core/scope.ts";
@@ -1325,6 +1326,12 @@ export default function piredExtension(pi: ExtensionAPI): void {
 				}
 				text = renderCoverageBrief(coverageBrief(view.matrix), (id) => labels.get(id));
 			}
+			// A claim nobody has looked at twice is as much a hole in the account as
+			// a cell nobody has tested, and only the cells were ever said out loud —
+			// so the challenge contract ADR-007 built could sit installed and idle
+			// for a whole engagement while findings stayed at `suspected`.
+			const waiting = unchallengedBrief(await ws.read("findings"));
+			if (waiting) text = text ? `${text}\n\n${waiting}` : waiting;
 		} catch { return undefined; }
 
 		const kept = event.messages.filter(
@@ -2349,6 +2356,64 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	 * makes it a thing you choose to do to a row rather than a queue you are put
 	 * through.
 	 */
+	/**
+	 * The on-demand half of verification.
+	 *
+	 * `recall challenge` has always returned the brief, but only to the agent —
+	 * the operator had no way to ask for a second look at one claim, and nothing
+	 * to hand a subagent when they wanted one. The brief is built from the record
+	 * and the class contract rather than from the conversation, which is what
+	 * makes it safe to give to a child that has seen none of it: a verifier that
+	 * inherits the finder's reasoning agrees with it, measured at precision
+	 * 0.059 -> 0.038 for 2.5x the wall clock.
+	 */
+	pi.registerCommand("challenge", {
+		description: "What is still unverified — the queue, or `<id>` for the brief to hand a fresh agent",
+		handler: async (args, ctx) => {
+			if (!workspace) {
+				ctx.ui.notify("pired: no engagement workspace yet", "warning");
+				return;
+			}
+			let findings: FindingRecord[];
+			try {
+				findings = await workspace.read("findings");
+			} catch (err) {
+				ctx.ui.notify(`pired: could not read findings — ${err instanceof Error ? err.message : String(err)}`, "warning");
+				return;
+			}
+
+			const id = (args ?? "").trim();
+			if (!id) {
+				const queue = unchallengedQueue(findings);
+				if (queue.length === 0) {
+					ctx.ui.notify("pired: nothing unchallenged — every live finding has been through a challenge", "info");
+					return;
+				}
+				const list = queue.map((f) => `· ${f.id} [${f.severity}] ${f.title}`).join("\n");
+				ctx.ui.notify(`pired: ${queue.length} finding(s) carry no verdict\n${list}\n\n/challenge <id> for the brief on one.`, "info");
+				return;
+			}
+
+			const finding = findings.find((f) => f.id === id);
+			if (!finding) {
+				ctx.ui.notify(`pired: no finding called "${id}" — /challenge lists what is unverified`, "warning");
+				return;
+			}
+			const targetModel = await workspace.readModel().catch(() => undefined);
+			const brief = challengeBrief(finding, auditFinding({ finding, targetModel }));
+			// The delegation line names the CLI rather than pasting the brief into a
+			// task string: a child can fetch its own brief, and a task prompt that
+			// carries one is a task prompt nobody reads.
+			ctx.ui.notify(
+				`${brief}\n\nTo hand this to a subagent, spawn one whose job is to break the claim. It needs nothing `
+				+ `from this conversation — it reads the brief itself with \`pired-ledger recall challenge id=${id}\` and `
+				+ `records the verdict with \`pired-ledger record kind=finding id=${id} status=confirmed|refuted control="..."\`. `
+				+ "The verdict is judged against the class contract on the way in, so it cannot be asserted.",
+				"info",
+			);
+		},
+	});
+
 	pi.registerCommand("blockers", {
 		description: "What needs you — browse the parked questions and answer them",
 		handler: async (_args, ctx) => {

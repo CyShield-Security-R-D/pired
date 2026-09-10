@@ -2,7 +2,8 @@ import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
 	auditFinding, challengeBrief, type ChallengeReport, CLASS_ALIASES, CONTRACTS, contractFor,
-	evidenceShape, judge, modelAnswersEntitlement, verdictPatch,
+	evidenceShape, isUnchallenged, judge, modelAnswersEntitlement, unchallengedBrief, unchallengedQueue,
+	verdictPatch,
 } from "./challenge.ts";
 import type { FindingRecord } from "./ontology.ts";
 
@@ -329,5 +330,81 @@ describe("the registry every checklist class has to resolve through", () => {
 	it("declares no contract twice", () => {
 		const ids = CONTRACTS.map((c) => c.class);
 		expect(ids.length).toBe(new Set(ids).size);
+	});
+});
+
+describe("the unchallenged queue", () => {
+	/**
+	 * `suspected` is the default precisely because an absent verification means
+	 * unexamined, not examined-and-cleared. Everything still live that no
+	 * challenge settled is therefore waiting.
+	 */
+	it("counts anything live that no challenge has settled", () => {
+		expect(isUnchallenged(finding({ status: "suspected" }))).toBe(true);
+		expect(isUnchallenged(finding({ status: "open" }))).toBe(true);
+		expect(isUnchallenged(finding({ status: "triaged" }))).toBe(true);
+		expect(isUnchallenged(finding({ status: "confirmed" }))).toBe(false);
+	});
+
+	/** A disposed finding keeps its row; it is not work waiting on anyone. */
+	it("leaves the disposed alone, however they were disposed of", () => {
+		for (const status of ["refuted", "false-positive", "accepted-risk", "ignored"] as const) {
+			expect(isUnchallenged(finding({ status })), status).toBe(false);
+		}
+	});
+
+	it("puts the worst first, because a challenge budget is spent top-down", () => {
+		const queue = unchallengedQueue([
+			finding({ id: "a", severity: "low" }),
+			finding({ id: "b", severity: "critical" }),
+			finding({ id: "c", severity: "confirmed" as never, status: "confirmed" }),
+			finding({ id: "d", severity: "medium" }),
+		]);
+		expect(queue.map((f) => f.id)).toEqual(["b", "d", "a"]);
+	});
+
+	it("does not reorder the caller's array", () => {
+		const findings = [finding({ id: "a", severity: "low" }), finding({ id: "b", severity: "critical" })];
+		unchallengedQueue(findings);
+		expect(findings.map((f) => f.id)).toEqual(["a", "b"]);
+	});
+});
+
+describe("unchallengedBrief", () => {
+	/**
+	 * ADR-007 built the contract that settles a claim and nothing ever said a
+	 * claim was waiting, so a finding could sit at `suspected` for a whole
+	 * engagement with the machinery installed and idle. The coverage block says
+	 * which cells are untested; this says which claims are unverified.
+	 */
+	it("names what is waiting and how to get the brief", () => {
+		const out = unchallengedBrief([finding({ id: "f7", severity: "critical", title: "RCE in /admin" })]);
+		expect(out).toContain("f7");
+		expect(out).toContain("critical");
+		expect(out).toContain("RCE in /admin");
+		expect(out).toContain("recall challenge");
+	});
+
+	/** The whole reason it can go to a subagent, so the line has to say it. */
+	it("says the brief owes nothing to the conversation that produced the claim", () => {
+		expect(unchallengedBrief([finding()])).toMatch(/never from the conversation|fresh agent/);
+	});
+
+	it("agrees with itself about one versus many", () => {
+		expect(unchallengedBrief([finding({ id: "a" })])).toContain("1 finding has");
+		expect(unchallengedBrief([finding({ id: "a" }), finding({ id: "b" })])).toContain("2 findings have");
+	});
+
+	/** A brief that grew with the engagement would be charged on every turn. */
+	it("names a few and counts the rest", () => {
+		const many = ["a", "b", "c", "d", "e"].map((id) => finding({ id }));
+		const out = unchallengedBrief(many);
+		expect(out).toContain("+2 more");
+		expect(out).not.toContain("e [");
+	});
+
+	it("is empty when nothing is waiting, so it costs no prompt", () => {
+		expect(unchallengedBrief([])).toBe("");
+		expect(unchallengedBrief([finding({ status: "confirmed" }), finding({ status: "refuted" })])).toBe("");
 	});
 });
