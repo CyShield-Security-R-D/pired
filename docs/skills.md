@@ -6,7 +6,7 @@ Both are opt-in by design. The system prompt hands the model situational awarene
 
 ## Skills
 
-41 skills under `skills/<name>/SKILL.md`, contributed to pi's resource loader. pi discovers each one, advertises the name and description in the system prompt, and loads the body only when the model asks for it — so the always-on cost is one line each.
+45 skills under `skills/<name>/SKILL.md`, contributed to pi's resource loader. pi discovers each one, advertises the name and description in the system prompt, and loads the body only when the model asks for it — so the always-on cost is one line each.
 
 ```
 skills/
@@ -34,6 +34,15 @@ skills/
 | `review-language-js-ts` | Express/Fastify/Next, prototype pollution, `vm`/`eval`. |
 | `review-language-java` | Spring, Jackson/native deser, SpEL/OGNL, reflection. |
 | `review-language-go-ruby-php` | Per-language sources and sinks for the other three. |
+
+### Firmware / IoT — 4
+
+| Skill | For |
+|---|---|
+| `firmware-extract` | Blob to root filesystem: identify, entropy-check for encryption, carve with binwalk v3 / unblob, then the per-filesystem tools. FSTM stages 3–4. |
+| `firmware-triage` | The extracted rootfs: credentials and keys, the web/CGI surface that yields most real findings, startup scripts, and the update client. FSTM stage 5. |
+| `firmware-binaries` | Component CVEs and why version matching lies, `checksec` hardening as severity context, and decompiling the handler that matters. |
+| `firmware-emulate` | qemu-user for one binary, FirmAE for a whole device, and telling a real crash from an emulation artifact. FSTM stages 6–7. |
 
 ### Web — 10
 

@@ -9,7 +9,7 @@
  * Pure module: no ports, no I/O. Scope loading lives in the workspace/config layer.
  */
 
-import type { EngagementScope, ScopeTargets } from "./ontology.ts";
+import type { EngagementScope, ScopeTargets, TargetType } from "./ontology.ts";
 import type { Gate, GateDecision, ToolCall } from "./ports.ts";
 
 // --- IPv4 helpers -----------------------------------------------------------
@@ -378,4 +378,29 @@ export function summarizeScope(scope: EngagementScope): string {
 	const auth = scope.authorized === true ? "authorized" : "NOT authorized";
 	const mode = scope.strictUnresolved ? `${scope.mode}/strict` : scope.mode;
 	return `${scope.engagement} [${mode}, ${auth}] ${counts.join(", ") || "no targets"}`;
+}
+
+/**
+ * Which bundled checklist seeds this engagement's coverage matrix.
+ *
+ * Lived in the extension until it had to answer for two more target types, and
+ * moved here because it is a pure function of the scope and because a decision
+ * nothing can test is a decision that goes quietly wrong — `api.json` shipped
+ * with 13 classes that no code path could ever select, and nobody noticed.
+ *
+ * The order is deliberate. The operator's own `targetType` wins, because the
+ * inference below reads the shape of the targets and the shape settles exactly
+ * two cases: bare addresses mean `network`, hostnames and URLs mean `web`. An
+ * API engagement is a list of URLs and looks identical to a web one; a firmware
+ * engagement names no network target at all. Neither is inferable, so neither
+ * is inferred.
+ */
+export function pickTargetType(profile: string, scope: EngagementScope): TargetType {
+	if (scope.targetType) return scope.targetType;
+	if (profile === "review") return "code-review";
+	const t = scope.targets ?? {};
+	const webish = (t.domains?.length ?? 0) > 0 || (t.urls?.length ?? 0) > 0;
+	const netish = (t.ips?.length ?? 0) > 0 || (t.cidrs?.length ?? 0) > 0;
+	if (netish && !webish) return "network";
+	return "web";
 }

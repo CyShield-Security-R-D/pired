@@ -123,7 +123,8 @@ subdomain; IPs match exactly; CIDRs use IPv4 containment; `exclude` wins over
 ## 7. `checklist.json`
 
 Single JSON object — the vuln-class checklist for the engagement, seeded from a
-target-type template (`web` / `api` / `network` / `code-review`) and editable.
+target-type template (`web` / `api` / `network` / `code-review` / `firmware`) and editable.
+The template is chosen by `scope.targetType` when set, else inferred from the target shape.
 Drives the coverage matrix (§9 of this doc, `PLAN.md` §6).
 
 ```jsonc

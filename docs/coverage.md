@@ -150,9 +150,16 @@ The checklist is seeded once per engagement from a bundled template, chosen by t
 
 | Profile / scope | Target type |
 |---|---|
+| `targetType` set in the scope file | whatever it says |
 | `review` | `code-review` |
 | Targets include domains or URLs | `web` |
 | Targets are IPs or CIDRs only | `network` |
+
+The shape of a scope settles exactly two of these. An API engagement is a list of URLs and looks identical to a web one; a firmware engagement names no network target at all. So `api.json` and `firmware.json` are reachable only by saying so:
+
+```jsonc
+{ "v": 1, "engagement": "acme-cam", "authorized": true, "mode": "off", "targetType": "firmware", "targets": {} }
+```
 
 An existing checklist is **never** clobbered — edit `checklist.json` in the workspace to add, remove, or annotate classes for a specific engagement. A malformed template is non-fatal: coverage simply stays uncomputed rather than taking the session down.
 

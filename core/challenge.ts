@@ -420,6 +420,118 @@ export const CONTRACTS: readonly VerificationContract[] = [
 			"engagement's rules of engagement, or ask the operator. Reachability with no stated policy " +
 			"behind it describes the network rather than finding anything wrong with it.",
 	},
+	/**
+	 * The firmware family.
+	 *
+	 * These are the classes with no analogue in a web or code-review engagement,
+	 * so they are the only ones firmware.json needed new: everything else it
+	 * asks — `cmdi` of a CGI binary, `traversal` of a device handler, `sca` of a
+	 * component in the rootfs — is the same weakness on a different surface and
+	 * settles against the same bar it always did.
+	 *
+	 * What is genuinely different here is the *medium*, which ADR-009 says
+	 * decides what proof looks like. Two consequences run through all of them.
+	 * A static image cannot answer a question about a running device, so a
+	 * control that requires one is a control that cannot be met from an
+	 * extracted rootfs — and emulation fails often enough (16% of images on
+	 * firmadyne, 79% on FirmAE) that "could not be confirmed dynamically" is an
+	 * expected outcome rather than a failure to look. And several of these are
+	 * only reachable with the hardware in hand, so their ceiling reflects what
+	 * an image alone can establish.
+	 */
+	{
+		class: "memory-safety",
+		claim: "attacker-controlled input reaches a memory operation that writes past the buffer",
+		control:
+			"a benign input of the same length and shape must NOT crash it, and the crash must repeat " +
+			"from the same input. A crash under emulation is not a finding on its own: QEMU-based " +
+			"rehosting produces faults from unimplemented ioctls and missing peripherals that look " +
+			"identical to a real overflow, so say whether the faulting address is derived from your " +
+			"input or from a syscall the emulator does not have.",
+		ceiling: "high",
+		ceilingWhy:
+			"critical needs control of execution, not a crash. On an unhardened static MIPS/ARM binary " +
+			"that step is usually short — but it is a step, and the absence of NX/ASLR/canary is " +
+			"severity context for the impact paragraph rather than proof of exploitability.",
+	},
+	{
+		class: "update-signature",
+		claim: "the device accepts firmware that the vendor did not sign",
+		control:
+			"a MODIFIED image must be accepted. An update client that fetches over plaintext is the " +
+			"weaker CWE-494 case and is proven by the transport alone; claiming CWE-347 means showing " +
+			"the updater parses a signature and ignores the result, which needs the verify call traced " +
+			"or a re-signed image accepted. Reading `http://` in a binary is where this starts, not " +
+			"where it ends.",
+		ceiling: "high",
+		ceilingWhy:
+			"critical needs the delivery too. Unsigned update is the classic second-order finding: it " +
+			"is persistent compromise once you can reach the update path, so name the bug that gets you " +
+			"there — an unauthenticated trigger, a MITM-able channel — or record it as critical-if-chained.",
+	},
+	{
+		class: "update-rollback",
+		claim: "the device accepts a validly-signed but older, vulnerable image",
+		control:
+			"the older image must actually boot and run, and the security version must be shown to live " +
+			"somewhere writable rather than in an eFuse or OTP register. A version number that merely " +
+			"looks mutable in a config file is not this finding until the downgrade completes.",
+	},
+	{
+		class: "no-update-path",
+		claim: "there is no mechanism to ship a fix for this component at all",
+		control:
+			"absence has to be established, not assumed from a filesystem listing: show there is no " +
+			"update client, no writable firmware partition and no documented procedure. A component " +
+			"that updates only as part of a whole-image flash still updates.",
+		ceiling: "medium",
+		ceilingWhy:
+			"unpatchability is a property of the product, not a way in. It raises the severity of every " +
+			"other finding in the report and carries little on its own — cite it in their impact.",
+	},
+	{
+		class: "secure-boot",
+		claim: "the chain of trust can be broken, so code the vendor did not sign executes at boot",
+		control:
+			"a modified boot stage must actually execute. Boot code or keys sitting in rewritable flash " +
+			"is the precondition, not the proof — show the device runs it, or record the reachability " +
+			"and keep the finding suspected.",
+	},
+	{
+		class: "debug-iface",
+		claim: "a debug or test interface gives access it should not, to whoever can reach it",
+		control:
+			"the interface must yield something: a shell, a bootloader prompt, a halt-and-read over " +
+			"JTAG. Populated pads are not a finding — plenty of boards expose test points that are " +
+			"fused off or authenticated. Say which access level you reached, and whether opening the " +
+			"enclosure was needed, because that is what decides whether it is in the threat model.",
+		entitlement:
+			"who is meant to be able to reach this? A debug header inside a sealed enclosure in a " +
+			"locked cabinet and one on a retail device an attacker can buy are the same finding with " +
+			"different severities. Establish the deployment from the target model or ask the operator.",
+	},
+	{
+		class: "debug-code",
+		claim: "debug functionality the vendor did not intend to ship is present and reachable in a production build",
+		control:
+			"it must be reachable in the SHIPPING configuration. A debug branch behind a compile-time " +
+			"flag that is off, or an applet the build strips, is dead code — show the path from an " +
+			"input an attacker controls, or this is a note about hygiene rather than a finding.",
+	},
+	{
+		class: "side-channel",
+		claim: "a secret can be recovered, or a check bypassed, through power, timing, EM or induced faults",
+		control:
+			"this cannot be settled from an image. It needs the hardware, the instrumentation and a " +
+			"recovered key or a bypassed check to show for it — a non-constant-time comparison in a " +
+			"decompilation is a lead. Record it suspected and say what rig would settle it; a claim " +
+			"that a device is glitchable, with no glitch, is the kind of thing a client's engineer " +
+			"disproves in an afternoon.",
+		ceiling: "medium",
+		ceilingWhy:
+			"without the attack actually performed this is a design observation. It goes higher only " +
+			"with a demonstrated key extraction or secure-boot bypass on real hardware.",
+	},
 	{
 		class: "logic",
 		claim: "the application permits a sequence its rules forbid",

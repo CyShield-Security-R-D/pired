@@ -884,3 +884,103 @@ release. Naming the two commands a child needs is enough, and works whatever spa
 **A `verification` field the caller can set.** It is the one field that must not be forgeable — a
 caller handing in the conclusion it is supposed to have earned is exactly the failure ADR-007 exists
 to prevent. `record` deletes it and computes its own.
+
+---
+
+## ADR-015 — Firmware is a target type, not a new ontology
+
+**Status:** accepted
+
+### Context
+
+pired covered `web`, `api`, `network` and `code-review`. A firmware image fits none of them, and the
+obvious reading — that firmware needs its own inventory kinds, its own scope primitives and its own
+weakness vocabulary — turns out to be mostly wrong.
+
+Three things came out of the research that shaped this.
+
+**The OWASP IoT Top 10 is dead.** The repo was archived in 2024 with `index.md` emptied, the canonical
+PDF 404s, and no successor was ever published despite the original promising a two-year cadence. It
+is reporting vocabulary a client recognises, not a coverage floor. The live artifacts are FSTM (how
+to test firmware, 9 stages), ISVS (what controls must exist) and ISTG (test cases by device
+component).
+
+**The findings are not where the taxonomy points.** The hardware and boot-chain literature is
+extensive, but ISE's SOHOpelessly Broken 2.0 found a web-application vulnerability in **13 of 13**
+SOHO devices and root shell on 12; Talos found 44 vulnerabilities in the CGI and shell scripts of a
+single router. Command injection in a vendor CGI binary is the highest-volume class by a wide margin,
+and hardcoded credentials the most consistently reported. Invasive hardware work is rare in a paid
+engagement because it destroys the unit and eats the budget.
+
+**Version matching lies.** Vendor backports fix code without bumping the version string; stripping
+and static linking against uClibc/musl defeat signatures; SDK code is compiled in but unreachable.
+Industry SAST false-positive rates run 64–82% and no firmware CVE tool publishes a measured rate at
+all — EMBA carries verifier modules precisely because raw string matching is known unreliable.
+
+### Decision
+
+**Firmware is a `targetType` with a checklist and four skills. The ontology does not change.**
+
+The existing inventory kinds already carry firmware surface, and carry it well:
+
+| Firmware thing | Record |
+|---|---|
+| Component + version (busybox 1.19.4) | `tech{name, version}` — an SBOM entry, and the row `sca` is asked of |
+| CGI handler in the web root | `endpoint{file}` — `file` was added so a cell could name a place on disk |
+| Device, emulated or real | `host` |
+| Listening service | `service` |
+
+**Most classes reuse the id they already had.** `cmdi` is `cmdi` whether the sink is a Rails
+controller or a MIPS CGI binary, and it settles against the same bar. `firmware.json` names 19
+classes and only **eight** are new — `memory-safety`, `update-signature`, `update-rollback`,
+`no-update-path`, `secure-boot`, `debug-iface`, `debug-code`, `side-channel` — which are the ones
+with no analogue in a web or code-review engagement. The rest are `default-creds`, `secrets`, `cmdi`,
+`authn`, `traversal`, `unauth-service`, `tls`, `infodisclosure`, `crypto`, `sca`, `misconfig`.
+
+**The eight new contracts encode the medium**, as ADR-009 requires. A static image cannot settle a
+question about a running device, and emulation reaches a working service on 16% of images under
+firmadyne and 79% under FirmAE — so "could not be confirmed dynamically" is an expected outcome, and
+`memory-safety`'s control demands that a benign input of the same shape does *not* crash, because
+QEMU rehosting produces faults from missing peripherals that look identical to an overflow.
+`side-channel` is capped at medium without the attack actually performed.
+
+**`scope.targetType` selects the checklist**, and the inference stays as the default for the two
+cases the target shape genuinely settles. This also fixes a bug it exposed: `api.json` shipped with
+13 classes that no code path could ever select, because an API engagement is a list of URLs and looks
+exactly like a web one.
+
+**`pickTargetType` moved to `core/scope.ts`** and is now tested. It was in the extension, where a
+decision nothing can test goes quietly wrong — which is how `api.json` stayed unreachable without
+anyone noticing.
+
+### Consequences
+
+- No new profile. A firmware engagement is `review` while it is static and `pentest` once something
+  is emulated or a device is live; the gate posture those two carry is already the right one, and the
+  firmware specifics live in the checklist and the skills.
+- The skills say out loud that a CVE hit is a lead, not a finding, and that `checksec` output is
+  severity context rather than a finding — there is no CWE for "unhardened binary" and a client
+  cannot act on a list of missing flags.
+- `capa` is named as unusable here (x86/x64 only, the ARM PR unmerged, MIPS never attempted) and
+  `firmwalker`'s canonical repo is named as 404, so nobody wastes a session on either.
+- The scope still cannot name a firmware artifact by file and hash, which is what a statement of work
+  actually names. The skills work around it by recording the image as a `host` and its SHA-256 as a
+  note. That is a real gap, left open deliberately rather than half-designed.
+
+### Rejected
+
+**New inventory kinds** (`image`, `binary`, `bootloader`, `update`). It is the shape the ISTG
+component axis suggests, and it would ripple into `record`'s schema, coverage, the panel, export and
+`FORMAT.md` for surface the existing five kinds already carry. The mapping above is not a workaround;
+`tech{name, version}` genuinely *is* an SBOM entry.
+
+**A `firmware` profile.** Profiles decide gate posture, not methodology, and firmware work moves
+between read-only and live within one engagement.
+
+**Seeding the checklist from OWASP IoT Top 10.** It is archived and its ten items are written as
+categories for a report rather than as test cases with a control, which is what a coverage cell needs.
+
+**Wiring EMBA as a backend.** It is genuinely scriptable and actively maintained, but it is an
+orchestrator wrapping binwalk, radare2, cve-bin-tool and QEMU — running it under pired is an
+orchestrator inside an orchestrator, and its mean run is ~14 hours on a 25MB image. Better named in a
+skill as an optional deep scan than depended on.

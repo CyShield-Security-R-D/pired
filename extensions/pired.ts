@@ -33,7 +33,7 @@ import { bannerColumns, BROWSER_CHROME, OVERLAY, OVERLAY_HEIGHT_SHARE, railColum
 import type { BlockerRecord, Checklist, EngagementScope, FindingRecord, Severity, TargetType } from "../core/ontology.ts";
 import type { Gate, ToolContext, ToolDefinition } from "../core/ports.ts";
 import { buildSystemPrompt, PIRED_PROFILES, type PiredProfile } from "../core/prompts.ts";
-import { createScopeGate } from "../core/scope.ts";
+import { createScopeGate, pickTargetType } from "../core/scope.ts";
 import { renderCoveragePanel, type Tone } from "../core/coverage-panel.ts";
 import { complete } from "@earendil-works/pi-ai/compat";
 import type { AssistantMessage, Message, UserMessage } from "@earendil-works/pi-ai/compat";
@@ -182,21 +182,6 @@ function loadScope(cwd: string, profile: PiredProfile, trusted: boolean): Engage
 		}
 	}
 	return defaultScope(profile, basename(cwd) || "engagement");
-}
-
-/**
- * Which built-in checklist seeds the coverage matrix. Review is always code
- * review; otherwise infer from the scope's target shape (hostnames/urls -> web,
- * bare ip/cidr blocks -> network), defaulting to web — the broadest surface.
- * The operator can drop their own checklist.json to override any of this.
- */
-function pickTargetType(profile: PiredProfile, scope: EngagementScope): TargetType {
-	if (profile === "review") return "code-review";
-	const t = scope.targets ?? {};
-	const hasWebish = (t.domains?.length ?? 0) > 0 || (t.urls?.length ?? 0) > 0;
-	const hasNetish = (t.ips?.length ?? 0) > 0 || (t.cidrs?.length ?? 0) > 0;
-	if (hasNetish && !hasWebish) return "network";
-	return "web";
 }
 
 /** Seed checklist.json from the bundled template for this target type, if the engagement has none yet. */

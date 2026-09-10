@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { EngagementScope } from "./ontology.ts";
-import { checkCommandScope, createScopeGate, extractTargets, isHostInScope, isUrlInScope, summarizeScope } from "./scope.ts";
+import { checkCommandScope, createScopeGate, extractTargets, isHostInScope, isUrlInScope, pickTargetType, summarizeScope } from "./scope.ts";
 
 const scope: EngagementScope = {
 	v: 1,
@@ -253,5 +253,41 @@ describe("summarizeScope", () => {
 		expect(s).toContain("acme");
 		expect(s).toMatch(/enforce/);
 		expect(s).toMatch(/authorized/);
+	});
+});
+
+describe("pickTargetType", () => {
+	const eng = (over: Partial<EngagementScope> = {}): EngagementScope => ({
+		v: 1, engagement: "e", authorized: true, mode: "off", targets: {}, ...over,
+	});
+
+	/**
+	 * The bug this exists to stop repeating: `api.json` shipped with 13 classes
+	 * and nothing could ever select it, because the shape of a scope cannot tell
+	 * an API engagement from a web one — both are a list of URLs.
+	 */
+	it("takes the operator's word over any inference", () => {
+		expect(pickTargetType("pentest", eng({ targetType: "api", targets: { urls: ["https://x/v1"] } }))).toBe("api");
+		expect(pickTargetType("review", eng({ targetType: "firmware" }))).toBe("firmware");
+		// Even against the profile default, which is the whole point for firmware:
+		// a firmware engagement is read-only local work and would otherwise be
+		// handed the code-review checklist.
+		expect(pickTargetType("review", eng({ targetType: "network" }))).toBe("network");
+	});
+
+	it("still infers the two cases the target shape actually settles", () => {
+		expect(pickTargetType("pentest", eng({ targets: { ips: ["10.0.0.5"], cidrs: ["10.0.0.0/24"] } }))).toBe("network");
+		expect(pickTargetType("pentest", eng({ targets: { domains: ["acme.test"] } }))).toBe("web");
+		expect(pickTargetType("recon", eng({ targets: { urls: ["https://acme.test/a"] } }))).toBe("web");
+	});
+
+	/** A host named by address as well as by name is still a web engagement. */
+	it("does not read a mixed scope as network just because an address is in it", () => {
+		expect(pickTargetType("pentest", eng({ targets: { ips: ["10.0.0.5"], domains: ["acme.test"] } }))).toBe("web");
+	});
+
+	it("defaults review to code review, and everything unrecognised to web", () => {
+		expect(pickTargetType("review", eng())).toBe("code-review");
+		expect(pickTargetType("pentest", eng())).toBe("web");
 	});
 });

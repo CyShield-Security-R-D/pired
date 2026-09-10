@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "targetType": "firmware",
+  "classes": [
+    { "id": "default-creds", "title": "Hard-coded, default or guessable credentials", "cwe": ["CWE-798", "CWE-259", "CWE-1392"], "appliesTo": ["tech", "host", "service"] },
+    { "id": "secrets", "title": "Keys, certificates or secrets stored in the image", "cwe": ["CWE-321", "CWE-312", "CWE-311", "CWE-921"], "appliesTo": ["tech", "host"] },
+    { "id": "cmdi", "title": "Command injection in a device web/CGI handler", "cwe": ["CWE-78"], "appliesTo": ["endpoint", "param", "tech"] },
+    { "id": "authn", "title": "Missing or bypassable authentication on a device interface", "cwe": ["CWE-287", "CWE-306", "CWE-862"], "appliesTo": ["endpoint", "service"] },
+    { "id": "traversal", "title": "Path traversal / arbitrary file read on the device", "cwe": ["CWE-22", "CWE-98"], "appliesTo": ["endpoint", "param"] },
+    { "id": "memory-safety", "title": "Stack or heap overflow in a native handler", "cwe": ["CWE-121", "CWE-122", "CWE-787"], "appliesTo": ["tech", "endpoint", "param"] },
+    { "id": "unauth-service", "title": "Unauthenticated or unnecessary network service", "cwe": ["CWE-306", "CWE-668"], "appliesTo": ["service", "host"] },
+    { "id": "tls", "title": "Sensitive data sent without encryption", "cwe": ["CWE-319", "CWE-326", "CWE-327"], "appliesTo": ["service", "endpoint"] },
+    { "id": "update-signature", "title": "Firmware update not signature-verified", "cwe": ["CWE-347", "CWE-494"], "appliesTo": ["tech", "host"] },
+    { "id": "update-rollback", "title": "No anti-rollback: security version is mutable", "cwe": ["CWE-1328"], "appliesTo": ["host", "tech"] },
+    { "id": "no-update-path", "title": "Firmware or a bundled component is not updateable", "cwe": ["CWE-1277", "CWE-1329"], "appliesTo": ["host", "tech"] },
+    { "id": "secure-boot", "title": "Missing or bypassable root of trust", "cwe": ["CWE-1326", "CWE-1274", "CWE-1283", "CWE-1282"], "appliesTo": ["host"] },
+    { "id": "debug-iface", "title": "Debug or test interface without access control (UART/JTAG)", "cwe": ["CWE-1191", "CWE-1244"], "appliesTo": ["host"] },
+    { "id": "debug-code", "title": "Debug code or undocumented features shipped enabled", "cwe": ["CWE-489", "CWE-1313", "CWE-1242"], "appliesTo": ["tech", "endpoint", "service"] },
+    { "id": "infodisclosure", "title": "Sensitive information exposed through debug or uncleared state", "cwe": ["CWE-1243", "CWE-1258", "CWE-1272"], "appliesTo": ["tech", "host", "service"] },
+    { "id": "crypto", "title": "Predictable randomness or risky cryptographic primitive", "cwe": ["CWE-338", "CWE-1241", "CWE-1240"], "appliesTo": ["tech"] },
+    { "id": "sca", "title": "Outdated third-party component with known CVEs", "cwe": ["CWE-1395", "CWE-1104"], "appliesTo": ["tech"] },
+    { "id": "misconfig", "title": "Insecure default settings or file permissions", "cwe": ["CWE-1188", "CWE-276", "CWE-693"], "appliesTo": ["host", "service", "tech"] },
+    { "id": "side-channel", "title": "Side-channel or fault-injection exposure", "cwe": ["CWE-1300", "CWE-1255", "CWE-1247", "CWE-1332"], "appliesTo": ["host"] }
+  ]
+}

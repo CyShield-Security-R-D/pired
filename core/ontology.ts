@@ -29,7 +29,7 @@ export const RECORD_VERSION = 1;
 export const SCOPE_MODES = ["enforce", "warn", "off"] as const;
 export type ScopeMode = (typeof SCOPE_MODES)[number];
 
-export const TARGET_TYPES = ["web", "api", "network", "code-review"] as const;
+export const TARGET_TYPES = ["web", "api", "network", "code-review", "firmware"] as const;
 /** Known target types; custom types are allowed. */
 export type TargetType = (typeof TARGET_TYPES)[number] | (string & {});
 
@@ -240,6 +240,20 @@ export interface EngagementScope {
 	workspace?: string;
 	targets: ScopeTargets;
 	exclude?: ScopeTargets;
+	/**
+	 * Which checklist seeds the coverage matrix, when the targets cannot say.
+	 *
+	 * The shape of a scope infers `web` from domains and `network` from bare
+	 * addresses, which works for those two and for nothing else: an API
+	 * engagement and a web engagement are both a list of URLs, so `api.json`
+	 * shipped with 13 classes that nothing could ever select. A firmware
+	 * engagement has no network target at all.
+	 *
+	 * Inference cannot distinguish these because the difference is not in the
+	 * targets — it is in what the operator came to test. So they say, and the
+	 * inference below stays as the default for the two cases it does settle.
+	 */
+	targetType?: TargetType;
 	/**
 	 * When true, a recognized network command whose target could not be parsed
 	 * (e.g. `curl localhost`, a shell variable) is BLOCKED under `enforce` mode
