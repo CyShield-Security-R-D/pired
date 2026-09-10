@@ -26,7 +26,7 @@ import {
 	buildBrowserModel, detailRowCount, elementLabel, initialState, reduceBrowser, renderBrowser, selectedBlocker, visibleBlockers, type BrowserKey, type BrowserModel, type BrowserState, type BrowserTone, type BrowserView,
 } from "../core/browser.ts";
 import { type BannerTone, renderBanner } from "../core/banner.ts";
-import { auditFinding, challengeBrief, unchallengedBrief, unchallengedQueue } from "../core/challenge.ts";
+import { challengeCommand, unchallengedBrief } from "../core/challenge.ts";
 import { blockerDialog, SKIP_OPTION } from "../core/dialog.ts";
 import { exportFindingsMarkdown, notReportReady } from "../core/export.ts";
 import { bannerColumns, BROWSER_CHROME, OVERLAY, OVERLAY_HEIGHT_SHARE, railColumns } from "../core/layout.ts";
@@ -2366,36 +2366,9 @@ export default function piredExtension(pi: ExtensionAPI): void {
 				ctx.ui.notify(`pired: could not read findings — ${err instanceof Error ? err.message : String(err)}`, "warning");
 				return;
 			}
-
-			const id = (args ?? "").trim();
-			if (!id) {
-				const queue = unchallengedQueue(findings);
-				if (queue.length === 0) {
-					ctx.ui.notify("pired: nothing unchallenged — every live finding has been through a challenge", "info");
-					return;
-				}
-				const list = queue.map((f) => `· ${f.id} [${f.severity}] ${f.title}`).join("\n");
-				ctx.ui.notify(`pired: ${queue.length} finding(s) carry no verdict\n${list}\n\n/challenge <id> for the brief on one.`, "info");
-				return;
-			}
-
-			const finding = findings.find((f) => f.id === id);
-			if (!finding) {
-				ctx.ui.notify(`pired: no finding called "${id}" — /challenge lists what is unverified`, "warning");
-				return;
-			}
 			const targetModel = await workspace.readModel().catch(() => undefined);
-			const brief = challengeBrief(finding, auditFinding({ finding, targetModel }));
-			// The delegation line names the CLI rather than pasting the brief into a
-			// task string: a child can fetch its own brief, and a task prompt that
-			// carries one is a task prompt nobody reads.
-			ctx.ui.notify(
-				`${brief}\n\nTo hand this to a subagent, spawn one whose job is to break the claim. It needs nothing `
-				+ `from this conversation — it reads the brief itself with \`pired-ledger recall challenge id=${id}\` and `
-				+ `records the verdict with \`pired-ledger record kind=finding id=${id} status=confirmed|refuted control="..."\`. `
-				+ "The verdict is judged against the class contract on the way in, so it cannot be asserted.",
-				"info",
-			);
+			const view = challengeCommand({ findings, id: args ?? "", ...(targetModel ? { targetModel } : {}) });
+			ctx.ui.notify(view.text, view.tone);
 		},
 	});
 

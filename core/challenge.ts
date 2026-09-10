@@ -1199,3 +1199,71 @@ export function hypothesisBrief(h: HypothesisRecord, ctx: HypothesisContext = {}
 		+ "and element. If clear, record the hypothesis outcome again with your basis in the reason.");
 	return out.join("\n");
 }
+
+/** What `/challenge` should put on screen, and in which tone. */
+export interface ChallengeCommandView {
+	text: string;
+	tone: "info" | "warning";
+	/** The finding the brief is for, when one was resolved. Lets a caller act on it. */
+	finding?: FindingRecord;
+}
+
+export interface ChallengeCommandInput {
+	findings: FindingRecord[];
+	/** What the operator typed after the command, already trimmed. */
+	id?: string;
+	targetModel?: string;
+	/** Evidence bodies by workspace-relative path, for the gap audit. */
+	evidence?: Record<string, string>;
+}
+
+/**
+ * `/challenge`, as a function of the ledger.
+ *
+ * The command's decisions — is anything waiting, does this id exist, what does a
+ * verifier need to be told — lived in `extensions/pired.ts`, which is 38%
+ * covered and is the file CLAUDE.md names as the one to keep moving logic *out*
+ * of. It shipped with no test at all, and the argument for moving it is the same
+ * one `pickTargetType` made: a decision nothing can test is a decision that goes
+ * quietly wrong, and both of this session's schema bugs were exactly that.
+ *
+ * The host is left with what only a host can do: read the workspace and draw the
+ * result.
+ */
+export function challengeCommand(input: ChallengeCommandInput): ChallengeCommandView {
+	const id = input.id?.trim() ?? "";
+
+	if (!id) {
+		const queue = unchallengedQueue(input.findings);
+		if (queue.length === 0) {
+			return { tone: "info", text: "pired: nothing unchallenged — every live finding has been through a challenge" };
+		}
+		const list = queue.map((f) => `· ${f.id} [${f.severity}] ${f.title}`).join("\n");
+		return {
+			tone: "info",
+			text: `pired: ${queue.length} finding(s) carry no verdict\n${list}\n\n/challenge <id> for the brief on one.`,
+		};
+	}
+
+	const finding = input.findings.find((f) => f.id === id);
+	if (!finding) {
+		return { tone: "warning", text: `pired: no finding called "${id}" — /challenge lists what is unverified` };
+	}
+
+	const brief = challengeBrief(finding, auditFinding({
+		finding,
+		...(input.evidence ? { evidence: input.evidence } : {}),
+		...(input.targetModel ? { targetModel: input.targetModel } : {}),
+	}));
+	// The delegation line names the CLI rather than pasting the brief into a task
+	// string: a child can fetch its own brief, and a task prompt that carries one
+	// is a task prompt nobody reads.
+	return {
+		tone: "info",
+		finding,
+		text: `${brief}\n\nTo hand this to a subagent, spawn one whose job is to break the claim. It needs nothing `
+			+ `from this conversation — it reads the brief itself with \`pired-ledger recall challenge id=${id}\` and `
+			+ `records the verdict with \`pired-ledger record kind=finding id=${id} status=confirmed|refuted control="..."\`. `
+			+ "The verdict is judged against the class contract on the way in, so it cannot be asserted.",
+	};
+}

@@ -2,7 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
 	auditFinding, challengeBrief, type ChallengeReport, CLASS_ALIASES, CONTRACTS, contractFor,
-	evidenceShape, GENERIC_CONTROL, hypothesisBrief, isUnchallenged, judge, modelAnswersEntitlement, unchallengedBrief, unchallengedQueue,
+	challengeCommand, evidenceShape, GENERIC_CONTROL, hypothesisBrief, isUnchallenged, judge, modelAnswersEntitlement, unchallengedBrief, unchallengedQueue,
 	verdictPatch,
 } from "./challenge.ts";
 import type { FindingRecord, HypothesisRecord } from "./ontology.ts";
@@ -491,5 +491,89 @@ describe("hypothesisBrief", () => {
 		const out = hypothesisBrief(hyp());
 		expect(out).toMatch(/I could not find anything/);
 		expect(out).toMatch(/file:line or evidence path/);
+	});
+});
+
+describe("challengeCommand", () => {
+	/**
+	 * Moved out of `extensions/pired.ts`, which is 38% covered and is the file
+	 * CLAUDE.md names as the one to keep moving logic out of. It had shipped with
+	 * no test at all — and both schema bugs found this session were the same
+	 * thing: a decision nothing could test.
+	 */
+	it("says nothing is waiting rather than drawing an empty list", () => {
+		const view = challengeCommand({ findings: [finding({ status: "confirmed" })] });
+		expect(view.tone).toBe("info");
+		expect(view.text).toMatch(/nothing unchallenged/);
+		expect(view.finding).toBeUndefined();
+	});
+
+	it("lists what carries no verdict, worst first", () => {
+		const view = challengeCommand({
+			findings: [
+				finding({ id: "a", severity: "low", title: "Verbose errors" }),
+				finding({ id: "b", severity: "critical", title: "RCE in /admin" }),
+				finding({ id: "c", severity: "high", title: "IDOR on notes", status: "confirmed" }),
+			],
+		});
+		expect(view.text).toMatch(/2 finding\(s\) carry no verdict/);
+		// Assert on the rows themselves: a bare indexOf("b") matches the "b" in
+		// any surrounding prose and passes for the wrong reason.
+		const rows = view.text.split("\n").filter((l) => l.startsWith("· "));
+		expect(rows).toEqual(["· b [critical] RCE in /admin", "· a [low] Verbose errors"]);
+		expect(view.text).not.toContain("IDOR on notes");
+		expect(view.text).toMatch(/\/challenge <id>/);
+	});
+
+	it("treats whitespace as no argument, not as an id", () => {
+		expect(challengeCommand({ findings: [finding()], id: "   " }).text).toMatch(/carry no verdict/);
+	});
+
+	it("warns on an id it does not have, and points at the list", () => {
+		const view = challengeCommand({ findings: [finding()], id: "nope" });
+		expect(view.tone).toBe("warning");
+		expect(view.text).toMatch(/no finding called "nope"/);
+		expect(view.text).toMatch(/\/challenge lists/);
+	});
+
+	it("returns the brief and the finding it is for", () => {
+		const target = finding({ id: "f3", class: "cmdi", title: "Command injection in /admin" });
+		const view = challengeCommand({ findings: [target], id: "f3" });
+		expect(view.tone).toBe("info");
+		expect(view.finding).toBe(target);
+		expect(view.text).toContain("Challenge finding f3");
+		expect(view.text).toContain(contractFor("cmdi")?.control);
+	});
+
+	/** The delegation half: a child fetches its own brief rather than being handed one. */
+	it("names the two commands a subagent needs, with the id filled in", () => {
+		const view = challengeCommand({ findings: [finding({ id: "f3" })], id: "f3" });
+		expect(view.text).toContain("pired-ledger recall challenge id=f3");
+		expect(view.text).toContain("pired-ledger record kind=finding id=f3");
+		expect(view.text).toMatch(/cannot be asserted/);
+	});
+
+	it("audits against the target model, so an entitlement gap is named", () => {
+		const view = challengeCommand({
+			findings: [finding({ id: "f4", class: "idor" })],
+			id: "f4",
+			targetModel: "# Actors\nowner, admin\n",
+		});
+		expect(view.text).toContain("Challenge finding f4");
+		expect(view.text).toMatch(/entitlement/i);
+	});
+
+	it("passes evidence through, so a cited file's shape is judged", () => {
+		const view = challengeCommand({
+			findings: [finding({ id: "f5", class: "sqli", evidence: ["evidence/x.txt"] })],
+			id: "f5",
+			evidence: { "evidence/x.txt": "GET /search?q=1 HTTP/1.1\n\nHTTP/1.1 200 OK\n" },
+		});
+		expect(view.text).toContain("evidence/x.txt");
+	});
+
+	it("is unbothered by an empty ledger", () => {
+		expect(challengeCommand({ findings: [] }).text).toMatch(/nothing unchallenged/);
+		expect(challengeCommand({ findings: [], id: "f1" }).tone).toBe("warning");
 	});
 });
