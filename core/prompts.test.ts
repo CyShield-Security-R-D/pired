@@ -51,6 +51,39 @@ describe("buildSystemPrompt", () => {
 		expect(p).toContain("enumerate a web app");
 	});
 
+	/**
+	 * The bug: saying "hello" started a code review. Every instruction in the
+	 * prompt was written in the imperative of an engagement already underway —
+	 * "Work in passes", "Enumerate the attack surface", "do not finish while a
+	 * class is still unconsidered" — and nothing anywhere said the operator's
+	 * message was what decided the turn. A capable model read the methodology as
+	 * a standing order and began covering the floor off a greeting.
+	 */
+	it("puts the operator's message in charge of the turn, so a greeting is not an engagement", () => {
+		for (const profile of PIRED_PROFILES) {
+			const p = buildSystemPrompt({ profile, scope });
+			expect(p, profile).toMatch(/greeting as a greeting/i);
+			expect(p, profile).toMatch(/begins when they ask|not a job that starts on connect/i);
+			// The methodology must not outrank what was actually asked for.
+			expect(p, profile).toMatch(/none of it outranks what they actually asked for/i);
+		}
+	});
+
+	it("frames the methodology as how to work, never as a reason to begin working", () => {
+		const p = buildSystemPrompt({ profile: "review", scope });
+		expect(p).toMatch(/once the operator has asked for one/i);
+		expect(p).toMatch(/method, not a trigger/i);
+		// "do not finish" is about not abandoning a job half-done, not about
+		// refusing to stop when the operator says stop.
+		expect(p).toMatch(/not do not stop when you are asked to/i);
+	});
+
+	it("still tells it to act when it is actually asked to, rather than asking permission twice", () => {
+		const p = buildSystemPrompt({ profile: "review", scope });
+		expect(p).toMatch(/instruction to review it/i);
+		expect(p).toMatch(/genuinely ambiguous/i);
+	});
+
 	it("drives the explore-first method: diverge (creativity) before the checklist floor", () => {
 		const p = buildSystemPrompt({ profile: "review", scope });
 		// creativity must lead and not be capped by any list

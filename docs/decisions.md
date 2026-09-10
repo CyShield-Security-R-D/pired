@@ -657,3 +657,70 @@ the failure mode this file already has an ADR's worth of comments about. Not wor
 **Auto-installing nothing, and asking about everything, as before.** Keeping the questions but
 reordering them was the smaller change and does not fix the complaint: the problem was being asked at
 all, per model, with no view of what was already chosen.
+
+---
+
+## ADR-012 — The operator's message decides the turn; the methodology is not a standing order
+
+**Status:** accepted
+
+### Context
+
+Saying `hello` to pired started a code review.
+
+Nothing was wrong with the harness — the prompt was. Every instruction in it was written in the
+imperative of an engagement already underway:
+
+```
+Work in passes. Pass 1 is where your best findings come from …
+Enumerate the attack surface — every route/endpoint/input/sink …
+… do not finish while a class is still unconsidered.
+Before finishing, briefly note what you did not get to …
+Momentum: … don't stall the whole engagement.
+```
+
+and nothing anywhere said that what the operator typed was what decided the turn. A capable model
+reads `do not finish while a class is still unconsidered` as a standing order and begins covering the
+floor off a greeting. The default `review` profile makes it worse, not better: the scope block ends
+with *"Read-only local work (e.g. code review) is still fine"*, which reads as permission to start.
+
+This is the same shape as ADR-002 — a prompt that was true sentence by sentence and wrong when read
+as a whole — and it is not fixed by the model getting smarter, because the smarter model follows the
+instructions more faithfully.
+
+### Decision
+
+Two paragraphs, both in `core/prompts.ts`.
+
+The identity block establishes who is driving: the operator is in the room, their message decides the
+turn, a greeting is answered as a greeting, an engagement begins when one is asked for, and
+**nothing below outranks what they actually asked for**.
+
+The methodology block is framed as method rather than trigger, and its `do not finish` is
+disambiguated in place: it means do not abandon a job half-done, not do not stop when the operator
+says stop.
+
+The correction is deliberately *not* "be less proactive". Told to review something, it reviews it —
+the same paragraph says so, and says to name the next step and wait only when the ask is genuinely
+ambiguous. What changed is what the model treats as the instruction: the operator's message, not the
+methodology.
+
+### Consequences
+
+- The invariant is asserted for all three profiles in `core/prompts.test.ts`, since the methodology
+  block is shared and the failure was profile-independent.
+- The `<pired-coverage>` block was investigated and cleared: it is only injected once the ledger has
+  recorded surface, so on a fresh session it does not fire and was never part of this. Nothing else
+  injects an opening user message.
+- The prompt grows by two paragraphs on every turn of every session. Worth it: the failure it
+  prevents is the first thing a new operator sees.
+
+### Rejected
+
+**Gating the methodology block on whether an engagement has started.** There is no such signal — a
+workspace is opened at `session_start` for every session, so the block would either always render or
+never. The framing sentence costs less and does not depend on state that does not exist.
+
+**Deleting `do not finish while a class is still unconsidered`.** It is load-bearing for coverage
+honesty, which is most of what the ledger is for. The problem was never the sentence; it was that
+nothing scoped it to a job the operator had actually asked for.
