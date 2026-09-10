@@ -20,6 +20,7 @@ export default defineConfig({
 				// test that mocks all of it would assert only that the mocks were called.
 				"bin/pired.mjs",
 				"bin/pired-state.mjs",
+				"bin/pired-ledger.mjs",
 			],
 			/**
 			 * A ratchet, in the same spirit as eval/ratchet.json: these are floors set

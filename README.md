@@ -295,7 +295,7 @@ core/          security engine — no host imports, test-first (162 tests)
 extensions/
   pired.ts     the pi extension (tools, scope gate, prompt, UI, commands, providers)
   lib/         node host services · core->pi tool bridge · provider registration
-bin/           pired (launcher) · pired-state (the panel, outside the TUI)
+bin/           pired (launcher) · pired-state (the panel, outside the TUI) · pired-ledger (record/recall for subagents)
 skills/  checklists/   opt-in methodology (web, api, network, code-review)
 themes/        the pired theme
 docs/          the documentation

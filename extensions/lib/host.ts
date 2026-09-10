@@ -1,6 +1,9 @@
 /**
  * Node-backed implementations of core's host ports, for the pi extension.
- * (LLM/subagents are provided by pi via createAgentSession; see subagents.ts.)
+ *
+ * Also used by `bin/pired-ledger.mjs`, which wires the same ports for a process
+ * that never loaded the extension — a subagent child — so a child's `record`
+ * writes through exactly the code the parent's does.
  */
 
 import { randomBytes } from "node:crypto";

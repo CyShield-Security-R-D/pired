@@ -234,6 +234,31 @@ pired-state [--engagement NAME] [--mode state|coverage|findings|blockers]
 
 Defaults to the most recently modified engagement under `~/.pired/engagements/`. `--json` emits the underlying data structure. See [The engagement panel](panel.md#outside-the-tui-pired-state).
 
+## `pired-ledger`
+
+`record` and `recall`, for a process that never loaded pired's extension.
+
+pi-subagents spawns children with extension bindings stripped, so a delegated child has neither tool — everything the ledger is for is invisible to exactly the agents you were told to delegate to. This is the same two tools, over the same `Workspace`, through the same `core/tools.ts` code the extension calls, reached over `bash`.
+
+```bash
+pired-ledger recall <query> [key=value]...
+pired-ledger record <key=value>...
+pired-ledger scope
+            [--engagement NAME] [--json]
+```
+
+```bash
+pired-ledger recall gaps
+pired-ledger recall challenge id=f3
+pired-ledger record kind=endpoint host=h1 method=GET path=/api/user file=api/user.go
+pired-ledger record kind=finding title="SQLi in /search" severity=high target=e_search \
+    class=sqli cwe=CWE-89 evidence=core/search.js:42 evidence=core/db.js:9
+```
+
+Repeating a key builds a list, as `evidence` does above. Exit status is `0` on success, `1` when the tool rejected the call, `2` for a usage error or a missing engagement.
+
+`scope` prints what the engagement authorizes — and says plainly that it reports the boundary rather than enforcing one. **Scope is not inherited by a child**: `createScopeGate` lives in the parent's tool pipeline, and a child outside the extension is outside the gate. Restate the authorized targets in every handoff. See [`ops-delegation`](skills.md).
+
 ## Environment variables
 
 | Variable | Default | Meaning |

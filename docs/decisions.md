@@ -724,3 +724,76 @@ never. The framing sentence costs less and does not depend on state that does no
 **Deleting `do not finish while a class is still unconsidered`.** It is load-bearing for coverage
 honesty, which is most of what the ledger is for. The problem was never the sentence; it was that
 nothing scoped it to a job the operator had actually asked for.
+
+---
+
+## ADR-013 — A subagent reaches the ledger through a CLI, not through the extension
+
+**Status:** accepted
+
+### Context
+
+`ops-delegation` tells the operator to hand noisy recon and adversarial verification to a child, and
+says the payoff arrives only once the child's result is *recorded* rather than reported in prose.
+None of that could work.
+
+pi-subagents spawns children with extension bindings deliberately stripped
+(`omitExtensionBindingsEnv`), so **a child never loads pired**. It has no `record`, no `recall`, and
+no scope gate. Everything the harness exists for is invisible to exactly the agents it tells you to
+delegate to. This had already cost a measured incident: a child that could not resolve its model
+reported `0 turns | 0 tokens | 0 tools` and the parent blocked on it forever — *"a silent deadlock at
+~0% CPU that only an external timeout ends. Two full mlflow scans died this way."* The fix then was
+mirroring providers into pi's own `models.json`, which made a child able to *think* and left it
+unable to *write*.
+
+Two things in the repo were also simply false. `ops-delegation` claimed **"Scope + auth are
+inherited — a child cannot exceed the engagement's scope or authorization; it is not a way around the
+gate."** The gate is `createScopeGate`, it lives in the parent's tool pipeline, and a child outside
+the extension is outside it — so the document told the operator a delegated child was bounded when
+nothing bounded it. And `extensions/lib/host.ts` pointed at a `subagents.ts` that does not exist.
+
+### Decision
+
+`bin/pired-ledger.mjs` — `record` and `recall` over `bash`, for a process with no extension.
+
+It is deliberately **not** a reimplementation. It opens the same `Workspace`, builds the same tool
+objects with `createCoreTools`, and hands them the same args the model would have given them, so a
+child's `record` validates, allocates ids and appends through exactly the parent's code. `pired-state`
+established this shape for reading — an extension-less process using pired's own derivation rather
+than scraping the `.jsonl`, chosen so the panel and the TUI can never disagree. This is the write
+half of the same argument.
+
+Arguments are `key=value`, because that is already how the skills and the prompt write tool calls —
+a child copying a line out of a skill should not have to translate it. A repeated key builds a list,
+so `evidence` takes several without anyone hand-writing JSON in a shell.
+
+`scope` reports what the engagement authorizes **and says it does not enforce it**. There is no
+honest way for a CLI to bound a process that is free not to call it, and the correction to
+`ops-delegation` now says so: restate the boundary in every handoff, and treat a delegated network
+action as unguarded work you authorized personally.
+
+### Consequences
+
+- Values are coerced: a bare integer becomes a number and `true`/`false` become booleans, because
+  `core/tools.ts` reads numbers with `typeof v === "number"` — a port arriving as the string `"80"`
+  is not rejected, it is dropped, and the service lands with no port at all. Coercion stops at
+  integers: guessing further would turn a version like `1.0` into something that matches nothing.
+- Exit status is meaningful — `0` success, `1` the tool rejected the call, `2` usage or no engagement
+  — so a child can branch on it instead of parsing prose.
+- Verified end to end rather than by unit test alone: records written through the CLI are visible to
+  `pired-state`'s own derivation, which is the property that matters. One ledger, no drift.
+- A third binary to keep in `package.json`, `files`, and both installers' expectations.
+
+### Rejected
+
+**Letting the child write the `.jsonl` files directly with `write`/`bash`.** It is one line of
+prompt and no code, and it gives up id allocation, validation, tombstones and the append discipline
+the format depends on — the thing `pired-state` was deliberately built *not* to do.
+
+**Loading pired's extension in the child.** `omitExtensionBindingsEnv` is pi-subagents' decision, not
+pired's, and working around another package's deliberate isolation to inject a tool is the kind of
+fix that breaks on their next release.
+
+**Making the CLI enforce scope.** A gate a process may decline to call is not a gate. Reporting the
+boundary honestly is worth more than a check that produces false confidence, and the safety fix is
+the correction to `ops-delegation`, not a flag here.
