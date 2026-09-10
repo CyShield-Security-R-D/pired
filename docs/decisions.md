@@ -561,6 +561,22 @@ The single approval now covers the PATH entries, so the trailing PATH prompt is 
   `SecurityProtocol`, which on an un-patched box is still TLS 1.0; nodejs.org refuses it, and the
   failure surfaces as "the underlying connection was closed" rather than as a protocol error.
 
+### Verified since
+
+The Windows-only half could not be exercised from the development box at all — `Invoke-PiredInstaller`
+exits early off Win32, `Join-Path` will not synthesise a `C:\...` path, and neither `HKCU` nor a
+directory junction exists to write. What *was* checked there, against PowerShell 7.6.6: the parse,
+PSScriptAnalyzer, the manifest resolving x64/arm64/x86 off the live nodejs.org listing, a real
+download-verify-unpack, and a tampered payload under an intact manifest being refused.
+
+The rest was closed by a real install on a Windows box (2026-09-10), which completed successfully —
+so the zip path, `Get-FileHash`, `Expand-Archive`/`ZipFile`, the junction at `node\current`, the
+`HKCU\Environment` PATH write with its `WM_SETTINGCHANGE` broadcast, and the plan-and-approve flow
+all work on the platform they were written for, without administrator.
+
+Two branches remain unexercised and are not claimed: the `old` state, where a private Node is
+installed to shadow one already on PATH, and any architecture other than the one that box runs.
+
 ### Rejected
 
 **Installing Git for Windows when there is no `bash`.** pi runs every tool through bash, so a Windows
