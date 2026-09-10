@@ -576,3 +576,84 @@ the wrong habit on the very first command.
 **Merging the two scripts.** npm's global layout and PATH storage differ enough that the merged
 script would be mostly branches. They stay separate and are kept honest by this file.
 
+---
+
+## ADR-011 — Choosing models is a list you stand in, not a question repeated
+
+**Status:** accepted
+
+### Context
+
+The add-a-host wizard collected models in a loop:
+
+```
+   ┌─ pick one model id
+   │  context window? · output cap? · does it reason? · which wire format?
+   └─ "Another model from this host?"  [Yes/No]
+```
+
+Adding three models meant answering that yes/no twice, and up to twelve questions besides. The
+questions were asked one model at a time, so what had already been chosen was never on screen — the
+confirm dialog's body was the only place it appeared, and only as prose. The operator's own
+complaint was the "another model?" prompt, which is the part that reads as the tool asking
+permission to continue doing the thing it was opened to do.
+
+Editing was worse: there was none. `/provider` walked straight into the add wizard, `/provider list`
+printed a summary, and everything else — a base URL that moved, a context window the probe guessed
+wrong, a thinking format that turned out to be the other one — meant opening `~/.pired/models.json`
+by hand and knowing the schema. That is the same wall the wizard exists to take down.
+
+### Decision
+
+**Picking is one screen that shows its own state.** `pickModels` draws every model the host serves
+with `◉`/`○`, toggling on select and redrawing. Leaving is picking Done rather than answering No.
+The same screen covers all three cases the loop needed branches for: a handful listed, hundreds
+(narrowed by a search first, since pi's selector neither scrolls nor filters), and none at all —
+where the list is empty and the only row asks for an id.
+
+**The per-model questions are answered rather than asked.** `draftModel` takes what the probe
+reported and defaults or guesses the rest; `reviewModels` puts the result up as one line per model
+whose rows open the editor. Three or four questions per model become one screen for all of them.
+
+**`guessReasoning` leans towards `false`.** The two mistakes are not equal. Marked `false` on a
+reasoning model, the thinking leaks into the reply — untidy, and obvious the first time anyone reads
+it. Marked `true` on a model that does not think, pired declares a wire format the model never sends,
+and the failure is the one documented in `docs/models.md`: an empty reply, exit 0, nothing on screen
+to say why. So only markers that name a reasoning model outright count, an `instruct` build is taken
+at its word, and the review screen shows the answer before anything is written.
+
+**`/provider` opens a manager once anything is configured.** `provider-editor.ts` is
+`~/.pired/models.json` as menus: hosts, then a host's URL/token/API dialect, then its models, then
+one model's parameters. Every row carries its current value, every edit writes immediately, and every
+menu re-reads the file on redraw — so the screen shows what was saved rather than what the module
+believes it saved.
+
+### Consequences
+
+- `editModelFields` is shared between the add flow's review screen and the editor. Reviewing a guess
+  and correcting a saved model are the same act, and a second implementation would be a second place
+  for `THINKING_FORMATS` to fall out of date.
+- Turning reasoning off drops `compat` with it, so the file never carries a wire format for a model
+  that was just declared not to think.
+- A typed id gets a row of its own in the picker. Without one it could be added and never taken back
+  off, which is worse than not being able to add it.
+- The editor re-probes when adding models to an existing host, and holds back the ids already
+  configured — offering one invites a duplicate the file has no way to tell apart.
+- Both test suites now answer menus by naming a distinctive part of a row rather than repeating the
+  whole label. A row carries its current value, so a script written against the full string would
+  have to be rewritten every time a default moved.
+
+### Rejected
+
+**A custom TUI component with real keybindings** — checkboxes, a properties panel, arrow-key field
+navigation. pi hands an extension four dialogs (`select`, `confirm`, `input`, `notify`) and the
+`/login` callbacks hand over even less. The wizard is reachable from both, and is written against
+that four-method `Prompter` precisely so it can be driven by a fake in a test. A component would work
+in the command and not in `/login`, and would trade the tests for a flow verified by clicking.
+
+**Guessing the thinking format silently and skipping the review screen.** It is one screen against
+the failure mode this file already has an ADR's worth of comments about. Not worth it.
+
+**Auto-installing nothing, and asking about everything, as before.** Keeping the questions but
+reordering them was the smaller change and does not fix the complaint: the problem was being asked at
+all, per model, with no view of what was already chosen.

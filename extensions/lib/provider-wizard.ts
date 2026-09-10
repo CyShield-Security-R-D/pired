@@ -71,7 +71,7 @@ export const HOST_PRESETS: HostPreset[] = [
 ];
 
 /** pi's API adapters, as a question an operator can answer. */
-const API_DIALECTS: { id: string; label: string }[] = [
+export const API_DIALECTS: { id: string; label: string }[] = [
 	{ id: "openai-completions", label: "openai-completions — LM Studio, Ollama, vLLM, OpenRouter, most gateways" },
 	{ id: "anthropic-messages", label: "anthropic-messages — an Anthropic-shaped API or proxy" },
 	{ id: "openai-responses", label: "openai-responses — OpenAI's Responses API" },
@@ -212,6 +212,24 @@ export function guessThinkingFormat(modelId: string, baseUrl: string): string {
 	if (/glm|zai/.test(id)) return "zai";
 	if (/openrouter\./i.test(baseUrl)) return "openrouter";
 	return "openai";
+}
+
+/**
+ * Whether this model id names a model that thinks before it answers.
+ *
+ * Deliberately shy, because the two mistakes are not equal. Guessing `false`
+ * for a reasoning model leaks its thinking into the reply — untidy, and obvious
+ * the first time anyone reads it. Guessing `true` for a model that does not
+ * think declares a wire format it will never send, and that is the failure
+ * documented in docs/models.md: an empty reply, exit 0, nothing on screen to
+ * say why. So only markers that name a reasoning model outright count, an
+ * `instruct` build is taken at its word, and the answer is shown for review
+ * before anything is written.
+ */
+export function guessReasoning(modelId: string): boolean {
+	const id = modelId.toLowerCase();
+	if (/instruct|non-?thinking/.test(id)) return false;
+	return /qwq|qwen3|deepseek-r\d|[-:]thinking|reasoner|magistral|-reasoning/.test(id);
 }
 
 /** A positive integer, or undefined for anything else — including "8k". */
@@ -419,17 +437,17 @@ export async function addHost(ui: Prompter, opts: AddHostOptions): Promise<AddHo
 		ui.notify(`pired: ${baseUrl}/models did not answer — ${why}${hint}`, "warning");
 	}
 
-	const models: (LocalModelDef & { compat?: ProviderCompat })[] = [];
-	while (models.length < MAX_MODELS) {
-		if (models.length > 0 && !(await ui.confirm("Another model from this host?", models.map((m) => `· ${describeModel(m)}`).join("\n")))) break;
-		const chosen = await chooseModelId(ui, probed, new Set(models.map((m) => m.id)));
-		if (chosen === undefined) {
-			if (models.length === 0) return undefined;
-			break;
-		}
-		models.push(await describeChosenModel(ui, chosen, baseUrl, probed));
-	}
-	if (models.length === 0) return undefined;
+	// Pick every model in one list, then review what that produced. The flow
+	// this replaced asked for one id, then four questions about it, then
+	// "another model from this host?", and went round again — so the operator
+	// answered a yes/no between each model and never saw what was already
+	// chosen. Picking is now one screen that shows its own state, and the
+	// questions are answered by the probe and by guesses the review screen
+	// puts up for correction.
+	const picked = await pickModels(ui, probed);
+	if (picked === undefined || picked.length === 0) return undefined;
+	const models = await reviewModels(ui, picked.map((id) => draftModel(id, baseUrl, probed)), baseUrl);
+	if (models === undefined || models.length === 0) return undefined;
 
 	const taken = new Set(opts.existing.map((p) => p.id));
 	let id = preset.id || suggestProviderId(baseUrl);
@@ -486,81 +504,201 @@ export async function addHost(ui: Prompter, opts: AddHostOptions): Promise<AddHo
 	return { config, updated: Boolean(clash), ...(await chooseModelToUse(ui, models, saved)) };
 }
 
-/** Pick from what the host reports, search it when it reports hundreds, or type one. */
-async function chooseModelId(ui: Prompter, probed: ProbedModel[], already: Set<string>): Promise<string | undefined> {
-	const ids = probed.map((p) => p.id).filter((id) => !already.has(id));
-	const TYPE_IT = "type an id…";
-	if (ids.length > 0 && ids.length <= MAX_LIST) {
-		const picked = await ui.select(`Model — ${ids.length} served here`, [...ids, TYPE_IT]);
-		if (picked === undefined) return undefined;
-		if (picked !== TYPE_IT) return picked;
-	} else if (ids.length > MAX_LIST) {
-		// Drawing 300 options would scroll the terminal past the question, so the
-		// list becomes a search: type part of a name, pick from what matches.
-		const query = await ui.input(`Model — ${ids.length} served here; type part of a name to search`);
-		if (query === undefined) return undefined;
-		const hits = filterModelIds(ids, query);
-		if (hits.length === 1) return hits[0];
-		if (hits.length > 1) {
-			const AS_TYPED = `use "${query.trim()}" as typed`;
-			const picked = await ui.select(`${hits.length} match "${query.trim()}"`, [...hits, AS_TYPED]);
-			if (picked === undefined) return undefined;
-			return picked === AS_TYPED ? query.trim() : picked;
-		}
-		ui.notify(`pired: nothing here matches "${query.trim()}"`, "warning");
-	}
-	const typed = await ui.input("Model id — exactly as the host names it");
-	if (typed === undefined) return undefined;
-	const id = typed.trim();
-	if (!id) {
-		ui.notify("pired: no model id — nothing added", "warning");
-		return undefined;
-	}
-	return id;
+/** One model as a row in the picker: chosen or not, and what the host said about it. */
+export function modelRow(id: string, chosen: boolean, probed?: ProbedModel): string {
+	const bits: string[] = [];
+	if (probed?.contextWindow) bits.push(`${probed.contextWindow.toLocaleString("en-US")} ctx`);
+	if (probed?.vision) bits.push("vision");
+	return `${chosen ? "\u25c9" : "\u25cb"} ${id}${bits.length > 0 ? ` \u2014 ${bits.join(" \u00b7 ")}` : ""}`;
 }
 
-/** Fill in what the probe could not: size, and how thinking comes back. */
-async function describeChosenModel(
+const TYPE_ROW = "+ Type an id\u2026";
+
+/**
+ * Choose models from a list you stand in, rather than a question repeated.
+ *
+ * Selecting a row toggles it and redraws, so what is chosen is on screen the
+ * whole time and leaving is picking Done rather than answering No. The same
+ * screen covers all three cases the old loop needed separate branches for: a
+ * host that listed a handful, a host that listed hundreds (narrowed by a search
+ * first, since pi's selector neither scrolls nor filters), and a host that
+ * answered nothing at all — where the list is empty and the only row is the one
+ * that asks for an id.
+ */
+export async function pickModels(
 	ui: Prompter,
-	id: string,
-	baseUrl: string,
 	probed: ProbedModel[],
-): Promise<LocalModelDef & { compat?: { thinkingFormat: string } }> {
+	opts: { already?: Iterable<string>; max?: number } = {},
+): Promise<string[] | undefined> {
+	const already = new Set(opts.already ?? []);
+	const max = opts.max ?? MAX_MODELS;
+	const chosen = new Set<string>();
+	let pool = probed.filter((p) => !already.has(p.id));
+
+	if (pool.length > MAX_LIST) {
+		const query = await ui.input(`Models \u2014 ${pool.length} served here; type part of a name to search`);
+		if (query === undefined) return undefined;
+		const hits = new Set(filterModelIds(pool.map((p) => p.id), query));
+		if (hits.size === 0) ui.notify(`pired: nothing here matches "${query.trim()}" \u2014 type the id instead`, "warning");
+		pool = pool.filter((p) => hits.has(p.id));
+	}
+
+	for (;;) {
+		const byLabel = new Map<string, string>();
+		const rows: string[] = [];
+		for (const p of pool) {
+			const label = modelRow(p.id, chosen.has(p.id), p);
+			byLabel.set(label, p.id);
+			rows.push(label);
+		}
+		// An id that was typed rather than served still needs a row, or having
+		// added it there would be no way to take it back off.
+		for (const id of chosen) {
+			if (pool.some((p) => p.id === id)) continue;
+			const label = modelRow(id, true);
+			byLabel.set(label, id);
+			rows.push(label);
+		}
+		rows.push(TYPE_ROW);
+		const done = `\u2713 Done \u2014 add ${chosen.size} model${chosen.size === 1 ? "" : "s"}`;
+		if (chosen.size > 0) rows.push(done);
+
+		const picked = await ui.select(
+			pool.length > 0
+				? `Models \u2014 pick any, then Done \u00b7 ${chosen.size} chosen`
+				: "Models \u2014 the host listed none, so type the id",
+			rows,
+		);
+		if (picked === undefined) return undefined;
+		if (picked === done) return [...chosen];
+		if (picked === TYPE_ROW) {
+			const typed = await ui.input("Model id \u2014 exactly as the host names it");
+			if (typed === undefined) continue;
+			const id = typed.trim();
+			if (!id) {
+				ui.notify("pired: no model id", "warning");
+			} else if (already.has(id)) {
+				ui.notify(`pired: ${id} is already on this host`, "warning");
+			} else {
+				chosen.add(id);
+			}
+			continue;
+		}
+		const id = byLabel.get(picked);
+		if (id === undefined) continue;
+		if (chosen.has(id)) chosen.delete(id);
+		else if (chosen.size >= max) ui.notify(`pired: ${max} models is the most one host takes at a time`, "warning");
+		else chosen.add(id);
+	}
+}
+
+/**
+ * A model as it will be written, before anyone is asked about it.
+ *
+ * Everything the probe reported is kept; everything it did not is defaulted or
+ * guessed. Nothing here is final — `reviewModels` puts the result up as a list
+ * whose rows open the editor.
+ */
+export function draftModel(id: string, baseUrl: string, probed: ProbedModel[]): LocalModelDef & { compat?: ProviderCompat } {
 	const hit = probed.find((p) => p.id === id);
-	// Esc on these two is "take the default", not "abandon the host": they are
-	// the questions an operator is least likely to have an answer to, and the
-	// file is editable afterwards.
-	let contextWindow = hit?.contextWindow;
-	if (contextWindow === undefined) {
-		const raw = await ui.input(`Context window for ${id}, in tokens — Enter for ${DEFAULT_CONTEXT}`);
-		contextWindow = toPositiveInt(raw ?? "") ?? DEFAULT_CONTEXT;
-	}
-	let maxTokens = hit?.maxTokens;
-	if (maxTokens === undefined) {
-		const raw = await ui.input(`Most output tokens per reply for ${id} — Enter for ${DEFAULT_MAX_TOKENS}`);
-		maxTokens = toPositiveInt(raw ?? "") ?? DEFAULT_MAX_TOKENS;
-	}
-
-	const reasoning = await ui.confirm(
-		`Does ${id} think before it answers?`,
-		"A reasoning model returns its thinking in a format that has to be declared.\nGet it wrong and the model replies with nothing at all, successfully.",
-	);
-	let compat: { thinkingFormat: string } | undefined;
-	if (reasoning) {
-		const guess = guessThinkingFormat(id, baseUrl);
-		const ordered = [...THINKING_FORMATS].sort((a, b) => Number(b.id === guess) - Number(a.id === guess));
-		const picked = await ui.select(`How ${id} returns its thinking`, ordered.map((f) => f.label));
-		compat = { thinkingFormat: THINKING_FORMATS.find((f) => f.label === picked)?.id ?? guess };
-	}
-
+	const reasoning = guessReasoning(id);
 	return {
 		id,
-		contextWindow,
-		maxTokens,
+		contextWindow: hit?.contextWindow ?? DEFAULT_CONTEXT,
+		maxTokens: hit?.maxTokens ?? DEFAULT_MAX_TOKENS,
 		reasoning,
 		...(hit?.vision ? { input: ["text", "image"] as ("text" | "image")[] } : {}),
-		...(compat ? { compat } : {}),
+		...(reasoning ? { compat: { thinkingFormat: guessThinkingFormat(id, baseUrl) } } : {}),
 	};
+}
+
+/**
+ * One model's parameters, as a menu of fields rather than a march of prompts.
+ *
+ * Every row carries its current value, so the screen answers "what is this set
+ * to" without changing anything \u2014 which is most of what someone opening an
+ * editor wants. Edits apply as they are made, so leaving by Esc keeps them:
+ * there is no half-filled form to abandon.
+ *
+ * Shared with the add flow on purpose. Reviewing a guess and correcting a saved
+ * model are the same act, and a second implementation of it would be a second
+ * place for the thinking-format list to fall out of date.
+ */
+export async function editModelFields(
+	ui: Prompter,
+	model: LocalModelDef & { compat?: ProviderCompat },
+	baseUrl: string,
+): Promise<LocalModelDef & { compat?: ProviderCompat }> {
+	let draft = { ...model };
+	for (;;) {
+		const ctx = `Context window   ${(draft.contextWindow ?? DEFAULT_CONTEXT).toLocaleString("en-US")}`;
+		const out = `Max output       ${(draft.maxTokens ?? DEFAULT_MAX_TOKENS).toLocaleString("en-US")}`;
+		const think = `Reasoning        ${draft.reasoning ? `yes \u00b7 ${draft.compat?.thinkingFormat ?? "openai"}` : "no"}`;
+		const vision = `Vision           ${draft.input?.includes("image") ? "yes" : "no"}`;
+		const done = "\u2713 Done";
+
+		const picked = await ui.select(`${draft.id} \u2014 pick a field to change`, [ctx, out, think, vision, done]);
+		if (picked === undefined || picked === done) return draft;
+
+		if (picked === ctx) {
+			const raw = await ui.input(`Context window for ${draft.id}, in tokens \u2014 Enter for ${DEFAULT_CONTEXT}`);
+			if (raw !== undefined) draft = { ...draft, contextWindow: toPositiveInt(raw) ?? DEFAULT_CONTEXT };
+		} else if (picked === out) {
+			const raw = await ui.input(`Most output tokens per reply for ${draft.id} \u2014 Enter for ${DEFAULT_MAX_TOKENS}`);
+			if (raw !== undefined) draft = { ...draft, maxTokens: toPositiveInt(raw) ?? DEFAULT_MAX_TOKENS };
+		} else if (picked === vision) {
+			draft = { ...draft, input: draft.input?.includes("image") ? ["text"] : ["text", "image"] };
+		} else if (draft.reasoning) {
+			// Off: drop the format with it, so the file never carries a wire format
+			// for a model that was declared not to think.
+			const { compat: _dropped, ...rest } = draft;
+			draft = { ...rest, reasoning: false };
+		} else {
+			const guess = draft.compat?.thinkingFormat ?? guessThinkingFormat(draft.id, baseUrl);
+			const ordered = [...THINKING_FORMATS].sort((a, b) => Number(b.id === guess) - Number(a.id === guess));
+			const format = await ui.select(`How ${draft.id} returns its thinking`, ordered.map((f) => f.label));
+			if (format === undefined) continue;
+			draft = {
+				...draft,
+				reasoning: true,
+				compat: { ...draft.compat, thinkingFormat: THINKING_FORMATS.find((f) => f.label === format)?.id ?? guess },
+			};
+		}
+	}
+}
+
+/**
+ * What the picker produced, as a list whose rows are editable.
+ *
+ * This is where a guessed `reasoning` gets caught: the row says so in the same
+ * words the editor uses, and picking it opens the editor. It is one screen in
+ * place of the three or four questions the old flow asked per model.
+ */
+export async function reviewModels(
+	ui: Prompter,
+	drafts: (LocalModelDef & { compat?: ProviderCompat })[],
+	baseUrl: string,
+): Promise<(LocalModelDef & { compat?: ProviderCompat })[] | undefined> {
+	let models = [...drafts];
+	for (;;) {
+		const byLabel = new Map<string, number>();
+		const rows = models.map((m, i) => {
+			const label = `  ${describeModel(m)}`;
+			byLabel.set(label, i);
+			return label;
+		});
+		const done = `\u2713 Add ${models.length} model${models.length === 1 ? "" : "s"}`;
+
+		const picked = await ui.select("Review \u2014 pick one to change, or add them", [...rows, done]);
+		if (picked === undefined) return undefined;
+		if (picked === done) return models;
+
+		const at = byLabel.get(picked);
+		const target = at === undefined ? undefined : models[at];
+		if (at === undefined || target === undefined) continue;
+		const edited = await editModelFields(ui, target, baseUrl);
+		models = models.map((m, i) => (i === at ? edited : m));
+	}
 }
 
 /**

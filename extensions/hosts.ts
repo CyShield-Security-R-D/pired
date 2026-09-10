@@ -19,7 +19,8 @@
 
 import type { OAuthCredentials, OAuthLoginCallbacks } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { addHost, describeHost, type Prompter } from "./lib/provider-wizard.ts";
+import { manageProviders } from "./lib/provider-editor.ts";
+import { addHost, type AddHostResult, describeHost, type Prompter } from "./lib/provider-wizard.ts";
 import {
 	type LocalProviderConfig, mirrorProvidersToPi, piredModelsPath, readProviderFile, registerPiredProviders,
 	removeProvider, removeProviderFromPi, toPiProvider, upsertProvider, writeProviderFile,
@@ -189,7 +190,7 @@ export default function hostsExtension(pi: ExtensionAPI): void {
 	 * dialogs instead of the login dialog's prompts.
 	 */
 	pi.registerCommand("provider", {
-		description: "Add an LLM provider — base URL, model, token — the wizard `/login` also opens; `list` | `remove <id>`",
+		description: "Add or edit LLM providers — base URL, token, each model's parameters; `list` | `remove <id>`",
 		handler: async (args, ctx) => {
 			const [verb = "", rest = ""] = (args ?? "").trim().split(/\s+/, 2);
 			const path = piredModelsPath();
@@ -227,21 +228,44 @@ export default function hostsExtension(pi: ExtensionAPI): void {
 			}
 
 			if (!ctx.hasUI) {
-				ctx.ui.notify(`pired: adding a host needs the terminal UI — edit ${path}, see docs/models.md`, "warning");
+				ctx.ui.notify(`pired: managing hosts needs the terminal UI — edit ${path}, see docs/models.md`, "warning");
 				return;
 			}
 
-			const added = await addHost(ctx.ui, {
-				existing: providers,
-				savedTo: path,
+			const openWizard = async (): Promise<AddHostResult | undefined> => {
+				// Re-read rather than close over `providers`: by the time this runs
+				// the operator may have added or removed a host from the menu, and a
+				// stale list is how a second host silently replaces the first.
+				const added = await addHost(ctx.ui, {
+					existing: readProviderFile(path).providers,
+					savedTo: path,
+					save: (config) => saveHost(pi, config),
+				});
+				if (added) {
+					ctx.ui.notify(
+						`pired: ${added.updated ? "updated" : "added"} ${added.config.id} · ${added.config.models.length} model(s) — in /model now`,
+						"info",
+					);
+				}
+				return added;
+			};
+
+			// Nothing configured yet, so the manager would be an empty list standing
+			// in front of the wizard. Open the wizard itself.
+			if (providers.length === 0) {
+				const added = await openWizard();
+				if (added?.useModelId) await useModel(pi, ctx, added.config.id, added.useModelId);
+				return;
+			}
+
+			const result = await manageProviders(ctx.ui, {
+				load: () => readProviderFile(path).providers,
 				save: (config) => saveHost(pi, config),
+				remove: (id) => forgetHost(pi, id),
+				add: openWizard,
+				savedTo: path,
 			});
-			if (!added) return;
-			ctx.ui.notify(
-				`pired: ${added.updated ? "updated" : "added"} ${added.config.id} · ${added.config.models.length} model(s) — in /model now`,
-				"info",
-			);
-			if (added.useModelId) await useModel(pi, ctx, added.config.id, added.useModelId);
+			if (result.providerId && result.useModelId) await useModel(pi, ctx, result.providerId, result.useModelId);
 		},
 	});
 }

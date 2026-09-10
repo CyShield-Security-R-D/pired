@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
-	addHost, describeHost, filterModelIds, guessThinkingFormat, looksMissingVersionPath, maskToken,
-	mergeProbes, normalizeBaseUrl, parseModelList, probeModels, type ProbedModel, type Prompter, suggestProviderId,
-	THINKING_FORMATS, toPositiveInt, uniqueId,
+	addHost, describeHost, draftModel, editModelFields, filterModelIds, guessReasoning, guessThinkingFormat,
+	looksMissingVersionPath, maskToken, mergeProbes, modelRow, normalizeBaseUrl, parseModelList, pickModels,
+	probeModels, type ProbedModel, type Prompter, reviewModels, suggestProviderId, THINKING_FORMATS,
+	toPositiveInt, uniqueId,
 } from "./provider-wizard.ts";
 import type { LocalProviderConfig } from "./providers.ts";
 
@@ -25,7 +26,17 @@ function scripted(steps: Step[]): Prompter & { notes: string[]; remaining: () =>
 		return step[1];
 	};
 	return {
-		select: async (title) => next("select", title) as string | undefined,
+		/**
+		 * A menu row carries its own current value — `Reasoning        yes · qwen`
+		 * — so a script that repeated the whole label back would have to be
+		 * rewritten every time a default moved. An answer that is not a row
+		 * verbatim names a distinctive part of one instead.
+		 */
+		select: async (title, options) => {
+			const want = next("select", title);
+			if (typeof want !== "string") return undefined;
+			return options.find((o) => o === want) ?? options.find((o) => o.includes(want)) ?? want;
+		},
 		input: async (title) => next("input", title) as string | undefined,
 		confirm: async (title) => next("confirm", title) as boolean,
 		notify: (message) => void notes.push(message),
@@ -259,17 +270,206 @@ describe("describeHost", () => {
 	});
 });
 
+describe("guessReasoning", () => {
+	/**
+	 * The two mistakes are not equal, so this leans one way on purpose. A model
+	 * wrongly marked as thinking is handed a wire format it never sends, and the
+	 * result is the empty successful reply docs/models.md documents.
+	 */
+	it("claims only the models that name themselves reasoning models", () => {
+		for (const id of ["qwq-32b", "Qwen3-27B", "deepseek-r1", "glm-4.6:thinking", "magistral-small", "phi-4-reasoning"]) {
+			expect(guessReasoning(id), id).toBe(true);
+		}
+		for (const id of ["llama-3.3-70b", "mistral-small", "gemma-3-27b", "my-tuned-model"]) {
+			expect(guessReasoning(id), id).toBe(false);
+		}
+	});
+
+	it("takes an instruct build at its word, since that is the non-thinking one", () => {
+		expect(guessReasoning("Qwen3-27B-Instruct")).toBe(false);
+	});
+});
+
+describe("draftModel", () => {
+	it("keeps everything the probe reported and defaults the rest", () => {
+		expect(draftModel("llama3", "http://localhost:11434/v1", [{ id: "llama3", contextWindow: 128000, vision: true }]))
+			.toEqual({ id: "llama3", contextWindow: 128000, maxTokens: 8192, reasoning: false, input: ["text", "image"] });
+	});
+
+	it("carries a thinking format only for a model it believes thinks", () => {
+		expect(draftModel("qwq-32b", "http://localhost:1234/v1", [])).toEqual({
+			id: "qwq-32b", contextWindow: 32768, maxTokens: 8192, reasoning: true, compat: { thinkingFormat: "qwen" },
+		});
+		expect(draftModel("llama3", "http://localhost:11434/v1", []).compat).toBeUndefined();
+	});
+});
+
+describe("pickModels", () => {
+	const probed: ProbedModel[] = [{ id: "alpha", contextWindow: 8192 }, { id: "beta" }];
+
+	/**
+	 * The bug this replaces: the flow asked "another model from this host?" after
+	 * every pick, so adding three models meant answering two yes/no questions
+	 * that had nothing to do with the models, and the list of what was already
+	 * chosen was never on screen.
+	 */
+	it("takes several models in one pass, with no question between them", async () => {
+		const ui = scripted([
+			["pick any", "alpha"],
+			["1 chosen", "beta"],
+			["2 chosen", "Done"],
+		]);
+		expect(await pickModels(ui, probed)).toEqual(["alpha", "beta"]);
+		expect(ui.remaining()).toBe(0);
+	});
+
+	it("unpicks a row that is already picked, so the list is the state", async () => {
+		const ui = scripted([
+			["pick any", "alpha"],
+			["1 chosen", modelRow("alpha", true, probed[0])],
+			["0 chosen", "beta"],
+			["1 chosen", "Done"],
+		]);
+		expect(await pickModels(ui, probed)).toEqual(["beta"]);
+	});
+
+	it("asks for an id when the host listed nothing, and shows what was typed", async () => {
+		const ui = scripted([
+			["the host listed none", "Type an id"],
+			["Model id", "hand-written"],
+			["the host listed none", "Done"],
+		]);
+		expect(await pickModels(ui, [])).toEqual(["hand-written"]);
+	});
+
+	/** A typed id with no row of its own could be added and never taken back off. */
+	it("gives a typed id a row, so it can be unpicked like any other", async () => {
+		const ui = scripted([
+			["the host listed none", "Type an id"],
+			["Model id", "typo"],
+			["the host listed none", modelRow("typo", true)],
+			["the host listed none", "Type an id"],
+			["Model id", "correct"],
+			["the host listed none", "Done"],
+		]);
+		expect(await pickModels(ui, [])).toEqual(["correct"]);
+	});
+
+	it("narrows a list pi's selector cannot draw before showing it", async () => {
+		const many = Array.from({ length: 60 }, (_, i) => ({ id: `vendor/model-${i}` }));
+		const ui = scripted([
+			["type part of a name to search", "model-42"],
+			["pick any", "vendor/model-42"],
+			["1 chosen", "Done"],
+		]);
+		expect(await pickModels(ui, many)).toEqual(["vendor/model-42"]);
+	});
+
+	it("stops at the cap rather than letting one host run away with the file", async () => {
+		const three: ProbedModel[] = [{ id: "a" }, { id: "b" }, { id: "c" }];
+		const ui = scripted([
+			["pick any", "a"], ["1 chosen", "b"], ["2 chosen", "c"], ["2 chosen", "Done"],
+		]);
+		expect(await pickModels(ui, three, { max: 2 })).toEqual(["a", "b"]);
+		expect(ui.notes.join("\n")).toContain("2 models is the most");
+	});
+
+	it("leaves out what the host already has, and takes nothing on Esc", async () => {
+		const hidden = scripted([["pick any", "beta"], ["1 chosen", "Done"]]);
+		expect(await pickModels(hidden, probed, { already: ["alpha"] })).toEqual(["beta"]);
+		expect(await pickModels(scripted([["pick any", undefined]]), probed)).toBeUndefined();
+	});
+});
+
+describe("editModelFields", () => {
+	const at = "http://localhost:1234/v1";
+
+	it("changes nothing by being opened, since every row is a value not a question", async () => {
+		const model = { id: "m", contextWindow: 1000, maxTokens: 100, reasoning: false };
+		expect(await editModelFields(scripted([["pick a field", "Done"]]), model, at)).toEqual(model);
+	});
+
+	it("turns reasoning on with a format, and drops the format when it goes off again", async () => {
+		const on = scripted([
+			["pick a field", "Reasoning"],
+			["returns its thinking", qwenFormat],
+			["pick a field", "Done"],
+		]);
+		const thinking = await editModelFields(on, { id: "qwen3-27b", reasoning: false }, at);
+		expect(thinking.reasoning).toBe(true);
+		expect(thinking.compat?.thinkingFormat).toBe("qwen");
+
+		// Off has to take the format with it, or the file keeps a wire format for
+		// a model that was just declared not to think.
+		const off = scripted([["pick a field", "Reasoning"], ["pick a field", "Done"]]);
+		const plain = await editModelFields(off, thinking, at);
+		expect(plain.reasoning).toBe(false);
+		expect(plain.compat).toBeUndefined();
+	});
+
+	it("takes the sizes, falling back to the default when the answer is not a number", async () => {
+		const ui = scripted([
+			["pick a field", "Context window"],
+			["Context window for", "262144"],
+			["pick a field", "Max output"],
+			["output tokens per reply", "eight thousand"],
+			["pick a field", "Done"],
+		]);
+		const edited = await editModelFields(ui, { id: "m", reasoning: false }, at);
+		expect(edited.contextWindow).toBe(262144);
+		expect(edited.maxTokens).toBe(8192);
+	});
+
+	it("toggles vision without asking a question about it", async () => {
+		const ui = scripted([["pick a field", "Vision"], ["pick a field", "Done"]]);
+		expect((await editModelFields(ui, { id: "m", reasoning: false }, at)).input).toEqual(["text", "image"]);
+	});
+
+	/** Edits land as they are made, so leaving is never a lost form. */
+	it("keeps what was already changed when the menu is left with Esc", async () => {
+		const ui = scripted([["pick a field", "Vision"], ["pick a field", undefined]]);
+		expect((await editModelFields(ui, { id: "m", reasoning: false }, at)).input).toEqual(["text", "image"]);
+	});
+});
+
+describe("reviewModels", () => {
+	it("hands back the drafts untouched when they are already right", async () => {
+		const drafts = [draftModel("llama3", "http://x/v1", [])];
+		expect(await reviewModels(scripted([["Review", "Add 1 model"]]), drafts, "http://x/v1")).toEqual(drafts);
+	});
+
+	/**
+	 * The screen that catches a wrong guess: `reasoning` is inferred from the id,
+	 * and this is where it is shown in the same words the editor uses.
+	 */
+	it("opens the editor on the row that was picked, and keeps the others", async () => {
+		const drafts = [draftModel("qwq-32b", "http://x/v1", []), draftModel("llama3", "http://x/v1", [])];
+		const ui = scripted([
+			["Review", "qwq-32b"],
+			["pick a field", "Reasoning"],
+			["pick a field", "Done"],
+			["Review", "Add 2 models"],
+		]);
+		const out = await reviewModels(ui, drafts, "http://x/v1");
+		expect(out?.[0]?.reasoning).toBe(false);
+		expect(out?.[1]).toEqual(drafts[1]);
+	});
+
+	it("adds nothing when it is backed out of", async () => {
+		expect(await reviewModels(scripted([["Review", undefined]]), [draftModel("m", "http://x/v1", [])], "http://x/v1"))
+			.toBeUndefined();
+	});
+});
+
 describe("addHost", () => {
 	it("adds a local host from its preset, keeping what the probe already knows", async () => {
 		const ui = scripted([
 			["add a provider", "LM Studio — http://localhost:1234/v1"],
 			["Base URL", ""],
 			["API token", ""],
-			["Model", "qwen3-27b"],
-			["output tokens", ""],
-			["think before it answers", true],
-			["returns its thinking", qwenFormat],
-			["Another model", false],
+			["pick any", "qwen3-27b"],
+			["1 chosen", "Done"],
+			["Review", "Add 1 model"],
 			["Add LM Studio?", true],
 			["Switch to qwen3-27b now?", true],
 		]);
@@ -299,11 +499,14 @@ describe("addHost", () => {
 			["Base URL", "gpu-box:8000/v1"],
 			["Which API", "openai-completions — LM Studio, Ollama, vLLM, OpenRouter, most gateways"],
 			["API token", "$LAB_TOKEN"],
+			["the host listed none", "Type an id"],
 			["Model id", "my-tuned-model"],
-			["Context window", "128000"],
-			["output tokens", ""],
-			["think before it answers", false],
-			["Another model", false],
+			["the host listed none", "Done"],
+			["Review", "my-tuned-model"],
+			["pick a field", "Context window"],
+			["Context window for", "128000"],
+			["pick a field", "Done"],
+			["Review", "Add 1 model"],
 			["Provider id", ""],
 			["Add gpu-box?", true],
 			["Switch to my-tuned-model now?", false],
@@ -331,10 +534,9 @@ describe("addHost", () => {
 			["Base URL", ""],
 			["API token", "sk-or-test"],
 			["type part of a name to search", "model-42"],
-			["Context window", ""],
-			["output tokens", ""],
-			["think before it answers", false],
-			["Another model", false],
+			["pick any", "vendor/model-42"],
+			["1 chosen", "Done"],
+			["Review", "Add 1 model"],
 			["Add OpenRouter?", true],
 			["Switch to vendor/model-42 now?", false],
 		]);
@@ -351,11 +553,10 @@ describe("addHost", () => {
 			["add a provider", "LM Studio — http://localhost:1234/v1"],
 			["Base URL", ""],
 			["API token", ""],
+			["the host listed none", "Type an id"],
 			["Model id", "second-model"],
-			["Context window", ""],
-			["output tokens", ""],
-			["think before it answers", false],
-			["Another model", false],
+			["the host listed none", "Done"],
+			["Review", "Add 1 model"],
 			["already configured", 'Add to "lmstudio" — keep its 1 existing model(s)'],
 			["Update LM Studio?", true],
 			["Switch to second-model now?", false],
@@ -373,11 +574,10 @@ describe("addHost", () => {
 			["add a provider", "LM Studio — http://localhost:1234/v1"],
 			["Base URL", ""],
 			["API token", ""],
+			["the host listed none", "Type an id"],
 			["Model id", "only-this"],
-			["Context window", ""],
-			["output tokens", ""],
-			["think before it answers", false],
-			["Another model", false],
+			["the host listed none", "Done"],
+			["Review", "Add 1 model"],
 			["already configured", 'Replace "lmstudio" — its existing model(s) are dropped'],
 			["Update LM Studio?", true],
 			["Switch to only-this now?", false],
@@ -386,22 +586,16 @@ describe("addHost", () => {
 		expect(result?.config.models.map((m) => m.id)).toEqual(["only-this"]);
 	});
 
-	it("collects a second model when asked for one", async () => {
+	/** Two models used to cost a yes/no in the middle; now it is one more row. */
+	it("collects a second model without a question between them", async () => {
 		const ui = scripted([
 			["add a provider", "Ollama — http://localhost:11434/v1"],
 			["Base URL", ""],
 			["API token", ""],
-			["Model", "llama3"],
-			["Context window", ""],
-			["output tokens", ""],
-			["think before it answers", false],
-			["Another model", true],
-			["Model", "qwen3"],
-			["Context window", ""],
-			["output tokens", ""],
-			["think before it answers", true],
-			["returns its thinking", qwenFormat],
-			["Another model", false],
+			["pick any", "llama3"],
+			["1 chosen", "qwen3"],
+			["2 chosen", "Done"],
+			["Review", "Add 2 models"],
 			["Add Ollama?", true],
 			["Switch to which one?", "qwen3"],
 		]);
@@ -417,11 +611,10 @@ describe("addHost", () => {
 			["add a provider", "LM Studio — http://localhost:1234/v1"],
 			["Base URL", ""],
 			["API token", ""],
+			["the host listed none", "Type an id"],
 			["Model id", "qwen3-27b"],
-			["Context window", ""],
-			["output tokens", ""],
-			["think before it answers", false],
-			["Another model", false],
+			["the host listed none", "Done"],
+			["Review", "Add 1 model"],
 			["Add LM Studio?", false],
 		]);
 		expect(await addHost(late, { existing: [], probe: noProbe })).toBeUndefined();
@@ -435,5 +628,15 @@ describe("addHost", () => {
 		]);
 		expect(await addHost(ui, { existing: [], probe: noProbe })).toBeUndefined();
 		expect(ui.notes.join("\n")).toContain("no base URL");
+	});
+
+	it("writes nothing when the model list is left empty", async () => {
+		const ui = scripted([
+			["add a provider", "LM Studio — http://localhost:1234/v1"],
+			["Base URL", ""],
+			["API token", ""],
+			["the host listed none", undefined],
+		]);
+		expect(await addHost(ui, { existing: [], probe: noProbe })).toBeUndefined();
 	});
 });

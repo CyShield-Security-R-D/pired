@@ -44,6 +44,16 @@ function stubHost(available: unknown[] = [{ id: "already-configured" }]) {
 		expect(title, `dialog ${at}`).toContain(step[0]);
 		return step[1];
 	};
+	/**
+	 * A menu row carries its current value, so a script names a distinctive part
+	 * of one rather than repeating the whole label back — otherwise every test
+	 * here would be rewritten each time a default moved.
+	 */
+	const pick = (title: string, options: string[]): string | undefined => {
+		const want = answer(title);
+		if (typeof want !== "string") return undefined;
+		return options.find((o) => o === want) ?? options.find((o) => o.includes(want)) ?? want;
+	};
 	const inHome = async <T>(steps: Step[], run: () => Promise<T>): Promise<T> => {
 		script = steps;
 		at = 0;
@@ -76,7 +86,7 @@ function stubHost(available: unknown[] = [{ id: "already-configured" }]) {
 		},
 		ui: {
 			notify: (m: string) => void said.push(m),
-			select: async (t: string) => answer(t) as string | undefined,
+			select: async (t: string, options: string[]) => pick(t, options),
 			input: async (t: string) => answer(t) as string | undefined,
 			confirm: async (t: string) => answer(t) as boolean,
 		},
@@ -96,7 +106,7 @@ function stubHost(available: unknown[] = [{ id: "already-configured" }]) {
 			const value = answer(p.message);
 			if (value === undefined) throw new Error("Login cancelled");
 			const label = typeof value === "boolean" ? (value ? "Yes" : "No") : value;
-			const hit = p.options.find((o) => o.label === label);
+			const hit = p.options.find((o) => o.label === label) ?? p.options.find((o) => o.label.includes(label));
 			expect(hit, `no option "${label}" in [${p.options.map((o) => o.label).join(" | ")}]`).toBeDefined();
 			return hit?.id;
 		},
@@ -128,17 +138,25 @@ function stubHost(available: unknown[] = [{ id: "already-configured" }]) {
 	};
 }
 
+/**
+ * Adding one host, end to end. 127.0.0.1:1 answers nothing, so this is also the
+ * probe-failed path: the picker has no list to draw and asks for the id.
+ */
 const A_HOST: Step[] = [
 	["add a provider", "Other OpenAI-compatible host…"],
 	["Base URL", "http://127.0.0.1:1/v1"],
 	["Which API", "openai-completions — LM Studio, Ollama, vLLM, OpenRouter, most gateways"],
 	["API token", "$LAB_TOKEN"],
+	["the host listed none", "Type an id"],
 	["Model id", "my-model"],
-	["Context window", "128000"],
-	["output tokens", ""],
-	["think before it answers", true],
+	["the host listed none", "Done"],
+	["Review", "my-model"],
+	["pick a field", "Context window"],
+	["Context window for", "128000"],
+	["pick a field", "Reasoning"],
 	["returns its thinking", "qwen — Qwen/QwQ on LM Studio, vLLM, llama.cpp (reasoning_content)"],
-	["Another model", false],
+	["pick a field", "✓ Done"],
+	["Review", "Add 1 model"],
 	["Provider id", "lab"],
 	["Add lab?", true],
 	["Switch to my-model now?", false],
@@ -257,6 +275,46 @@ describe("/provider", () => {
 		expect(JSON.parse(readFileSync(host.modelsPath, "utf8")).providers).toHaveLength(1);
 		expect(host.seen.models).toEqual([{ provider: "lab", id: "my-model" }]);
 		expect(host.said.join("\n")).toContain("model is now lab/my-model");
+	});
+
+	/**
+	 * A bare `/provider` used to walk straight into the add wizard, so the only
+	 * way to change a host that was already configured was to edit the JSON.
+	 */
+	it("opens the manager once something is configured, and edits it in place", async () => {
+		const host = stubHost();
+		await host.login(A_HOST);
+		await host.command("", [
+			["pired · providers", "lab"],
+			["lab — pick a field", "Base URL"],
+			["Base URL for lab", "192.168.1.14:1234/v1"],
+			["lab — pick a field", "← Back"],
+			["pired · providers", "✓ Done"],
+		]);
+		const written = JSON.parse(readFileSync(host.modelsPath, "utf8")).providers[0];
+		expect(written.baseUrl).toBe("http://192.168.1.14:1234/v1");
+		// The edit has to reach the picker and the subagent mirror too, or it is
+		// a file change nothing in this session is using.
+		expect(host.seen.providers.get("lab")?.baseUrl).toBe("http://192.168.1.14:1234/v1");
+		expect(JSON.parse(readFileSync(host.mirrorPath, "utf8")).providers.lab.baseUrl)
+			.toBe("http://192.168.1.14:1234/v1");
+	});
+
+	it("edits a model's parameters from the manager, without hand-editing JSON", async () => {
+		const host = stubHost();
+		await host.login(A_HOST);
+		await host.command("", [
+			["pired · providers", "lab"],
+			["lab — pick a field", "Models (1)"],
+			["lab · models", "my-model"],
+			["my-model — pick a field", "Max output"],
+			["output tokens per reply", "16384"],
+			["my-model — pick a field", "✓ Done"],
+			["lab · models", "← Back"],
+			["lab — pick a field", "← Back"],
+			["pired · providers", "✓ Done"],
+		]);
+		expect(JSON.parse(readFileSync(host.modelsPath, "utf8")).providers[0].models[0].maxTokens).toBe(16384);
 	});
 
 	it("lists what is configured, and says where when there is nothing", async () => {

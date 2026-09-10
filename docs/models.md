@@ -16,14 +16,37 @@ It asks, in order:
 | **Base URL** | `localhost:1234/v1` is enough; the scheme is filled in (`http` for a host on this box, `https` otherwise). |
 | **API** | Only for a host with no preset: `openai-completions` for nearly everything, or an Anthropic-, Responses- or Gemini-shaped endpoint. |
 | **Token** | Or **`$ENV_VAR`**, which is stored as the reference and read from the environment at request time — the answer when the key is a client's. |
-| **Model** | pired asks the host what it serves (`GET {baseUrl}/models`) and offers the list; several hundred models becomes a search instead. If the host does not answer, you type the id — and the failure is reported, because it is the same failure the agent would have hit later. |
-| **Size** | Context window and output cap, taken from the host's own answer where it gives one. |
-| **Thinking** | Whether the model reasons, and in which wire format — see [`compat`](#compat-and-the-failure-it-prevents) below. The likely one is offered first. |
+| **Models** | pired asks the host what it serves (`GET {baseUrl}/models`) and puts the answer up as a list you tick through — pick as many as you want in one pass, and Done when you are finished. Several hundred models becomes a search first. If the host does not answer, the list is empty and you type the id — and the failure is reported, because it is the same failure the agent would have hit later. |
 
-Then it shows what it will write, and writes it: `~/.pired/models.json`, readable only by you, plus pi's own `~/.pi/agent/models.json` so that subagents — which run without pired's extension — can resolve the model too. The provider is registered immediately, so it is in `/model` without a restart, and the wizard offers to switch to it.
+Then it shows what that produced, one line per model, with the context window and output cap the host reported and a guess at whether the model reasons:
 
 ```
-/provider             add one (the same wizard /login opens)
+Review — pick one to change, or add them
+  qwen3-27b — 262,144 ctx · 8,192 out · reasoning · qwen
+  llama-3.3-70b — 131,072 ctx · 8,192 out
+  ✓ Add 2 models
+```
+
+Picking a row opens that model's parameters. Nothing else is asked — the questions the wizard used to put between you and each model are answered by the probe and by the guess, and this screen is where a wrong guess gets caught. `reasoning` is inferred from the model's name and leans towards *no*, because the [`compat`](#compat-and-the-failure-it-prevents) failure below only bites a model wrongly marked as thinking.
+
+Then it writes: `~/.pired/models.json`, readable only by you, plus pi's own `~/.pi/agent/models.json` so that subagents — which run without pired's extension — can resolve the model too. The provider is registered immediately, so it is in `/model` without a restart, and the wizard offers to switch to it.
+
+## Editing one
+
+`/provider` opens the manager once anything is configured — every host, what it serves, and the way into each:
+
+```
+pired · providers · ~/.pired/models.json
+  lmstudio — http://192.168.1.14:1234/v1 · 2 models
+  ollama — http://localhost:11434/v1 · 1 model
+  + Add a provider…
+  ✓ Done
+```
+
+Every row carries its current value, so opening a menu answers *what is this set to* without changing anything. A host's menu edits its base URL, token and API dialect, and leads to its models; a model's menu edits its context window, output cap, reasoning format and vision flag. Edits are written as they are made — there is no form to fill in and no half-finished state to abandon — and each menu redraws from the file, so what is on screen is what was saved.
+
+```
+/provider             the manager — or the add wizard, when nothing is configured yet
 /provider list        what is configured, and what each provider serves
 /provider remove <id> forget one — pired's file, pi's mirror, and this session
 ```
