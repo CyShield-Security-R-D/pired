@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ExtensionSelectorComponent, initTheme } from "@earendil-works/pi-coding-agent";
 import { blockerDialog } from "../core/dialog.ts";
+import { createRecallTool, createRecordTool } from "../core/tools.ts";
 import piredExtension, { describeUnready } from "./pired.ts";
 
 /**
@@ -162,6 +163,62 @@ describe("/blockers", () => {
 		const ctx = { ...host.ctx, ui: { ...host.ctx.ui, notify: (m: string) => said.push(m) } };
 		await host.run("blockers", "", ctx);
 		expect(said.join(" ")).toContain("no engagement workspace");
+	});
+});
+
+describe("/challenge", () => {
+	/**
+	 * The command shipped with no test at all, which is how `extensions/pired.ts`
+	 * gets to 38% coverage and why CLAUDE.md says to keep moving logic out of it.
+	 */
+	it("says so plainly when there is no engagement to read", async () => {
+		const said: string[] = [];
+		const host = railHost();
+		const ctx = { ...host.ctx, ui: { ...host.ctx.ui, notify: (m: string) => said.push(m) } };
+		await host.run("challenge", "", ctx);
+		expect(said.join(" ")).toContain("no engagement workspace");
+	});
+
+	it("is registered, so /challenge exists at all", () => {
+		const host = railHost();
+		expect(host.run("challenge", "")).toBeDefined();
+	});
+});
+
+describe("the recall schema and the queries that read it", () => {
+	/**
+	 * The bug this catches: `recall cleared class=authz` read `a.class`, and
+	 * `class` was not in the tool's parameter schema — so the filter was
+	 * unreachable to a model however well it worked when a test called
+	 * `execute()` directly. Same shape as `api.json` shipping with 13 classes
+	 * nothing could select.
+	 */
+	it("declares every argument its queries actually read", () => {
+		const recall = createRecallTool({ workspace: {} as never });
+		const props = Object.keys((recall.parameters as { properties: Record<string, unknown> }).properties);
+		for (const arg of ["query", "id", "class", "limit"]) {
+			expect(props, `recall must accept ${arg}`).toContain(arg);
+		}
+	});
+
+	it("offers cleared as a query, or nothing can ask for it", () => {
+		const recall = createRecallTool({ workspace: {} as never });
+		const q = (recall.parameters as { properties: { query: { enum: string[] } } }).properties.query.enum;
+		expect(q).toContain("cleared");
+		expect(q).toContain("challenge");
+	});
+
+	/**
+	 * `basis` and `live` are read on a re-checked hypothesis, and their
+	 * descriptions said "For kind=finding:" — a model reading that would never
+	 * supply them on a hypothesis, so the field that records a second look would
+	 * almost never have been written.
+	 */
+	it("does not tell the model basis and live are for findings only", () => {
+		const record = createRecordTool({ workspace: {} as never });
+		const props = (record.parameters as { properties: Record<string, { description?: string }> }).properties;
+		expect(props.basis?.description).toMatch(/hypothesis/i);
+		expect(props.live?.description).not.toMatch(/^For kind=finding:/);
 	});
 });
 
