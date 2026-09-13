@@ -12,7 +12,7 @@ curl -fsSL https://raw.githubusercontent.com/mamgad/pired/main/install.sh | sh
 powershell -c "irm https://raw.githubusercontent.com/mamgad/pired/main/install.ps1 | iex"
 ```
 
-Either one installs [pi](https://pi.dev) if it is missing, installs pired, and registers pired's extension with pi so a bare `pi` loads the security layer too.
+Either one installs [pi](https://pi.dev) if it is missing, installs pired, and puts the `pired` command on your PATH. Neither registers anything with pi — a bare `pi` stays exactly the pi you had, and the security layer arrives only through `pired`, which passes it to pi with `-e` for that run ([ADR-017](decisions.md)).
 
 On macOS and Linux the script starts by surveying the box and printing the plan — every component, where it goes, and the exact PATH line it wants to add — then asks once before doing any of it:
 
@@ -22,11 +22,10 @@ On macOS and Linux the script starts by surveying the box and printing the plan 
     + node       ~/.local/share/pired/node     v22 from nodejs.org, checksum-verified
     + pi         ~/.local/share/pired/bin      @earendil-works/pi-coding-agent
     + pired      ~/.local/share/pired/bin      from github:mamgad/pired
-    + extension  ~/.pi/agent                   so a bare `pi` loads the security layer
     + PATH       ~/.bashrc                     export PATH="$HOME/.local/share/pired/bin:$PATH"
 
   Nothing runs as root. No daemon, no service, no shell hooks.
-  Undo: rm -rf ~/.local/share/pired ~/.pired ~/.pi
+  Undo: rm -rf ~/.local/share/pired ~/.pired
 
   Proceed? [Y/n]
 ```
@@ -46,7 +45,7 @@ The repository is private for now, so `curl` cannot fetch the script anonymously
 ```bash
 # one command, if you already have pi
 npm install -g --ignore-scripts github:mamgad/pired
-pi install "$(npm root -g)/pired"        # so a bare `pi` loads it too
+pi install "$(npm root -g)/pired"        # optional: opt a bare `pi` in too
 
 # or clone — ./install.sh installs the checkout it is sitting in
 git clone git@github.com:mamgad/pired.git && cd pired && ./install.sh
@@ -66,7 +65,7 @@ Both authenticate with your GitHub SSH key; check it with `ssh -T git@github.com
 
 ```bash
 npm install -g --ignore-scripts github:mamgad/pired
-pi install "$(npm root -g)/pired"     # optional: auto-load in plain `pi`
+pi install "$(npm root -g)/pired"     # optional: opt a bare `pi` in too
 ```
 
 **As a pi package only** (no `pired` launcher):

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { ExtensionSelectorComponent, initTheme } from "@earendil-works/pi-coding-agent";
 import { blockerDialog } from "../core/dialog.ts";
 import { createRecallTool, createRecordTool } from "../core/tools.ts";
-import piredExtension, { describeUnready } from "./pired.ts";
+import piredExtension, { applyOwnTheme, describeUnready } from "./pired.ts";
 
 /**
  * The extension is mostly host glue, so it is not unit-testable in the usual
@@ -354,5 +354,50 @@ describe("a blocker on screen", () => {
 			expect(lines.some((l) => l.includes("The staging host"))).toBe(true);
 			expect(lines.some((l) => l.includes("skip for now"))).toBe(true);
 		}
+	});
+});
+
+/**
+ * The installer used to run `pi install <pired>`, which put themes/ on pi's
+ * global resource path and turned `setTheme("pired")` from the no-op its comment
+ * claimed into a write of `theme` in ~/.pi/agent/settings.json — repainting the
+ * operator's own `pi` for good, from an install that never mentioned it. ADR-017.
+ */
+describe("applying pired's theme", () => {
+	function themeSpy(available: Record<string, unknown>) {
+		const asked: string[] = [];
+		const applied: unknown[] = [];
+		const ui = {
+			getTheme: (name: string) => {
+				asked.push(name);
+				return available[name];
+			},
+			setTheme: (theme: unknown) => {
+				applied.push(theme);
+				return { success: true };
+			},
+		};
+		return { ui, asked, applied };
+	}
+
+	it("hands pi the theme object, never its name, because a name is what pi writes to disk", () => {
+		const instance = { name: "pired" };
+		const { ui, applied } = themeSpy({ pired: instance });
+		applyOwnTheme(ui);
+		expect(applied).toEqual([instance]);
+		// The regression in one line: a string here is a permanent settings write.
+		expect(applied.some((t) => typeof t === "string")).toBe(false);
+	});
+
+	it("leaves a pi that never heard of pired entirely alone", () => {
+		const { ui, asked, applied } = themeSpy({});
+		applyOwnTheme(ui);
+		expect(asked).toEqual(["pired"]);
+		expect(applied).toEqual([]);
+	});
+
+	it("does nothing on a pi too old to have the theme API rather than throwing into session start", () => {
+		expect(() => applyOwnTheme({})).not.toThrow();
+		expect(() => applyOwnTheme({ getTheme: () => ({ name: "pired" }) })).not.toThrow();
 	});
 });

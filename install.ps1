@@ -11,9 +11,12 @@
 #   curl -fsSL https://raw.githubusercontent.com/mamgad/pired/main/install.sh | sh
 #
 # It surveys the box, prints exactly what it will do and where, asks once, and
-# then does all of it: Node.js (when missing or too old), pi, pired, the
-# extension registration that makes a bare `pi` load the security layer, and the
+# then does all of it: Node.js (when missing or too old), pi, pired, and the
 # user PATH entries that make the command typeable.
+#
+# It does not register anything with pi. `pi` stays the pi you installed; the
+# security layer arrives only when you type `pired`, which passes it to pi with
+# -e for that run. See ADR-017.
 #
 # Nothing needs administrator. The MSI from nodejs.org does, so this does not
 # use it:
@@ -944,7 +947,6 @@ function Invoke-PiredInstaller {
 
 		$piredNote = if ($reinstall) { "reinstall from $source" } else { "from $source" }
 		Write-PlanRow "+" "pired" (Get-Tilde $prefix) $piredNote
-		Write-PlanRow "+" "extension" (Get-Tilde (Join-Path $env:USERPROFILE ".pi\agent")) "so a bare ``pi`` loads the security layer"
 
 		if ($pathNeeded.Count -gt 0) {
 			Write-PlanRow "+" "PATH" "your user environment" (($pathNeeded | ForEach-Object { Get-Tilde $_ }) -join "; ")
@@ -969,9 +971,9 @@ function Invoke-PiredInstaller {
 		}
 		# Spelled for PowerShell, which is the shell this script was started from.
 		if ($ownsTree) {
-			Write-Note "Undo: Remove-Item -Recurse -Force $(Get-Tilde (Get-PiredHome)), ~\.pired, ~\.pi"
+			Write-Note "Undo: Remove-Item -Recurse -Force $(Get-Tilde (Get-PiredHome)), ~\.pired"
 		} else {
-			Write-Note "Undo: npm rm -g pired $PiPackage; Remove-Item -Recurse -Force ~\.pired, ~\.pi"
+			Write-Note "Undo: npm rm -g pired $PiPackage; Remove-Item -Recurse -Force ~\.pired"
 		}
 		Write-Say
 
@@ -1036,34 +1038,14 @@ function Invoke-PiredInstaller {
 		if ($installedPi) { $shims += "pi" }
 		Remove-BlockedShims -Prefix $prefix -Names $shims
 
-		# --- register the extension with pi ---
-		# Installing the package gives you `pired`; this is what makes a bare
-		# `pi` load the security layer too. Non-fatal - the launcher passes -e
-		# explicitly, so pired still works completely without it - but never
-		# silent: an unregistered extension means a plain `pi` runs with no
-		# security layer at all.
-		$npmRoot = Get-NpmValue @("root", "--global")
-		$piredRoot = if ($npmRoot) { Join-Path $npmRoot "pired" } else { "" }
-		if ($piredRoot -and (Test-Directory $piredRoot)) {
-			if ($pi) {
-				Write-Step "registering the extension with pi"
-				if (-not (Invoke-Logged -Command $pi -Arguments @("install", $piredRoot))) {
-					Write-Note "skipped - run: pi install $piredRoot"
-				} else {
-					# Trust, then check: `pi install` can report success and leave pi
-					# without the package, and a bare `pi` then starts perfectly well
-					# with no security layer in it.
-					$listed = & $pi list 2>$null | Out-String
-					if ($listed -notmatch "pired") {
-						Write-Note "pi did not record it - a plain 'pi' runs without the security layer."
-						Write-Note "retry with: pi install $piredRoot"
-					}
-				}
-			} else {
-				Write-Note "pi not found: a plain 'pi' will not load the security layer."
-				Write-Note "register it with: pi install $piredRoot"
-			}
-		}
+		# --- pi is left alone ---
+		# There is deliberately no `pi install` here. Registering the package
+		# would put pired's extensions AND themes\ on pi's global resource path,
+		# so a bare `pi` would start with the security layer and - because pi
+		# persists a theme set through its extension API - would rewrite `theme`
+		# in ~\.pi\agent\settings.json on first run. `pi` stays the pi you
+		# installed. `pired` passes -e for its own run and writes nothing.
+		# See ADR-017.
 
 		# --- PATH ---
 		# Covered by the one approval above, so this writes rather than asks.

@@ -210,6 +210,36 @@ export function describeUnready(count: number): string {
 		: "";
 }
 
+/**
+ * The two theme calls pired needs, both optional: an older pi has neither.
+ *
+ * Generic in the theme type so the *object* overload is the only one in scope.
+ * pi's real `setTheme` takes `string | Theme`; narrowing the parameter here is
+ * what makes passing a name a compile error rather than a settings write.
+ */
+type ThemeCapableUi<T> = {
+	getTheme?: (name: string) => T | undefined;
+	setTheme?: (theme: T) => unknown;
+};
+
+/**
+ * Paint this run in pired's theme without editing the operator's pi.
+ *
+ * `setTheme(name)` is not a display call — pi resolves the name, then writes
+ * `theme` into ~/.pi/agent/settings.json (`interactive-mode.js`), so every later
+ * bare `pi` starts repainted. An installer that registered pired with pi turned
+ * that from a no-op into a permanent change nobody asked for. `setTheme(Theme)`
+ * takes pi's `setThemeInstance` path instead: applied to this run, written
+ * nowhere. `getTheme` returns undefined unless the theme file was loaded for
+ * this run — which the `pired` launcher does with --theme — so a pi that never
+ * heard of pired is left exactly as its operator configured it. ADR-017.
+ */
+export function applyOwnTheme<T>(ui: ThemeCapableUi<T>): void {
+	const theme = ui.getTheme?.("pired");
+	// Never the name: passing a string is what makes pi persist the choice.
+	if (theme !== undefined && theme !== null) ui.setTheme?.(theme);
+}
+
 async function countUnready(ws: Workspace): Promise<string> {
 	try {
 		return describeUnready(notReportReady(await ws.read("findings")).length);
@@ -1132,7 +1162,7 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	const applyUiPolish = (ctx: ExtensionContext): void => {
 		if (ctx.mode !== "tui") return; // terminal-only; skip in print/rpc/json (headless) modes
 		try {
-			ctx.ui.setTheme?.("pired"); // no-op unless the theme was loaded (e.g. by `pired run`)
+			applyOwnTheme(ctx.ui); // by instance, never by name: ADR-017
 		} catch {}
 		try {
 			ctx.ui.setWorkingIndicator?.({ frames: spinnerFrames(ctx.ui.theme), intervalMs: SPINNER_INTERVAL_MS });

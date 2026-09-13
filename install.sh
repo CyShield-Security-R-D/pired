@@ -9,9 +9,12 @@
 #   powershell -c "irm https://raw.githubusercontent.com/mamgad/pired/main/install.ps1 | iex"
 #
 # It surveys the box, prints exactly what it will do and where, asks once, and
-# then does all of it: Node.js (when missing or too old), pi, pired, the
-# extension registration that makes a bare `pi` load the security layer, and the
+# then does all of it: Node.js (when missing or too old), pi, pired, and the
 # PATH line that makes the command typeable.
+#
+# It does not register anything with pi. `pi` stays the pi you installed; the
+# security layer arrives only when you type `pired`, which passes it to pi with
+# -e for that run. See ADR-017.
 #
 # Nothing runs as root. A vanilla Ubuntu has neither Node nor git, and neither
 # absence is a reason to reach for sudo:
@@ -523,8 +526,6 @@ else
 fi
 plan_row "$PLUS_MARK" "pired" "$(tilde "$BIN_DIR")" "$PIRED_NOTE"
 
-plan_row "$PLUS_MARK" "extension" "$(tilde "$HOME/.pi/agent")" "so a bare \`pi\` loads the security layer"
-
 case "$PATH_STATE" in
 	live) plan_row "$KEEP_MARK" "PATH" "$(tilde "$BIN_DIR")" "already on your PATH" ;;
 	written) plan_row "$KEEP_MARK" "PATH" "$(tilde "$RC_FILE")" "already there — new shells have it" ;;
@@ -538,9 +539,9 @@ if [ "$NODE_STATE" = old ]; then
 	say "  ${DIM}The PATH line puts pired's Node.js ahead of $(command -v node) in new shells.${OFF}"
 fi
 if [ "$OWNS_TREE" = 1 ]; then
-	say "  ${DIM}Undo: rm -rf $(tilde "$PIRED_HOME") ~/.pired ~/.pi${OFF}"
+	say "  ${DIM}Undo: rm -rf $(tilde "$PIRED_HOME") ~/.pired${OFF}"
 else
-	say "  ${DIM}Undo: npm rm -g pired $PI_PACKAGE · rm -rf ~/.pired ~/.pi${OFF}"
+	say "  ${DIM}Undo: npm rm -g pired $PI_PACKAGE · rm -rf ~/.pired${OFF}"
 fi
 say ""
 
@@ -712,7 +713,7 @@ if [ "$DO_PI" = 1 ]; then
 elif [ -n "$PI" ]; then
 	done_line "pi" "$("$PI" --version 2>/dev/null || echo present)  $(tilde "$PI")"
 else
-	skip_line "pi" "skipped — pired still works, a bare \`pi\` will not"
+	skip_line "pi" "skipped — pired drives pi, so put one on PATH before running it"
 fi
 
 # --- pired ------------------------------------------------------------------
@@ -773,30 +774,13 @@ else
 	die "could not install from $SOURCE"
 fi
 
-# --- register the extension with pi ----------------------------------------
-# Installing the binary gives you `pired`; this is what makes a bare `pi` load
-# the security layer too. Non-fatal — the launcher passes -e explicitly, so
-# pired still works completely without it — but never silent: an unregistered
-# extension means a plain `pi` runs with no security layer at all.
-NPM_ROOT=$(npm root --global 2>/dev/null || true)
-if [ -n "$PI" ] && [ -n "$NPM_ROOT" ] && [ -d "$NPM_ROOT/pired" ]; then
-	STEP_HINT="registering with pi"
-	if step "extension" quiet_label "$PI" install "$NPM_ROOT/pired"; then
-		# Trust, then check. `pi install` can report success and leave pi without
-		# the package, and the difference is invisible: a bare `pi` starts
-		# perfectly well with no security layer in it. `pi list` is what an
-		# operator would look at, so it is what this looks at.
-		if "$PI" list 2>/dev/null | grep -q pired; then
-			done_line "extension" "registered — a bare \`pi\` loads the security layer"
-		else
-			warn_line "extension" "pi did not record it — a bare \`pi\` runs without the security layer; retry: pi install $NPM_ROOT/pired"
-		fi
-	else
-		warn_line "extension" "not registered — run: pi install $NPM_ROOT/pired"
-	fi
-elif [ -z "$PI" ]; then
-	skip_line "extension" "no pi to register with"
-fi
+# --- pi is left alone -------------------------------------------------------
+# There is deliberately no `pi install` here. Registering the package would put
+# pired's extensions AND themes/ on pi's global resource path, so a bare `pi`
+# would start with the security layer and — because pi persists a theme set
+# through its extension API — would rewrite `theme` in ~/.pi/agent/settings.json
+# on first run. `pi` stays the pi you installed. `pired` passes -e for its own
+# run and changes nothing on disk. See ADR-017.
 
 # --- PATH -------------------------------------------------------------------
 # An install that works but cannot be typed looks identical to a failed one, so

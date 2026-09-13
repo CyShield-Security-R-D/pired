@@ -1072,3 +1072,90 @@ satisfiable or would make honest clearances impossible to record.
 ledger and would make a restarted run inherit a spent budget with no obvious way to reset it. Per
 session is weaker and predictable; the strong version is a config decision the operator can already
 make by setting `maxAgents` low.
+
+---
+
+## ADR-017 — The installer leaves `pi` alone; `pired` is the only thing that loads pired
+
+**Status:** accepted
+
+### Context
+
+Both installers ended with a registration step:
+
+```sh
+pi install "$(npm root -g)/pired"
+```
+
+The stated purpose was generous — "so a bare `pi` loads the security layer" — and it was checked
+carefully, `pi list | grep pired` guarding against the case where `pi install` reports success and
+records nothing. What it actually did was larger than the sentence, in three steps that are only
+visible if you read pi's source rather than its flags:
+
+1. `package.json` declares `pi.themes: ["./themes"]` next to `pi.extensions`. Registration is not
+   per-resource: `package-manager.js:1804` loops every entry in `RESOURCE_TYPES` — extensions,
+   skills, prompts, **themes** — so registering the extension also puts `themes/pired.json` on pi's
+   global resource path and makes the name `pired` resolve in every pi run on the box.
+2. `extensions/pired.ts` calls `ctx.ui.setTheme("pired")` on each TUI start. The guard was the
+   comment "no-op unless the theme was loaded (e.g. by `pired run`)" — true right up until step 1
+   made the name resolve, which is to say true until the installer ran.
+3. pi's extension API persists a theme set **by name**. `interactive-mode.js:1907`:
+
+   ```js
+   const result = this.themeController.setThemeName(themeOrName);
+   if (result.success) {
+     if (this.settingsManager.getTheme() !== themeOrName) {
+       this.settingsManager.setTheme(themeOrName);   // → save() → ~/.pi/agent/settings.json
+     }
+   }
+   ```
+
+So one installer run, plus one `pired` start, permanently rewrote `theme` in the operator's global
+pi settings. Not for the pired session — for every `pi` they ever ran afterwards. The launcher was
+never the culprit: `--use-theme` reaches `applyOverrides`, which merges into the in-memory `settings`
+and never into `globalSettings`, so it cannot persist. The damage came entirely from the path the
+installer opened.
+
+The failure this prevents is small and infuriating: a consultant installs an assessment tool and
+their editor's agent comes back a different colour, with no setting they remember changing and no
+line in the installer's plan that says so.
+
+### Decision
+
+**The installers install `pired` and nothing else.** No `pi install`, no plan row for an extension,
+no `~/.pi` in the undo hint — the scripts never write inside pi's directory and now do not claim to.
+`pi` is the pi the operator installed. `pired` is pi plus the security layer, assembled with `-e` at
+launch and gone when the process exits.
+
+**Where the theme is applied, it is applied by instance, not by name.** `ctx.ui.getTheme("pired")`
+returns a `Theme` or `undefined`, and `setTheme(Theme)` takes pi's `setThemeInstance` path, which
+paints the run and writes nothing. Two properties fall out: a pi that never heard of pired gets
+`undefined` and is left alone, and an operator who *deliberately* runs `pi install <pired>` gets the
+theme for that session without their settings file being edited behind them.
+
+### Consequences
+
+- `pi install git:github.com/mamgad/pired` still exists and still works. It moved from something the
+  installer did on your behalf to something you type — which is the difference between a default and
+  a choice.
+- A box that ran an older installer is still registered, and its `~/.pi/agent/settings.json` still
+  carries `"theme": "pired"`. Neither is repaired automatically: unregistering is
+  `pi remove <src>`, and the settings key is the operator's file to edit. An installer that reached
+  into pi's settings to undo its own overreach would be committing the same category of act.
+- The `pired` launcher is now the only supported entry point, so anything the security layer needs
+  must be passed in `bin/launch.mjs`. That is already true of the profile, thinking level,
+  `--approve` and the theme.
+
+### Rejected
+
+**Keeping registration and only fixing the theme write.** It fixes the loud symptom and leaves the
+quiet one: a bare `pi` still silently loads a security-operator prompt, a scope gate and two extra
+tools. Someone who installed an assessment harness did not thereby ask for their general-purpose
+agent to be reshaped.
+
+**Registration behind an installer flag** (`--register-pi`). A flag nobody passes is a code path
+nobody tests, and the thing it would guard is one documented command the operator can already type.
+
+**Dropping `pi.themes` from `package.json` instead.** It would break the deliberate `pi install`
+route — which is a legitimate way to run pired — to fix an installer problem. The manifest is not
+where the mistake was.
