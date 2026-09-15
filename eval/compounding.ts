@@ -9,13 +9,22 @@
  * accumulated false positives faster than findings, making repeated runs
  * "potentially counterproductive".
  *
- * Two arms, same model, same target, k sessions each:
+ * Three arms, same model, same target, k sessions each:
  *   persisted  the engagement workspace carries across sessions
  *   wiped      the workspace is deleted at every session boundary
+ *   lensed     the workspace carries, and each session opens the next PASS
  *
  * The wiped arm is the ablation that matters. It runs pired identically —
  * same prompt, same tools, same everything — and removes only durable memory,
  * which is the confound the original A-vs-C comparison could never separate.
+ *
+ * The lensed arm is ADR-018 under test. `persisted` and `lensed` differ by one
+ * thing: a `pired-ledger pass next` between sessions, which moves the router off
+ * the coverage matrix and onto a lens that can reach work the matrix cannot see.
+ * It pays only if it beats the WIPED arm's union — the bar `compounding-union.ts`
+ * computes — because reaching the union of k cold scans is what accumulation
+ * does on its own, and calling that learning is the artifact this whole file
+ * exists to have caught once already.
  *
  * Scored against DVBank's key, so the outcome is *finding real bugs*, not
  * filling in cells. The primary statistic is a slope: does session 3 add
@@ -36,6 +45,21 @@ import type { Score } from "./dvbank/score.ts";
 
 const run = promisify(execFile);
 const PIRED = new URL("../bin/pired.mjs", import.meta.url).pathname;
+const LEDGER = new URL("../bin/pired-ledger.mjs", import.meta.url).pathname;
+
+const ARMS = ["persisted", "wiped", "lensed"] as const;
+type Arm = (typeof ARMS)[number];
+
+/**
+ * The ladder the lensed arm works through, one lens per session.
+ *
+ * Passed as PIRED_PASSES rather than written into a scope file so the arm's only
+ * difference from `persisted` stays visible in one place. `credentialed` is left
+ * out because DVBank is a code review with no loot to re-run anything as, and a
+ * rung that is empty by construction would dilute the comparison rather than
+ * test it.
+ */
+const LENSES = "route,file,invariant,adversarial";
 const RUN_ID = Math.random().toString(36).slice(2, 8);
 
 function arg(name: string, def?: string): string {
@@ -84,7 +108,7 @@ interface SessionScore extends Score {
 	error?: string;
 }
 
-async function rollout(arm: "persisted" | "wiped", index: number, sessions: number, workDir: string): Promise<{ arm: string; rollout: number; scores: SessionScore[] }> {
+async function rollout(arm: Arm, index: number, sessions: number, workDir: string): Promise<{ arm: string; rollout: number; scores: SessionScore[] }> {
 	const name = `cmp-${RUN_ID}-${arm}-r${index}`;
 	const dir = join(workDir, name);
 	await buildTarget(dir);
@@ -96,6 +120,21 @@ async function rollout(arm: "persisted" | "wiped", index: number, sessions: numb
 	for (let s = 0; s < sessions; s++) {
 		// The ablation: wiping removes durable memory and nothing else.
 		if (s > 0 && arm === "wiped") await rm(engagementDir, { recursive: true, force: true });
+		// The treatment: the lensed arm keeps everything the persisted arm keeps
+		// and additionally advances the ladder, so session s runs under lens s.
+		// Its failure is recorded rather than swallowed — an arm that silently
+		// stopped advancing would be the persisted arm wearing another name, and
+		// would read as a null result for the feature rather than for the harness.
+		if (s > 0 && arm === "lensed") {
+			try {
+				await run(process.execPath, [LEDGER, "--engagement", name, "pass", "next"], {
+					env: { ...process.env, PIRED_PASSES: LENSES },
+					timeout: 60000,
+				});
+			} catch (err) {
+				process.stderr.write(`  lensed r${index} s${s}: could not open the pass — ${(err as Error).message.slice(0, 160)}\n`);
+			}
+		}
 		const started = Date.now();
 		let ok = true;
 		let error: string | undefined;
@@ -104,7 +143,14 @@ async function rollout(arm: "persisted" | "wiped", index: number, sessions: numb
 				PIRED, "--profile", "review", "--provider", arg("provider", "openrouter"),
 				"--model", arg("model", "qwen/qwen3.8-27b"),
 				"--no-theme", "--target", dir, "--prompt", PROMPT,
-			], { timeout: Number(arg("timeout", "1200000")), maxBuffer: 1 << 26, cwd: dir });
+			], {
+				timeout: Number(arg("timeout", "1200000")),
+				maxBuffer: 1 << 26,
+				cwd: dir,
+				// Only the lensed arm gets a ladder. The other two run the harness
+				// exactly as every earlier number in research/ was measured against.
+				env: arm === "lensed" ? { ...process.env, PIRED_PASSES: LENSES } : process.env,
+			});
 			pending.child.stdin?.end();
 			await pending;
 		} catch (err) {
@@ -143,11 +189,11 @@ const workDir = arg("work", "/tmp/compounding");
 await mkdir(workDir, { recursive: true });
 
 const jobs: Array<() => Promise<Awaited<ReturnType<typeof rollout>>>> = [];
-for (const arm of ["persisted", "wiped"] as const) {
+for (const arm of ARMS) {
 	for (let i = 0; i < rollouts; i++) jobs.push(() => rollout(arm, i, sessions, workDir));
 }
 
-process.stderr.write(`compounding · 2 arms x ${rollouts} rollouts x ${sessions} sessions = ${jobs.length * sessions} runs · ${RUN_ID}\n\n`);
+process.stderr.write(`compounding · ${ARMS.length} arms x ${rollouts} rollouts x ${sessions} sessions = ${jobs.length * sessions} runs · ${RUN_ID}\n\n`);
 
 const results: Array<Awaited<ReturnType<typeof rollout>>> = [];
 let cursor = 0;
@@ -190,17 +236,21 @@ if (failed.length === allSessions.length) {
 }
 for (const key of ["recall", "precision", "ledgerFindings", "hypotheses"] as const) {
 	process.stdout.write(`${key}\n`);
-	for (const arm of ["persisted", "wiped"]) {
+	for (const arm of ARMS) {
 		const s = series(arm, key);
 		process.stdout.write(`  ${arm.padEnd(10)} ${s.map((x) => x.toFixed(3)).join("  →  ")}   Δ ${(s[s.length - 1]! - s[0]!).toFixed(3)}\n`);
 	}
 	process.stdout.write("\n");
 }
 
-const pr = series("persisted", "recall");
-const wr = series("wiped", "recall");
+const slope = (arm: Arm): string => {
+	const r = series(arm, "recall");
+	return ((r[r.length - 1]! - r[0]!) / Math.max(sessions - 1, 1)).toFixed(4);
+};
+process.stdout.write(`slope (recall gain per session): ${ARMS.map((a) => `${a} ${slope(a)}`).join(" · ")}\n`);
 process.stdout.write(
-	`slope (recall gain per session): persisted ${((pr[pr.length - 1]! - pr[0]!) / Math.max(sessions - 1, 1)).toFixed(4)} · wiped ${((wr[wr.length - 1]! - wr[0]!) / Math.max(sessions - 1, 1)).toFixed(4)}\n`,
+	"\nThese are per-session ledger scores and the persisted and lensed arms accumulate;\n" +
+	`re-score them on a common basis before reading anything into it:\n  node eval/compounding-union.ts --run ${RUN_ID}\n`,
 );
 await writeFile(join(workDir, `summary-${RUN_ID}.json`), `${JSON.stringify(results, null, 2)}\n`);
 process.stdout.write(`raw → ${join(workDir, `summary-${RUN_ID}.json`)}\n`);

@@ -173,6 +173,8 @@ Arm A is n=5 with a 95% interval, from a re-run that reproduced the original sin
 
 This is not evidence that the ledger is worthless — it is evidence that **this benchmark never tested it**. A one-shot detection scan is the task least likely to benefit from durable cross-session state. The experiment that settles it is [`eval/compounding.ts`](../eval/compounding.ts), and it **has** been run: persisted versus wiped over k sessions found no measurable recall benefit and a bias toward stopping early ([research/06](../research/06-compounding-2026-08.md)).
 
+It now carries a third arm, `lensed`, which is [ADR-018](decisions.md) under test — the same persisted ledger, plus a `pired-ledger pass next` between sessions so each one routes under a different lens. **That arm has not been run.** Its bar is the wiped arm's union rather than the persisted arm's line: reaching the union of *k* cold scans is what accumulation does by itself, and mistaking that for learning is the scoring artifact research/06 exists to have caught once already. Run it with `node eval/compounding.ts`, then re-score on a common basis with `node eval/compounding-union.ts --run <id>`.
+
 A later prompt revision (*explore-first + coverage floor*) scored 0.81 recall / 0.76 F1 in a **single** run. It is not in the table above: it has not been replicated, and the contamination control was never re-run against it.
 
 Full methodology, per-category breakdown, exact token and cost accounting, and threats to validity: **[`research/`](../research/)**.
