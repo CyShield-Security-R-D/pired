@@ -10,7 +10,8 @@ import { continuityProbe } from "./continuity.ts";
 import { coverageProbe } from "./coverage.ts";
 import { graderProbe } from "./grader.ts";
 import { ledgerProbe } from "./ledger.ts";
+import { passesProbe } from "./passes.ts";
 import { routerProbe } from "./router.ts";
 import { scopeProbe } from "./scope.ts";
 
-export const PROBES: Probe[] = [scopeProbe, routerProbe, coverageProbe, continuityProbe, ledgerProbe, graderProbe];
+export const PROBES: Probe[] = [scopeProbe, routerProbe, passesProbe, coverageProbe, continuityProbe, ledgerProbe, graderProbe];

@@ -23,6 +23,7 @@ Scripted scenarios with deterministic assertions against `core/`'s pure function
 |---|---|
 | `scope` | Does the gate hold against direct, content-injected, ambiguous, and unauthorized targets — *and* does in-scope work still run? |
 | `router` | Does `selectNext` keep returning workable cells as blocker density rises, without ever handing back blocked work? |
+| `passes` | Does a settled matrix end the route sweep without ending the engagement — and does the lens that catches it still drain? |
 | `coverage` | Can the denominator every other metric is expressed in drift silently? |
 | `continuity` | Does a cold restart over the same directory reconstruct the engagement exactly? |
 | `ledger` | Does claimed evidence resolve — and does the detector still catch planted defects? |
@@ -44,7 +45,7 @@ Scripted scenarios with deterministic assertions against `core/`'s pure function
 
 A suite that cannot fail is not testing anything, so Assay is mutation-tested: break a rule in `core/`, confirm it goes red, revert.
 
-Thirteen mutations are known to be caught — six in `core/` (dropping the scope exclusion by host and by URL, removing the domain boundary check, returning blocked work from the router, dropping the evidence-path traversal guard, breaking last-write-wins, ignoring `appliesTo`) and seven in the grader. Two of the `core/` cases exist *because* mutation testing found the suite missing them.
+Fifteen mutations are known to be caught — eight in `core/` (dropping the scope exclusion by host and by URL, removing the domain boundary check, returning blocked work from the router, dropping the evidence-path traversal guard, breaking last-write-wins, ignoring `appliesTo`, cutting the adversarial lens off from cleared cells, and letting a promoted lens overwrite a ladder rung) and seven in the grader. Two of the `core/` cases exist *because* mutation testing found the suite missing them.
 
 The grader is mutation-tested hardest on purpose: every headline number flows through it, so a misclassification there is wrong in a way no individual result looks wrong.
 
@@ -170,7 +171,7 @@ Arm A is n=5 with a 95% interval, from a re-run that reproduced the original sin
 
 **That `record`/`recall` caused the lift.** The re-run graded the ledger alongside the emitted report and found **0.8 records per run** against 61 findings emitted: `findings.jsonl` was absent for four of five runs, and `hypotheses.jsonl` and `inventory.jsonl` for all five. The engagement apparatus was bypassed and detection held anyway, so the defensible attribution is the prompt.
 
-This is not evidence that the ledger is worthless — it is evidence that **this benchmark never tested it**. A one-shot detection scan is the task least likely to benefit from durable cross-session state. The experiment that would settle it is the compounding one — three arms, k sessions, persisted versus wiped ledger — and it has not been run.
+This is not evidence that the ledger is worthless — it is evidence that **this benchmark never tested it**. A one-shot detection scan is the task least likely to benefit from durable cross-session state. The experiment that settles it is [`eval/compounding.ts`](../eval/compounding.ts), and it **has** been run: persisted versus wiped over k sessions found no measurable recall benefit and a bias toward stopping early ([research/06](../research/06-compounding-2026-08.md)).
 
 A later prompt revision (*explore-first + coverage floor*) scored 0.81 recall / 0.76 F1 in a **single** run. It is not in the table above: it has not been replicated, and the contamination control was never re-run against it.
 

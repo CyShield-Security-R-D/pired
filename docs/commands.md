@@ -18,6 +18,7 @@ Everything pired adds to pi. pi's own commands (`/model`, `/reload`, sessions, �
 | `/findings` | Browse findings, worst first; select one to read its description, repro and evidence. |
 | `/report` | Write findings to Markdown in the engagement workspace, with a Coverage section: what was settled, what was refuted, and what nobody reached. Prints the absolute path. |
 | `/challenge` | What is still unverified: the queue of findings no challenge has settled, or `/challenge <id>` for the brief on one — the brief a fresh subagent can be handed. |
+| `/pass` | Which pass is open, the lens it runs under and what that lens can still reach. `/pass next` opens the next rung; `/pass <lens>` opens a named one. Only on engagements that turned passes on. |
 | `/blockers` | Browse what needs you: every parked question, waiting ones first, with `a` to answer the one under the cursor. |
 | `/scribe` | Write the review into the ledger now — findings, surface, and a verdict on every checklist class. |
 | `/scribe on` \| `off` \| `status` | Let it run by itself after every reply (off by default), or report its state. |
@@ -141,6 +142,59 @@ pired-ledger record kind=finding id=f3 status=confirmed \
 The verdict is judged against the class contract on the way in and **cannot be asserted** — `record` deletes any `verification` handed to it and computes its own. A confirmation with no control case is recorded as `suspected` with the reason, and the finding is kept exactly as it was.
 
 Invocation stays a pull, deliberately: re-running a proof touches the client's system again, so nothing here fires on its own.
+
+### `/pass` — working an engagement in more than one sweep
+
+Measured on the application corpus, the union of three passes finds roughly twice
+what the average pass finds — 9 of 24 truth entries against a mean of 4.3, and the
+same shape for codex and bare pi. About half of what the harness can find, it
+misses on any given pass.
+
+Running it again over the same ledger does not collect that. `research/06` ran the
+experiment: persisted and wiped arms tie at 0.591 cumulative recall, a gap of
+-0.000, and the persisted arm's final sessions run about half as long — one of
+them recorded zero new findings in 105 seconds. It opened a full ledger, found
+`recall next` empty, and stopped. That is the honest reading of an empty router:
+`gaps` and `next` route to `not-tested` by construction, so a settled matrix looks
+like a finished engagement.
+
+So a pass carries a **lens**, and the lens decides what it is allowed to look at:
+
+| lens | what it routes to |
+|---|---|
+| `route` | test cases with no verdict — the matrix, unchanged |
+| `file` | files the ledger names but never recorded as surface |
+| `invariant` | rules in `model.md` that no hypothesis has tested |
+| `adversarial` | unchallenged findings, then cleared cells, oldest first |
+| `credentialed` | surface settled before the engagement held a credential |
+
+Earlier passes' **facts** carry forward — the inventory, the target model, the
+loot, the evidence — which is what makes a later pass cheaper than a cold one.
+Their **verdicts** are what the next pass is there to re-open: a cell reading
+`clear` still counts toward the coverage the client is handed, and stops counting
+as done work to the router.
+
+**Off unless you turn it on.** In `scope.json`:
+
+```json
+"passes": { "enabled": true, "lenses": ["route", "file", "invariant", "adversarial"] }
+```
+
+or `PIRED_PASSES=route,file,invariant,adversarial` for a headless run, the same
+affordance `PIRED_SCRIBE` exists for. With neither, an engagement runs one `route`
+pass and behaves exactly as it did before passes existed.
+
+Opening one stays a pull. A further pass spends your budget and touches the
+client's systems again, so `/pass next` is yours to type — the agent is told what
+the next lens would reach and told the decision is yours. `recall pass` is the
+agent's view of the same thing, and the ledger stamps which pass found each row,
+so `/pass` can say what this one has actually added.
+
+Opening a discovery pass while findings still carry no verdict says so and opens
+anyway. A union of passes multiplies false positives as readily as findings, and
+precision is where this harness is weakest — 0.059 on the application corpus
+against bare pi's 0.192 — but what to spend the time on is your call, not the
+harness's.
 
 ### `/blockers` — what needs you
 
@@ -303,6 +357,7 @@ pired ships no spawn machinery — delegation comes from whichever subagent pack
 | `PIRED_RAIL_WIDTH` | `56` inline, `64` tmux | Panel width in columns. |
 | `PIRED_RAIL_HEIGHT` | `50%` | Inline rail height: `N` rows or `N%`. Invalid values fall back to `50%`. |
 | `PI_BIN` | `pi` | The pi binary the `pired` launcher spawns. |
+| `PIRED_PASSES` | — | The pass ladder for a headless run: `route,file,invariant,adversarial`, or `off`. Overrides `scope.json`. |
 | `TMUX` | — | Set by tmux; `/panel tmux` requires it. |
 
 The panel's start-up visibility is a flag rather than an environment variable: `--pired-panel on|off`, or `pired --no-panel`.

@@ -125,6 +125,7 @@ recall query=<query> [limit=50]
 | `inventory` | Recorded surface. |
 | `hypotheses` | Each with outcome, class, target. |
 | `findings` | Each with severity, status, target. |
+| `pass` | Which pass is open, the lens it runs under, and what that lens can reach. A single-pass engagement says so and points back at coverage. |
 | `challenge` | What is unchallenged, worst first. With `id=<finding>`, the brief for breaking that one: the class's control case, the entitlement question, and what its evidence does not yet show. |
 | `blockers` | Open blockers only. |
 | `loot` | **Handles only** — never secrets. |
@@ -132,6 +133,8 @@ recall query=<query> [limit=50]
 | `model` | The target model, or how to write one if there is none. |
 
 `next` and `gaps` are the ones that keep an engagement honest: they are how the agent stays systematic and avoids quitting early.
+
+On an engagement that works in [passes](commands.md#pass--working-an-engagement-in-more-than-one-sweep), `next` routes by the open lens instead of by the matrix, and a settled matrix is reported as the end of the route sweep rather than the end of the work. `gaps` keeps answering about the matrix in every pass — a `gaps` that quietly answered something else would be a second derivation of the same question.
 
 This is the harness's central bet, and it is worth being precise about its evidence: the published benchmark **did not test it**. The detection lift it measured is attributable to the security-tuned prompt, because in the re-run the ledger was barely written to and detection held anyway. A one-shot scan is the task least likely to need durable state. See [Evaluation](evaluation.md#what-the-benchmark-does-not-establish).
 

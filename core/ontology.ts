@@ -33,6 +33,59 @@ export const TARGET_TYPES = ["web", "api", "network", "code-review", "firmware"]
 /** Known target types; custom types are allowed. */
 export type TargetType = (typeof TARGET_TYPES)[number] | (string & {});
 
+/**
+ * The lenses a pass can be run under — the axis that makes pass N+1 unable to
+ * repeat pass N.
+ *
+ * Measured on the application corpus (`research/11`): the union of three passes
+ * found 9 of 24 truth entries where the mean pass found 4.3, so roughly half of
+ * what the harness can find it misses on any given pass. The obvious remedy —
+ * run it again over the same ledger — is the one measured not to work
+ * (`research/06`): persisted and wiped arms tie at 0.591 cumulative recall, and
+ * the persisted arm's final sessions run about half as long, one of them
+ * recording zero new findings in 105 seconds. A second pass that re-reads the
+ * first pass's conclusions inherits them.
+ *
+ * So a pass carries a lens, and the lens decides what it is allowed to look at:
+ *
+ * - `route` — the coverage matrix as it stands. The present behaviour.
+ * - `file` — files the ledger names but never recorded as surface. Across 17
+ *   misses the file holding the missed entry was opened 17 times and recorded as
+ *   surface 0 times, so a matrix built from routes could never point at it.
+ * - `invariant` — the rules in the target model that no hypothesis has tested.
+ *   These are the scanner-blind classes; nothing else routes to them.
+ * - `adversarial` — cleared cells and unchallenged findings (ADR-014, ADR-016),
+ *   given a place in the ladder rather than waiting to be pulled.
+ * - `credentialed` — surface settled before the engagement held a credential,
+ *   which is surface that was only ever tested as an anonymous caller.
+ */
+export const PASS_LENSES = ["route", "file", "invariant", "adversarial", "credentialed"] as const;
+export type PassLens = (typeof PASS_LENSES)[number];
+
+/**
+ * How a pass is opened and what the ladder holds.
+ *
+ * Off by default, and the whole feature is inert when it is: one `route` pass,
+ * no prompt block, no change to the router, nothing new in the panel. The ladder
+ * is engagement policy rather than an operator preference — a firmware teardown,
+ * a credentialed web retest and a one-hour triage do not want the same one —
+ * which is why it lives in `scope.json` beside `maxAgents`.
+ */
+export interface PassConfig {
+	enabled?: boolean;
+	/** The ladder, in order. Pass 1 takes the first entry. Defaults to DEFAULT_PASS_LADDER. */
+	lenses?: PassLens[];
+}
+
+/**
+ * The ladder used when passes are enabled and none is named.
+ *
+ * `credentialed` is deliberately not in it: it is empty without loot, and a
+ * ladder whose last rung is usually empty teaches the operator that the ladder
+ * ends early. A pentest engagement adds it explicitly.
+ */
+export const DEFAULT_PASS_LADDER: PassLens[] = ["route", "file", "invariant", "adversarial"];
+
 export const INVENTORY_KINDS = ["host", "service", "endpoint", "param", "tech"] as const;
 export type InventoryKind = (typeof INVENTORY_KINDS)[number];
 
@@ -193,6 +246,17 @@ export interface RecordBase {
 	deletedReason?: string;
 	/** Set by the duplicate sweep on the rows it folded away: the id they became. */
 	duplicateOf?: string;
+	/**
+	 * Which pass created this row. Absent means pass 1, or a ledger written
+	 * before passes existed — the two are indistinguishable and neither matters.
+	 *
+	 * Written by the record path and deleted from caller input, the same rule
+	 * `verification` follows: a model that could assert which pass it was on
+	 * could assert the coverage that goes with it. It is set on creation only, so
+	 * a row corrected in pass 3 still reports the pass that found it — which is
+	 * what makes the per-pass delta a measurement rather than a restatement.
+	 */
+	pass?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -205,6 +269,14 @@ export interface WorkspaceManifest {
 	createdAt: IsoTimestamp;
 	/** Store name -> schema version currently on disk. */
 	stores: Partial<Record<StoreName, number>>;
+	/**
+	 * The pass currently open, counting from 1.
+	 *
+	 * On the manifest rather than in the session because a pass outlives a
+	 * session — a consultant closes the laptop mid-pass — and because the count
+	 * is what the per-pass delta is expressed in. Absent means 1.
+	 */
+	pass?: number;
 	/**
 	 * The directory this engagement was opened from, first time.
 	 *
@@ -254,6 +326,14 @@ export interface EngagementScope {
 	 * inference below stays as the default for the two cases it does settle.
 	 */
 	targetType?: TargetType;
+	/**
+	 * Whether this engagement works in passes, and which lenses its ladder holds.
+	 *
+	 * Absent or `enabled: false` is one `route` pass, which is the behaviour every
+	 * measurement in `research/` was taken against — so nothing already reported
+	 * changes meaning until an engagement opts in.
+	 */
+	passes?: PassConfig;
 	/**
 	 * Most subagents this session may spawn. Defaults to DEFAULT_MAX_AGENTS.
 	 *

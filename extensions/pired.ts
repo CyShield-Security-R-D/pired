@@ -26,11 +26,11 @@ import {
 	buildBrowserModel, detailRowCount, elementLabel, initialState, reduceBrowser, renderBrowser, selectedBlocker, visibleBlockers, type BrowserKey, type BrowserModel, type BrowserState, type BrowserTone, type BrowserView,
 } from "../core/browser.ts";
 import { type BannerTone, renderBanner } from "../core/banner.ts";
-import { challengeCommand, unchallengedBrief } from "../core/challenge.ts";
+import { challengeCommand, unchallengedBrief, unchallengedQueue } from "../core/challenge.ts";
 import { blockerDialog, SKIP_OPTION } from "../core/dialog.ts";
 import { exportFindingsMarkdown, notReportReady } from "../core/export.ts";
 import { bannerColumns, BROWSER_CHROME, OVERLAY, OVERLAY_HEIGHT_SHARE, railColumns } from "../core/layout.ts";
-import type { BlockerRecord, Checklist, EngagementScope, FindingRecord, Severity, TargetType } from "../core/ontology.ts";
+import type { BlockerRecord, Checklist, EngagementScope, FindingRecord, PassLens, Severity, TargetType } from "../core/ontology.ts";
 import type { Gate, ToolContext, ToolDefinition } from "../core/ports.ts";
 import { buildSystemPrompt, PIRED_PROFILES, type PiredProfile } from "../core/prompts.ts";
 import { createScopeGate, pickTargetType } from "../core/scope.ts";
@@ -42,6 +42,10 @@ import { applyPlan, extractionSystemPrompt, extractionUserMessage, needsRetry, p
 import type { Fields } from "../core/identity.ts";
 import { dismissHint, PANEL_MODES, renderFindingDetail, renderPanel, scrollFramed, type PanelData, type PanelMode, type PanelTone } from "../core/panel.ts";
 import { coverageBrief, renderCoverageBrief } from "../core/coverage.ts";
+import {
+	parseLenses, passCommand, passDelta, passState, planPass, promoteLens, renderPassBrief,
+	resolveLadder, type PassState,
+} from "../core/passes.ts";
 import { labelIndex } from "../core/target.ts";
 import { claimCounts, computeCoverageView, computeEngagementStats, coveragePercent, isDisposed, unwrittenHypotheses, type CoverageView, type EngagementStats } from "../core/stats.ts";
 import { layoutStatusLine, scribeStatus, type ScribeState, type Segment } from "../core/statusline.ts";
@@ -265,6 +269,22 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	 * ways the file changes during a run.
 	 */
 	let targetModel = "";
+
+	/**
+	 * The pass ladder this engagement runs, and where it has got to.
+	 *
+	 * `undefined` is the default and means the engagement does not run passes at
+	 * all — one `route` sweep, no prompt block, no router change, nothing in the
+	 * panel. Every number in `research/` was measured against that behaviour, so
+	 * it has to remain reachable without configuration. See ADR-018.
+	 *
+	 * The number is read from the manifest at session start rather than reset,
+	 * because a pass outlives a session: a consultant closes the laptop mid-pass
+	 * and the second morning is still pass 3.
+	 */
+	let passLadder: PassLens[] | undefined;
+	let passNumber = 1;
+	const passNow = (): PassState | undefined => passState(passLadder, passNumber);
 
 	/**
 	 * The directory this engagement was created in, when it is not this one.
@@ -1239,7 +1259,13 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		// what the last one worked out about the target.
 		targetModel = await workspace.readModel();
 
-		for (const tool of createCoreTools({ workspace })) {
+		// The environment wins over scope.json, so a headless arm can turn passes
+		// on for an engagement whose scope predates them — the affordance
+		// PIRED_SCRIBE exists for, one feature later.
+		passLadder = resolveLadder(scope.passes, parseLenses(process.env.PIRED_PASSES));
+		passNumber = passLadder ? await workspace.currentPass() : 1;
+
+		for (const tool of createCoreTools({ workspace, pass: passNow })) {
 			const presentation = tool.name === "record" ? { renderResult: renderRecordResult } : undefined;
 			// Held so phase two can write through the same tool the model would have
 			// called: same validation, same ids, same coverage effect. A second write
@@ -1347,6 +1373,31 @@ export default function piredExtension(pi: ExtensionAPI): void {
 			// for a whole engagement while findings stayed at `suspected`.
 			const waiting = unchallengedBrief(await ws.read("findings"));
 			if (waiting) text = text ? `${text}\n\n${waiting}` : waiting;
+			// Which pass is open, and what its lens can still reach. Renders nothing
+			// on pass 1 and nothing at all on an engagement that does not run passes,
+			// which between them is the overwhelming majority of sessions — the block
+			// is read because it stays quiet when it has nothing to say.
+			const open = passNow();
+			if (open && open.pass > 1) {
+				// One read of the inventory, used for both the labels and the plan:
+				// this runs on every request, so a second pass over the same file is
+				// a cost the block has to justify and cannot.
+				const inventory = await ws.read("inventory");
+				const labels = new Map(inventory.map((r) => [r.id, elementLabel(r)]));
+				const plan = planPass({
+					pass: open.pass,
+					lens: open.lens,
+					...(view ? { matrix: view.matrix } : {}),
+					hypotheses: await ws.read("hypotheses"),
+					findings: await ws.read("findings"),
+					inventory,
+					loot: await ws.read("loot"),
+					targetModel: await ws.readModel().catch(() => undefined),
+					labelFor: (id) => labels.get(id),
+				});
+				const brief = renderPassBrief(open, plan);
+				if (brief) text = text ? `${brief}\n\n${text}` : brief;
+			}
 		} catch { return undefined; }
 
 		const kept = event.messages.filter(
@@ -1404,7 +1455,7 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		// every one of them means the model is wanted elsewhere.
 		stopScribe();
 		return {
-			systemPrompt: `${event.systemPrompt}\n\n${buildSystemPrompt({ profile, scope, checklist: checklistClasses, workspace: workspace?.dir, targetModel })}`,
+			systemPrompt: `${event.systemPrompt}\n\n${buildSystemPrompt({ profile, scope, checklist: checklistClasses, workspace: workspace?.dir, targetModel, ...(passNow() ? { pass: passNow() } : {}) })}`,
 		};
 	});
 
@@ -2398,6 +2449,71 @@ export default function piredExtension(pi: ExtensionAPI): void {
 			}
 			const targetModel = await workspace.readModel().catch(() => undefined);
 			const view = challengeCommand({ findings, id: args ?? "", ...(targetModel ? { targetModel } : {}) });
+			ctx.ui.notify(view.text, view.tone);
+		},
+	});
+
+	/**
+	 * `/pass` — what pass this is, and the way to open the next one.
+	 *
+	 * Opening stays a pull. A further pass spends the operator's budget and
+	 * touches the client's systems again, which is the same reason challenging a
+	 * finding was never made automatic (ADR-014): saying that more work is
+	 * available is not the same as doing it.
+	 */
+	pi.registerCommand("pass", {
+		description: "Which pass is open and what its lens reaches — `next` or `<lens>` opens another",
+		handler: async (args, ctx) => {
+			if (!workspace) {
+				ctx.ui.notify("pired: no engagement workspace yet", "warning");
+				return;
+			}
+			const ws = workspace;
+			const state = passNow();
+			let view;
+			try {
+				if (!state) {
+					view = passCommand({ arg: args ?? "" });
+				} else {
+					const coverage = await computeCoverageView(ws).catch(() => undefined);
+					const hypotheses = await ws.read("hypotheses");
+					const findings = await ws.read("findings");
+					const inventory = await ws.read("inventory");
+					const labels = new Map(inventory.map((r) => [r.id, elementLabel(r)]));
+					view = passCommand({
+						state,
+						arg: args ?? "",
+						plan: planPass({
+							pass: state.pass,
+							lens: state.lens,
+							...(coverage ? { matrix: coverage.matrix } : {}),
+							hypotheses, findings, inventory,
+							loot: await ws.read("loot"),
+							targetModel: await ws.readModel().catch(() => undefined),
+							labelFor: (id) => labels.get(id),
+						}),
+						delta: passDelta(state.pass, { findings, hypotheses, inventory }),
+						unchallenged: unchallengedQueue(findings).length,
+					});
+				}
+			} catch (err) {
+				ctx.ui.notify(`pired: could not read the engagement — ${err instanceof Error ? err.message : String(err)}`, "warning");
+				return;
+			}
+			// The command decides; the host performs. Bumping the manifest is the one
+			// part of this that is not a pure function of the ledger.
+			if (view.open) {
+				try {
+					passNumber = await ws.openPass();
+					// A named lens moves to the pass now open and the rest of the ladder
+					// follows it, so `/pass invariant` runs the invariant lens without
+					// costing the engagement the rung it skipped.
+					if (passLadder) passLadder = promoteLens(passLadder, passNumber, view.open);
+				} catch (err) {
+					ctx.ui.notify(`pired: could not open the pass — ${err instanceof Error ? err.message : String(err)}`, "warning");
+					return;
+				}
+			}
 			ctx.ui.notify(view.text, view.tone);
 		},
 	});

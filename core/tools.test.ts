@@ -1591,3 +1591,123 @@ describe("cleared cells and their second look", () => {
 		expect(out).not.toContain("sqli");
 	});
 });
+
+describe("passes, and the ledger's record of which one found what", () => {
+	/** A workspace plus tools wired to a pass state the test controls. */
+	async function withPass(state?: { pass: number; lens: "route" | "file" | "invariant" | "adversarial" | "credentialed"; ladder: Array<"route" | "file" | "invariant" | "adversarial" | "credentialed"> }) {
+		const svc = makeFakeServices();
+		const ws = await Workspace.open("/ws/acme", "acme", svc);
+		await ws.writeChecklist({
+			v: 1, targetType: "web",
+			classes: [{ id: "sqli", title: "SQL injection" }, { id: "idor", title: "IDOR" }],
+		} as Checklist);
+		const ctx: ToolContext = { cwd: "/target", services: svc };
+		const deps = { workspace: ws, pass: () => state };
+		return { svc, ws, ctx, record: createRecordTool(deps), recall: createRecallTool(deps) };
+	}
+
+	it("writes no pass field at all on a single-pass engagement", async () => {
+		// The inertness property, at the format level: an engagement that never
+		// opted in must produce the same bytes it produced before passes existed,
+		// or every ledger on the box quietly changes shape for no behaviour.
+		const { ws, ctx, record } = await withPass();
+		await record.execute({ kind: "finding", title: "IDOR", severity: "high", target: "e1" }, ctx);
+		expect((await ws.read("findings"))[0]).not.toHaveProperty("pass");
+	});
+
+	it("stamps the pass that created a row, and only above the first", async () => {
+		const first = await withPass({ pass: 1, lens: "route", ladder: ["route", "file"] });
+		await first.record.execute({ kind: "finding", title: "IDOR", severity: "high", target: "e1" }, first.ctx);
+		expect((await first.ws.read("findings"))[0]).not.toHaveProperty("pass");
+
+		const later = await withPass({ pass: 3, lens: "file", ladder: ["route", "file"] });
+		await later.record.execute({ kind: "finding", title: "IDOR", severity: "high", target: "e1" }, later.ctx);
+		await later.record.execute({ kind: "endpoint", path: "/api/notes" }, later.ctx);
+		expect((await later.ws.read("findings"))[0]?.pass).toBe(3);
+		expect((await later.ws.read("inventory"))[0]?.pass).toBe(3);
+	});
+
+	it("refuses a pass number the caller handed in, the same rule verification follows", async () => {
+		// A model that could assert it was on pass 3 could assert the coverage that
+		// goes with it, and the per-pass delta — the one statistic that says whether
+		// a further pass paid for itself — would report what it was told.
+		const { ws, ctx, record } = await withPass({ pass: 2, lens: "file", ladder: ["route", "file"] });
+		await record.execute({ kind: "finding", title: "IDOR", severity: "high", target: "e1", pass: 9 }, ctx);
+		expect((await ws.read("findings"))[0]?.pass).toBe(2);
+	});
+
+	it("keeps the pass that found a row when a later pass corrects it", async () => {
+		// Otherwise the delta stops being a measurement: a pass-3 edit to a pass-1
+		// finding would move it into pass 3's column and make the pass look
+		// productive for work it did not do.
+		const { ws, ctx, record } = await withPass({ pass: 2, lens: "file", ladder: ["route", "file"] });
+		const created = await record.execute({ kind: "finding", title: "IDOR", severity: "high", target: "e1" }, ctx);
+		const id = (created.details as { id: string }).id;
+		const third = createRecordTool({ workspace: ws, pass: () => ({ pass: 3, lens: "file" as const, ladder: ["route" as const, "file" as const] }) });
+		await third.execute({ kind: "finding", id, impact: "reads another tenant's notes" }, ctx);
+		const row = (await ws.read("findings"))[0];
+		expect(row?.impact).toBe("reads another tenant's notes");
+		expect(row?.pass).toBe(2);
+	});
+
+	it("tells a single-pass engagement that coverage is its plan, not that something is missing", async () => {
+		const { ctx, recall } = await withPass();
+		expect(textOf(await recall.execute({ query: "pass" }, ctx))).toContain("runs a single pass");
+	});
+
+	it("reports the open lens, the ladder and what this pass has added", async () => {
+		const { ctx, recall, record } = await withPass({ pass: 2, lens: "adversarial", ladder: ["route", "adversarial"] });
+		await record.execute({ kind: "finding", title: "IDOR", severity: "high", target: "e1" }, ctx);
+		const out = textOf(await recall.execute({ query: "pass" }, ctx));
+		expect(out).toContain("Pass 2, lens `adversarial`");
+		expect(out).toContain("<- open");
+		expect(out).toContain("1 finding(s)");
+	});
+
+	it("routes `next` by the lens once a later pass is open, not by the matrix", async () => {
+		const { ctx, recall, record } = await withPass({ pass: 2, lens: "adversarial", ladder: ["route", "adversarial"] });
+		await record.execute({ kind: "finding", title: "IDOR on notes", severity: "high", target: "e1" }, ctx);
+		const out = textOf(await recall.execute({ query: "next" }, ctx));
+		expect(out).toContain("Next in pass 2");
+		expect(out).toContain("IDOR on notes");
+		expect(out).not.toContain("Next test case:");
+	});
+
+	it("names the next lens instead of calling the engagement finished when the matrix is settled", async () => {
+		// The regression this whole feature exists for. research/06: the persisted
+		// arm's final session opened a full ledger, was told there was no actionable
+		// work, and stopped after 105 seconds having recorded nothing. A settled
+		// matrix ends the route sweep, not the engagement.
+		const { ctx, recall, record } = await withPass({ pass: 1, lens: "route", ladder: ["route", "adversarial"] });
+		const el = await record.execute({ kind: "endpoint", path: "/api/notes" }, ctx);
+		const target = (el.details as { id: string }).id;
+		await record.execute({
+			kind: "hypothesis", target, class: ["sqli", "idor"], outcome: "refuted",
+			statement: "every query on this route is parameterised through the ORM, and no raw string reaches the driver",
+		}, ctx);
+		const out = textOf(await recall.execute({ query: "next" }, ctx));
+		expect(out).toContain("settles the route sweep, not the engagement");
+		expect(out).toContain("`adversarial`");
+		expect(out).toContain("operator's call");
+	});
+
+	it("still reports no actionable work when the engagement has no ladder to offer", async () => {
+		const { ctx, recall, record } = await withPass();
+		const el = await record.execute({ kind: "endpoint", path: "/api/notes" }, ctx);
+		await record.execute({
+			kind: "hypothesis", target: (el.details as { id: string }).id, class: ["sqli", "idor"], outcome: "refuted",
+			statement: "every query on this route is parameterised through the ORM, and no raw string reaches the driver",
+		}, ctx);
+		expect(textOf(await recall.execute({ query: "next" }, ctx))).toBe("No actionable work: every applicable test case has a verdict.");
+	});
+
+	it("keeps `gaps` answering about the matrix in every pass, and says where the lens went", async () => {
+		// A `gaps` that quietly answered something else would be a second derivation
+		// of the same question — the thing pired-state exists not to be.
+		const { ctx, recall, record } = await withPass({ pass: 2, lens: "file", ladder: ["route", "file"] });
+		await record.execute({ kind: "endpoint", path: "/api/notes" }, ctx);
+		const out = textOf(await recall.execute({ query: "gaps" }, ctx));
+		expect(out).toContain("Test cases not yet settled");
+		expect(out).toContain("`file` lens");
+	});
+});

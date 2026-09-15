@@ -16,6 +16,7 @@ import { computeCoverage, coveragePercent, findGaps, selectNext } from "./covera
 import { CVSS_DEFAULT_VERSION, CVSS_EXAMPLE, cvssVersion, validateCvss } from "./cvss.ts";
 import { type Fields, findDuplicate, findNearDuplicate, type IdentityKind, isNoOp, mergeRecord } from "./identity.ts";
 import { locateAcrossFiles, locateSink, sinkHints } from "./locate.ts";
+import { lensForPass, nextInPass, PASS_LENS_HELP, type PassState, passDelta, planPass } from "./passes.ts";
 import { buildTargetIndex, elementLabel, resolveElementTarget, type TargetIndex } from "./target.ts";
 import { computeCoverageView, computeEngagementStats, isDisposed } from "./stats.ts";
 import { CELL_GLYPH, renderCoveragePanel } from "./coverage-panel.ts";
@@ -47,6 +48,16 @@ export interface ToolDeps {
 	workspace: Workspace;
 	/** Inventory kinds treated as coverage surface elements. */
 	surfaceKinds?: InventoryKind[];
+	/**
+	 * The pass this session is working in, or undefined when the engagement does
+	 * not run passes (the default — see ADR-018).
+	 *
+	 * A function rather than a value because `/pass` can open one mid-session and
+	 * a tool captured at wiring time would keep answering with the pass the
+	 * session started on. Host-provided rather than read from the manifest on
+	 * every call, so the common path — passes off — costs no extra file read.
+	 */
+	pass?: () => PassState | undefined;
 }
 
 const RECORD_KINDS = [
@@ -56,7 +67,7 @@ type RecordKind = (typeof RECORD_KINDS)[number];
 type LedgerKind = Exclude<RecordKind, "note" | "evidence" | "model">;
 
 const RECALL_QUERIES = [
-	"status", "next", "coverage", "surface", "gaps", "cleared", "inventory", "hypotheses", "findings", "finding", "challenge", "loot", "blockers", "notes", "model",
+	"status", "next", "coverage", "surface", "gaps", "cleared", "pass", "inventory", "hypotheses", "findings", "finding", "challenge", "loot", "blockers", "notes", "model",
 ] as const;
 
 /**
@@ -403,12 +414,26 @@ async function writeRecord(
 			const dup = findDuplicate(kind, merged, current as unknown as Fields[]);
 			if (dup) { id = (dup as unknown as InventoryRecord).id; return undefined; }
 			id = ctx.services.ids.newId();
-			return [{ v: RECORD_VERSION, id, kind, createdAt: ctx.services.clock.nowIso(), ...merged } as unknown as InventoryRecord];
+			return [{ v: RECORD_VERSION, id, kind, createdAt: ctx.services.clock.nowIso(), ...passStamp(deps), ...merged } as unknown as InventoryRecord];
 		});
 		return id;
 	} catch {
 		return undefined;
 	}
+}
+
+/**
+ * The pass number to stamp on a row being created, or nothing.
+ *
+ * Nothing on pass 1, deliberately. Absent already means pass 1 everywhere that
+ * reads it, so stamping it would write a field into every row of every
+ * engagement that does not run passes — a format change the default path never
+ * asked for, and one that would make a ledger recorded today differ from one
+ * recorded last week for no behaviour.
+ */
+function passStamp(deps: ToolDeps): { pass?: number } {
+	const n = deps.pass?.()?.pass ?? 1;
+	return n > 1 ? { pass: n } : {};
 }
 
 /** Resolve one target to an element id, or leave it as written. */
@@ -694,6 +719,15 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 			// to have reached.
 			if (kind === "hypothesis") delete a.verification;
 
+			// Which pass found a row is the harness's to say, never the caller's.
+			//
+			// The same rule `verification` follows, for the same reason: a model that
+			// could assert it was on pass 3 could assert the coverage that goes with
+			// it, and the per-pass delta — the one statistic that says whether a
+			// further pass paid for itself — would be reporting what it was told
+			// rather than what happened.
+			delete a.pass;
+
 			// A re-record carrying a basis is a second look at a settled cell, not a
 			// first one. Writing it down is what makes the challenge reportable —
 			// before this the row came back byte-identical and the work vanished.
@@ -833,7 +867,7 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 							}
 							const id = ctx.services.ids.newId();
 							const record = defined({
-								v: RECORD_VERSION, id, kind: "hypothesis", createdAt: stamp, ...patch,
+								v: RECORD_VERSION, id, kind: "hypothesis", createdAt: stamp, ...passStamp(deps), ...patch,
 							}) as unknown as HypothesisRecord;
 							working.push(record as unknown as Fields);
 							out.push(record);
@@ -1000,6 +1034,7 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 							parked = ctx.services.ids.newId();
 							return [{
 								v: RECORD_VERSION, id: parked, kind: "blocker", createdAt: ctx.services.clock.nowIso(),
+								...passStamp(deps),
 								type: outcome.blocker?.type, question: outcome.blocker?.question,
 								context: outcome.blocker?.context, priority: "high", status: "open",
 							} as unknown as BlockerRecord];
@@ -1237,7 +1272,7 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 				// recall is the one thing that cannot be recovered later.
 				if (kind === "finding") near = findNearDuplicate(patch, current as unknown as Fields[]) as unknown as LedgerRecord | undefined;
 				const id = existingId ?? ctx.services.ids.newId();
-				record = defined({ v: RECORD_VERSION, id, kind, createdAt: now, ...(DEFAULTS[kind] ?? {}), ...patch }) as unknown as LedgerRecord;
+				record = defined({ v: RECORD_VERSION, id, kind, createdAt: now, ...passStamp(deps), ...(DEFAULTS[kind] ?? {}), ...patch }) as unknown as LedgerRecord;
 				return [record];
 			});
 
@@ -1374,6 +1409,36 @@ export function createRecallTool(deps: ToolDeps): ToolDefinition {
 		return computeCoverage({ classes: checklist.classes, elements, hypotheses, openBlockers });
 	}
 
+	/**
+	 * The open pass's worklist, built from the whole ledger.
+	 *
+	 * Every lens but `route` draws on state the coverage matrix cannot reach —
+	 * the files a finding names, the invariants in the target model, the loot
+	 * timeline — which is exactly why a plan is not just a filtered matrix.
+	 */
+	async function passPlan(state: PassState, limit: number) {
+		// The rows come back with the plan so the caller can compute the delta off
+		// the same read. `recall pass` wants both, and reading each ledger twice for
+		// one answer is how a tool call that should be cheap stops being cheap.
+		const inventory = await deps.workspace.read("inventory");
+		const hypotheses = await deps.workspace.read("hypotheses");
+		const findings = await deps.workspace.read("findings");
+		const labels = new Map(inventory.map((r) => [r.id, elementLabel(r)]));
+		const plan = planPass({
+			pass: state.pass,
+			lens: state.lens,
+			...(await coverageMatrix().then((m) => (m ? { matrix: m } : {}))),
+			hypotheses,
+			findings,
+			inventory,
+			loot: await deps.workspace.read("loot"),
+			targetModel: await deps.workspace.readModel().catch(() => undefined),
+			labelFor: (id) => labels.get(id),
+			limit,
+		});
+		return { plan, rows: { inventory, hypotheses, findings } };
+	}
+
 	return {
 		name: "recall",
 		label: "recall",
@@ -1385,6 +1450,7 @@ export function createRecallTool(deps: ToolDeps): ToolDefinition {
 			"coverage (the full test plan as a matrix, one row per class), " +
 			"surface (one row per recorded element with its coverage bar), " +
 			"next (the next test case to run), gaps (test cases not run yet, plus the ones blocked), " +
+			"pass (which pass is open, the lens it runs under, and what that lens can reach — a single-pass engagement says so), " +
 			"model (the target model: what the system does, its actors, its invariants), " +
 			"inventory, hypotheses, findings, loot (handles only), blockers, notes, " +
 			"finding (ONE finding in full — pass id — every field as recorded: description, impact, remediation, repro, evidence, cwe, cvss). " +
@@ -1470,6 +1536,39 @@ export function createRecallTool(deps: ToolDeps): ToolDefinition {
 						"\n\n`recall challenge id=<id>` returns the brief for one. Sample rather than sweep — one per " +
 						"class, or the oldest — and hand it to a fresh agent: the job is to break the clearance, and a " +
 						"verifier that has read the reasoning behind it agrees with it.",
+					);
+				}
+				case "pass": {
+					/**
+					 * What this pass is for, and what it has added.
+					 *
+					 * The second half is the statistic `research/06` had to reconstruct
+					 * after the fact by diffing two scored ledgers: its persisted arm's
+					 * third session recorded zero new findings and zero new hypotheses
+					 * in 105 seconds, and nothing in the running session could say so.
+					 */
+					const state = deps.pass?.();
+					if (!state) {
+						return text(
+							"This engagement runs a single pass, which is the default. Coverage is the plan: `recall gaps` " +
+							"for what has no verdict, `recall cleared` for what was ruled out, `recall challenge` for what " +
+							"nobody has looked at twice.",
+						);
+					}
+					const { plan, rows } = await passPlan(state, limit);
+					const delta = passDelta(state.pass, rows);
+					const ladder = state.ladder.map((l, i) => `${i + 1}. ${l}${i + 1 === state.pass ? "  <- open" : ""}`).join("\n");
+					const body = plan.items.length === 0
+						? (plan.note ?? "Nothing this lens can reach.")
+						: `${plan.total} item(s) this lens can reach:\n${plan.items.map((i) => `${i.ref} — ${i.label}: ${i.why}`).join("\n")}` +
+							truncated(plan.items.length, plan.total, "items");
+					return text(
+						`Pass ${state.pass}, lens \`${state.lens}\` — ${PASS_LENS_HELP[state.lens]}\n${ladder}\n\n` +
+						`Added in this pass: ${delta.findings} finding(s), ${delta.hypotheses} hypothes(es), ${delta.surface} surface element(s).\n\n` +
+						body +
+						(state.pass > 1
+							? "\n\nEarlier passes' facts stand; their verdicts are what this pass re-opens. A cell reading `clear` is a claim like any other."
+							: ""),
 					);
 				}
 				case "hypotheses": {
@@ -1670,12 +1769,46 @@ export function createRecallTool(deps: ToolDeps): ToolDefinition {
 					}
 					const all = findGaps(m);
 					const gaps = all.slice(0, limit);
-					return text(gaps.length
+					// The gap list is the matrix's, in every pass. A lens changes what to
+					// work on, not what the matrix says — and a `gaps` that quietly
+					// answered something else would be a second derivation of the same
+					// question, which is the thing `pired-state` exists not to be.
+					const lens = deps.pass?.();
+					const aside = lens && lens.lens !== "route"
+						? `\n\nPass ${lens.pass} is open under the \`${lens.lens}\` lens, which routes elsewhere — \`recall pass\` for its list.`
+						: "";
+					return text((gaps.length
 						? `Test cases not yet settled (element/class):\n${gaps.map((g) => `${g.element}/${g.class}: ${g.reason}`).join("\n")}`
 							+ truncated(gaps.length, all.length, "outstanding test cases")
-						: "No gaps: every applicable test case has a verdict.");
+						: "No gaps: every applicable test case has a verdict.") + aside);
 				}
 				case "next": {
+					/**
+					 * The router, as the open pass sees it.
+					 *
+					 * Above pass 1 the worklist is the lens's, not the matrix's — which
+					 * is the whole of ADR-018. `research/06` measured what happens
+					 * without it: a session that opened a full ledger, found the matrix
+					 * settled, and stopped after 105 seconds having recorded nothing.
+					 * An empty matrix is the end of the route sweep, not the end of the
+					 * work.
+					 */
+					const state = deps.pass?.();
+					if (state && state.lens !== "route") {
+						const { plan } = await passPlan(state, limit);
+						const item = nextInPass(plan);
+						if (!item) {
+							return text(
+								`Pass ${state.pass}, lens \`${state.lens}\`: ${plan.note ?? "nothing this lens can reach."} ` +
+								"`recall pass` shows the ladder; opening the next one is the operator's call.",
+							);
+						}
+						return text(
+							`Next in pass ${state.pass} (lens \`${state.lens}\`): ${item.label}\n` +
+							`Why this pass: ${item.why}\n` +
+							`${plan.total} item(s) on this lens's list — \`recall pass\` reads it in full. Record the verdict either way.`,
+						);
+					}
 					const m = await coverageMatrix();
 					if (!m) return text("No checklist loaded; cannot pick next work.");
 					if (m.applicable === 0) {
@@ -1684,7 +1817,21 @@ export function createRecallTool(deps: ToolDeps): ToolDefinition {
 					const next = selectNext(m);
 					if (!next) {
 						const blocked = m.counts.blocked;
-						return text(blocked > 0 ? `No unblocked work: ${blocked} test case(s) blocked pending the operator.` : "No actionable work: every applicable test case has a verdict.");
+						if (blocked > 0) return text(`No unblocked work: ${blocked} test case(s) blocked pending the operator.`);
+						// The matrix being settled is a fact about the matrix. Where a
+						// ladder exists, say what the next lens would reach rather than
+						// reporting the engagement finished — but do not open it: a further
+						// pass spends the operator's budget and touches the client's
+						// systems again, so it stays their call (ADR-018).
+						if (state) {
+							const upcoming = lensForPass(state.ladder, state.pass + 1);
+							return text(
+								"Every applicable test case in the matrix has a verdict — which settles the route sweep, not the engagement. " +
+								`The next lens on this engagement's ladder is \`${upcoming}\`: ${PASS_LENS_HELP[upcoming]}. ` +
+								"Opening a pass is the operator's call; say what it would reach and let them decide.",
+							);
+						}
+						return text("No actionable work: every applicable test case has a verdict.");
 					}
 					return text(`Next test case: ${next.element} for ${next.class}. Record the verdict as a hypothesis either way — a refutation counts.`);
 				}

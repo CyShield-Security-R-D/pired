@@ -71,6 +71,21 @@ tombstone, so a wrong deletion is undone by anyone who can open the ledger.
 `record kind=<k> id=<id> delete=true reason="..."` writes one; the operator's
 `/dedupe` sweep writes them for rows it folds together.
 
+One more optional field, on engagements that work in passes (§5, ADR-018):
+
+```jsonc
+{ "v":1, "id":"f3a9", "kind":"finding", "createdAt":"...", "pass": 2 }
+```
+
+`pass` is the pass that **created** the row, and it is set on creation only — a
+row corrected in pass 3 still reports the pass that found it, which is what makes
+"what did this pass add" a measurement rather than a restatement. **Absent means
+pass 1**, so a ledger written before passes existed and one on its first pass
+read identically, and an engagement that does not run passes writes the field
+never. It is written by the record path and deleted from caller input: a caller
+that could assert which pass it was on could assert the coverage that goes with
+it, the same rule `verification` follows (§8.3).
+
 ## 5. `manifest.json`
 
 Single JSON object at the workspace root.
@@ -81,12 +96,20 @@ Single JSON object at the workspace root.
   "engagement": "acme-webapp-2026",
   "createdAt": "2026-08-23T14:00:00Z",
   "originPath": "/home/you/clients/acme/webapp",   // optional; see below
+  "pass": 2,                                       // optional; see below
   "stores": {
     "inventory": 1, "hypotheses": 1, "findings": 1,
     "blockers": 1, "loot": 1
   }
 }
 ```
+
+`pass` is which pass is open, counting from 1, and **absent means 1**. It lives on
+the manifest rather than in the session because a pass outlives a session — a
+consultant closes the laptop mid-pass, and a counter that reset on restart would
+hand the second morning's work the first morning's lens. Written by `/pass`; the
+lens each pass runs under comes from `scope.json` (§6), not from here, because the
+ladder is configuration and the count is state.
 
 `originPath` is the directory the engagement was first opened from, written once and never updated.
 An engagement is keyed on that directory's basename, so `~/clientA/backend` and `~/clientB/backend`
@@ -112,9 +135,23 @@ Single JSON object — the authorized engagement scope. Canonical copy of the
     "cidrs": ["10.10.20.0/24"],
     "urls": ["https://app.acme.test/"]
   },
-  "exclude": { "domains": ["admin.acme.test"], "ips": ["10.10.20.1"] }
+  "exclude": { "domains": ["admin.acme.test"], "ips": ["10.10.20.1"] },
+  "passes": {                      // optional; absent means one `route` pass
+    "enabled": true,
+    "lenses": ["route", "file", "invariant", "adversarial"]
+  }
 }
 ```
+
+`passes` is the ladder this engagement works through, one lens per pass, clamped
+to the last rung past the end. Absent or `"enabled": false` is a single `route`
+pass — today's behaviour exactly, and the behaviour every number in `research/`
+was measured against. The lenses are `route` (the coverage matrix as it stands),
+`file` (files the ledger names but never recorded as surface), `invariant` (rules
+in `model.md` no hypothesis has tested), `adversarial` (unchallenged findings,
+then cleared cells) and `credentialed` (surface settled before the engagement held
+a credential). `PIRED_PASSES=route,file` overrides it for a headless run, and
+`PIRED_PASSES=off` turns it off. See ADR-018.
 
 Matching rules (documented for interoperability): `*.base` matches `base` and any
 subdomain; IPs match exactly; CIDRs use IPv4 containment; `exclude` wins over

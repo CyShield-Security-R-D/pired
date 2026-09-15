@@ -280,3 +280,40 @@ describe("remembering which directory made the engagement", () => {
 	});
 });
 
+
+describe("which pass is open", () => {
+	it("starts a new engagement on pass 1 and says so from the manifest", async () => {
+		const ws = await Workspace.open("/w", "acme", makeFakeServices());
+		expect((await ws.readManifest())?.pass).toBe(1);
+		expect(await ws.currentPass()).toBe(1);
+	});
+
+	it("reads a manifest written before passes existed as pass 1", async () => {
+		// Absent means 1 everywhere that reads it. Inventing a distinction between
+		// "no pass recorded" and "pass 1" would put a migration in front of every
+		// workspace on the box for no behaviour.
+		const services = makeFakeServices();
+		const ws = await Workspace.open("/w", "acme", services);
+		await services.fs.writeFile("/w/manifest.json", JSON.stringify({ formatVersion: 1, engagement: "acme", createdAt: "t0", stores: {} }));
+		expect(await ws.currentPass()).toBe(1);
+	});
+
+	it("carries the open pass across sessions, because a pass outlives one", async () => {
+		// A consultant closes the laptop mid-pass. A counter that reset on restart
+		// would hand the second morning's work the first morning's lens.
+		const services = makeFakeServices();
+		const first = await Workspace.open("/w", "acme", services);
+		expect(await first.openPass()).toBe(2);
+		const second = await Workspace.open("/w", "acme", services);
+		expect(await second.currentPass()).toBe(2);
+		expect(await second.openPass()).toBe(3);
+	});
+
+	it("leaves a workspace whose manifest was deleted on pass 1 rather than inventing one", async () => {
+		const services = makeFakeServices();
+		const ws = await Workspace.open("/w", "acme", services);
+		await services.fs.remove("/w/manifest.json");
+		expect(await ws.openPass()).toBe(1);
+		expect(await services.fs.readFileIfExists("/w/manifest.json")).toBeUndefined();
+	});
+});

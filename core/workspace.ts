@@ -142,6 +142,7 @@ export class Workspace {
 				engagement,
 				createdAt: this.clock.nowIso(),
 				stores: {},
+				pass: 1,
 				...(originPath ? { originPath } : {}),
 			};
 			await this.writeJsonAtomic(manifestPath, manifest);
@@ -229,6 +230,40 @@ export class Workspace {
 
 	async readManifest(): Promise<WorkspaceManifest | undefined> {
 		return this.readJson<WorkspaceManifest>(this.file("manifest.json"));
+	}
+
+	/**
+	 * Which pass is open, counting from 1.
+	 *
+	 * Absent means 1 — a ledger written before passes existed and one on its
+	 * first pass are the same engagement as far as anything downstream is
+	 * concerned, and inventing a distinction between them would put a migration
+	 * in front of every workspace on the box for no behaviour.
+	 */
+	async currentPass(): Promise<number> {
+		const manifest = await this.readManifest();
+		const n = manifest?.pass;
+		return typeof n === "number" && Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1;
+	}
+
+	/**
+	 * Open the next pass, returning its number.
+	 *
+	 * On the manifest rather than in the session because a pass outlives a
+	 * session — a consultant closes the laptop mid-pass, and a pass that reset to
+	 * 1 on every restart would hand the second morning's work the first
+	 * morning's lens.
+	 *
+	 * A workspace with no manifest cannot be bumped and stays on pass 1. That is
+	 * a workspace somebody deleted a file out of mid-session; refusing to invent
+	 * a manifest for it keeps `Workspace.ensure` the one place a manifest is born.
+	 */
+	async openPass(): Promise<number> {
+		const manifest = await this.readManifest();
+		if (!manifest) return 1;
+		const next = (await this.currentPass()) + 1;
+		await this.writeJsonAtomic(this.file("manifest.json"), { ...manifest, pass: next });
+		return next;
 	}
 
 	async writeScope(scope: EngagementScope): Promise<void> {

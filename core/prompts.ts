@@ -17,6 +17,8 @@
 import type { EngagementScope } from "./ontology.ts";
 import { summarizeScope } from "./scope.ts";
 
+import { PASS_LENS_HELP, type PassState } from "./passes.ts";
+
 export const PIRED_PROFILES = ["review", "recon", "pentest"] as const;
 export type PiredProfile = (typeof PIRED_PROFILES)[number];
 
@@ -29,6 +31,14 @@ export interface BuildPromptOptions {
 	workspace?: string;
 	/** The engagement's target model (`model.md`), carried in from the workspace. */
 	targetModel?: string;
+	/**
+	 * The pass this engagement has open, when it runs passes at all.
+	 *
+	 * Absent on every engagement that has not opted in, which is the default, and
+	 * the block it drives renders nothing on pass 1 even when it is present. See
+	 * ADR-018.
+	 */
+	pass?: PassState;
 	skills?: Array<{ name: string; description: string }>;
 	/** Extra instructions appended verbatim (e.g. from --append-system-prompt or a context file). */
 	extra?: string;
@@ -126,7 +136,7 @@ function methodologyBlock(checklist: string[] | undefined): string {
 	return `<methodology>
 How to run an engagement once the operator has asked for one. This is method, not a trigger: on its own it is never a reason to start work, and "do not finish" below means do not stop halfway through a job you were given, not do not stop when you are asked to.
 
-Work in passes. Pass 1 is where your best findings come from — do not let any list narrow it.
+Work in three phases, in this order. Phase 1 is where your best findings come from — do not let any list narrow it. (These are phases *within* a piece of work; a pass is the larger unit the engagement may run several of, each under its own lens — \`recall pass\` if this engagement has them.)
 
 1. Explore (diverge). Understand the target on its own terms: what it does, its trust boundaries, where untrusted input enters and where it reaches dangerous sinks. Hunt for the high-value bugs that are on no checklist — violations of the application's own domain invariants (resources conserved, ownership/tenant boundaries, idempotency, ordering and race windows), missing or broken authorization on individual operations, and multi-step chains. Your judgment matters most here; follow what smells wrong.
 
@@ -136,7 +146,7 @@ Work in passes. Pass 1 is where your best findings come from — do not let any 
 
 3. Report precisely (capture). For each issue, cite the exact file and the specific vulnerable line — re-read and pin the sink line rather than approximating, and quote it when you can. Separate confirmed from suspected; never invent results.
 
-Before finishing, briefly note what you did not get to and would investigate with more time. Covering the floor is the minimum bar; the ceiling is the creative work in pass 1.
+Before finishing, briefly note what you did not get to and would investigate with more time. Covering the floor is the minimum bar; the ceiling is the creative work in phase 1.
 </methodology>`;
 }
 
@@ -192,6 +202,32 @@ ${shown}
 </target-model>`;
 }
 
+/**
+ * What pass this is, and what it is therefore allowed to take for granted.
+ *
+ * Empty on pass 1 and empty when the engagement does not run passes, which
+ * between them is almost every session — a block that renders every turn to say
+ * "pass 1 of 4" is how a block stops being read, and the standing context block
+ * is only read because it stays quiet when it has nothing to say.
+ *
+ * What it does say, it says once: the previous pass's FACTS stand and its
+ * VERDICTS are the subject. That distinction is the entire feature. Without it a
+ * second pass re-reads a full ledger and concludes the work is done — measured
+ * in `research/06` as a session that ran 105 seconds and recorded nothing.
+ */
+function passBlock(state: PassState | undefined): string {
+	if (!state || state.pass <= 1) return "";
+	return `<pass number="${state.pass}" lens="${state.lens}">
+This is pass ${state.pass} of this engagement, and it runs under the \`${state.lens}\` lens: ${PASS_LENS_HELP[state.lens]}.
+
+What earlier passes established as FACT still stands — the inventory, the target model, the credentials, the evidence on disk. That is what makes this pass cheaper than starting cold, and re-deriving it is waste.
+
+What earlier passes concluded is what this pass is here to re-open. A cell reading \`clear\` is a claim somebody made, not a settled question, and a full ledger is not the same as a finished engagement: the matrix being settled means the route sweep is done, which is why this pass has a different lens. \`recall pass\` is this lens's worklist and \`recall next\` routes by it.
+
+Record what you find as you always would. The harness stamps which pass found it, so nothing here changes how you write a hypothesis or a finding.
+</pass>`;
+}
+
 export function buildSystemPrompt(opts: BuildPromptOptions): string {
 	const blocks = [
 		IDENTITY,
@@ -199,6 +235,7 @@ export function buildSystemPrompt(opts: BuildPromptOptions): string {
 		workspaceBlock(opts.workspace),
 		targetModelBlock(opts.targetModel),
 		methodologyBlock(opts.checklist),
+		passBlock(opts.pass),
 		scopeBlock(opts.scope),
 		skillsBlock(opts.skills),
 		opts.extra?.trim() ? opts.extra.trim() : "",

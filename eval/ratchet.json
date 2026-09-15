@@ -30,5 +30,13 @@
   "ledger.detector_cases_passed": {
     "min": 9,
     "why": "The integrity detector must keep catching every planted defect. A detector that stops detecting passes silently otherwise."
+  },
+  "passes.router_stalls": {
+    "max": 0,
+    "why": "A lens ladder that runs dry while clearances are outstanding is the 105-second session research/06 measured: a full ledger read as a finished engagement. This floor never moves."
+  },
+  "passes.cases": {
+    "min": 14,
+    "why": "The lens corpus may grow but never shrink — deleting a case is how a suite silently stops testing."
   }
 }

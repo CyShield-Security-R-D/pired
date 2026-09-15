@@ -284,3 +284,55 @@ describe("target model in the prompt", () => {
 		expect(p).toMatch(/stale picture is worse than none/i);
 	});
 });
+
+describe("the pass block", () => {
+	it("is absent from every engagement that did not ask for passes", () => {
+		// The inertness property. Every number in research/ was measured against a
+		// single-pass harness, so an engagement that has not opted in must get the
+		// prompt it always got.
+		for (const profile of PIRED_PROFILES) {
+			expect(buildSystemPrompt({ profile, scope })).not.toContain("<pass");
+		}
+	});
+
+	it("is absent on pass 1 even when the engagement runs passes", () => {
+		// A block that renders every turn to say "pass 1 of 4" is how a block stops
+		// being read — the argument ADR-016 already made against nudging.
+		const p = buildSystemPrompt({
+			profile: "review", scope,
+			pass: { pass: 1, lens: "route", ladder: ["route", "file"] },
+		});
+		expect(p).not.toContain("<pass");
+	});
+
+	it("tells a later pass that the facts carry and the verdicts are the subject", () => {
+		// The distinction is the whole feature: research/06 measured a second
+		// session that re-read a full ledger, inherited its conclusions and stopped
+		// after 105 seconds having recorded nothing.
+		const p = buildSystemPrompt({
+			profile: "review", scope,
+			pass: { pass: 2, lens: "adversarial", ladder: ["route", "adversarial"] },
+		});
+		expect(p).toContain('<pass number="2" lens="adversarial">');
+		expect(p).toMatch(/still stands/i);
+		expect(p).toMatch(/re-open/i);
+		expect(p).toMatch(/full ledger is not the same as a finished engagement/i);
+	});
+
+	it("keeps the scope block after it, so nothing outranks what may be touched", () => {
+		const p = buildSystemPrompt({
+			profile: "pentest", scope,
+			pass: { pass: 3, lens: "file", ladder: ["route", "file"] },
+		});
+		expect(p.indexOf("<pass")).toBeLessThan(p.indexOf("<scope>"));
+	});
+
+	it("calls the three review stages phases, so the word pass means one thing", () => {
+		// ADR-018 flagged the collision: the methodology's diverge/converge/capture
+		// stages and the engagement-level pass were both called a pass, and the
+		// prompt now has to say both in one breath.
+		const p = buildSystemPrompt({ profile: "review", scope, checklist: ["authz"] });
+		expect(p).toContain("Work in three phases");
+		expect(p).not.toMatch(/Pass 1 is where your best findings/);
+	});
+});

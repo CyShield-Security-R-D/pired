@@ -50,6 +50,7 @@ Two directions, both small on purpose.
 | `ontology.ts` | Every record type, status, and enum. The vocabulary. |
 | `workspace.ts` | Append-only, versioned JSONL ledgers; artifacts; path safety. |
 | `coverage.ts` | `checklist × surface = matrix`, gaps, `selectNext`, the percentage. |
+| `passes.ts` | The pass ladder, the per-lens worklist, and what a pass added. |
 | `scope.ts` | Scope parsing, target matching, the gate decision. |
 | `tools.ts` | `record` and `recall`, as host-agnostic definitions. |
 | `prompts.ts` | The security-operator prompt, per profile. |
@@ -80,7 +81,7 @@ npm run test:coverage # vitest run --coverage
 npm run typecheck     # tsc --noEmit
 ```
 
-625 unit tests — 445 over the core, the rest over the pi adapter, the two
+1,270 unit tests — 881 over the core, the rest over the pi adapter, the two
 binaries and the grader — plus the [assay](evaluation.md) probes over the
 harness itself. Coverage is measured and ratcheted; see [testing](testing.md)
 for what is excluded and why.

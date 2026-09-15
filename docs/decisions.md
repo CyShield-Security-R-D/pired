@@ -7,7 +7,7 @@ trade-off from an accident.
 [Architecture](architecture.md) describes the shape of the system. This file records why the shape
 is that way at the points where it could reasonably have gone another way.
 
-**Status values:** `accepted` · `superseded by ADR-NNN` · `reversed`
+**Status values:** `proposed` · `accepted` · `superseded by ADR-NNN` · `reversed`
 
 ---
 
@@ -1159,3 +1159,151 @@ nobody tests, and the thing it would guard is one documented command the operato
 **Dropping `pi.themes` from `package.json` instead.** It would break the deliberate `pi install`
 route — which is a legitimate way to run pired — to fix an installer problem. The manifest is not
 where the mistake was.
+
+---
+
+## ADR-018 — A pass has a lens, and the ledger withholds its own verdicts from the next one
+
+**Status:** accepted · 2026-09-15
+
+### Context
+
+Two measurements in `research/` sit next to each other and point opposite ways.
+
+`research/11` — on the application corpus, the union of three passes beats the mean of three passes
+for every arm:
+
+| arm | passes | mean | union |
+|---|---|---:|---:|
+| pired | 6, 4, 3 | 4.3 | **9/24** |
+| codex | 4, 4, 4 | 4.0 | 8/24 |
+| bare pi | 3, 3, 4 | 3.3 | 6/24 |
+
+Roughly half of what any of these can find, it misses on a given pass, and the shape survives the
+larger corpus (mean 5.3, union 11/42). That document's own rule is *three passes minimum, report the
+range*.
+
+`research/06` — a second pass over a **persisted** ledger buys none of it. Re-scored so both arms
+measure the same quantity, cumulative recall at k=3 is 0.591 persisted against 0.591 wiped, a gap of
+-0.000. What durable state did change is when the agent stops: final sessions ran 255s against 480s,
+and one rollout ran **105 seconds and recorded zero new findings and zero new hypotheses** — it
+opened a full ledger, concluded the work was done, and stopped. That document closes by naming the
+remedy as a design change rather than a scoring fix: *the design must change so that a full ledger
+drives further testing rather than a confident early exit*.
+
+The mechanism is not mysterious. `recall gaps` and `recall next` route to `not-tested` by
+construction (ADR-016), so once every cell carries a hypothesis the router is empty — and stopping is
+the honest reading of an empty router. The union in the first table came from passes that could not
+see each other's conclusions. Handing pass 2 pass 1's verdicts is the same failure the challenge
+brief is built from the record rather than the conversation to avoid: a reviewer that inherits the
+reasoning agrees with it.
+
+`research/09` says what a later pass would have to do *differently* rather than merely again. Across
+17 misses the file containing the missed entry was **opened in 17 of 17 and recorded as surface in 0
+of 17**. A second pass routing on the same surface vocabulary as the first cannot reach any of them.
+
+### Decision
+
+**A pass is a unit of work with a lens**, and the lens is what makes pass N+1 structurally unable to
+repeat pass N.
+
+| lens | worklist |
+|---|---|
+| `route` | `recall gaps` — the present behaviour |
+| `file` | files opened during an earlier pass and never recorded as surface |
+| `invariant` | `model.md` invariants carrying no hypothesis against them |
+| `adversarial` | `recall cleared` and the unchallenged queue — ADR-014 and ADR-016, given a place in the ladder |
+| `credentialed` | the recorded surface re-run as each principal in `loot` |
+
+**Facts carry forward; verdicts do not.** Inventory, the target model, loot, blockers and evidence
+are what make a later pass cheaper than a cold one, and they are kept. A `refuted` hypothesis still
+reads `clear` in the coverage number handed to the client — the report is unchanged — but it stops
+counting as done work to the router, which above pass 1 returns cleared cells oldest-first
+(ADR-016's sampling heuristic, promoted from a pull to a worklist) rather than returning nothing.
+
+**Passes are off by default, and the ladder is configuration.** With no configuration there is one
+`route` pass and today's behaviour exactly: no `<pass>` block in the prompt, no change to
+`selectNext`, nothing new in the panel. An engagement opts in:
+
+```json
+{ "passes": { "enabled": true, "lenses": ["route", "file", "invariant", "adversarial"] } }
+```
+
+in `scope.json`, beside `maxAgents` and `agentTools`, because this is engagement policy and not a
+global preference — a firmware teardown, a credentialed web retest and a one-hour triage do not want
+the same ladder. `PIRED_PASSES=route,file` covers the headless case, the precedent being
+`PIRED_SCRIBE`, which exists because an opt-in feature with no headless switch had three measured
+passes silently comparing two configurations (`research/11`).
+
+**`/pass [lens]` opens one**, taking the next lens in the ladder when none is named. Opening stays a
+pull, for the reason challenging is one (ADR-014): a further pass spends the operator's budget and
+touches the client's systems again.
+
+**The pass number is written by the record path and deleted from caller input**, the rule
+`verification` already follows. A model that could assert which pass it was on could assert the
+coverage that goes with it. It lives on `RecordBase.pass` and in the manifest, which is what lets the
+delta — what this pass added that the ledger did not already hold — be computed rather than argued.
+
+**The precision guard is surfaced, not enforced.** "Do not open pass N+1 while pass N's unchallenged
+queue is non-empty" is a line in the standing brief and never a refusal, on ADR-004's grounds. It
+matters here more than elsewhere: pired's precision on the application corpus is 0.059 against bare
+pi's 0.192, and a union multiplies false positives as readily as findings.
+
+Placement follows the structural rule. `core/passes.ts` is pure — lens definitions,
+`planPass(...) -> PassPlan`, and the delta — with `selectNext` taking the plan, the prompt block
+rendered only above pass 1, and `/pass` plus the panel row in `extensions/`.
+
+Two details the implementation settled.
+
+**Naming a lens moves it; it does not overwrite a rung.** `/pass invariant` on a `route, file,
+invariant, adversarial` ladder first overwrote rung 2, which silently dropped `file` from the session
+for good — the operator asked to run one lens now and lost a different one entirely, with nothing
+saying so. `promoteLens` moves the named lens to the open pass and keeps the rest of the ladder
+behind it.
+
+**The word collision is resolved in favour of the engagement.** The methodology block's
+diverge/converge/capture stages are now **phases**, and `pass` means only the engagement-level unit.
+The phase-1 sentence the prompt leans on — *"phase 1 is where your best findings come from"* — is
+unchanged in force.
+
+### Consequences
+
+- **This ADR records a decision, not a result.** The recall payoff is unmeasured, and the design is
+  falsifiable with an instrument that already exists: a third arm in `eval/compounding.ts` —
+  `wiped` unioned, `persisted` naive, `persisted` lensed — scored on cumulative recall at k=3 and
+  time-to-exit. It pays only if the lensed arm beats the unioned cold arm. Anything less means
+  accumulation has been rebuilt and called learning, which is exactly the artifact `research/06`
+  exists to record.
+- An assay probe covers the router directly: plant a cleared cell, assert a pass-2 router never
+  returns empty while one remains. A positive control in the sense `docs/evaluation.md` requires.
+- `core/passes.ts` is pure and carries the lens vocabulary, the ladder, the per-lens worklist,
+  `promoteLens`, the per-pass delta and the `/pass` view. The extension is left reading the
+  workspace, bumping the manifest and drawing the result — the division `challengeCommand` already
+  set.
+- Default-off means the ratchets and the corpus keep measuring the current behaviour until an arm
+  turns it on, so nothing already reported changes meaning.
+
+### Rejected
+
+**Opening pass 2 automatically when the router empties.** It spends budget and re-touches a client's
+systems on the harness's initiative, and an empty router is also what the end of a finished job looks
+like. Saying another pass is available is not the same as running one — the same line ADR-014 draws
+around challenging.
+
+**Making a cleared cell `not-tested` again.** It would repair the router by corrupting the number the
+client is handed: work that was genuinely done would be reported as never attempted, and the coverage
+percentage would fall as the engagement deepened. The verdict is right; what was wrong is that the
+router treated it as terminal.
+
+**A `passes` store in the ledger.** The pass is a counter on the manifest and a field on records that
+already exist. A fifth store would need a format version, a renderer and a browser to hold one
+integer and a string.
+
+**A global setting in `~/.pired/`.** Every other engagement-shaped policy — scope mode, `maxAgents`,
+`targetType`, `strictUnresolved` — lives in `scope.json` because it belongs to the engagement rather
+than the operator, and a ladder inherited from last month's firmware job is the wrong default for
+this week's retest.
+
+**Nudging about available passes in the standing block.** ADR-016 rejected the same thing for cleared
+cells and the argument is unchanged: a line that renders every turn on every engagement is how the
+block stops being read.
