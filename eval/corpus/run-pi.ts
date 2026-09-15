@@ -98,6 +98,35 @@ const wanted = only.split(",").map((x) => x.trim()).filter(Boolean);
 const targets = wanted.length ? manifest.filter((m) => wanted.some((w) => m.id.includes(w) || m.package.includes(w))) : manifest;
 
 const workDir = arg("work", "/tmp/corpus-pi");
+
+/**
+ * The seal must exempt the model endpoint and nothing else — and the model
+ * endpoint is wherever the chosen provider actually lives. run.ts derives this;
+ * this file hardcoded "openrouter.ai", so every bare-pi arm on any other
+ * provider was sealed away from its own model.
+ *
+ * Measured: a full 5-target x 3-pass bare-pi arm on the `zai` provider wrote 15
+ * "Connection error" failures, while the pired arm against the same provider
+ * reported an explicit 429. The failures were the seal, not the quota — and a
+ * model that cannot be reached is indistinguishable from one that reviewed the
+ * code and found nothing.
+ */
+const MODEL_HOST = await (async (): Promise<string> => {
+	try {
+		const cfg = JSON.parse(await readFile(join(process.env.HOME ?? "", ".pi", "agent", "models.json"), "utf8")) as {
+			providers?: Record<string, { baseUrl?: string }>;
+		};
+		const url = cfg.providers?.[arg("provider", "openrouter") as string]?.baseUrl;
+		return url ? new URL(url).hostname : "";
+	} catch {
+		return "";
+	}
+})();
+const NO_PROXY_HOSTS = ["localhost", "127.0.0.1", MODEL_HOST].filter(Boolean).join(",");
+if (arg("sealed") !== "no") {
+	process.stderr.write(`\u29bf sealed \u00b7 outbound HTTP blackholed except: ${NO_PROXY_HOSTS}\n`);
+	if (!MODEL_HOST) process.stderr.write(`\u26a0 no baseUrl found for provider "${arg("provider", "openrouter")}" — the model may be unreachable under the seal\n`);
+}
 await mkdir(workDir, { recursive: true });
 const schemaPath = join(workDir, "schema.json");
 await writeFile(schemaPath, JSON.stringify(SCHEMA, null, 2));
@@ -183,8 +212,8 @@ const jobs = targets.map((m) => async (): Promise<void> => {
 						...process.env,
 						HTTPS_PROXY: "http://127.0.0.1:1", HTTP_PROXY: "http://127.0.0.1:1",
 						https_proxy: "http://127.0.0.1:1", http_proxy: "http://127.0.0.1:1",
-						NO_PROXY: "openrouter.ai,localhost,127.0.0.1",
-						no_proxy: "openrouter.ai,localhost,127.0.0.1",
+						NO_PROXY: NO_PROXY_HOSTS,
+						no_proxy: NO_PROXY_HOSTS,
 					},
 				}),
 			},
