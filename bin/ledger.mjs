@@ -23,8 +23,8 @@
  * ADR-006.
  */
 
-/** Verbs the CLI dispatches. `record`/`recall` are the tools; `scope` is local. */
-export const LEDGER_VERBS = ["record", "recall", "scope"];
+/** Verbs the CLI dispatches. `record`/`recall` are the tools; `scope` and `pass` are local. */
+export const LEDGER_VERBS = ["record", "recall", "scope", "pass"];
 
 export const LEDGER_USAGE = `pired-ledger — read and write the engagement ledger from outside the TUI
 
@@ -35,6 +35,7 @@ Usage:
   pired-ledger record <key=value>...
   pired-ledger recall <query> [key=value]...
   pired-ledger scope
+  pired-ledger pass [next]
 
 Examples:
   pired-ledger recall gaps
@@ -49,6 +50,11 @@ Options:
   --engagement <name>  Which engagement   (default: the current directory's, else the newest)
   --json               Raw JSON rather than the rendered text
   --help               This text
+
+\`pass\` reports which pass is open and what its lens reaches; \`pass next\` opens
+the next one. The lens comes from the engagement's ladder, so a headless run
+chooses it by setting the ladder — \`PIRED_PASSES=adversarial pired-ledger pass
+next\` — rather than by naming one here.
 
 Repeating a key builds a list (see \`evidence\` above). \`scope\` prints what the
 engagement authorizes — it reports the boundary, it does not enforce one: a
@@ -140,6 +146,10 @@ export function parseLedgerArgv(argv) {
   plan.verb = verb;
 
   const tail = rest.slice(1);
+  if (verb === "pass") {
+    plan.args = { arg: tail[0] ?? "" };
+    return plan;
+  }
   if (verb === "recall") {
     // A bare `recall` is the status view, the same as the tool's default.
     const first = tail[0];
@@ -155,6 +165,31 @@ export function parseLedgerArgv(argv) {
   }
 
   return plan;
+}
+
+/**
+ * What `pired-ledger pass [arg]` is being asked to do.
+ *
+ * Only `next` opens one. A named lens is deliberately not accepted here, and the
+ * reason is that a CLI invocation has no session to hold it in: the TUI's
+ * `/pass <lens>` promotes the lens within the run that typed it, and the only
+ * places a headless equivalent could persist that are the operator's
+ * `scope.json` — which a child has no business rewriting — or a second copy of
+ * the lens in the manifest, which would make the ladder and the manifest two
+ * answers to the same question.
+ *
+ * Nothing is lost. The ladder is what decides the lens, and `PIRED_PASSES` sets
+ * the ladder for exactly this kind of run, so `PIRED_PASSES=adversarial
+ * pired-ledger pass next` reaches any lens without a second source of truth.
+ */
+export function planPassVerb(arg) {
+  const want = String(arg ?? "").trim().toLowerCase();
+  if (want === "" || want === "status") return { open: false };
+  if (want === "next") return { open: true };
+  throw new Error(
+    `pass takes nothing or "next", got "${want}". The lens comes from the engagement's ladder — ` +
+    `set it for this run with PIRED_PASSES=${want} and then \`pass next\`.`,
+  );
 }
 
 /**

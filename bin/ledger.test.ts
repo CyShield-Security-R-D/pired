@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { coerceValue, LEDGER_USAGE, parseAssignments, parseLedgerArgv, renderScope, resultText } from "./ledger.mjs";
+import { coerceValue, LEDGER_USAGE, parseAssignments, parseLedgerArgv, planPassVerb, renderScope, resultText } from "./ledger.mjs";
 
 describe("coerceValue", () => {
 	/**
@@ -165,5 +165,36 @@ describe("resultText", () => {
 		expect(resultText({ content: [] })).toBe("");
 		expect(resultText({})).toBe("");
 		expect(resultText(undefined)).toBe("");
+	});
+});
+
+describe("the pass verb", () => {
+	it("takes its argument positionally, the way a skill would write it", () => {
+		expect(parseLedgerArgv(["pass"])).toMatchObject({ verb: "pass", args: { arg: "" } });
+		expect(parseLedgerArgv(["pass", "next"])).toMatchObject({ verb: "pass", args: { arg: "next" } });
+		expect(parseLedgerArgv(["pass", "next", "--engagement", "acme"])).toMatchObject({ verb: "pass", engagement: "acme" });
+	});
+
+	it("reports without opening unless asked to open", () => {
+		// Opening a pass spends the operator's budget and touches the client's
+		// systems again. A bare `pass` is a question, not an instruction.
+		expect(planPassVerb("")).toEqual({ open: false });
+		expect(planPassVerb("status")).toEqual({ open: false });
+		expect(planPassVerb(undefined)).toEqual({ open: false });
+		expect(planPassVerb("next")).toEqual({ open: true });
+		expect(planPassVerb("  NEXT  ")).toEqual({ open: true });
+	});
+
+	it("refuses a named lens and says how to reach it anyway", () => {
+		// A CLI invocation has no session to hold a promoted lens in, and the two
+		// places it could persist are the operator's scope.json — which a child has
+		// no business rewriting — and a second copy in the manifest, which would
+		// make the ladder and the manifest two answers to one question. The ladder
+		// is the answer, and PIRED_PASSES sets it for exactly this kind of run.
+		expect(() => planPassVerb("adversarial")).toThrow(/PIRED_PASSES=adversarial/);
+	});
+
+	it("is listed in the usage, since a verb nobody can discover is a verb nobody uses", () => {
+		expect(LEDGER_USAGE).toContain("pired-ledger pass [next]");
 	});
 });

@@ -5,6 +5,7 @@
  *   pired-ledger recall gaps
  *   pired-ledger record kind=finding title="SQLi in /search" severity=high
  *   pired-ledger scope
+ *   pired-ledger pass next
  *
  * A shell, in the sense ADR-006 means: read argv, touch the disk, print. Every
  * decision lives in ledger.mjs, which is covered — this file resolves the
@@ -16,7 +17,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { LEDGER_USAGE, parseLedgerArgv, renderScope, resultText } from "./ledger.mjs";
+import { LEDGER_USAGE, parseLedgerArgv, planPassVerb, renderScope, resultText } from "./ledger.mjs";
 import { pickEngagement } from "./state.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -111,11 +112,66 @@ async function main() {
   const src = await sourceRoot();
   const { Workspace } = await import(pathToFileURL(join(src, "core", "workspace.ts")).href);
   const { createCoreTools } = await import(pathToFileURL(join(src, "core", "tools.ts")).href);
+  const { parseLenses, passState, resolveLadder } = await import(pathToFileURL(join(src, "core", "passes.ts")).href);
   const { makeHostServices } = await import(pathToFileURL(join(src, "extensions", "lib", "host.ts")).href);
 
   const services = makeHostServices();
   const workspace = await Workspace.open(join(ENG, name), name, services);
-  const tools = createCoreTools({ workspace });
+
+  /**
+   * The pass a child is working in, read off the disk rather than inherited.
+   *
+   * A subagent is a separate process with no session state, and the adversarial
+   * lens is exactly the work ADR-013 and ADR-014 tell you to delegate — so
+   * without this the rows a child writes carry no pass stamp and the per-pass
+   * delta undercounts precisely the work that was handed out. The ladder comes
+   * from the same scope the parent read; the count comes from the manifest,
+   * which is where it lives because a pass outlives a session.
+   */
+  const scope = loadScope(process.cwd()) ?? (await workspace.readScope().catch(() => undefined));
+  const ladder = resolveLadder(scope?.passes, parseLenses(process.env.PIRED_PASSES));
+  const pass = ladder ? passState(ladder, await workspace.currentPass()) : undefined;
+
+  /**
+   * Opening a pass from outside the TUI.
+   *
+   * `/pass` is a command handler, so until this existed the pass count could only
+   * advance in an interactive session: a headless run could set the ladder with
+   * PIRED_PASSES and then sat on pass 1 forever. That is the gap PIRED_SCRIBE was
+   * added for one feature earlier — an opt-in mechanism with no headless switch
+   * gets measured in its switched-off state — and it is the same gap for anyone
+   * driving pired from CI or from the compounding experiment.
+   *
+   * The report itself is `recall pass`, deliberately: one renderer, so the CLI
+   * and the TUI cannot describe the same ladder differently.
+   */
+  if (plan.verb === "pass") {
+    let opening;
+    try {
+      opening = planPassVerb(plan.args.arg);
+    } catch (err) {
+      process.stderr.write(`pired-ledger: ${err.message}\n`);
+      process.exit(2);
+    }
+    if (opening.open && !ladder) {
+      process.stderr.write(
+        "pired-ledger: this engagement runs a single pass, so there is nothing to open.\n" +
+        "Give it a ladder in scope.json (\"passes\": { \"enabled\": true }) or with PIRED_PASSES.\n",
+      );
+      process.exit(2);
+    }
+    if (opening.open) await workspace.openPass();
+    // Re-read after the bump rather than reusing the state resolved above:
+    // reporting the pass we were on before opening one is the kind of off-by-one
+    // nobody notices until a delta is wrong.
+    const opened = ladder ? passState(ladder, await workspace.currentPass()) : undefined;
+    const recall = createCoreTools({ workspace, pass: () => opened }).find((t) => t.name === "recall");
+    const view = await recall.execute({ query: "pass" }, { cwd: process.cwd(), services });
+    process.stdout.write(plan.json ? `${JSON.stringify(view, null, 2)}\n` : `${resultText(view)}\n`);
+    process.exit(0);
+  }
+
+  const tools = createCoreTools({ workspace, pass: () => pass });
   const tool = tools.find((t) => t.name === plan.verb);
   if (!tool) {
     process.stderr.write(`pired-ledger: no ${plan.verb} tool\n`);
