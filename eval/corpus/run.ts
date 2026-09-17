@@ -287,10 +287,28 @@ const jobs = targets.map((m) => async (): Promise<void> => {
 	// without that fact is how three passes of the library corpus came to look like
 	// a harness result.
 	const engaged = await engagementTelemetry(engagementDir);
+	const seconds = Math.round((Date.now() - started) / 1000);
+	// An agent that exits in a minute having recorded nothing did not review the
+	// code, and scoring it 0.0 recall writes a bailout down as a measurement.
+	// run-pi.ts, run-codex.ts and run-claude.ts all refuse such a run; this file
+	// never got the rule, so the pired arm was the only one whose bailouts
+	// counted against it. Measured on the app corpus: two of forty target-runs
+	// exited at 62s and 49s with nothing recorded, both in one cell, worth about
+	// three findings — half of that cell's deficit against bare pi.
+	//
+	// The other runners can only look at the clock. This one knows whether the
+	// coverage machinery ran at all, so it asks that too: no findings AND no
+	// hypotheses means the thing under test never engaged, whatever the elapsed
+	// time says. A 60s-only rule would have caught the 49s bailout and missed the
+	// 62s one.
+	if (ok && findings.length === 0 && engaged.hypotheses === 0 && seconds < 120) {
+		ok = false;
+		error = `recorded nothing in ${seconds}s — no findings, no hypotheses, too fast to be a real review`;
+	}
 	const row = {
 		...m, recall: score.recall ?? 0, precision: score.precision ?? 0,
 		found: score.true_positives ?? 0, reported: findings.length,
-		seconds: Math.round((Date.now() - started) / 1000), ok, error, engaged,
+		seconds, ok, error, engaged,
 	};
 	rows.push(row);
 	// Persisted the moment it is known, not at the end of the scan. A corpus pass
