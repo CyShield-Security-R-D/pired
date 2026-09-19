@@ -151,9 +151,14 @@ function facts(info: BannerInfo, compact = false, panelVisible = false, pathMax 
 	// Dropped when compact: the engagement name is this directory's basename, so
 	// on a terminal counting rows the path mostly repeats the line above it.
 	if (info.cwd && !compact) rows.push(["directory", shortPath(info.cwd, pathMax)]);
-	// Never dropped, not even when compact. Every other row is convenience; this
-	// one says the ledger you are about to write to belongs to somewhere else.
-	if (info.foreignOrigin) rows.push(["shared with", shortPath(info.foreignOrigin, pathMax)]);
+	// Never dropped, not even when compact, and not cut to the column either. Every
+	// other row is convenience; this one says the ledger you are about to write to
+	// belongs to somewhere else, and the part that says *whose* is the client name
+	// at the front. Cut to a narrow column, `~/clientA/backend` becomes
+	// `…/backend` — still a path, no longer a warning. It keeps the wider budget
+	// and pays for it by making the block taller, which is the right way round for
+	// the one row here that exists to stop you writing into the wrong engagement.
+	if (info.foreignOrigin) rows.push(["shared with", shortPath(info.foreignOrigin, 44)]);
 	rows.push(["profile", `${info.profile} · scope ${info.scope}`]);
 	if (info.model) rows.push(["model", info.model]);
 	// Only when the engagement already holds work, and only when nothing else on
@@ -304,7 +309,10 @@ export function renderBanner(o: BannerOptions): string[] {
 	// last two rows, so the recorded facts and half the command list ended in an
 	// ellipsis. Measuring the content cannot get that wrong.
 	const roomy = inner >= stackedNeeds;
-	const rows = roomy ? labelled : facts(info, true);
+	// `panelVisible` travels here too. Without it the narrow layout — the one a
+	// 100-column terminal gets, where rows are scarcest — went on drawing the
+	// recorded row the rail was already carrying.
+	const rows = roomy ? labelled : facts(info, true, o.panelVisible, pathMax);
 
 	// --- compact: the facts stand beside the wordmark ------------------------
 	// Stacked, the banner is thirteen rows of mostly air, and the hole beside the

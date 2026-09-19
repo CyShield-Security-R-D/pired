@@ -329,3 +329,18 @@ describe("what decides the layout", () => {
 		expect(pair).toContain("/panel");
 	});
 });
+
+describe("the narrow layout defers too", () => {
+	it("drops the recorded row at the width a 100-column terminal leaves", () => {
+		// The flag reached the labelled layout and stopped there, so the layout with
+		// the fewest rows to spare was the one still spending one on a number the
+		// rail was already carrying. Found by rendering it rather than by reading it.
+		const text = renderBanner({ ...opts(27), panelVisible: true }).join("\n");
+		expect(text).not.toContain("41 surface");
+		expect(text).toContain("airflow-ftxin0");
+	});
+
+	it("still shows it there when the panel is off", () => {
+		expect(renderBanner(opts(27)).join("\n")).toContain("41 surface");
+	});
+});
