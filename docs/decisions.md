@@ -1307,3 +1307,83 @@ this week's retest.
 **Nudging about available passes in the standing block.** ADR-016 rejected the same thing for cleared
 cells and the argument is unchanged: a line that renders every turn on every engagement is how the
 block stops being read.
+
+---
+
+## ADR-019 — The banner does not repeat what the rail is already saying
+
+**Status:** accepted · 2026-09-19
+
+### Context
+
+The welcome entry is one block: the banner, then the coverage matrix drawn under it, with the
+engagement rail floating to the right of both. It reserves enough rows for the editor to clear the
+rail — about 21 — and `extensions/pired.ts` only draws the matrix when what is left over is worth
+drawing into:
+
+```ts
+const room = rows - banner.length - 1;
+const box = coverageView && room >= 7 ? renderCoveragePanel({ … }) : [];
+```
+
+So the banner's height is the matrix's budget, and nothing said so anywhere. Measured against the
+widths `core/layout.ts` actually hands out:
+
+| terminal | banner | banner rows | matrix gets | drew? |
+|---|---:|---:|---:|---|
+| 190 | 116 | 9 | 11 | 6 of 8 classes |
+| 150 | 91 | 9 | 11 | 6 of 8 classes |
+| **120** | **62** | **15** | **5** | **nothing — five blank rows** |
+| 100 | 42 | 15 | 5 | nothing |
+
+A 120-column terminal is an ordinary one, and on it pired's signature view — checklist × surface,
+the whole rigor thesis — was replaced by blank space. Not because the matrix was too big: because
+the banner above it was six rows taller than it needed to be, and the test failed by two.
+
+Two things made it tall, and neither was load-bearing.
+
+**The footer decided the layout.** `compactNeeds` required `TAGLINE + 3 + cmdRow` — 85 columns,
+fixed, whatever the facts do — so any banner under about 145 columns was thrown into the stacked
+layout. The stacked layout is 15 rows against the side-by-side layout's 9. A row that can simply
+wrap was re-laying out the wordmark and the facts.
+
+**A path was cut to a constant.** `shortPath(info.cwd, 44)` ran whatever column the path landed in,
+and a path is the longest value in the block by a wide margin. At 62 columns the side-by-side layout
+needed 62 and had 60. It missed by two, on a value that was already abbreviated.
+
+And the row that survived all that was the one worth losing. With the rail up, `recorded` puts the
+coverage percentage on screen for the **third** time — banner, coverage box, rail — and the findings
+tally for the second.
+
+### Decision
+
+The banner takes `panelVisible`. When the rail is drawing the ledger, the banner drops its
+`recorded` row: identity and the armed gate are what a banner is for, and state belongs to the view
+that owns it. With `--no-panel` there is no rail and no coverage box, so the flag is off, the banner
+is the only thing carrying those numbers, and it keeps them.
+
+Alongside it, two layout facts stop being constants. `compactNeeds` is now the facts' width only —
+the footer wraps itself in `footerLines`, stacking the tagline above the commands when the pair will
+not fit, which costs two rows instead of six. And `pathMax` is the column the path lands in rather
+than 44.
+
+| terminal | banner rows | matrix gets | draws |
+|---|---:|---:|---|
+| 190 / 150 | 9 → **8** | 12 | **all 8 classes** |
+| 120 | 15 → **10** | 10 | **5 of 8, then `+3 more`** |
+| 100 / 85 | 15 / 16 | 5 / 4 | still nothing |
+
+### Consequences
+
+100- and 85-column terminals still get no matrix, and that is left alone. At 42 columns the banner
+is already down to values without labels, so the rows would have to come out of the wordmark or the
+air around it, and a matrix drawn into 40 columns is a class label and a four-cell bar. Blank rows
+are the better answer there; if that changes, the lever is the narrow layout's four blank rows, not
+the reservation.
+
+Raising the reservation was rejected. It buys rows for the matrix by pushing the editor further down
+the screen on every session for the life of the engagement, to fix a frame you see once.
+
+`panelVisible` is a layout fact, so it sits on `BannerOptions` beside `minLines` rather than on
+`BannerInfo`, which describes the engagement. The extension derives it from `bannerReserve() > 0` —
+the same test that already means "the panel is off" — so the two cannot drift apart.

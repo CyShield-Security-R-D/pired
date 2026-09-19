@@ -259,3 +259,73 @@ describe("an engagement that belongs to another directory", () => {
 	});
 });
 
+
+describe("not saying it three times", () => {
+	// The welcome entry draws the coverage matrix under the banner and the rail
+	// draws the ledger beside it, so with the panel up the banner's `recorded` row
+	// is the third copy of the coverage percentage on one screen and the second of
+	// the findings tally.
+	const withPanel = (width: number) => ({ ...opts(width), panelVisible: true });
+
+	it("drops the recorded row when the rail is already carrying it", () => {
+		const text = renderBanner(withPanel(88)).join("\n");
+		expect(text).not.toContain("recorded");
+		expect(text).not.toContain("41 surface");
+		// Identity is not state: what the banner is for survives.
+		expect(text).toContain("airflow-ftxin0");
+		expect(text).toContain("review · scope enforce");
+	});
+
+	it("keeps it when the panel is off, because nothing else would say it", () => {
+		// `pired --no-panel` draws no rail and no coverage box, so the banner is the
+		// only thing on screen carrying the numbers.
+		expect(renderBanner(opts(88)).join("\n")).toContain("41 surface");
+	});
+
+	it("gives the rows it saves to the matrix under it", () => {
+		// The welcome entry only draws the matrix when `21 - banner - 1 >= 7`.
+		const before = renderBanner(opts(62)).length;
+		const after = renderBanner(withPanel(62)).length;
+		expect(after).toBeLessThan(before);
+		expect(21 - after - 1).toBeGreaterThanOrEqual(7);
+	});
+});
+
+describe("what decides the layout", () => {
+	it("stands the facts beside the wordmark at the width a 120-column terminal leaves", () => {
+		// 62 columns. The side-by-side layout needed 62 and had 60 — missed by two,
+		// because the directory was cut to a fixed 44 whatever column it landed in —
+		// so it fell back to the stacked layout, which is six rows taller, and those
+		// six rows were the coverage matrix.
+		const lines = renderBanner({ ...opts(62), panelVisible: true });
+		const art = lines.findIndex((l) => l.includes("█▀█"));
+		expect(lines[art]).toContain("airflow-ftxin0");
+	});
+
+	it("cuts a path to the column it lands in, not to a constant", () => {
+		const text = renderBanner({
+			...opts(62, { cwd: "~/clients/acme/services/api" }), panelVisible: true,
+		}).join("\n");
+		expect(text).toContain("…/");
+		expect(text).toContain("api");
+		for (const l of renderBanner({ ...opts(62, { cwd: "~/clients/acme/services/api" }), panelVisible: true })) {
+			expect(l.length).toBeLessThanOrEqual(62);
+		}
+	});
+
+	it("stacks the tagline under the commands rather than re-laying out the block", () => {
+		// Together they are 85 columns whatever the facts do. Letting that decide
+		// the whole layout is what threw a 62-column banner into the tall one.
+		const lines = renderBanner({ ...opts(62), panelVisible: true });
+		const tag = lines.findIndex((l) => l.includes("security assessment harness"));
+		const cmd = lines.findIndex((l) => l.includes("/surface"));
+		expect(tag).toBeGreaterThanOrEqual(0);
+		expect(cmd).toBeGreaterThan(tag);
+	});
+
+	it("keeps them on one row when the column can hold both", () => {
+		const lines = renderBanner({ ...opts(116), panelVisible: true });
+		const pair = lines.find((l) => l.includes("security assessment harness"));
+		expect(pair).toContain("/panel");
+	});
+});

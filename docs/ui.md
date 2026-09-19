@@ -320,12 +320,16 @@ A session opens with the wordmark, the engagement it is about to work on, and th
   ──────────────────────────────────────────────────────────
 
   engagement   airflow-ftxin0
+  directory    …/clients/acme/services/api
   profile      review · scope enforce
   model        qwen3.8-27b
-  recorded     41 surface · 12% covered · 2 findings
 
   /surface   /hypotheses   /findings   /coverage   /panel
 ```
+
+**It says who you are, not how you are doing.** With the panel up there is a `recorded` row's worth of state — `41 surface · 12% covered · 2 findings` — that the rail is already carrying and the coverage matrix under the banner is carrying again, so the banner drops it. It comes back under `pired --no-panel`, where nothing else on the screen would say it.
+
+That row is not free. The welcome entry draws the matrix only when the rows left under the banner can hold it, so the banner's height *is* the matrix's budget — and on a 120-column terminal the extra rows were the difference between the matrix and five blank lines. See [ADR-019](decisions.md#adr-019--the-banner-does-not-repeat-what-the-rail-is-already-saying).
 
 Three rows of half blocks, not six of full ones. Block capitals are 34 columns wide and the space beside the panel is 27, so a full-height font could not sit next to the rail at all — and it reads as retro besides. The two tones are not decoration: the name is literally "pi" + "red", so the accent lands on the second half and the wordmark explains itself. The tagline is set against the art's **baseline** rather than its top, where it reads as a lockup instead of two unrelated things sharing a line.
 

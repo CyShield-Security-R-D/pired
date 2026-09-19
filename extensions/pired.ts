@@ -2342,7 +2342,12 @@ export default function piredExtension(pi: ExtensionAPI): void {
 				const rows = bannerReserve();
 				const ink = (tone: BannerTone, text: string) => theme.fg(BANNER_TONE_COLOR[tone], text);
 				const truncate = (x: string, w: number) => truncateToWidth(x, w, theme.fg("dim", "…"));
-				const banner = renderBanner({ info, width: cols, ink, measure: visibleWidth, truncate });
+				// The same test bannerReserve() uses: zero reserved rows is how "the
+				// panel is off" reaches this renderer. With the rail up the banner
+				// drops the numbers the rail is already carrying; with it off the
+				// banner is the only thing carrying them and keeps them.
+				const panelVisible = rows > 0;
+				const banner = renderBanner({ info, width: cols, panelVisible, ink, measure: visibleWidth, truncate });
 
 				// The panel floats, so the editor has to clear it, so the welcome entry
 				// has to be that tall. Those rows were blank; the matrix that is the
@@ -2371,7 +2376,7 @@ export default function piredExtension(pi: ExtensionAPI): void {
 					}).map((l) => `  ${l}`)
 					: [];
 				if (box.length === 0) {
-					return renderBanner({ info, width: cols, minLines: rows, ink, measure: visibleWidth, truncate });
+					return renderBanner({ info, width: cols, minLines: rows, panelVisible, ink, measure: visibleWidth, truncate });
 				}
 				const out = [...banner, ...box];
 				while (out.length < rows) out.push("");
