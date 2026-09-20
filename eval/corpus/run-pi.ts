@@ -28,6 +28,36 @@ import type { Finding } from "../dvbank/score.ts";
 import { scopeClause } from "./lib.ts";
 
 const exec = promisify(execFile);
+
+/** Model tokens a target-run consumed — see the note in run.ts. */
+async function sessionTokens(targetDir: string, since: number): Promise<number> {
+	const key = `--${targetDir.replace(/\//g, "-")}--`;
+	const dir = join(process.env.HOME ?? "", ".pi", "agent", "sessions", key);
+	let total = 0;
+	try {
+		const { readdir, stat } = await import("node:fs/promises");
+		for (const name of await readdir(dir)) {
+			if (!name.endsWith(".jsonl")) continue;
+			const file = join(dir, name);
+			if ((await stat(file)).mtimeMs < since) continue;
+			for (const line of (await readFile(file, "utf8")).split("\n")) {
+				if (!line.includes("totalTokens")) continue;
+				try {
+					const walk = (x: unknown): void => {
+						if (Array.isArray(x)) { for (const y of x) walk(y); return; }
+						if (x && typeof x === "object") {
+							const v = (x as Record<string, unknown>).totalTokens;
+							if (typeof v === "number") total += v;
+							for (const y of Object.values(x as Record<string, unknown>)) walk(y);
+						}
+					};
+					walk(JSON.parse(line));
+				} catch { /* one bad line, not the run */ }
+			}
+		}
+	} catch { /* no session directory */ }
+	return total;
+}
 const RUN_ID = Math.random().toString(36).slice(2, 8);
 
 function arg(name: string, def = ""): string {
@@ -143,6 +173,8 @@ interface Row {
 	seconds: number;
 	ok: boolean;
 	error?: string;
+	/** Model tokens this target-run consumed, read back from the session log. */
+	tokens?: number;
 }
 
 const rows: Row[] = [];
@@ -248,6 +280,7 @@ const jobs = targets.map((m) => async (): Promise<void> => {
 	}
 
 	const seconds = Math.round((Date.now() - started) / 1000);
+	const tokens = await sessionTokens(m.target, started);
 	// An empty result returned in seconds is a failed run, not a zero score.
 	// Scoring it as 0.0 recall is how a broken harness gets written down as a
 	// measurement — this run exists to avoid exactly that.
@@ -257,7 +290,7 @@ const jobs = targets.map((m) => async (): Promise<void> => {
 	}
 
 	if (!ok) {
-		rows.push({ id: m.id, repo: m.repo, entries: m.entries, found: 0, recall: 0, reported: 0, seconds, ok, error });
+		rows.push({ id: m.id, repo: m.repo, entries: m.entries, found: 0, recall: 0, reported: 0, seconds, ok, error, tokens });
 		process.stdout.write(`  ${m.id.padEnd(20)} FAILED — ${error}\n`);
 		return;
 	}
@@ -266,7 +299,7 @@ const jobs = targets.map((m) => async (): Promise<void> => {
 	rows.push({
 		id: m.id, repo: m.repo, entries: m.entries,
 		found: score.true_positives, recall: score.recall,
-		reported: findings.length, seconds, ok,
+		reported: findings.length, seconds, ok, tokens,
 	});
 	process.stdout.write(
 		`  ${m.id.padEnd(20)} ${String(m.entries).padEnd(4)} found ${String(score.true_positives).padEnd(3)} recall ${score.recall.toFixed(2)}  (${findings.length} reported, ${seconds}s)\n`,

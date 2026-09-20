@@ -26,6 +26,47 @@ import { scopeClause } from "./lib.ts";
 
 const run = promisify(execFile);
 const PIRED = new URL("../../bin/pired.mjs", import.meta.url).pathname;
+
+/**
+ * What a target-run cost, in model tokens.
+ *
+ * Reconstructing this afterwards from timestamps was wrong by 27% on one cell —
+ * session files are attributed by mtime, and a pass boundary falls inside the
+ * tolerance. Recording it per run, from the session the run itself produced,
+ * removes the guesswork: "tokens per finding" is then measured, not inferred.
+ *
+ * The agent writes one session directory per working directory, so the target's
+ * own path identifies it; `since` keeps an earlier pass over the same target
+ * out of the total.
+ */
+async function sessionTokens(targetDir: string, since: number): Promise<number> {
+	const key = `--${targetDir.replace(/\//g, "-")}--`;
+	const dir = join(process.env.HOME ?? "", ".pi", "agent", "sessions", key);
+	let total = 0;
+	try {
+		const { readdir, stat } = await import("node:fs/promises");
+		for (const name of await readdir(dir)) {
+			if (!name.endsWith(".jsonl")) continue;
+			const file = join(dir, name);
+			if ((await stat(file)).mtimeMs < since) continue;
+			for (const line of (await readFile(file, "utf8")).split("\n")) {
+				if (!line.includes("totalTokens")) continue;
+				try {
+					const walk = (x: unknown): void => {
+						if (Array.isArray(x)) { for (const y of x) walk(y); return; }
+						if (x && typeof x === "object") {
+							const v = (x as Record<string, unknown>).totalTokens;
+							if (typeof v === "number") total += v;
+							for (const y of Object.values(x as Record<string, unknown>)) walk(y);
+						}
+					};
+					walk(JSON.parse(line));
+				} catch { /* a truncated line costs one record, not the run */ }
+			}
+		}
+	} catch { /* no session directory: report 0 rather than failing the run */ }
+	return total;
+}
 const RUN_ID = Math.random().toString(36).slice(2, 8);
 
 function arg(name: string, def?: string): string {
@@ -103,6 +144,8 @@ interface Row extends Entry {
 	ok: boolean;
 	error?: string;
 	engaged?: { surface: number; hypotheses: number; settled: number; findings: number };
+	/** Model tokens this target-run consumed, read back from the agent's session log. */
+	tokens?: number;
 }
 
 /**
@@ -287,6 +330,7 @@ const jobs = targets.map((m) => async (): Promise<void> => {
 	// without that fact is how three passes of the library corpus came to look like
 	// a harness result.
 	const engaged = await engagementTelemetry(engagementDir);
+	const tokens = await sessionTokens(m.target, started);
 	const seconds = Math.round((Date.now() - started) / 1000);
 	// An agent that exits in a minute having recorded nothing did not review the
 	// code, and scoring it 0.0 recall writes a bailout down as a measurement.
@@ -308,7 +352,7 @@ const jobs = targets.map((m) => async (): Promise<void> => {
 	const row = {
 		...m, recall: score.recall ?? 0, precision: score.precision ?? 0,
 		found: score.true_positives ?? 0, reported: findings.length,
-		seconds, ok, error, engaged,
+		seconds, ok, error, engaged, tokens,
 	};
 	rows.push(row);
 	// Persisted the moment it is known, not at the end of the scan. A corpus pass
