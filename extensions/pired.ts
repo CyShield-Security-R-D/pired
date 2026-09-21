@@ -49,6 +49,7 @@ import {
 import { labelIndex } from "../core/target.ts";
 import { claimCounts, computeCoverageView, computeEngagementStats, coveragePercent, isDisposed, unwrittenHypotheses, type CoverageView, type EngagementStats } from "../core/stats.ts";
 import { layoutStatusLine, scribeStatus, type ScribeState, type Segment } from "../core/statusline.ts";
+import { oneRow, recordResultLine, type RecordResultDetails, type RecordTone } from "../core/transcript.ts";
 import { createCoreTools } from "../core/tools.ts";
 import { Workspace } from "../core/workspace.ts";
 import { execFile } from "node:child_process";
@@ -136,11 +137,12 @@ const SEVERITY_INK: Array<[Severity, string, ThemeColor]> = [
 
 const SEVERITY_COLOR = Object.fromEntries(SEVERITY_INK.map(([sev, , color]) => [sev, color])) as Record<Severity, ThemeColor>;
 
+/** The tones core/transcript.ts asks for, in this theme's vocabulary. */
+const RECORD_TONE_COLOR: Record<RecordTone, ThemeColor> = { ...SEVERITY_COLOR, body: "text", muted: "dim" };
+
 /**
- * Render a `record` result as a security-native line. A recorded finding is the
- * engagement's actual product, so its severity should be the first thing the
- * operator sees in the transcript rather than generic tool output. Anything
- * else falls back to the tool's own summary text.
+ * Draw a `record` result as one row of pi's transcript. See core/transcript.ts
+ * for the line itself; what is left here is pi's Component shell.
  */
 function renderRecordResult(result: AgentToolResult<unknown>, _options: ToolRenderResultOptions, theme: Theme): Component {
 	const summary = (): string => {
@@ -149,13 +151,11 @@ function renderRecordResult(result: AgentToolResult<unknown>, _options: ToolRend
 	};
 	let line: string;
 	try {
-		const d = (result.details ?? {}) as { kind?: string; severity?: Severity; title?: string };
-		line =
-			d.kind === "finding" && d.severity && d.title
-				? `${theme.fg(SEVERITY_COLOR[d.severity] ?? "text", `⦿ ${d.severity.toUpperCase()}`)}  ${theme.fg("text", d.title)}`
-				: theme.fg("dim", summary());
+		line = recordResultLine(result.details as RecordResultDetails | undefined, summary(), (tone, text) =>
+			theme.fg(RECORD_TONE_COLOR[tone] ?? "text", text),
+		);
 	} catch {
-		line = summary(); // presentation must never break the transcript
+		line = oneRow(summary()); // presentation must never break the transcript
 	}
 	return {
 		render: (width: number): string[] => [truncateToWidth(line, width)],
