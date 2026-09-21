@@ -1387,3 +1387,94 @@ the screen on every session for the life of the engagement, to fix a frame you s
 `panelVisible` is a layout fact, so it sits on `BannerOptions` beside `minLines` rather than on
 `BannerInfo`, which describes the engagement. The extension derives it from `bannerReserve() > 0` —
 the same test that already means "the panel is off" — so the two cannot drift apart.
+
+---
+
+## ADR-020 — A tool result renders as one row, because pi paints rows and not strings
+
+**Status:** accepted · 2026-09-21
+
+### Context
+
+`renderRecordResult` replaces pi's generic tool output with a single security-native line — a
+recorded finding's severity first, because that is the engagement's product. It returned one string
+and always meant one row. It never enforced one row, and pi's renderer gives it no help.
+
+pi renders a tool result inside a `Box` (`pi-tui/dist/components/box.js`) that renders the child at
+`width - 2`, measures the result with `visibleWidth`, fills it out to the frame width, and paints
+`toolSuccessBg` across the whole thing. Every step of that treats the string as a row. A `\n` inside
+it is not a line break the TUI knows about: the green fill opens on the first physical row, the
+padding lands on the second, and pi's line accounting is off by one for everything drawn below —
+the rail panel included. What the operator reports is a successful record tearing the panel.
+
+`record` results are routinely multi-line, because `record` answers the model and not the operator.
+`macroDigest` appends `\nEngagement: surface 34 · coverage 22% · …` to **every** successful write
+(`core/tools.ts`), with a paragraph of second-person guidance above it for model sections and for
+findings short of confirmation.
+
+It looked intermittent because `truncateToWidth` bills a `\n` as one column, so a narrow frame cut
+the summary before the newline and a wide one cut after it. The threshold is therefore per record
+kind, five columns past the end of that kind's first line — measured, and the same +5 for all three:
+
+| result | first line | tears from |
+|---|---:|---:|
+| `record kind=endpoint` | 37 cols | width 42 |
+| `record kind=hypothesis` | 41 cols | width 46 |
+| `record kind=model` | 118 cols | width 123 |
+
+Physical rows emitted for what the renderer believed was one row, measured against pi's own `Box`
+arithmetic with the strings `core/tools.ts` assembles verbatim:
+
+| terminal | `kind=endpoint` | `kind=hypothesis` | `kind=model` |
+|---|---:|---:|---:|
+| 40 | 1 | 1 | 1 |
+| 80 | **2** | **2** | 1 |
+| 120 | **2** | **2** | 1 |
+| 140 | **2** | **2** | **2** |
+| 200 | **2** | **2** | **3** |
+
+So an ordinary 120-column terminal tore a row on every hypothesis and every surface element — which
+is most of what an engagement records — and looked clean on the model sections an operator writes
+early. That ordering is why it read as random.
+
+### Decision
+
+The row is the summary's **first line only**, and the renderer enforces it rather than trusting its
+input. `oneRow` (`core/transcript.ts`) takes that first line and replaces C0 controls and DEL with
+spaces: a lone `\r` returns the cursor to column 0 and overprints the row, and a `\t` is three
+columns to pi-tui and eight to the terminal. Both are the same off-by-n as the newline arriving by
+another route, and a renderer that only defends against `\n` invites the next one.
+
+Cutting the tail rather than wrapping it is the same reasoning as ADR-019, one surface
+over: everything after the first line is addressed to the model in the second person — an operator
+cannot act on `record kind=model section=what text="..."` — and the digest's numbers are already on
+the operator's screen, in the status line always and in the rail when it is open. The model receives
+the whole body unchanged; this cuts the transcript row, not the tool result.
+
+The line moves to `core/transcript.ts`, leaving pi's `Component` shell in the extension.
+
+### Consequences
+
+- Findings are untouched. `recordDetails` carries `severity` and `title` only for findings, so a
+  finding renders from `details` and never showed the summary. `oneRow` guards its title anyway,
+  because a title is operator-supplied text and can be pasted.
+- Anything else pired renders into a single-row component has the same exposure. `oneRow` is the
+  shared answer; the footer's foreign-status flattening in `extensions/pired.ts` is the same defence
+  written inline, before this was understood as a class of bug.
+- A `record` summary whose useful content is on its second line would now be invisible to the
+  operator. None is today, and the constraint is worth keeping: the first line of a tool summary is
+  the part addressed to whoever is watching.
+
+### Rejected
+
+**Returning one array entry per line.** `render` returns `string[]`, so splitting the body and
+letting `Box` paint each line would fix the tear and keep every word. It also undoes the thing the
+renderer exists for: two to four rows of model-facing prose per `record`, in a transcript that on a
+review gets one every few seconds, is the generic tool output that `renderRecordResult` was written
+to replace. The bug was never that one row was the wrong shape — it was that nothing made the string
+be one.
+
+**Flattening the newlines into the single row instead of cutting at the first.** Keeps everything
+and still cannot tear, but the row becomes `Recorded hypothesis H-7 (refuted) on E-12 Engagement:
+surface 34 · coverage 22% · 180 test ca…` — the summary crowded off its own line by numbers the
+status line is carrying two rows below, truncated mid-word.

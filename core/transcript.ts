@@ -13,7 +13,7 @@
  * (`\nEngagement: surface 34 · coverage 22% · …`, core/tools.ts) with a
  * paragraph of guidance often under it. It only *looked* intermittent because
  * `truncateToWidth` counts `\n` as one column: on a narrow frame the cut landed
- * before the newline and the row survived, on a wide one it did not.
+ * before the newline and the row survived, on a wide one it did not. ADR-020.
  */
 
 import type { Severity } from "./ontology.ts";
