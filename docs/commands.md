@@ -24,7 +24,9 @@ Everything pired adds to pi. pi's own commands (`/model`, `/reload`, sessions, �
 | `/scribe on` \| `off` \| `status` | Let it run by itself after every reply (off by default), or report its state. |
 | `/scribe quick` | The cheap half only: findings and surface out of new review, no checklist roll-call. |
 | `/extract` | The old name for `/scribe`, kept as an alias. |
-| `/provider` | Add an LLM provider — base URL, model, token — the same wizard `/login` opens. |
+| `/provider` | Manage providers in one form with Save, Cancel and Delete; opens presets on first use. |
+| `/provider add` | Add a provider from a preset; paste model IDs or select them from a searchable list. |
+| `/provider edit <id>` | Edit a provider's connection and model settings together, then save. |
 | `/provider list` | Show the providers in `~/.pired/models.json` and the models each serves. |
 | `/provider remove <id>` | Forget one, in pired's file, pi's mirror, and this session's picker. |
 

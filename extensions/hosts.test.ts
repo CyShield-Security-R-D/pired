@@ -3,6 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import hostsExtension, { loginPrompter } from "./hosts.ts";
+import { ProviderPanel } from "./lib/provider-panel.ts";
+import type { ManageResult } from "./lib/provider-editor.ts";
+import { stripTerminalSequences } from "@earendil-works/pi-tui";
 
 /**
  * Both doors into the wizard, driven through the shapes pi actually uses.
@@ -120,6 +123,22 @@ function stubHost(available: unknown[] = [{ id: "already-configured" }]) {
 		seen,
 		said,
 		asked,
+		panel: (drive: (panel: ProviderPanel) => Promise<void>) => {
+			Object.assign(ctx.ui, { custom: async (factory: (
+				tui: { terminal: { rows: number }; requestRender: () => void },
+				theme: { fg: (tone: string, s: string) => string; bg: (tone: string, s: string) => string; bold: (s: string) => string },
+				keys: undefined, done: (result: ManageResult) => void,
+			) => ProviderPanel) => {
+				let result: ManageResult | undefined;
+				const panel = factory({ terminal: { rows: 30 }, requestRender: () => {} }, {
+					fg: (_tone, s) => s, bg: (_tone, s) => s, bold: (s) => s,
+				}, undefined, (value) => { result = value; });
+				expect(panel).toBeInstanceOf(ProviderPanel);
+				await drive(panel);
+				expect(result, "the form should finish").toBeDefined();
+				return result;
+			} });
+		},
 		modelsPath: join(home, ".pired", "models.json"),
 		mirrorPath: join(home, ".pi", "agent", "models.json"),
 		command: (args: string, steps: Step[] = []) => inHome(steps, async () => {
@@ -353,5 +372,83 @@ describe("/provider", () => {
 		expect(host.said.join("\n")).toContain('no provider called "nope"');
 		await host.command("remove");
 		expect(host.said.join("\n")).toContain("/provider remove <id>");
+	});
+});
+
+
+async function focusPanel(panel: ProviderPanel, label: string): Promise<void> {
+	for (let i = 0; i < 100; i++) {
+		if (panel.render(88).map(stripTerminalSequences).some((line) => line.includes("› ") && line.includes(label))) return;
+		await panel.handleInput("\t");
+	}
+	throw new Error(`No row ${label}`);
+}
+
+async function clickPanel(panel: ProviderPanel, label: string): Promise<void> {
+	await focusPanel(panel, label);
+	await panel.handleInput("\r");
+}
+
+describe("/provider with the terminal form", () => {
+	it("creates, edits, and deletes through the real command, storage, mirror and model registry", async () => {
+		const host = stubHost();
+		host.panel(async (panel) => {
+			await clickPanel(panel, "LM Studio");
+			await focusPanel(panel, "Model IDs");
+			await panel.handleInput("\x1b[200~qwen3, llama\x1b[201~");
+			await panel.handleInput("\x13");
+		});
+		await host.command("add");
+		expect(host.asked).toEqual([]);
+		expect(JSON.parse(readFileSync(host.modelsPath, "utf8")).providers[0].models).toHaveLength(2);
+		expect(statSync(host.modelsPath).mode & 0o777).toBe(0o600);
+		expect(JSON.parse(readFileSync(host.mirrorPath, "utf8")).providers.lmstudio.models).toHaveLength(2);
+		expect(host.seen.models).toEqual([{ provider: "lmstudio", id: "qwen3" }]);
+
+		host.panel(async (panel) => {
+			await focusPanel(panel, "Base URL");
+			await panel.handleInput("\x05");
+			await panel.handleInput("\x15");
+			await panel.handleInput("\x1b[200~localhost:8080/v1\x1b[201~");
+			await panel.handleInput("\x13");
+			await clickPanel(panel, "Done");
+		});
+		await host.command("edit lmstudio");
+		expect(JSON.parse(readFileSync(host.modelsPath, "utf8")).providers[0].baseUrl).toBe("http://localhost:8080/v1");
+		expect(JSON.parse(readFileSync(host.mirrorPath, "utf8")).providers.lmstudio.baseUrl).toBe("http://localhost:8080/v1");
+		expect(host.seen.providers.get("lmstudio")?.baseUrl).toBe("http://localhost:8080/v1");
+
+		host.panel(async (panel) => {
+			await clickPanel(panel, "LM Studio");
+			await clickPanel(panel, "Delete provider…");
+			await clickPanel(panel, "Delete provider");
+			await clickPanel(panel, "Done");
+		});
+		await host.command("");
+		expect(JSON.parse(readFileSync(host.modelsPath, "utf8")).providers).toEqual([]);
+		expect(JSON.parse(readFileSync(host.mirrorPath, "utf8")).providers.lmstudio).toBeUndefined();
+		expect(host.seen.unregistered).toEqual(["lmstudio"]);
+	});
+
+	it("opens the preset form on first use and cancels without writing", async () => {
+		const host = stubHost();
+		host.panel(async (panel) => {
+			expect(panel.render(88).join("\n")).toContain("choose a preset");
+			await panel.handleInput("\x1b");
+		});
+		await host.command("");
+		expect(host.asked).toEqual([]);
+		expect(host.seen.models).toEqual([]);
+	});
+
+	it("explains invalid commands and missing edit targets without opening an unrelated flow", async () => {
+		const host = stubHost();
+		await host.command("edit missing");
+		await host.command("edit");
+		await host.command("typo");
+		expect(host.said.join("\n")).toContain('no provider called "missing"');
+		expect(host.said.join("\n")).toContain("/provider edit <id>");
+		expect(host.said.join("\n")).toContain("/provider [add | edit <id> | list | remove <id>]");
+		expect(host.asked).toEqual([]);
 	});
 });

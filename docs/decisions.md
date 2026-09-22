@@ -1558,3 +1558,44 @@ the tests exercise.
 **Vendoring or reimplementing delegation.** Answered before this repo had an installer:
 *"Why reimplement and not just use them as they are? I don't want to maintain any extra
 dependencies."* (`research/01`).
+
+
+---
+
+## ADR-022 — Provider settings are a draft form with an explicit save
+
+**Status:** accepted · 2026-09-23 · supersedes ADR-011's immediate field saves for the terminal manager
+
+### Context
+
+ADR-011 replaced repeated model questions with menus, but every provider field
+still opened a separate prompt. Editing a URL saved it before the corresponding
+token could be changed. The theme's red accent also colored ordinary dialog
+prompts, making routine configuration look like an error.
+
+### Decision
+
+`/provider` uses a custom terminal component with a neutral border, editable
+fields, preset defaults, and Save/Cancel/Delete actions. The component holds a
+provider draft and calls the existing persistence adapter only on Save. Escape
+from a changed provider asks whether to discard it; deletion defaults to keeping
+the provider. Validation and save failures retain the draft.
+
+Model IDs can be pasted in bulk or selected in a searchable, scrolling list.
+Filtering preserves selections, and toggling a model preserves its customized
+settings. Discovery is explicit so a hosted provider can receive its token
+before the request is sent. Model metadata and compatibility helpers remain
+shared with the existing wizard. Environment key references are resolved for
+discovery but stored as references; rendered inputs mask tokens.
+
+### Consequences
+
+The terminal component lives in `extensions/lib/provider-panel.ts`, since it
+owns pi input and rendering. File writes, registration, and mirroring stay in
+`hosts.ts`. The callback-only `/login` path and hosts without `ui.custom` retain
+the dialog fallback. The change is local to provider management; it does not
+change the theme's accent for the rest of pired.
+
+Tests drive the component with real terminal input sequences and exercise the
+command through real temporary files, including create/edit/delete, model
+registration and mirroring. Layout checks cover short and narrow terminals.

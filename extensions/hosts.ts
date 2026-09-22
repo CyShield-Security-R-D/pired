@@ -19,7 +19,8 @@
 
 import type { OAuthCredentials, OAuthLoginCallbacks } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { manageProviders } from "./lib/provider-editor.ts";
+import { manageProviders, editProvider, type ManageResult } from "./lib/provider-editor.ts";
+import { ProviderPanel } from "./lib/provider-panel.ts";
 import { addHost, type AddHostResult, describeHost, type Prompter } from "./lib/provider-wizard.ts";
 import {
 	type LocalProviderConfig, mirrorProvidersToPi, piredModelsPath, readProviderFile, registerPiredProviders,
@@ -183,18 +184,21 @@ export default function hostsExtension(pi: ExtensionAPI): void {
 	});
 
 	/**
-	 * What `/login` cannot do: show what is configured, and take one away.
-	 *
-	 * Adding is here too, for anyone who would rather type the noun than find it
-	 * in a list of providers — it is the same wizard, driven through pi's plain
-	 * dialogs instead of the login dialog's prompts.
+	 * The terminal manager edits a whole provider draft before saving it. Login
+	 * callbacks and older hosts retain the dialog flow; both use the same
+	 * persistence, registration, and model-switching adapters.
 	 */
 	pi.registerCommand("provider", {
-		description: "Add or edit LLM providers — base URL, token, each model's parameters; `list` | `remove <id>`",
+		description: "Manage providers and models · add | edit <id> | list | remove <id>",
 		handler: async (args, ctx) => {
 			const [verb = "", rest = ""] = (args ?? "").trim().split(/\s+/, 2);
 			const path = piredModelsPath();
 			const { providers } = readProviderFile(path);
+
+			if (!["", "add", "edit", "list", "remove"].includes(verb.toLowerCase())) {
+				ctx.ui.notify("pired: /provider [add | edit <id> | list | remove <id>]", "info");
+				return;
+			}
 
 			if (verb.toLowerCase() === "list") {
 				if (providers.length === 0) {
@@ -232,6 +236,37 @@ export default function hostsExtension(pi: ExtensionAPI): void {
 				return;
 			}
 
+			if (verb.toLowerCase() === "edit" && !providers.some((p) => p.id === rest)) {
+				ctx.ui.notify(rest ? `pired: no provider called "${rest}" — /provider list shows them` : "pired: /provider edit <id>", "warning");
+				return;
+			}
+
+			if (typeof ctx.ui.custom === "function") {
+				const result = await ctx.ui.custom<ManageResult>(
+					(tui, theme, _keys, done) => new ProviderPanel(theme, {
+						load: () => readProviderFile(path).providers,
+						save: (config) => saveHost(pi, config),
+						remove: (id) => forgetHost(pi, id),
+					}, () => tui.requestRender(), done, () => Math.min(tui.terminal.rows - 2, Math.floor(tui.terminal.rows * 0.95)), {
+						add: verb.toLowerCase() === "add", edit: verb.toLowerCase() === "edit" ? rest : undefined,
+					}),
+					{ overlay: true, overlayOptions: { width: 88, maxHeight: "95%", anchor: "center", margin: 1 } },
+				);
+				if (result.providerId && result.useModelId) {
+					ctx.ui.notify(`pired: saved ${result.providerId} — available in /model`, "info");
+					await useModel(pi, ctx, result.providerId, result.useModelId);
+				}
+				return;
+			}
+
+			if (verb.toLowerCase() === "edit") {
+				await editProvider(ctx.ui, {
+					load: () => readProviderFile(path).providers,
+					save: (config) => saveHost(pi, config), remove: (id) => forgetHost(pi, id),
+				}, rest);
+				return;
+			}
+
 			const openWizard = async (): Promise<AddHostResult | undefined> => {
 				// Re-read rather than close over `providers`: by the time this runs
 				// the operator may have added or removed a host from the menu, and a
@@ -252,7 +287,7 @@ export default function hostsExtension(pi: ExtensionAPI): void {
 
 			// Nothing configured yet, so the manager would be an empty list standing
 			// in front of the wizard. Open the wizard itself.
-			if (providers.length === 0) {
+			if (providers.length === 0 || verb.toLowerCase() === "add") {
 				const added = await openWizard();
 				if (added?.useModelId) await useModel(pi, ctx, added.config.id, added.useModelId);
 				return;

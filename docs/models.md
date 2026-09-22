@@ -6,52 +6,78 @@ What pired contributes is `~/.pired/models.json`: any OpenAI-compatible provider
 
 ## Adding a provider
 
-`/login` is where you tell a tool about a model it does not yet have, so that is where this lives: pired puts **"Add a custom provider…"** in pi's own login list, under *Sign in with an account*. `/login add-provider` goes straight there, and **`/provider`** opens the same wizard by name.
+Open **`/provider add`**, choose a preset, and fill in one form. LM Studio,
+Ollama, llama.cpp, vLLM and OpenRouter have defaults; choose **Other
+OpenAI-compatible host** for a custom endpoint.
 
-It asks, in order:
-
-| | |
-|---|---|
-| **Which server** | LM Studio, Ollama, llama.cpp, vLLM, OpenRouter — each prefilled with the port it ships on — or another OpenAI-compatible address. |
-| **Base URL** | `localhost:1234/v1` is enough; the scheme is filled in (`http` for a host on this box, `https` otherwise). |
-| **API** | Only for a host with no preset: `openai-completions` for nearly everything, or an Anthropic-, Responses- or Gemini-shaped endpoint. |
-| **Token** | Or **`$ENV_VAR`**, which is stored as the reference and read from the environment at request time — the answer when the key is a client's. |
-| **Models** | pired asks the host what it serves (`GET {baseUrl}/models`) and puts the answer up as a list you tick through — pick as many as you want in one pass, and Done when you are finished. Several hundred models becomes a search first. If the host does not answer, the list is empty and you type the id — and the failure is reported, because it is the same failure the agent would have hit later. |
-
-Then it shows what that produced, one line per model, with the context window and output cap the host reported and a guess at whether the model reasons:
-
-```
-Review — pick one to change, or add them
-  qwen3-27b — 262,144 ctx · 8,192 out · reasoning · qwen
-  llama-3.3-70b — 131,072 ctx · 8,192 out
-  ✓ Add 2 models
+```text
+Add provider
+  Name          LM Studio
+  Base URL      http://localhost:1234/v1
+  API token     Optional · paste a key or $ENV_VAR
+  Model IDs     qwen3, llama3
+  Find models
+  Manage models (2) · select, edit or remove
+  ▸ Advanced · provider ID and API format
+  [x] Use first model after saving
+  Save provider
+  Cancel
 ```
 
-Picking a row opens that model's parameters. Nothing else is asked — the questions the wizard used to put between you and each model are answered by the probe and by the guess, and this screen is where a wrong guess gets caught. `reasoning` is inferred from the model's name and leans towards *no*, because the [`compat`](#compat-and-the-failure-it-prevents) failure below only bites a model wrongly marked as thinking.
+**Tab / Shift+Tab** or **↑ / ↓** moves between fields. Edit values directly,
+then choose **Save provider** or press **Ctrl+S**. **Esc** goes back; leaving a
+changed provider asks whether to discard the draft. No field is saved on its own.
 
-Then it writes: `~/.pired/models.json`, readable only by you, plus pi's own `~/.pi/agent/models.json` so that subagents — which run without pired's extension — can resolve the model too. The provider is registered immediately, so it is in `/model` without a restart, and the wizard offers to switch to it.
+- Local server presets need no token. For a hosted endpoint, paste its key or
+  an environment reference such as `$OPENROUTER_KEY`. Keys stay masked, including
+  while editing. Clearing a key restores unauthenticated local-server access.
+- Paste several model IDs at once, separated by commas, spaces or newlines.
+  Duplicate IDs are removed automatically.
+- **Find models** asks the server for its model list. Search within the list,
+  use **Space** or **Enter** to select models, or **Select all matching** to add
+  a whole group. The list scrolls, and filtering keeps selections from other
+  searches. A failed lookup leaves the form intact so you can correct the URL
+  or enter model IDs manually.
+- **Manage models** opens the same selection list without a network request.
+  Deselect a model to remove it. Highlight one and press **e** to edit its
+  context window, output limit, reasoning format and image support together.
+  **Apply to draft** returns to the list; the provider's Save writes the changes.
+- **Advanced** exposes the provider ID and API format. Presets use the
+  OpenAI-compatible chat API. Press Enter on API format to cycle through the
+  supported adapters. Existing provider IDs stay fixed; their display names
+  can be edited. Adding the same preset again gets a separate ID.
 
-## Editing one
+The probe supplies model metadata when available; otherwise pired uses defaults
+and infers reasoning from the model ID. Model rows show those settings so they
+can be reviewed before saving. See [compatibility](#compat-and-the-failure-it-prevents)
+when a server needs a specific reasoning format.
 
-`/provider` opens the manager once anything is configured — every host, what it serves, and the way into each:
+Save writes `~/.pired/models.json` with owner-only permissions, updates pi's
+`~/.pi/agent/models.json` mirror, and registers the models immediately in `/model`.
+**Use first model after saving** is checked for new providers; turn it off to
+keep using your current model. Normal fields and borders use neutral colors;
+red identifies validation errors and Delete.
 
+## Editing or deleting a provider
+
+**`/provider`** lists configured providers, with their URLs and model counts,
+and an **Add provider** action. On first use it goes straight to the presets.
+Choose a provider to open the same form used for adding one. **Delete provider**
+asks for confirmation before removing it from both files and the session picker;
+**Keep provider** is the default. An already active model stays until restart.
+
+```text
+/provider             open the manager
+/provider add         add a provider directly
+/provider edit <id>   edit a provider directly
+/provider list        show configured providers and model IDs
+/provider remove <id> delete one, with confirmation in the terminal
 ```
-pired · providers · ~/.pired/models.json
-  lmstudio — http://192.168.1.14:1234/v1 · 2 models
-  ollama — http://localhost:11434/v1 · 1 model
-  + Add a provider…
-  ✓ Done
-```
 
-Every row carries its current value, so opening a menu answers *what is this set to* without changing anything. A host's menu edits its base URL, token and API dialect, and leads to its models; a model's menu edits its context window, output cap, reasoning format and vision flag. Edits are written as they are made — there is no form to fill in and no half-finished state to abandon — and each menu redraws from the file, so what is on screen is what was saved.
-
-```
-/provider             the manager — or the add wizard, when nothing is configured yet
-/provider list        what is configured, and what each provider serves
-/provider remove <id> forget one — pired's file, pi's mirror, and this session
-```
-
-Nothing here is required: the file is plain JSON and can still be written by hand.
+`/login` still includes **Add a custom provider…**, and `/login add-provider`
+opens its callback-based wizard. Older hosts without custom terminal components
+also use the dialog fallback. The form is the primary `/provider` interface.
+The configuration remains plain JSON and can still be edited by hand.
 
 ## Why local models are the default case
 
@@ -63,7 +89,7 @@ Frontier and subscription models work fine too, wherever the engagement allows t
 
 ## `~/.pired/models.json`
 
-What the wizard writes, and what you can write yourself:
+What the manager writes, and what you can write yourself:
 
 ```jsonc
 {
