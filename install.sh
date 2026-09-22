@@ -12,9 +12,13 @@
 # then does all of it: Node.js (when missing or too old), pi, pired, and the
 # PATH line that makes the command typeable.
 #
-# It does not register anything with pi. `pi` stays the pi you installed; the
+# It does not register pired with pi. `pi` stays the pi you installed; the
 # security layer arrives only when you type `pired`, which passes it to pi with
 # -e for that run. See ADR-017.
+#
+# It does register pi-subagents, the delegation extension pired cooperates with.
+# That is a package the operator would otherwise install by hand, it is named in
+# the plan, and PIRED_SKIP_SUBAGENTS=1 declines it. See ADR-021.
 #
 # Nothing runs as root. A vanilla Ubuntu has neither Node nor git, and neither
 # absence is a reason to reach for sudo:
@@ -31,17 +35,22 @@
 #   install.sh [-y|--yes] [--dry-run] [-h|--help]
 #
 # Environment:
-#   PIRED_SOURCE   npm spec to install from      (default github:mamgad/pired)
-#   NPM_PREFIX     prefix to install into        (default npm's own global root;
-#                  ~/.local/share/pired when this script brings its own Node,
-#                  ~/.local when npm's root is not writable)
-#   PIRED_SKIP_PI  1 to not install pi
-#   PIRED_YES      1 to skip the confirmation prompt
-#   PIRED_NO_ANIM  1 for plain line-at-a-time output
+#   PIRED_SOURCE          npm spec to install from   (default github:mamgad/pired)
+#   NPM_PREFIX            prefix to install into     (default npm's own global root;
+#                         ~/.local/share/pired when this script brings its own Node,
+#                         ~/.local when npm's root is not writable)
+#   PIRED_SKIP_PI         1 to not install pi
+#   PIRED_SKIP_SUBAGENTS  1 to not install pi-subagents
+#   PIRED_YES             1 to skip the confirmation prompt
+#   PIRED_NO_ANIM         1 for plain line-at-a-time output
 
 set -eu
 
 PI_PACKAGE="@earendil-works/pi-coding-agent"
+# The delegation extension pired cooperates with: `spawn a subagent` is a thing
+# the operator can ask for on a fresh box, rather than a README step they find
+# out about after the first engagement wanted one. See ADR-021.
+SUBAGENTS_PACKAGE="npm:pi-subagents"
 NODE_LINE=22
 NODE_MIN_MAJOR=22
 NODE_MIN_MINOR=19
@@ -54,8 +63,11 @@ DRY_RUN=0
 usage() {
 	# Piped from curl there is no file to read the header out of, so the flags
 	# are spelled out rather than sliced from the comment block above.
+	# To the first blank line rather than to a fixed line number: the range 2,37
+	# was already one env var short of the block it meant to print, and a header
+	# that grows silently truncates the help it is the source of.
 	if [ -r "${0:-}" ] && head -1 "$0" 2>/dev/null | grep -q '^#!'; then
-		sed -n '2,37p' "$0" | sed 's/^# \{0,1\}//'
+		sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'
 		return 0
 	fi
 	cat <<'USAGE'
@@ -66,7 +78,8 @@ pired installer — installs Node.js (if needed), pi, pired and the extension.
   -y, --yes    install without the confirmation prompt
   --dry-run    print the plan and change nothing
 
-  PIRED_SOURCE / NPM_PREFIX / PIRED_SKIP_PI / PIRED_YES / PIRED_NO_ANIM
+  PIRED_SOURCE / NPM_PREFIX / PIRED_SKIP_PI / PIRED_SKIP_SUBAGENTS
+  PIRED_YES / PIRED_NO_ANIM
   https://github.com/mamgad/pired/tree/main/docs
 USAGE
 }
@@ -447,6 +460,37 @@ if [ -x "$BIN_DIR/pi" ] || { [ "$DO_NODE" = 0 ] && command -v pi >/dev/null 2>&1
 fi
 if [ "${PIRED_SKIP_PI:-0}" = 1 ]; then DO_PI=0; fi
 
+# --- subagents --------------------------------------------------------------
+# Asked of the pi that is already here, if one is. On a box where this run is
+# bringing pi too there is nothing to ask, and the answer is the one the plan
+# would give anyway: install it.
+#
+# The match is any package whose name ends in `pi-subagents`, not the one spec
+# this script installs. The ecosystem is mostly forks — @gotgenes, @nklisch,
+# @tintinweb — and an operator who chose one did not ask for a second
+# implementation of the same tool registered underneath it.
+subagents_registered() {
+	[ -n "$1" ] || return 1
+	"$1" list 2>/dev/null | grep -Eq '(^|[:/[:space:]])(@[^[:space:]/]+/)?pi-subagents([[:space:]]|$)'
+}
+
+SURVEY_PI=""
+if [ -x "$BIN_DIR/pi" ]; then SURVEY_PI="$BIN_DIR/pi"
+elif [ "$DO_NODE" = 0 ]; then SURVEY_PI=$(command -v pi 2>/dev/null || true)
+fi
+
+DO_SUBAGENTS=1
+SUBAGENTS_STATE=missing
+if [ "${PIRED_SKIP_SUBAGENTS:-0}" = 1 ]; then
+	DO_SUBAGENTS=0; SUBAGENTS_STATE=declined
+elif [ "$DO_PI" = 0 ] && [ -z "$SURVEY_PI" ]; then
+	# No pi to register it with, and none coming. Saying "+ subagents" here would
+	# be promising something this run cannot do.
+	DO_SUBAGENTS=0; SUBAGENTS_STATE=nopi
+elif subagents_registered "$SURVEY_PI"; then
+	DO_SUBAGENTS=0; SUBAGENTS_STATE=present
+fi
+
 REINSTALL=0
 if [ -x "$BIN_DIR/pired" ]; then REINSTALL=1; fi
 
@@ -526,6 +570,16 @@ else
 fi
 plan_row "$PLUS_MARK" "pired" "$(tilde "$BIN_DIR")" "$PIRED_NOTE"
 
+# The only row that writes outside this script's own prefix, so it says where —
+# ~/.pi is pi's directory, and a plan that hid that would be hiding the one line
+# someone might object to.
+case "$SUBAGENTS_STATE" in
+	missing) plan_row "$PLUS_MARK" "subagents" "$(tilde "$HOME/.pi")" "$SUBAGENTS_PACKAGE — delegation, loads in every pi" ;;
+	present) plan_row "$KEEP_MARK" "subagents" "$(tilde "$HOME/.pi")" "already registered with pi" ;;
+	declined) plan_row "$KEEP_MARK" "subagents" "" "skipped — PIRED_SKIP_SUBAGENTS=1" ;;
+	nopi) plan_row "$KEEP_MARK" "subagents" "" "skipped — no pi to register it with" ;;
+esac
+
 case "$PATH_STATE" in
 	live) plan_row "$KEEP_MARK" "PATH" "$(tilde "$BIN_DIR")" "already on your PATH" ;;
 	written) plan_row "$KEEP_MARK" "PATH" "$(tilde "$RC_FILE")" "already there — new shells have it" ;;
@@ -538,10 +592,12 @@ say "  ${DIM}Nothing runs as root. No daemon, no service, no shell hooks.${OFF}"
 if [ "$NODE_STATE" = old ]; then
 	say "  ${DIM}The PATH line puts pired's Node.js ahead of $(command -v node) in new shells.${OFF}"
 fi
+UNDO_SUBAGENTS=""
+[ "$DO_SUBAGENTS" = 1 ] && UNDO_SUBAGENTS=" · pi remove $SUBAGENTS_PACKAGE"
 if [ "$OWNS_TREE" = 1 ]; then
-	say "  ${DIM}Undo: rm -rf $(tilde "$PIRED_HOME") ~/.pired${OFF}"
+	say "  ${DIM}Undo: rm -rf $(tilde "$PIRED_HOME") ~/.pired${UNDO_SUBAGENTS}${OFF}"
 else
-	say "  ${DIM}Undo: npm rm -g pired $PI_PACKAGE · rm -rf ~/.pired${OFF}"
+	say "  ${DIM}Undo: npm rm -g pired $PI_PACKAGE · rm -rf ~/.pired${UNDO_SUBAGENTS}${OFF}"
 fi
 say ""
 
@@ -774,13 +830,50 @@ else
 	die "could not install from $SOURCE"
 fi
 
-# --- pi is left alone -------------------------------------------------------
-# There is deliberately no `pi install` here. Registering the package would put
-# pired's extensions AND themes/ on pi's global resource path, so a bare `pi`
-# would start with the security layer and — because pi persists a theme set
+# --- pired is not registered ------------------------------------------------
+# There is deliberately no `pi install` for *pired* here. Registering it would
+# put pired's extensions AND themes/ on pi's global resource path, so a bare
+# `pi` would start with the security layer and — because pi persists a theme set
 # through its extension API — would rewrite `theme` in ~/.pi/agent/settings.json
 # on first run. `pi` stays the pi you installed. `pired` passes -e for its own
 # run and changes nothing on disk. See ADR-017.
+
+# --- subagents --------------------------------------------------------------
+# pired ships no sub-agent machinery and depends on none; this is the package it
+# cooperates with when it is there (extensions/lib/providers.ts mirrors its
+# providers to the children). Installed after pired and never before it, so the
+# order of the plan is the order of the run.
+#
+# Non-fatal, and deliberately so: a third-party package that fails to resolve is
+# not a reason to fail an install of pired, which works without it. The warning
+# carries the one command that retries it.
+install_subagents() { "$PI" install "$SUBAGENTS_PACKAGE"; }
+
+if [ "$DO_SUBAGENTS" = 1 ]; then
+	resolve_pi
+	if [ -z "$PI" ]; then
+		# Only reachable when the pi step was skipped between the plan and here.
+		skip_line "subagents" "skipped — no pi to register it with"
+	elif subagents_registered "$PI"; then
+		# The survey had no pi to put the question to — a box with a ~/.pi but no
+		# pi on it, which is what `npm rm -g` then reinstalling leaves behind. Ask
+		# now rather than install a package over itself.
+		done_line "subagents" "already registered with pi"
+	else
+		STEP_HINT="resolving $SUBAGENTS_PACKAGE"
+		# `pi install` exiting 0 is not the same as pi having recorded the package:
+		# the registration ADR-017 removed was guarded this way for that reason, and
+		# the guard is the part that was worth keeping.
+		if step "subagents" npm_label install_subagents && subagents_registered "$PI"; then
+			done_line "subagents" "$SUBAGENTS_PACKAGE  $(tilde "$HOME/.pi/agent")"
+		else
+			warn_line "subagents" "could not install $SUBAGENTS_PACKAGE — pired works without it"
+			say "    ${DIM}retry: pi install $SUBAGENTS_PACKAGE${OFF}"
+		fi
+	fi
+elif [ "$SUBAGENTS_STATE" = present ]; then
+	done_line "subagents" "already registered with pi"
+fi
 
 # --- PATH -------------------------------------------------------------------
 # An install that works but cannot be typed looks identical to a failed one, so

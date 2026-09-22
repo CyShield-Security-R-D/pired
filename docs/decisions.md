@@ -1478,3 +1478,83 @@ be one.
 and still cannot tear, but the row becomes `Recorded hypothesis H-7 (refuted) on E-12 Engagement:
 surface 34 · coverage 22% · 180 test ca…` — the summary crowded off its own line by numbers the
 status line is carrying two rows below, truncated mid-word.
+
+---
+
+## ADR-021 — The installers register pi-subagents, and only pi-subagents
+
+**Status:** accepted · 2026-09-22
+
+### Context
+
+pired's system prompt contains a soft hint — *"if a sub-agent tool is available, delegate isolated
+recon…"* — and `extensions/lib/providers.ts` carries ~80 lines whose whole purpose is making
+delegation work: pi-subagents spawns async children with extension bindings deliberately withheld,
+so the providers are mirrored into pi's own settings for those children to find. `research/07`
+records what that cost when it was missing: **subagent delegation was broken for an entire corpus
+run**, and two mlflow targets timed out at 30 minutes wedged behind it.
+
+All of that machinery is dormant on a fresh install. `pi-subagents` is a third-party package, and
+until now the installers did not mention it: the only pointer was a README section three screens
+down from the install command. An operator who follows the quickstart gets a harness that hints at a
+tool it does not have, and finds out during the first engagement that wanted one.
+
+ADR-017 is the reason for the hesitation. It removed `pi install <pired>` from both installers
+because registration is not per-resource — it put `themes/` on pi's global path too, and one `pired`
+start then rewrote `theme` in `~/.pi/agent/settings.json` for every `pi` the operator ever ran
+again. The rule that came out of it was *the scripts never write inside pi's directory*.
+
+### Decision
+
+**The installers register `npm:pi-subagents`, as a named row in the plan, and nothing else.**
+
+The distinction ADR-017 turns on is *whose behaviour changes and whether anyone was asked*. That
+decision is about pired reshaping a general-purpose `pi` that nobody pointed at pired. This is a
+delegation extension the operator would otherwise install by hand from the README, by typing the
+same command this row runs:
+
+- It is a `+` row in the plan, naming `~/.pi` as where it writes, before the single confirmation.
+- `PIRED_SKIP_SUBAGENTS=1` declines it, and the undo hint carries `pi remove npm:pi-subagents`
+  exactly when the run is going to add it.
+- A box that already has a subagents package registered — including a fork, of which the ecosystem
+  has a dozen — is left alone.
+- It runs after pired, and its failure is a warning carrying the retry command, never a failed
+  install. pired works without it; that is the whole premise of depending on nothing.
+- `pi install` exiting 0 is not taken as proof. The old registration step was guarded with
+  `pi list | grep`, because pi can report success and record nothing, and that guard is the part of
+  it worth keeping.
+
+### Consequences
+
+- The installers now write outside their own prefix, which they previously did not do at all. The
+  plan row and the opt-out are what make that a choice rather than a surprise, and they are the
+  parts with tests on them.
+- A bare `pi` gains delegation tools it did not have. That is the cost, it is stated in the row
+  (*"loads in every pi"*), and it is a general-purpose capability rather than a security-operator
+  prompt and a scope gate.
+- pired still ships no sub-agent machinery and takes no dependency on one. Nothing imports the
+  package; the cooperation is the mirror in `providers.ts` and a sentence in the prompt.
+- `install.test.ts` exists now, and runs the real `install.sh` under `/bin/sh`, dash and busybox
+  against stub `npm` and `pi` binaries on a sandboxed PATH and HOME. `install.ps1` refuses to run
+  off Windows, so its decision lives in `Get-SubagentsState` / `Test-SubagentsRegistered`, which any
+  `pwsh` can call directly, and the rest is held to parity assertions against the shell script.
+
+### Rejected
+
+**Leaving it to the README.** The status quo. It is the honest ADR-017-shaped answer, and it is what
+produced a corpus run where delegation was broken throughout and nobody noticed until the results
+were graded. A capability the prompt promises should not be a documentation step.
+
+**Installing it unconditionally, as a prerequisite.** Simpler code, one less branch. It also makes
+an operator who does not want a third-party extension in their `pi` unable to say so except by not
+running the installer — and the thing being installed is exactly the kind of package a consultant on
+a client box is entitled to refuse.
+
+**Registering it behind an opt-in flag** (`--with-subagents`). ADR-017 rejected flag-guarded
+registration on the grounds that a flag nobody passes is a code path nobody tests. That reasoning
+holds, and it argues for default-on with an opt-out: the path that runs on every install is the one
+the tests exercise.
+
+**Vendoring or reimplementing delegation.** Answered before this repo had an installer:
+*"Why reimplement and not just use them as they are? I don't want to maintain any extra
+dependencies."* (`research/01`).

@@ -14,9 +14,13 @@
 # then does all of it: Node.js (when missing or too old), pi, pired, and the
 # user PATH entries that make the command typeable.
 #
-# It does not register anything with pi. `pi` stays the pi you installed; the
+# It does not register pired with pi. `pi` stays the pi you installed; the
 # security layer arrives only when you type `pired`, which passes it to pi with
 # -e for that run. See ADR-017.
+#
+# It does register pi-subagents, the delegation extension pired cooperates with.
+# That is a package the operator would otherwise install by hand, it is named in
+# the plan, and PIRED_SKIP_SUBAGENTS=1 declines it. See ADR-021.
 #
 # Nothing needs administrator. The MSI from nodejs.org does, so this does not
 # use it:
@@ -35,6 +39,8 @@
 #                  prefix, %LOCALAPPDATA%\pired when this script brings its own
 #                  Node, or %APPDATA%\npm when npm's prefix is not writable)
 #   PIRED_SKIP_PI  set to 1 to not install pi
+#   PIRED_SKIP_SUBAGENTS
+#                  set to 1 to not install pi-subagents
 #   PIRED_YES      set to 1 to skip the confirmation prompt
 #   PIRED_DRY_RUN  set to 1 to print the plan and stop
 #
@@ -49,6 +55,10 @@ $ErrorActionPreference = "Stop"
 
 $PiredDefaultSource = "github:mamgad/pired"
 $PiPackage = "@earendil-works/pi-coding-agent"
+# The delegation extension pired cooperates with: `spawn a subagent` is a thing
+# the operator can ask for on a fresh box, rather than a README step they find
+# out about after the first engagement wanted one. See ADR-021.
+$SubagentsPackage = "npm:pi-subagents"
 $NodeLine = 22
 $NodeMinimum = [version]"22.19.0"
 $NodeDist = "https://nodejs.org/dist/latest-v$NodeLine.x"
@@ -656,6 +666,49 @@ function Resolve-Pi {
 	return ""
 }
 
+# --- subagents ---------------------------------------------------------------
+# The match is any package whose name ends in `pi-subagents`, not the one spec
+# this script installs. The ecosystem is mostly forks - @gotgenes, @nklisch,
+# @tintinweb - and an operator who chose one did not ask for a second
+# implementation of the same tool registered underneath it.
+function Test-SubagentsRegistered {
+	param([string]$Pi)
+	if (-not $Pi) { return $false }
+
+	$previous = $ErrorActionPreference
+	$ErrorActionPreference = "Continue"
+	try {
+		$output = & $Pi "list" 2>$null
+	} catch {
+		return $false
+	} finally {
+		$ErrorActionPreference = $previous
+	}
+
+	foreach ($line in @($output)) {
+		if ("$line" -match '(^|[:/\s])(@[^\s/]+/)?pi-subagents(\s|$)') { return $true }
+	}
+	return $false
+}
+
+# Asked of the pi that is already here, if one is. On a box where this run is
+# bringing pi too there is nothing to ask, and the answer is the one the plan
+# would give anyway: install it.
+#
+# A function rather than four lines inside the survey because this is the half of
+# the feature that decides, and install.ps1 cannot be run on the machines its
+# tests run on - so what decides has to be callable on its own.
+function Get-SubagentsState {
+	param([string]$Pi, [bool]$DoPi)
+
+	if ($env:PIRED_SKIP_SUBAGENTS -eq "1") { return "declined" }
+	# No pi to register it with, and none coming. A "+ subagents" row here would
+	# be promising something this run cannot do.
+	if ((-not $DoPi) -and (-not $Pi)) { return "nopi" }
+	if (Test-SubagentsRegistered $Pi) { return "present" }
+	return "missing"
+}
+
 # npm writes both a .cmd and a .ps1 shim, and PowerShell resolves the .ps1
 # first. Under a Restricted or AllSigned execution policy that shim refuses to
 # run, so `pired` fails even though the pired.cmd beside it is perfectly
@@ -900,6 +953,10 @@ function Invoke-PiredInstaller {
 		$doPi = ((-not $skipPi) -and (-not $pi))
 		$reinstall = (Test-Path -LiteralPath (Join-Path $prefix "pired.cmd") -PathType Leaf)
 
+		$piHome = if ($env:USERPROFILE) { Join-Path $env:USERPROFILE ".pi" } else { ".pi" }
+		$subagentsState = Get-SubagentsState -Pi $pi -DoPi $doPi
+		$doSubagents = ($subagentsState -eq "missing")
+
 		# Two entries when this run brings its own Node: the shims live in the
 		# prefix, node.exe and npm.cmd at the root of the extracted zip.
 		$pathWanted = @($prefix)
@@ -948,6 +1005,16 @@ function Invoke-PiredInstaller {
 		$piredNote = if ($reinstall) { "reinstall from $source" } else { "from $source" }
 		Write-PlanRow "+" "pired" (Get-Tilde $prefix) $piredNote
 
+		# The only row that writes outside this script's own prefix, so it says
+		# where - ~\.pi is pi's directory, and a plan that hid that would be hiding
+		# the one line someone might object to.
+		switch ($subagentsState) {
+			"missing" { Write-PlanRow "+" "subagents" (Get-Tilde $piHome) "$SubagentsPackage - delegation, loads in every pi" }
+			"present" { Write-PlanRow "." "subagents" (Get-Tilde $piHome) "already registered with pi" }
+			"declined" { Write-PlanRow "." "subagents" "" "skipped - PIRED_SKIP_SUBAGENTS=1" }
+			"nopi" { Write-PlanRow "." "subagents" "" "skipped - no pi to register it with" }
+		}
+
 		if ($pathNeeded.Count -gt 0) {
 			Write-PlanRow "+" "PATH" "your user environment" (($pathNeeded | ForEach-Object { Get-Tilde $_ }) -join "; ")
 		} else {
@@ -970,10 +1037,11 @@ function Invoke-PiredInstaller {
 			Write-Note "The PATH entry puts pired's Node.js ahead of $((Get-Command node).Source) in new shells."
 		}
 		# Spelled for PowerShell, which is the shell this script was started from.
+		$undoSubagents = if ($doSubagents) { "; pi remove $SubagentsPackage" } else { "" }
 		if ($ownsTree) {
-			Write-Note "Undo: Remove-Item -Recurse -Force $(Get-Tilde (Get-PiredHome)), ~\.pired"
+			Write-Note "Undo: Remove-Item -Recurse -Force $(Get-Tilde (Get-PiredHome)), ~\.pired$undoSubagents"
 		} else {
-			Write-Note "Undo: npm rm -g pired $PiPackage; Remove-Item -Recurse -Force ~\.pired"
+			Write-Note "Undo: npm rm -g pired $PiPackage; Remove-Item -Recurse -Force ~\.pired$undoSubagents"
 		}
 		Write-Say
 
@@ -1038,14 +1106,42 @@ function Invoke-PiredInstaller {
 		if ($installedPi) { $shims += "pi" }
 		Remove-BlockedShims -Prefix $prefix -Names $shims
 
-		# --- pi is left alone ---
-		# There is deliberately no `pi install` here. Registering the package
+		# --- pired is not registered ---
+		# There is deliberately no `pi install` for *pired* here. Registering it
 		# would put pired's extensions AND themes\ on pi's global resource path,
 		# so a bare `pi` would start with the security layer and - because pi
 		# persists a theme set through its extension API - would rewrite `theme`
 		# in ~\.pi\agent\settings.json on first run. `pi` stays the pi you
 		# installed. `pired` passes -e for its own run and writes nothing.
 		# See ADR-017.
+
+		# --- subagents ---
+		# pired ships no sub-agent machinery and depends on none; this is the
+		# package it cooperates with when it is there. Installed after pired and
+		# never before it, so the order of the plan is the order of the run.
+		#
+		# Non-fatal, and deliberately so: a third-party package that fails to
+		# resolve is not a reason to fail an install of pired, which works without
+		# it. The warning carries the one command that retries it.
+		if ($doSubagents) {
+			if (-not $pi) {
+				# Only reachable when the pi step was skipped between the plan and here.
+				Write-Note "subagents skipped - no pi to register it with"
+			} elseif (-not (Test-SubagentsRegistered $pi)) {
+				# Asked again rather than trusted from the survey, which had no pi to
+				# put the question to on a box with a ~\.pi but no pi on it - what
+				# `npm rm -g` then reinstalling leaves behind.
+				Write-Step "installing $SubagentsPackage"
+				# `pi install` exiting 0 is not the same as pi having recorded the
+				# package: the registration ADR-017 removed was guarded this way for
+				# that reason, and the guard is the part that was worth keeping.
+				$installed = (Invoke-Logged -Command $pi -Arguments @("install", $SubagentsPackage))
+				if (-not ($installed -and (Test-SubagentsRegistered $pi))) {
+					Write-Note "could not install $SubagentsPackage - pired works without it"
+					Write-Host "    retry: pi install $SubagentsPackage"
+				}
+			}
+		}
 
 		# --- PATH ---
 		# Covered by the one approval above, so this writes rather than asks.

@@ -306,11 +306,15 @@ FORMAT.md  PLAN.md
 
 ## Sub-agents
 
-pired ships **no** sub-agent machinery and takes **no** dependency on one. For delegated recon or adversarial confirmation, install [**pi-subagents**](https://github.com/nicobailon/pi-subagents) — pired cooperates with it when present and works fine without it.
+pired ships **no** sub-agent machinery and takes **no** dependency on one. For delegated recon or adversarial confirmation it cooperates with [**pi-subagents**](https://github.com/nicobailon/pi-subagents) when it is present, and works fine without it.
+
+The installers register it for you — it is a row in the plan, it is skipped when a subagents package is already registered, and `PIRED_SKIP_SUBAGENTS=1` declines it. On a box that was installed before, or by hand:
 
 ```bash
 pi install npm:pi-subagents
 ```
+
+Unlike pired itself, this one *is* registered with pi, so it loads in every `pi` run rather than only in `pired`. See [ADR-021](docs/decisions.md).
 
 ---
 

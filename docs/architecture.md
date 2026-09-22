@@ -70,7 +70,7 @@ The adapter is a good citizen in pi's extension chain:
 - **The prompt is appended**, never replaced. pi hands over its fully-assembled prompt — its own instructions, loaded skills, project context, plus whatever earlier extensions contributed — and pired adds its security overlay to the end. Neither pi's base nor another extension's contribution is clobbered.
 - **The status line carries other extensions' statuses** on a second line, exactly as pi's own footer does.
 - **Every UI call is guarded.** A missing or older pi API disables a feature; it never breaks the session.
-- **No sub-agent machinery**, and no dependency on any. pired cooperates with [pi-subagents](https://github.com/nicobailon/pi-subagents) when it is present and works fine without it.
+- **No sub-agent machinery**, and no dependency on any. pired cooperates with [pi-subagents](https://github.com/nicobailon/pi-subagents) when it is present and works fine without it. The installers register that package — the one thing they put on pi's global resource path, and the one the operator can decline with `PIRED_SKIP_SUBAGENTS=1` (ADR-021).
 
 ## Testing
 

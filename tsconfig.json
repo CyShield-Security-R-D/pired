@@ -20,6 +20,7 @@
     "core/**/*.ts",
     "bin/**/*.ts",
     "extensions/**/*.ts",
-    "eval/**/*.ts"
+    "eval/**/*.ts",
+    "install.test.ts"
   ]
 }
