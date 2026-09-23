@@ -1808,6 +1808,32 @@ the real ones are somewhat worse. A rejection therefore does not show that the c
 and an approval does not show that it is better. Both are screens on this corpus, and the retained
 findings still need reading before either is believed.
 
+
+### Amendment — a second approval path: finding more (2026-09-24, before any candidate run was graded)
+
+The operator's original rule had two halves: accept if the results are **better**, or at the same
+level with fewer tokens. The gate above implemented only the second. On 2026-09-24, with one baseline
+run graded and no candidate run graded, the operator stated the first half explicitly: "it's ok to
+spend more if we are going to find more." The live candidate sessions on GPT-6 Luna were delegating
+heavily (scout, investigate, then verify) and spending several times the baseline's tokens, so this
+path is the one the comparison could turn on, and it is fixed here before any candidate result.
+
+A model's grid now approves the candidate on **either** path, both requiring the complete official
+grid:
+
+1. **Similar quality, fewer tokens** — the gate above, unchanged.
+2. **Finds more** — candidate pass-mean pooled true positives at least **115%** of the baseline's
+   and strictly greater; grid-pooled precision at least 85% of the baseline's; no target wholly
+   below its baseline range; tokens not gated, and reported.
+
+ADR-025/027 delegation is accepted only if **both** models approve, each by either path; the
+summary names the path. Resampling the research's per-target runs (the same simulator) gives the
+second path, for both models together, a chance of firing on an identical candidate of 3.4%, and
+of catching a true +25% / +50% improvement of 58% / 95% (a 25% threshold would be 0.4% / 36% / 88%).
+
+The harness code is not changed while the grids run — a `--resume` after a provider-quota stop
+refuses when any pinned harness file differs — so the second path is applied to the finished
+grids' `runs.jsonl` afterwards, by the same `compareMatchedRuns` extended with this rule.
 ---
 
 ## ADR-027 — Delegation is pi-subagents' in-process children, not a native worker

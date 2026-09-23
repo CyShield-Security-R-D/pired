@@ -94,6 +94,14 @@ Other reading rules:
 - **Activity:** more records, hypotheses or worker calls are not quality.
 - **Findings:** read the retained findings before believing either outcome.
 
+### Second approval path (amendment, 2026-09-24, before any candidate run was graded)
+
+"It's ok to spend more if we are going to find more." A model's grid also approves the candidate
+when its pass-mean pooled true positives reach at least 115% of the baseline's (and exceed it),
+its grid-pooled precision stays at least 85% of the baseline's, and no target falls wholly below
+its baseline range — whatever the tokens, which are reported. Both models must approve, each by
+either path. See ADR-026's amendment for the error rates and why it is applied after the grids.
+
 ## Measurement
 
 The efficiency measure is Pi's provider-reported `totalTokens`, summed over parent responses,
