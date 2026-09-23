@@ -368,7 +368,7 @@ describe("terminal layout and navigation", () => {
 		ui.resize(38, 16);
 		await ui.fill("Base URL", "ftp://host");
 		await ui.key("\x13");
-		expect(ui.text()).toContain("HTTP or HTTPS");
+		expect(ui.text()).toContain("! Enter a valid HTTP or HTTPS");
 		expect(ui.text()).toContain("localhost:1234/v1");
 		expect(ui.render().length).toBeLessThanOrEqual(16);
 	});

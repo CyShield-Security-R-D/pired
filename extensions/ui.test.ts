@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ExtensionRunner, type Extension, type ExtensionContext, type ExtensionShortcut } from "@earendil-works/pi-coding-agent";
+import { ExtensionRunner, Theme, type ThemeColor, type Extension, type ExtensionContext, type ExtensionShortcut } from "@earendil-works/pi-coding-agent";
 import { matchesKey, setKittyProtocolActive, TuiMainScreen, type Component, type OverlayHandle, type OverlayOptions } from "@earendil-works/pi-tui";
 import piredExtension from "./pired.ts";
 
@@ -188,13 +188,39 @@ describe("panel lifecycle", () => {
 });
 
 describe("theme semantics", () => {
-	it("keeps ordinary actions and activity visually distinct from errors", () => {
-		const theme = JSON.parse(readFileSync(new URL("../themes/pired.json", import.meta.url), "utf8"));
-		const resolve = (role: string) => theme.vars[theme.colors[role]] ?? theme.colors[role];
-		for (const role of ["accent", "borderAccent", "mdLink", "mdCode", "thinkingHigh", "customMessageLabel"]) {
+	const palette = JSON.parse(readFileSync(new URL("../themes/pired.json", import.meta.url), "utf8"));
+	const resolve = (role: string): string => palette.vars[palette.colors[role]] ?? palette.colors[role];
+	const rgb = (hex: string): number[] => [1, 3, 5].map((offset) => Number.parseInt(hex.slice(offset, offset + 2), 16));
+
+	it("keeps pired visibly red without using the error shade for ordinary activity", () => {
+		for (const role of ["accent", "borderAccent", "mdLink", "mdCode", "syntaxKeyword", "thinkingHigh"]) {
+			const [r, g, b] = rgb(resolve(role)) as [number, number, number];
+			expect(r, role).toBeGreaterThan(Math.max(g, b) + 45);
 			expect(resolve(role), role).not.toBe(resolve("error"));
 		}
+		expect(resolve("customMessageLabel")).not.toBe(resolve("error"));
 		expect(resolve("error")).toBe(resolve("toolDiffRemoved"));
+	});
+
+	it.each(["truecolor", "256color"] as const)("keeps normal and error ink distinct after %s terminal conversion", (mode) => {
+		const colors = Object.fromEntries(Object.keys(palette.colors).map((role) => [role, resolve(role)]));
+		const theme = new Theme(colors as ConstructorParameters<typeof Theme>[0], colors as ConstructorParameters<typeof Theme>[1], mode);
+		for (const role of ["accent", "borderAccent", "muted", "thinkingHigh"] as ThemeColor[]) {
+			expect(theme.fg(role, "sample"), role).not.toBe(theme.fg("error", "sample"));
+		}
+		expect(theme.bg("selectedBg", "sample")).not.toBe(theme.bg("toolErrorBg", "sample"));
+	});
+
+	it("keeps field text and muted labels readable on dark and selected backgrounds", () => {
+		const luminance = (hex: string): number => rgb(hex).map((n) => n / 255)
+			.map((n) => n <= 0.04045 ? n / 12.92 : ((n + 0.055) / 1.055) ** 2.4)
+			.reduce((sum, n, i) => sum + n * [0.2126, 0.7152, 0.0722][i]!, 0);
+		for (const background of [palette.export.pageBg, resolve("toolPendingBg"), resolve("selectedBg")]) {
+			for (const role of ["text", "muted", "accent", "error"]) {
+				const contrast = (luminance(resolve(role)) + 0.05) / (luminance(background) + 0.05);
+				expect(contrast, `${role} on ${background}`).toBeGreaterThanOrEqual(4.5);
+			}
+		}
 	});
 });
 

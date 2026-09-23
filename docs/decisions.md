@@ -1657,3 +1657,28 @@ for explicit approval decisions. Pure renderer tests cover row budgets, long
 evidence paths, preserving selection, and narrow exit hints. A native Windows
 machine was not available; the Windows key sequences are exercised through the
 installed key parser and extension registry.
+
+
+## ADR-024 — Red is the identity; error state needs more than color
+
+**Status:** accepted · 2026-09-23 · supersedes ADR-023’s blue palette only
+
+### Context
+
+Making all normal accents blue separated activity from failure but lost pired’s
+identity as the red version of pi. A red brand does not require red form fields
+or borders, and color alone cannot tell an operator whether an action failed.
+
+### Decision
+
+Use muted red for activity, links and active accents, brighter soft red for
+thinking levels, and warm charcoal for selections. The wordmark keeps its bright
+red. Failures and destructive actions retain saturated error red. Provider forms
+keep neutral labels and borders; error and warning feedback starts with `!` and
+states the problem or corrective action. Selection keeps its cursor marker.
+
+Theme regressions check red hue, distinct activity/error output through pi’s
+truecolor and 256-color conversion, and text contrast on the shipped dark and
+selected backgrounds. Provider tests check neutral forms and corrective error
+messages without relying on color. ADR-023’s keyboard, focus, navigation and
+explicit-decision behavior remains in place.

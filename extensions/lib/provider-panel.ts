@@ -423,7 +423,10 @@ export class ProviderPanel {
 	render(width: number): string[] {
 		const rows = this.rows();
 		const inner = Math.max(1, width - 4);
-		const feedback = plain(this.message) || (this.screen === "form" ? "Token is hidden · leave blank for a local server" : "");
+		const message = plain(this.message);
+		// Red is also the brand color; a failure must remain clear without color.
+		const marker = message && (this.tone === "error" || this.tone === "warning") ? "! " : "";
+		const feedback = message ? marker + message : (this.screen === "form" ? "Token is hidden · leave blank for a local server" : "");
 		const feedbackRows = wrapTextWithAnsi(feedback, inner).slice(0, Math.max(1, this.height() - 9));
 		this.pageSize = Math.max(1, this.height() - 5 - feedbackRows.length);
 		this.scroll = Math.max(0, Math.min(this.scroll, rows.length - this.pageSize));

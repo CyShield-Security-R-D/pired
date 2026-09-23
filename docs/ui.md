@@ -192,7 +192,7 @@ Both halves matter. A call that is silently blocked is indistinguishable from th
 
 ## Working indicator, thinking, and window title
 
-- **Spinner** — a subdued blue braille cycle (`⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`) at 80 ms, inked in the theme accent and re-inked on theme change.
+- **Spinner** — a muted red braille cycle (`⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`) at 80 ms, inked in the theme accent and re-inked on theme change.
 - **Thinking** — hidden reasoning is labelled `thinking`. Depth is pi's, set with `--thinking` (the `pired` launcher defaults to `high`).
 - **Window title** — set to `pired · <engagement>`, so a tab or a tmux window is identifiable when several engagements are open.
 

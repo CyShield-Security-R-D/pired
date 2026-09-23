@@ -1,6 +1,6 @@
 # Theme
 
-pired ships one theme, called `pired`. It is a dark theme with subdued blue controls and activity indicators. Red marks errors, critical findings and the wordmark; ordinary prompts no longer look like failures.
+pired ships one theme, called `pired`. It is the red version of pi: a dark theme with a bright red wordmark, muted red accents and warm charcoal selections. Provider forms keep neutral text and borders; failures use a more saturated red with explicit wording and a `!` marker in form feedback.
 
 ```bash
 pired              # loads the theme
@@ -13,18 +13,18 @@ The theme is a normal pi theme file (`themes/pired.json`) against pi's theme sch
 
 | Var | Hex | Used for |
 |---|---|---|
-| `blue` | `#88c0d0` | accent, active borders, links, inline code, spinner |
-| `blueBright` | `#b4dbe5` | higher thinking levels |
+| `redDim` | `#dd8585` | accent, active borders, links, inline code, spinner |
+| `redBright` | `#efb3b3` | higher thinking levels |
 | `red` | `#ff5f5f` | errors, removed diff lines, the `red` half of the wordmark |
 | `text` | `#dcdcdc` | body text |
-| `gray` | `#98a2ad` | muted, thinking text, tool output |
-| `dimGray` | `#80868f` | secondary labels and structural chrome |
-| `darkGray` | `#46505d` | borders and rules |
-| `selectedBg` | `#303843` | selected rows and search matches |
+| `gray` | `#a6a0a0` | muted, thinking text, tool output |
+| `dimGray` | `#938b8b` | secondary labels and structural chrome |
+| `darkGray` | `#50464a` | borders and rules |
+| `selectedBg` | `#362a2d` | selected rows and search matches |
 | `green` | `#a3be8c` | success, refuted hypotheses, diff added |
 | `yellow` | `#e5c07b` | warning, medium severity, numbers |
 
-The wordmark remains `pi` (dim) + `red` (red). Normal interaction uses blue independently of the brand, while muted labels have enough contrast to remain readable on the dark background.
+The wordmark remains `pi` (dim) + `red` (red). Normal activity uses a quieter shade of red, while fields, instructions and form borders use warm neutrals. Selected rows use both a cursor marker and a background highlight.
 
 ## How colour is used
 
@@ -38,7 +38,7 @@ Use separate roles for normal interaction, severity and outcome. Structural elem
 | `accent` | active controls, the engagement, an armed gate, the coverage bar, the spinner |
 | `dim` | every rule, border, label, and separator in the interface |
 
-Normal activity is visually distinct from warnings and failures. Labels and glyphs also carry state, so color is never the only signal.
+Brand and error colors belong to the same red family but differ in saturation. Clear labels and glyphs carry the meaning: a spinner indicates activity, `!` introduces form errors or warnings, and destructive actions say Delete. Red alone never means a form has failed.
 
 ## Using your own theme
 
