@@ -7,6 +7,7 @@ import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { guardedOpenAICompletions } from "./context-guard.ts";
 
 /** pi's own provider-config shape, taken from the API rather than restated. */
 export type PiProviderConfig = Parameters<ExtensionAPI["registerProvider"]>[1];
@@ -41,6 +42,8 @@ export interface LocalProviderConfig {
 	apiKey?: string;
 	api?: string;
 	compat?: ProviderCompat;
+	/** Guard OpenAI-compatible requests before sending; enabled unless explicitly false. */
+	contextGuard?: boolean;
 	models: (LocalModelDef & { compat?: ProviderCompat })[];
 }
 
@@ -79,6 +82,8 @@ export function toPiProvider(cfg: LocalProviderConfig): PiProviderConfig {
 		baseUrl: cfg.baseUrl,
 		apiKey: cfg.apiKey ?? "local",
 		api: cfg.api ?? "openai-completions",
+		...((cfg.api ?? "openai-completions") === "openai-completions" && cfg.contextGuard !== false
+			? { streamSimple: guardedOpenAICompletions } : {}),
 		// Pass compat through at both levels. It is optional in the config and
 		// absent for most providers, but for a reasoning model it is the
 		// difference between working and silently producing nothing.

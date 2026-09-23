@@ -133,6 +133,7 @@ or start `pired` and pick from `/model`.
 | `apiKey` | `"local"` | Sent as the bearer token. `$VAR` / `${VAR}` is read from the environment instead of stored. |
 | `api` | `openai-completions` | pi's API adapter. |
 | `compat` | — | Compatibility switches; see below. |
+| `contextGuard` | `true` | Reserve output and safety headroom for `openai-completions` requests while pired is loaded. |
 | `models[]` | required | The models this provider serves. |
 
 ### Model fields
@@ -150,6 +151,47 @@ or start `pired` and pick from `/model`.
 A malformed or missing file is silently ignored — pired simply contributes no providers.
 
 The file holds tokens, so pired writes it `0600` and repairs the mode of a file that was created world-readable before. Keeping a key out of it entirely is what `$ENV_VAR` is for.
+
+## Context headroom and gateway errors
+
+A model's context window includes **input plus output**, not just conversation
+history. With `contextWindow: 262144` and `maxTokens: 32768`, at most 229,376
+tokens remain for input before allowing for any safety margin.
+
+For providers registered from `~/.pired/models.json` using
+`openai-completions`, pired checks each request before HTTP. It budgets the
+requested output plus a safety margin of `min(16384, contextWindow / 16)`
+(rounded down, at least one token). With the limits above, pired asks pi to
+compact at approximately **212,992 input tokens**, including new tool results.
+It leaves the advertised window and your global pi settings unchanged.
+
+The guard emits a local `context_length_exceeded` error that pi recognizes.
+With auto-compaction enabled, pi owns the summary and bounded retry; with it
+disabled, the error suggests `/compact`. It never silently drops messages.
+A very large single prompt or a summary that itself cannot fit may still need
+a smaller input or output limit. Token counts are estimates, not the server's
+tokenizer, so this is headroom rather than a guarantee against every overflow.
+
+Set `"contextGuard": false` on the provider in `~/.pired/models.json` to
+opt out, then reload/restart pi. The guard works in both `pired` and plain
+`pi` **when a pired extension is loaded**. The JSON mirror cannot carry a
+runtime guard: extension-less child processes retain pi's own budgeting.
+Other API adapters are unchanged.
+
+### SGLang behind Bifrost
+
+Bifrost can hide SGLang's detailed overflow error behind
+`provider api error (status 400)`; see
+[Bifrost #3131](https://github.com/maximhq/bifrost/issues/3131).
+The local guard avoids sending requests already known to exceed its budget; it
+does not label arbitrary gateway 400s as context overflow.
+
+The gateway-side correction is to preserve SGLang's upstream message and map
+genuine context overflows to `context_length_exceeded`. That lets pi recognize
+the error and recover. It does not increase the model's context window.
+For diagnosis, inspect the SGLang response directly or use Bifrost's
+[Include Raw Response option](https://github.com/maximhq/bifrost/blob/main/docs/quickstart/gateway/provider-configuration.mdx).
+Do not share raw requests or credentials when reporting the error.
 
 ## `compat`, and the failure it prevents
 

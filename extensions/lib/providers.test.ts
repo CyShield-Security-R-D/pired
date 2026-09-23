@@ -143,6 +143,26 @@ describe("removeProviderFromPi", () => {
 });
 
 describe("toPiProvider", () => {
+	it("guards OpenAI-compatible providers without altering their advertised model limits", () => {
+		const cfg = provider({ models: [{ id: "qwen", contextWindow: 262144, maxTokens: 32768 }] });
+		const registered = toPiProvider(cfg);
+		expect(registered.streamSimple).toBeTypeOf("function");
+		expect(registered.models?.[0]).toMatchObject({ contextWindow: 262144, maxTokens: 32768 });
+		expect(toPiProvider({ ...cfg, contextGuard: false }).streamSimple).toBeUndefined();
+		expect(toPiProvider({ ...cfg, api: "anthropic-messages" }).streamSimple).toBeUndefined();
+		expect(toPiProvider({ ...cfg, api: "openai-responses" }).streamSimple).toBeUndefined();
+	});
+
+	it("does not serialize runtime guards or alter limits in the plain-pi model mirror", () => {
+		const path = join(workspace(), "models.json");
+		const cfg = provider({ models: [{ id: "qwen", contextWindow: 262144, maxTokens: 32768 }] });
+		mirrorProvidersToPi([cfg], path);
+		const mirrored = JSON.parse(readFileSync(path, "utf8")).providers.lmstudio;
+		expect(mirrored.streamSimple).toBeUndefined();
+		expect(mirrored.contextGuard).toBeUndefined();
+		expect(mirrored.models[0]).toMatchObject({ contextWindow: 262144, maxTokens: 32768 });
+	});
+
 	it("fills the defaults pi needs and carries compat down to the model", () => {
 		const cfg = toPiProvider({
 			id: "lmstudio", baseUrl: "http://localhost:1234/v1",
