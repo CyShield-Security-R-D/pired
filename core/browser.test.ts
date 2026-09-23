@@ -678,3 +678,71 @@ describe("a claim asked of many targets, in the list", () => {
 	});
 });
 
+
+describe("keeping the operator's place", () => {
+	it("returns from a detail to the same selected and scrolled row", () => {
+		const list = { ...initialState("findings"), cursor: 2, scroll: 1 };
+		const detail = reduceBrowser(list, "in", model, 2) as BrowserState;
+		expect(reduceBrowser(detail, "out", model, 2)).toEqual(list);
+	});
+
+	it("supports Shift+Tab to reverse the view cycle", () => {
+		expect((reduceBrowser(initialState("surface"), "switchBack", model, 5) as BrowserState).view).toBe("coverage");
+		expect((reduceBrowser(initialState("coverage"), "switchBack", model, 5) as BrowserState).view).toBe("blockers");
+	});
+
+	it("keeps the same finding selected when a refresh inserts a row above it", async () => {
+		const { reconcileBrowserState } = await import("./browser.ts");
+		const before = { ...initialState("findings"), cursor: 1 };
+		const after = { ...model, findings: [{ ...model.findings[0]!, id: "new" }, ...model.findings] };
+		const next = reconcileBrowserState(before, model, after, 2);
+		expect(after.findings[next.cursor]?.id).toBe(model.findings[1]?.id);
+		expect(next.scroll).toBe(1);
+	});
+
+	it("returns to the list if the finding being read disappears on refresh", async () => {
+		const { reconcileBrowserState } = await import("./browser.ts");
+		const detail = reduceBrowser(initialState("findings"), "in", model, 4) as BrowserState;
+		const after = { ...model, findings: model.findings.slice(1) };
+		expect(reconcileBrowserState(detail, model, after, 4).view).toBe("findings");
+	});
+
+	it("never scrolls the selected surface row into the space used by the glyph legend", async () => {
+		const { browserBodyRows } = await import("./layout.ts");
+		const many = { ...model, surface: Array.from({ length: 30 }, (_, i) => ({ ...model.surface[0]!, id: `e${i}`, label: `endpoint-${i}` })) };
+		const viewport = browserBodyRows("surface", 14);
+		let state = initialState("surface");
+		for (let i = 0; i < 20; i++) {
+			state = reduceBrowser(state, "down", many, viewport) as BrowserState;
+			const lines = renderBrowser({ ...opts(state, 80, viewport), model: many, maxLines: 14 });
+			expect(lines.some((line) => line.includes("▸") && line.includes(`endpoint-${state.cursor}`))).toBe(true);
+			expect(lines.length).toBeLessThanOrEqual(14);
+		}
+	});
+
+	it("keeps the exit visible in narrow browser views", () => {
+		for (const view of ["coverage", "surface", "findings", "hypotheses", "blockers"] as const) {
+			expect(renderBrowser(opts(initialState(view), 40)).join("\n")).toContain("Esc close");
+		}
+	});
+});
+
+
+describe("refresh and compact navigation edges", () => {
+	it("keeps the nearest remaining row when the last detail disappears from a reordered list", async () => {
+		const { reconcileBrowserState } = await import("./browser.ts");
+		const list = { ...initialState("findings"), cursor: model.findings.length - 1 };
+		const detail = reduceBrowser(list, "in", model, 4) as BrowserState;
+		const after = { ...model, findings: model.findings.slice(0, -1).reverse() };
+		const next = reconcileBrowserState(detail, model, after, 4);
+		expect(next.view).toBe("findings");
+		expect(next.cursor).toBe(after.findings.length - 1);
+	});
+
+	it("calls Escape back rather than close when a narrow view has a parent", () => {
+		for (const view of ["coverage", "surface"] as const) {
+			const detail = reduceBrowser(initialState(view), "in", model, 4) as BrowserState;
+			expect(renderBrowser(opts(detail, 40)).join("\n")).toContain("Esc back");
+		}
+	});
+});

@@ -28,7 +28,7 @@
 import type { BlockerRecord } from "./ontology.ts";
 
 /** Which pi dialog a blocker calls for. */
-export type DialogShape = "confirm" | "select" | "input";
+export type DialogShape = "select" | "input";
 
 /** The terminal the dialog will be drawn in. */
 export interface DialogViewport {
@@ -43,13 +43,9 @@ export interface BlockerDialog {
 	 * question for every shape — `select` and `input` show nothing else.
 	 */
 	title: string;
-	/**
-	 * Second argument for `confirm`, which is the one shape that renders two
-	 * strings. Empty otherwise: the prose is already in `title`, and passing it
-	 * twice would print the question twice.
-	 */
+	/** Retained for adapters; empty because all visible prose is in title. */
 	detail: string;
-	/** Choices for `select`, with the escape hatch appended. */
+	/** Choices for `select`; approval puts its non-deciding escape hatch first. */
 	options?: string[];
 	/** Passed to `input`. pi's TUI component ignores it; other modes do not. */
 	placeholder?: string;
@@ -57,6 +53,8 @@ export interface BlockerDialog {
 
 /** The `select` choice that leaves a blocker open. Answering is never forced. */
 export const SKIP_OPTION = "skip for now";
+export const APPROVE_OPTION = "Approve";
+export const DENY_OPTION = "Deny";
 
 /** What is assumed when nobody knows the terminal size. 80x24 is the floor. */
 const DEFAULT_VIEWPORT: DialogViewport = { columns: 80, rows: 24 };
@@ -223,8 +221,8 @@ function proseBudget(rows: number, chrome: number, widget: number): number {
 /**
  * Build the dialog for one blocker, sized for the terminal it will be shown in.
  *
- * `approval` is a yes/no gate — the destructive-action case, where the wrong
- * default is the expensive one, so nothing is pre-selected. Anything carrying
+ * Approvals have explicit Approve/Deny choices and a non-deciding default.
+ * Escape and skip must never be recorded as denial. Anything carrying
  * enumerated options is a picker. Everything else is free text.
  */
 export function blockerDialog(b: BlockerRecord, viewport?: Partial<DialogViewport>): BlockerDialog {
@@ -233,13 +231,11 @@ export function blockerDialog(b: BlockerRecord, viewport?: Partial<DialogViewpor
 	const width = columns - TEXT_PADDING;
 
 	if (b.type === "approval") {
-		// confirm() is the two-string dialog, and pi joins them with a single
-		// newline before handing the pair to the same selector. So the heading is
-		// the title, the body is the message, and the budget is the selector's
-		// less the row the heading occupies — Yes/No being the widget.
-		const budget = proseBudget(rows, SELECT_FRAME + rowsFor(SELECT_HINT, width), 2);
-		const heading = blockerHeading(b);
-		return { shape: "confirm", title: heading, detail: bodyFor(b, width, budget - rowsFor(heading, width)) };
+		// confirm() returns false for both Escape and No. Only explicit choices
+		// may become a recorded decision; Enter on the default leaves it open.
+		const options = [SKIP_OPTION, APPROVE_OPTION, DENY_OPTION];
+		const budget = proseBudget(rows, SELECT_FRAME + rowsFor(SELECT_HINT, width), options.length);
+		return { shape: "select", title: proseFor(b, width, budget), detail: "", options };
 	}
 
 	if (b.options && b.options.length > 0) {

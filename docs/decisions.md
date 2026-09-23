@@ -1599,3 +1599,61 @@ change the theme's accent for the rest of pired.
 Tests drive the component with real terminal input sequences and exercise the
 command through real temporary files, including create/edit/delete, model
 registration and mirroring. Layout checks cover short and narrow terminals.
+
+
+## ADR-023 — UI controls preserve focus, position, and explicit decisions
+
+**Status:** accepted · 2026-09-23 · updates ADR-022’s theme scope
+
+### Context
+
+Alt+P was reported cycling models in Windows Terminal / PowerShell. pi rejects
+extension shortcuts that collide with reserved model actions; the conflict is
+reproducible with its real shortcut registry. The panel also depended on an
+overlay completion callback that pops the top overlay, even when a newer dialog
+has opened above the panel. Calling it after hiding the panel could dismiss an
+unrelated form.
+
+The browser spent a glyph-legend row that navigation had counted as content,
+reset selection when returning from detail, and reset it again on refresh. Long
+finding details in the rail were truncated rather than scrollable. Approval
+cancellation had a data consequence: pi’s boolean confirm API returns false for
+both Escape and denial, so cancelling recorded a decision the operator had not
+made. Automatically opening those prompts also blocked awaited tool events and
+competed with active forms.
+
+### Decision
+
+- F6 toggles the panel and F7 expands/restores it. Alt+P/Alt+M remain aliases;
+  host model controls keep their bindings. The focused rail handles its own
+  controls, and commands remain available when a terminal intercepts a key.
+- The persistent rail closes by its own overlay handle. It does not invoke pi’s
+  stack-pop completion callback after hiding. Pending opens carry a generation
+  guard, including the disk refresh before opening. Panel commands refresh both
+  counts and rows after external ledger edits. Overlay failures fall back to a
+  footer view. Session changes reset
+  the old rail and keyboard capture.
+- Navigation and rendering share the browser’s content budget. Detail views
+  retain their parent position; refresh follows record identity through sorting.
+  Finding details wrap long paths and scroll with the frame and controls visible.
+- Background questions produce one notification per session and remain in
+  `/blockers`. Answering is an explicit action. Approvals offer Skip, Approve,
+  and Deny, with Skip first; only explicit Approve/Deny choices settle them.
+- Ordinary controls, links and activity use subdued blue. Error red remains
+  reserved for error/severity roles and the brand mark. Neutral labels and
+  selection backgrounds have more contrast.
+
+### Consequences and validation
+
+The rail’s custom promise is fire-and-forget: releasing its own handle and local
+callbacks lets it be collected without popping another extension’s overlay.
+This follows the installed host’s lifecycle behavior rather than assuming its
+completion callback targets an identity.
+
+Regression tests exercise pi’s actual shortcut registry and overlay stack,
+Windows Terminal F6/F7 sequences, rapid toggles, session resets, asynchronous
+failure, focused-panel input, background notifications, and real ledger writes
+for explicit approval decisions. Pure renderer tests cover row budgets, long
+evidence paths, preserving selection, and narrow exit hints. A native Windows
+machine was not available; the Windows key sequences are exercised through the
+installed key parser and extension registry.

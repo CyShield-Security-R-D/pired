@@ -28,7 +28,7 @@ pired ⦿ acme-webapp · C1 H2 M3 · cov 62% · blockers 1 · ⛨ pentest·enfor
 
 | Segment | Meaning |
 |---|---|
-| `pired` | The wordmark: `pi` dim + `red` in the theme accent. Never dropped. |
+| `pired` | The wordmark: `pi` dim + `red` in the theme’s red role. Never dropped. |
 | `⦿ acme-webapp` | The engagement name. The last thing to be dropped. |
 | `C1 H2 M3` | Findings by severity — critical, high, medium, low, info — each in its own colour. Falls back to `⚑3` when narrow, and `⚑ 0` when there are none. |
 | `cov 62%` | Coverage of the applicable matrix. See [Coverage](coverage.md). |
@@ -65,7 +65,7 @@ Other extensions' statuses are not swallowed: they are carried on a second line,
 
 ## The engagement panel
 
-**Shown by default.** A side rail with the whole ledger: coverage, scope, surface, hypotheses, findings, and anything blocked. State you have to summon is state you check less often than you should, so it is up from the first frame. `/panel` toggles it, `alt+p` does the same without leaving the editor, and `pired --no-panel` starts without it.
+**Shown by default.** A side rail with the whole ledger: coverage, scope, surface, hypotheses, findings, and anything blocked. State you have to summon is state you check less often than you should, so it is up from the first frame. `/panel` toggles it, `F6` does the same without leaving the editor, and `pired --no-panel` starts without it.
 
 ```
 ╭─ ⦿ acme-webapp ──────────────────────────────────────╮
@@ -99,7 +99,7 @@ Other extensions' statuses are not swallowed: they are carried on a second line,
 │  ▸ IDOR on /api/accounts/{id}                        │
 │                                                      │
 │  12 evidence files                                   │
-│                                        alt+p to hide │
+│                                  F7 expand · F6 hide │
 ╰──────────────────────────────────────────────────────╯
 ```
 
@@ -109,7 +109,7 @@ The `!` line above the severity tally counts confirmed claims no finding has bee
 
 It is anchored top-right and capped at half the screen height, so it covers older, already-read transcript rather than the live region you are actually reading. It never takes the keyboard.
 
-The dim hint on the last row is reserved before the sections are laid out, so it survives even when the panel is full — the moment you most want to dismiss a panel is the moment it is most in the way. It is also **platform-aware**: `alt+p to hide` where the terminal sends Meta, and `/panel to hide` on macOS, where Option+P types `π` instead unless the profile is configured otherwise. A panel shown without being asked for must name an exit that works on the machine reading it. See [On macOS, `alt+p` may not reach pired](commands.md#on-macos-altp-may-not-reach-pired).
+The dim hint on the last row is reserved before the sections are laid out, so it survives even when the panel is full — the moment you most want to dismiss a panel is the moment it is most in the way. It is also **platform-aware**: `F7 expand · F6 hide` on Windows/Linux, and `/maximize` / `/panel` on macOS, where Option+P types `π` unless configured otherwise. A panel shown without being asked for must name an exit that works on the machine reading it. See [On macOS, `alt+p` may not reach pired](commands.md#on-macos-altp-may-not-reach-pired).
 
 Full reference, including the other two placements and rendering it outside the TUI: **[The engagement panel](panel.md)**.
 
@@ -168,11 +168,11 @@ Everything else `record` writes falls back to the tool's own dim summary. If the
 
 The harness is built never to stall: when the agent needs an operator decision it parks a `blocker` and routes around it via `recall next`. That only works if the blocker reaches a human — otherwise *"never stall"* quietly becomes *"never finish"*.
 
-So the moment a blocker is recorded, pired asks. The dialog is chosen from the blocker's shape:
+New blockers produce a notification once per session and appear in the panel. They do not interrupt an active form or block the agent on an unanswered modal. Open `/blockers` and press `a` to answer; the dialog is chosen from the blocker’s shape:
 
 | Blocker | Dialog |
 |---|---|
-| `blockerType: "approval"` | A yes/no confirm. Nothing is pre-selected: this is the destructive-action case, where the wrong default is the expensive one. |
+| `blockerType: "approval"` | Explicit `skip for now`, `Approve`, `Deny` choices. Skip is selected first; Escape leaves the blocker open. |
 | Has `options: [...]` | A select, with `skip for now` appended. |
 | Anything else | A free-text input. `credential-request` is prompted as a value stored in the workspace. |
 
@@ -192,7 +192,7 @@ Both halves matter. A call that is silently blocked is indistinguishable from th
 
 ## Working indicator, thinking, and window title
 
-- **Spinner** — a red braille cycle (`⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`) at 80 ms, inked in the theme accent and re-inked on theme change.
+- **Spinner** — a subdued blue braille cycle (`⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`) at 80 ms, inked in the theme accent and re-inked on theme change.
 - **Thinking** — hidden reasoning is labelled `thinking`. Depth is pi's, set with `--thinking` (the `pired` launcher defaults to `high`).
 - **Window title** — set to `pired · <engagement>`, so a tab or a tmux window is identifiable when several engagements are open.
 
@@ -288,12 +288,15 @@ This replaced a forced march through those dialogs, one per open blocker. A moda
 | `g` `G` / `Home` `End` | first, last |
 | `⏎` `→` `l` | drill in |
 | `Esc` `←` `h` | back, and out of the browser at the top level |
-| `Tab` | cycle coverage → surface → hypotheses → findings → blockers, keeping the filter |
+| `Tab` / `Shift+Tab` | cycle views forward / backward, keeping the filter |
+| `R` | refresh from disk, keeping the selected record |
 | `a` `c` `r` `u` `o` | filter all / confirmed / refuted / unwritten / open (hypotheses) |
 | `a` `x` `f` | answer, dismiss, waiting/all (blockers) |
 | `q` | close |
 
-Outside the TUI — `--print`, RPC, JSON — both commands report the tallies as a notification instead, so a headless run is told what it would have seen.
+Escape returns to the same list position. The row budget includes the glyph legend, so the selected row remains visible even in short terminals. Narrow views keep the exit hint first.
+
+Outside the TUI — `--print`, RPC, JSON — the browser commands report the tallies as a notification instead, so a headless run is told what it would have seen.
 
 ## Filling the terminal
 
@@ -331,7 +334,7 @@ A session opens with the wordmark, the engagement it is about to work on, and th
 
 That row is not free. The welcome entry draws the matrix only when the rows left under the banner can hold it, so the banner's height *is* the matrix's budget — and on a 120-column terminal the extra rows were the difference between the matrix and five blank lines. See [ADR-019](decisions.md#adr-019--the-banner-does-not-repeat-what-the-rail-is-already-saying).
 
-Three rows of half blocks, not six of full ones. Block capitals are 34 columns wide and the space beside the panel is 27, so a full-height font could not sit next to the rail at all — and it reads as retro besides. The two tones are not decoration: the name is literally "pi" + "red", so the accent lands on the second half and the wordmark explains itself. The tagline is set against the art's **baseline** rather than its top, where it reads as a lockup instead of two unrelated things sharing a line.
+Three rows of half blocks, not six of full ones. Block capitals are 34 columns wide and the space beside the panel is 27, so a full-height font could not sit next to the rail at all — and it reads as retro besides. The two tones are not decoration: the name is literally "pi" + "red", so red lands on the second half and the wordmark explains itself. The tagline is set against the art's **baseline** rather than its top, where it reads as a lockup instead of two unrelated things sharing a line.
 
 ### Sharing the terminal with the panel
 

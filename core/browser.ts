@@ -30,6 +30,7 @@ import { elementLabel, recordLabel } from "./target.ts";
 import { unwrittenHypotheses } from "./stats.ts";
 import type { Tone } from "./coverage-panel.ts";
 import { frameLines, RULE } from "./frame.ts";
+import { browserBodyRows } from "./layout.ts";
 import type {
 	BlockerRecord,
 	BlockerStatus,
@@ -65,7 +66,7 @@ export type HypothesisFilter = "all" | "confirmed" | "refuted" | "open" | "unwri
 
 export type BrowserKey =
 	| "up" | "down" | "pageUp" | "pageDown" | "top" | "bottom"
-	| "in" | "out" | "close" | "switch" | "refresh"
+	| "in" | "out" | "close" | "switch" | "switchBack" | "refresh"
 	| "filter:all" | "filter:confirmed" | "filter:refuted" | "filter:open" | "filter:unwritten"
 	// Blockers only. Two of these write to the ledger, which core does not do, so
 	// the adapter carries them out; they are named here anyway to keep one key
@@ -145,6 +146,8 @@ export interface BrowserModel {
 }
 
 export interface BrowserState {
+	/** Where Escape returns, including the list selection and scroll. */
+	parent?: BrowserState;
 	view: BrowserView;
 	cursor: number;
 	scroll: number;
@@ -499,6 +502,7 @@ export function reduceBrowser(state: BrowserState, key: BrowserKey, model: Brows
 			return state.view === "blockers"
 				? { ...state, filter: state.filter === "open" ? "all" : "open", cursor: 0, scroll: 0 }
 				: state;
+		case "switchBack":
 		case "switch": {
 			const order: BrowserView[] = ["coverage", "surface", "hypotheses", "findings", "blockers"];
 			const here = order.indexOf(
@@ -508,7 +512,7 @@ export function reduceBrowser(state: BrowserState, key: BrowserKey, model: Brows
 							: state.view === "finding" ? "findings"
 								: state.view === "blocker" ? "blockers"
 									: state.view);
-			const next = order[(Math.max(0, here) + 1) % order.length] as BrowserView;
+			const next = order[(Math.max(0, here) + (key === "switchBack" ? order.length - 1 : 1)) % order.length] as BrowserView;
 			return { ...initialState(next), filter: state.filter };
 		}
 		case "filter:all": return { ...state, filter: "all", cursor: 0, scroll: 0 };
@@ -517,6 +521,7 @@ export function reduceBrowser(state: BrowserState, key: BrowserKey, model: Brows
 		case "filter:open": return { ...state, filter: "open", cursor: 0, scroll: 0 };
 		case "filter:unwritten": return { ...state, filter: "unwritten", cursor: 0, scroll: 0 };
 		case "out": {
+			if (state.parent) return state.parent;
 			if (state.view === "finding") return { ...state, view: "findings", findingId: undefined, cursor: 0, scroll: 0 };
 			if (state.view === "blocker") return { ...state, view: "blockers", blockerId: undefined, cursor: 0, scroll: 0 };
 			if (state.view === "hypothesis") {
@@ -530,30 +535,30 @@ export function reduceBrowser(state: BrowserState, key: BrowserKey, model: Brows
 		case "in": {
 			if (state.view === "surface") {
 				const row = model.surface[state.cursor];
-				return row ? { ...state, view: "element", elementId: row.id, cursor: 0, scroll: 0 } : state;
+				return row ? { ...state, parent: state, view: "element", elementId: row.id, cursor: 0, scroll: 0 } : state;
 			}
 			if (state.view === "findings") {
 				const row = model.findings[state.cursor];
-				return row ? { ...state, view: "finding", findingId: row.id, cursor: 0, scroll: 0 } : state;
+				return row ? { ...state, parent: state, view: "finding", findingId: row.id, cursor: 0, scroll: 0 } : state;
 			}
 			if (state.view === "blockers") {
 				const row = visibleBlockers(model, state)[state.cursor];
-				return row ? { ...state, view: "blocker", blockerId: row.id, cursor: 0, scroll: 0 } : state;
+				return row ? { ...state, parent: state, view: "blocker", blockerId: row.id, cursor: 0, scroll: 0 } : state;
 			}
 			if (state.view === "hypotheses") {
 				const row = visibleHypotheses(model, state)[state.cursor];
-				return row ? { ...state, view: "hypothesis", hypothesisId: row.id, cursor: 0, scroll: 0 } : state;
+				return row ? { ...state, parent: state, view: "hypothesis", hypothesisId: row.id, cursor: 0, scroll: 0 } : state;
 			}
 			if (state.view === "coverage") {
 				const cls = model.classes[state.cursor];
-				return cls ? { ...state, view: "class", classId: cls.id, cursor: 0, scroll: 0 } : state;
+				return cls ? { ...state, parent: state, view: "class", classId: cls.id, cursor: 0, scroll: 0 } : state;
 			}
 			if (state.view === "class") {
 				// Into the hypothesis that settled this cell. A cell with none is the
 				// gap the matrix exists to show, so it stays put.
 				const el = model.surface[state.cursor];
 				const hyp = el && model.hypotheses.find((h) => h.targetId === el.id && h.class === state.classId);
-				return hyp ? { ...state, view: "hypothesis", hypothesisId: hyp.id, cursor: 0, scroll: 0 } : state;
+				return hyp ? { ...state, parent: state, view: "hypothesis", hypothesisId: hyp.id, cursor: 0, scroll: 0 } : state;
 			}
 			if (state.view === "element") {
 				// From a class row into the hypothesis that settled it. A class with no
@@ -561,12 +566,49 @@ export function reduceBrowser(state: BrowserState, key: BrowserKey, model: Brows
 				// rather than opening something unrelated.
 				const cls = model.classes[state.cursor];
 				const hyp = cls && model.hypotheses.find((h) => h.targetId === state.elementId && h.class === cls.id);
-				return hyp ? { ...state, view: "hypothesis", hypothesisId: hyp.id, cursor: 0, scroll: 0 } : state;
+				return hyp ? { ...state, parent: state, view: "hypothesis", hypothesisId: hyp.id, cursor: 0, scroll: 0 } : state;
 			}
 			return state;
 		}
 		default: return state;
 	}
+}
+
+/** Stable row identities let a refresh retain the item the operator is reading. */
+function browserRowIds(model: BrowserModel, state: BrowserState): string[] {
+	switch (state.view) {
+		case "surface": case "class": return model.surface.map((row) => row.id);
+		case "coverage": case "element": return model.classes.map((row) => row.id);
+		case "hypotheses": return visibleHypotheses(model, state).map((row) => row.id);
+		case "findings": return model.findings.map((row) => row.id);
+		case "blockers": return visibleBlockers(model, state).map((row) => row.id);
+		default: return [];
+	}
+}
+
+export function reconcileBrowserState(state: BrowserState, before: BrowserModel, after: BrowserModel, viewport: number, detailRows = 0): BrowserState {
+	const parent = state.parent ? reconcileBrowserState(state.parent, before, after, viewport) : undefined;
+	const detailId = state.findingId ?? state.blockerId ?? state.hypothesisId;
+	if (detailId) {
+		const records = state.view === "finding" ? after.findings : state.view === "blocker" ? after.blockers : after.hypotheses;
+		if (!records.some((row) => row.id === detailId)) {
+			if (parent) return parent;
+			const back = reduceBrowser(state, "out", before, viewport);
+			return back === "close" ? initialState() : reconcileBrowserState(back, before, after, viewport);
+		}
+		return { ...state, parent, scroll: Math.max(0, Math.min(state.scroll, detailRows - viewport)) };
+	}
+	if ((state.view === "element" && !after.surface.some((row) => row.id === state.elementId))
+		|| (state.view === "class" && !after.classes.some((row) => row.id === state.classId))) {
+		return parent ?? initialState(state.view === "element" ? "surface" : "coverage");
+	}
+	const id = browserRowIds(before, state)[state.cursor];
+	const ids = browserRowIds(after, state);
+	const found = ids.indexOf(id ?? "");
+	const cursor = found >= 0 ? found : Math.min(state.cursor, Math.max(0, ids.length - 1));
+	const page = Math.max(1, viewport);
+	const scroll = Math.max(0, Math.min(state.scroll, cursor, Math.max(0, ids.length - page)));
+	return { ...state, parent, cursor, scroll: cursor >= scroll + page ? cursor - page + 1 : scroll };
 }
 
 // --- render ----------------------------------------------------------------
@@ -658,7 +700,9 @@ function footer(o: RenderOptions): string[] {
 				: state.view === "findings"
 					? "↑↓ move · ⏎ open · tab blockers · R reload · q close"
 					: "↑↓ move · ⏎ open · a/c/r/u/o filter · tab findings · R reload · q close";
-	return [ink("muted", o.truncate(keys, width))];
+	const compact = state.parent || ["finding", "hypothesis", "blocker", "class", "element"].includes(state.view)
+		? "Esc back · ↑↓ scroll" : "Esc close · ↑↓ · Enter · Tab views";
+	return [ink("muted", o.truncate(o.measure(keys) > width ? compact : keys, width))];
 }
 
 /** `↓ N more` when the list runs past the window, as the rail marks its overflow. */
@@ -1118,6 +1162,7 @@ function parts(o: RenderOptions): { tally: string; body: string[]; total: number
  * chrome rather than three.
  */
 export function renderBrowser(o: RenderOptions): string[] {
+	if (o.maxLines !== undefined) o = { ...o, height: Math.min(o.height, browserBodyRows(o.state.view, o.maxLines)) };
 	if (o.width < MIN_WIDTH) return [o.truncate(o.ink("muted", "too narrow"), o.width)];
 
 	// Two columns for the border, one gutter each side, so nothing sits against

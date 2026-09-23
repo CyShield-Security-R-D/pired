@@ -38,8 +38,8 @@ export const PANEL_MODES = ["state", "coverage", "findings", "blockers"] as cons
  */
 export function dismissHint(platform: string, width = 0): string {
 	const mac = platform === "darwin";
-	const expand = mac ? "/maximize" : "alt+m";
-	const hide = mac ? "/panel" : "alt+p";
+	const expand = mac ? "/maximize" : "F7";
+	const hide = mac ? "/panel" : "F6";
 	// Advertise expanding first: hiding is discoverable by trying to get rid of
 	// the thing, while a scrollable panel is not discoverable at all — a feature
 	// nothing names is a feature nobody has. Both fit a default 56-column rail;
@@ -373,7 +373,7 @@ export interface ScrollWindow {
 	above: number;
 }
 
-export function scrollFramed(all: string[], scroll: number, height: number): ScrollWindow {
+export function scrollFramed(all: string[], scroll: number, height: number, cursor?: number): ScrollWindow {
 	if (all.length <= height || all.length < 3 || height < 3) {
 		return { lines: all.slice(0, Math.max(0, height)), scroll: 0, below: 0, above: 0 };
 	}
@@ -382,7 +382,13 @@ export function scrollFramed(all: string[], scroll: number, height: number): Scr
 	const body = all.slice(1, -1);
 	const bodyHeight = height - 2;
 	const max = Math.max(0, body.length - bodyHeight);
-	const at = Math.max(0, Math.min(scroll, max));
+	let at = Math.max(0, Math.min(scroll, max));
+	if (cursor !== undefined && cursor > 0 && cursor < all.length - 1) {
+		const row = cursor - 1;
+		if (row < at) at = row;
+		if (row >= at + bodyHeight) at = row - bodyHeight + 1;
+		at = Math.max(0, Math.min(at, max));
+	}
 	return {
 		lines: [top, ...body.slice(at, at + bodyHeight), bottom],
 		scroll: at,
@@ -401,6 +407,8 @@ export function scrollFramed(all: string[], scroll: number, height: number): Scr
  * once you are reading one row of it.
  */
 export interface FindingDetailOptions {
+	/** Scroll the body while keeping the frame and controls visible. */
+	scroll?: number;
 	finding: PanelData["recentFindings"][number];
 	engagement: string;
 	width: number;
@@ -415,15 +423,20 @@ export interface FindingDetailOptions {
 /** Wrap on spaces: a description is prose, and breaking it mid-word reads as corruption. */
 function wrapWords(text: string, width: number, measure: (s: string) => number): string[] {
 	const out: string[] = [];
-	let line = "";
-	for (const w of text.split(/\s+/).filter(Boolean)) {
-		const next = line ? `${line} ${w}` : w;
-		if (measure(next) > width && line) {
-			out.push(line);
-			line = w;
-		} else line = next;
+	const limit = Math.max(1, width);
+	for (const paragraph of text.replace(/\r\n?/g, "\n").split("\n")) {
+		let line = "";
+		for (const word of paragraph.split(/\s+/).filter(Boolean)) {
+			if (line && measure(`${line} ${word}`) <= limit) { line += ` ${word}`; continue; }
+			if (line) out.push(line);
+			line = "";
+			for (const char of word) {
+				if (line && measure(line + char) > limit) { out.push(line); line = ""; }
+				line += char;
+			}
+		}
+		out.push(line);
 	}
-	if (line) out.push(line);
 	return out;
 }
 
@@ -460,7 +473,9 @@ export function renderFindingDetail(o: FindingDetailOptions): string[] {
 	for (const e of f.evidence ?? []) field("evidence", e, "muted");
 
 	const room = o.maxLines - (framed ? 2 : 0) - (hint ? 1 : 0);
-	const lines = body.slice(0, Math.max(0, room)).map((l) => truncate(l, width));
+	const count = Math.max(0, room);
+	const scroll = Math.max(0, Math.min(o.scroll ?? 0, body.length - count));
+	const lines = body.slice(scroll, scroll + count).map((l) => truncate(l, width));
 	if (hint) {
 		const pad = Math.max(0, width - measure(hint));
 		lines.push(" ".repeat(pad) + ink("muted", hint));

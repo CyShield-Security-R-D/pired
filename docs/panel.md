@@ -8,7 +8,8 @@ It exists because the alternative is worse. Without it, the only way to see cove
 
 ```
 /panel          toggle it
-alt+p           the same, without leaving the editor (see the macOS note below)
+F6              the same, without leaving the editor
+F7              expand or restore
 /panel coverage jump straight to a view
 /panel next     cycle views
 /panel off      close it
@@ -40,7 +41,7 @@ Three, in preference order. `/panel` picks the first; the others are explicit.
 
 ### The inline rail (default)
 
-`/panel` or `alt+p`. A framed overlay pinned to the **top-right** of the TUI, at most half the screen tall.
+`/panel` or `F6`. A framed overlay pinned to the **top-right** of the TUI, at most half the screen tall.
 
 It floats over the transcript rather than reflowing it — pi's layout root belongs to pi — so *where* it sits decides what it costs you. The newest output and the editor are at the bottom, which is the part you are reading; anchoring to the top covers older, already-read lines instead. `maxHeight` keeps a long panel from creeping down into the live region.
 
@@ -52,10 +53,10 @@ The frame carries the engagement name **and its type** in its top edge, tmux-sty
 
 | Platform | Hint |
 |---|---|
-| macOS | `/panel to hide` |
-| everything else | `alt+p to hide` |
+| macOS | `/maximize expand · /panel hide` (shortened when narrow) |
+| Windows / Linux | `F7 expand · F6 hide` |
 
-Terminal.app and iTerm2 send **Option+P as `π`**, not as Meta, so on a default Mac the shortcut never arrives and pressing it types a character into your prompt. A panel that appears without being asked for must name an exit that actually works on the machine reading it, so a Mac is told the command instead. The shortcut still fires wherever the terminal does send Meta — including on a Mac configured for it. See [Commands and keys](commands.md#on-macos-altp-may-not-reach-pired).
+Terminal.app and iTerm2 send **Option+P as `π`**, not as Meta, so on a default Mac the shortcut never arrives and pressing it types a character into your prompt. A panel that appears without being asked for must name an exit that actually works on the machine reading it, so a Mac is told the command instead. F6/F7 are the primary keys; Alt+P/Alt+M remain aliases where the terminal sends Meta and pi has no reserved binding. Windows Terminal / PowerShell users should use F6/F7 to avoid model-binding conflicts. See [Commands and keys](commands.md#on-macos-altp-may-not-reach-pired).
 
 ### The tmux pane
 
@@ -101,7 +102,7 @@ Nothing is spaced above a section rule — the rule *is* the separator, and a bl
 | Variable | Default | Meaning |
 |---|---|---|
 | `PIRED_RAIL_WIDTH` | scales with the terminal (see below), `64` (tmux) | Panel width in columns. Naming one wins outright. |
-| `PIRED_RAIL_HEIGHT` | `50%` | Inline rail height: `N` rows or `N%` of the screen. Anything else falls back to `50%`. |
+| `PIRED_RAIL_HEIGHT` | `50%` | Inline rail height: positive integer rows or `1%`–`100%` of the screen, capped to the terminal. Invalid values fall back to `50%`. |
 
 Below 24 columns the frame is dropped rather than mangled; below 12 the panel renders nothing at all. Every framed line is padded to exactly the panel width — a ragged right edge reads as a rendering bug rather than a style.
 
@@ -160,7 +161,7 @@ The renderer itself (`core/panel.ts`) is a pure module: colour, width measuremen
 
 ## Maximizing
 
-`alt+m` (or `/maximize`) grows the rail to 70% width and 90% height and makes it scrollable. Press it again — or `esc` — to restore.
+`F7` (or `/maximize`) grows the rail to 70% width and 90% height and makes it scrollable. Press it again — or `esc` — to restore.
 
 ```
 ↑ ↓  /  k j      select a finding (scroll, when there are none)
@@ -168,8 +169,11 @@ The renderer itself (`core/panel.ts`) is a pure module: colour, width measuremen
 esc  ←  h        back to the list
 PgUp PgDn        scroll a page
 g G / Home End   first, last
-alt+m / q        restore
+F7 / q           restore
+F6               hide
 ```
+
+Inside a finding, arrows, PgUp/PgDn and Home/End scroll the full description, reproduction steps and evidence paths. Escape returns to the list.
 
 Selecting a finding and pressing `⏎` replaces the list with that finding in full — severity, CWE, class, target, status, description, repro steps and every evidence path — **in the same frame**. The rail stays one surface: you never leave it to find out what a row meant, and there is no second overlay to discover.
 
@@ -179,11 +183,11 @@ The restored rail shows three findings and three blockers, because that is what 
 
 It is still a side panel, not a takeover. The transcript stays visible on the left, which is the point — you are usually reading the panel *against* something the agent just said.
 
-Two behaviours worth knowing:
+Lifecycle and scrolling:
 
 **It captures the keyboard only while maximized**, and toggling *rebuilds* the overlay rather than resizing it. `nonCapturing` is fixed when an overlay is created, and `unfocus()` only releases to the next *capturing* overlay — so a rail opened as a view can never be handed the keyboard by changing its options later. Maximizing tears the overlay down and opens a new one in the mode wanted.
 
-**The rail answers for `alt+m` itself.** pi routes extension shortcuts through the editor, so while the maximized rail holds focus the registered shortcut never fires. Without the rail handling that key, maximize would be a toggle that only went one way. pi routes extension shortcuts through the *editor*, so while the rail holds the keyboard none of them reach their handlers — which is why the rail answers for `alt+m` itself, and why hiding a maximized panel with `alt+p` means pressing `esc` first.
+**The rail handles F6/F7 while focused.** pi normally routes extension shortcuts through the editor. The expanded rail handles its own hide and restore keys, including the legacy aliases, so both directions work without first pressing Escape. Closing removes only the rail’s overlay handle and leaves any newer dialog intact. Rapid toggles cancel stale opens; a failed custom overlay falls back to the footer strip.
 
 **The size is a live read, not a re-render.** `ui.custom` resolves `overlayOptions` exactly once: the function form is called when the overlay is shown and never again. pi-tui, though, re-reads the fields of the object that resolution produced on every frame. So the rail hands pi a single object whose `width`, `maxHeight` and `nonCapturing` are getters over the current mode — that, and not the repaint, is what resizes a panel that is already open. Returning a fresh object from a function looks equivalent and silently does nothing after the first frame: the panel lays out a full screen of content into an overlay still capped at half of one, and pi slices off everything past the cap, including the `↓ N more` line that would have told you content was missing.
 

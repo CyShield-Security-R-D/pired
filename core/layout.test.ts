@@ -53,3 +53,20 @@ describe("how the banner and the rail share a terminal", () => {
 		expect(railColumns(175, 0)).toBe(railColumns(175));
 	});
 });
+
+// Navigation and rendering must agree about the extra glyph-legend row.
+describe("browser and rail viewport budgets", () => {
+	it("reserves the glyph legend when calculating the visible body", async () => {
+		const { browserBodyRows } = await import("./layout.ts");
+		for (const view of ["coverage", "surface", "class", "element"]) expect(browserBodyRows(view, 20)).toBe(13);
+		for (const view of ["findings", "finding", "hypotheses", "blockers"]) expect(browserBodyRows(view, 20)).toBe(14);
+		expect(browserBodyRows("surface", 5)).toBe(5);
+	});
+
+	it("rejects heights that would grow a rail past the terminal", async () => {
+		const { panelHeight } = await import("./layout.ts");
+		for (const raw of [undefined, "0%", "999%", "-1", "1.5", "NaN", "", "Infinity"]) expect(panelHeight(raw)).toBe("50%");
+		expect(panelHeight("100%")).toBe("100%");
+		expect(panelHeight("24")).toBe(24);
+	});
+});

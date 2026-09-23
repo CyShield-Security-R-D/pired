@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { blockerDialog, blockerHeading, SKIP_OPTION } from "./dialog.ts";
+import { APPROVE_OPTION, blockerDialog, blockerHeading, DENY_OPTION, SKIP_OPTION } from "./dialog.ts";
 import type { BlockerRecord } from "./ontology.ts";
 
 const blocker = (over: Partial<BlockerRecord> = {}): BlockerRecord => ({
@@ -60,14 +60,12 @@ describe("blockerDialog", () => {
 			.toBe("value (stored in the workspace)");
 	});
 
-	// confirm is pi's one two-string dialog and it joins them with a newline
-	// itself, so the question belongs in the message and not repeated in both.
-	it("keeps an approval a yes/no gate, with the question in the message", () => {
+	// A boolean confirm conflates Escape with denial; explicit choices do not.
+	it("offers explicit approval and denial while keeping skip as the safe default", () => {
 		const d = blockerDialog(blocker({ type: "approval", options: ["a", "b"] }));
-		expect(d.shape).toBe("confirm");
-		expect(d.title).toBe("pired · approval");
-		expect(d.detail).toContain("not in the SOW's CIDR");
-		expect(d.title).not.toContain("SOW");
+		expect(d.shape).toBe("select");
+		expect(d.title).toContain("not in the SOW's CIDR");
+		expect(d.options).toEqual([SKIP_OPTION, APPROVE_OPTION, DENY_OPTION]);
 	});
 
 	it("shows the context under the question when there is room for both", () => {
@@ -149,11 +147,11 @@ describe("blockerDialog", () => {
 		expect(d.title).toContain("The staging host");
 	});
 
-	it("does the same for an approval, whose heading takes the only row there is", () => {
+	it("keeps the approval question when there is only one prose row", () => {
 		const d = blockerDialog(blocker({ type: "approval" }), { columns: 24, rows: 8 });
-		expect(d.title).toBe("pired · approval");
-		expect(d.detail).toContain("The staging");
-		expect(d.detail.split("\n")).toHaveLength(1);
+		expect(d.title).toContain("The staging");
+		expect(d.title.split("\n")).toHaveLength(1);
+		expect(d.options?.[0]).toBe(SKIP_OPTION);
 	});
 
 	it("assumes 80x24 when the host cannot say how big the terminal is", () => {

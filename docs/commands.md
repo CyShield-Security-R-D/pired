@@ -201,9 +201,9 @@ harness's.
 ### `/blockers` — what needs you
 
 The agent is built to never stall: it parks a question as a blocker and routes
-around it. The dialog fires the moment one is recorded, which is also the moment
-the operator has the context — but an operator who is mid-thought dismisses it,
-and the blocker correctly stays open. `/blockers` is the way back to it.
+around it. New questions produce a notification once per session and stay visible
+in the panel. They do not open a dialog over an active form or pause the agent
+while waiting for input. Open `/blockers` when you are ready to review them.
 
 It is the same browser `/findings` opens, on the blockers ledger: a list you can
 sit in rather than a queue you are put through. Waiting questions come first,
@@ -217,7 +217,10 @@ options offered, the work it gates, the answer it got.
 | `x` | Dismiss it: this is no longer a question. The row keeps its history and stops being counted. |
 | `f` | Toggle between what is still waiting and everything. |
 
-Either key writes onto the same record, so the ledger stays the single source of
+Approvals offer `skip for now`, `Approve`, and `Deny`, with skip selected first.
+Escape or skip leaves the question open; only an explicit decision is recorded.
+
+Either answer or dismiss writes onto the same record, so the ledger stays the single source of
 truth and a resumed session sees the decision. **The agent is told.** An answer
 used to go into a row nothing would read again — `recall blockers` lists only the
 open ones — so the agent kept routing around a question that had been settled an
@@ -239,34 +242,43 @@ not available for the writer: pi already owns `/export`, `/copy` and `/share`.
 | `Home` `End` / `g` `G` | Top, bottom. |
 | `⏎` / `→` / `l` | Open the row under the cursor. |
 | `esc` / `←` / `h` | Back out one level; at the top level, close. |
-| `tab` | Cycle coverage → surface → hypotheses → findings → blockers. |
+| `tab` / `shift+tab` | Cycle views forward / backward: coverage → surface → hypotheses → findings → blockers. |
 | `a` `c` `r` `o` | Filter hypotheses: all, confirmed, refuted, open. |
 | `a` `x` `f` | In blockers: answer, dismiss, or toggle waiting/all. |
 | `R` | Re-read the ledger — the agent may have recorded more since you opened it. |
 | `q` | Close. |
 
+Escape returns to the previous list position. `R` preserves the selected record
+when fresh data changes the sort order.
+
 ## Keys
 
 | Key | Does |
 |---|---|
-| `alt+p` | Toggle the engagement panel. |
+| `F6` | Toggle the engagement panel. |
+| `F7` | Expand or restore the panel. |
+| `alt+p` / `alt+m` | Legacy toggle / expand aliases, where the host accepts them. |
 
-`alt+p` rather than a `ctrl+` chord because every `ctrl+letter` is already taken by pi or readline — `ctrl+g` was registered and silently skipped as a conflict.
+Use **F6 and F7 in Windows Terminal / PowerShell**. pi reserves model shortcuts
+before loading extension bindings, so an `Alt+P` model binding can win over the
+panel alias. pired preserves those model controls; the function keys avoid the
+collision and also work while the expanded panel holds focus. `/panel` and
+`/maximize` are command fallbacks if a terminal intercepts a function key.
 
 ### On macOS, `alt+p` may not reach pired
 
 Terminal.app and iTerm2 send **Option+P as `π`** by default, not as Meta. The keypress never becomes `alt+p`, so the shortcut does nothing and a `π` lands in your prompt.
 
-Two ways out, and you do not need either:
+Use `F6` / `F7` (with Fn if needed), or the commands. For the legacy Alt aliases:
 
-- **`/panel`** works on every platform and every terminal. That is why the panel's own hint reads `/panel to hide` on macOS and `alt+p to hide` elsewhere — the instruction on screen is always one that works on the machine reading it.
+- **`/panel`** and **`/maximize`** work throughout the terminal UI. The panel advertises these commands on macOS and `F6` / `F7` elsewhere.
 - **Enable Option as Meta**, if you want the shortcut:
   - *Terminal.app* — Settings → Profiles → Keyboard → **Use Option as Meta Key**.
   - *iTerm2* — Settings → Profiles → Keys → Left Option key → **Esc+**.
   - *Ghostty* — `macos-option-as-alt = true`.
   - *WezTerm* — `send_composed_key_when_left_alt_is_pressed = false`.
 
-Extension shortcuts are registered by literal key, not as named keybinding actions, so `alt+p` is **not** rebindable through `~/.pi/agent/keybindings.json`. Use `/panel` where the shortcut does not reach you.
+Extension shortcuts are registered by literal key, not as named keybinding actions, so these shortcuts are **not** rebindable through `~/.pi/agent/keybindings.json`. Use `/panel` where the shortcut does not reach you.
 
 ## The `pired` launcher
 

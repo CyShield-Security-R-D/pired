@@ -168,7 +168,7 @@ See [Skills and checklists](skills.md) and [`FORMAT.md` §7](../FORMAT.md).
 ## Seeing it
 
 - **`/coverage`** — the full matrix, one row per class, with `⏎` into a class to see it down the whole surface. See [The interface](ui.md#the-coverage-view).
-- **`alt+p`** — the [panel](panel.md), for the summary and gap count.
+- **`F6`** — the [panel](panel.md), for the summary and gap count.
 - **`pired-state --json`** — the numbers, for a status bar or a script.
 - **`recall status` / `recall coverage` / `recall surface` / `recall gaps`** — what the agent sees, and it is the *same* view: `recall coverage` renders the matrix through the renderer `/coverage` uses, so the operator and the agent cannot be looking at two different numbers.
 

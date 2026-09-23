@@ -135,7 +135,7 @@ audit ./src for injection and auth bugs
 
 While it works, three things are worth watching:
 
-- The **[engagement panel](panel.md)**, top-right and up by default — the whole ledger, read from disk rather than from anything the model says. `/panel` (or `alt+p`) toggles it; `pired --no-panel` starts without it.
+- The **[engagement panel](panel.md)**, top-right and up by default — the whole ledger, read from disk rather than from anything the model says. `/panel` (or `F6`) toggles it; `pired --no-panel` starts without it.
 - The **status line** carries findings by severity, coverage, and open blockers, live.
 - **`/coverage`** opens the matrix: which vulnerability class has been settled against which piece of surface.
 

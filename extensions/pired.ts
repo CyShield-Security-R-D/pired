@@ -23,13 +23,13 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { type Component, Key, matchesKey, truncateToWidth, type TUI, visibleWidth } from "@earendil-works/pi-tui";
 import {
-	buildBrowserModel, detailRowCount, elementLabel, initialState, reduceBrowser, renderBrowser, selectedBlocker, visibleBlockers, type BrowserKey, type BrowserModel, type BrowserState, type BrowserTone, type BrowserView,
+	buildBrowserModel, detailRowCount, elementLabel, initialState, reconcileBrowserState, reduceBrowser, renderBrowser, selectedBlocker, visibleBlockers, type BrowserKey, type BrowserModel, type BrowserState, type BrowserTone, type BrowserView,
 } from "../core/browser.ts";
 import { type BannerTone, renderBanner } from "../core/banner.ts";
 import { challengeCommand, unchallengedBrief, unchallengedQueue } from "../core/challenge.ts";
-import { blockerDialog, SKIP_OPTION } from "../core/dialog.ts";
+import { promptBlocker } from "./lib/blocker-prompt.ts";
 import { exportFindingsMarkdown, notReportReady } from "../core/export.ts";
-import { bannerColumns, BROWSER_CHROME, OVERLAY, OVERLAY_HEIGHT_SHARE, railColumns } from "../core/layout.ts";
+import { bannerColumns, browserBodyRows, OVERLAY, OVERLAY_HEIGHT_SHARE, panelHeight, railColumns } from "../core/layout.ts";
 import type { BlockerRecord, Checklist, EngagementScope, FindingRecord, PassLens, Severity, TargetType } from "../core/ontology.ts";
 import type { Gate, ToolContext, ToolDefinition } from "../core/ports.ts";
 import { buildSystemPrompt, PIRED_PROFILES, type PiredProfile } from "../core/prompts.ts";
@@ -65,11 +65,11 @@ const CHECKLISTS_DIR = join(PIRED_ROOT, "checklists");
 // Brand and spinner are drawn through the active theme rather than hardcoded
 // truecolor: that way they degrade correctly on 256-color terminals and stay
 // legible under whatever theme the operator picks. The two-tone wordmark still
-// reads as "pi" + "red" because `accent` is the theme's signal color.
+// keeps its red brand ink; interactive accents use a separate theme role.
 //
 // The name IS "pi + red" — the status line renders it as the brand mark, so
 // there is no separate banner widget: brand + live stats share one line.
-const wordmark = (theme: Theme): string => theme.bold(theme.fg("dim", "pi")) + theme.bold(theme.fg("accent", "red"));
+const wordmark = (theme: Theme): string => theme.bold(theme.fg("dim", "pi")) + theme.bold(theme.fg("error", "red"));
 
 // Animated "working" spinner — a smooth braille cycle. Frames are rendered
 // verbatim by pi, so each is colored at setup; intervalMs paces the animation.
@@ -99,9 +99,9 @@ const PRIORITY = {
 
 /** Coverage-panel tones mapped onto the active theme. */
 const BANNER_TONE_COLOR: Record<BannerTone, ThemeColor> = {
-	// "pi" recedes and "red" carries the accent: the name is the two words, and
+	// "pi" recedes and "red" keeps its brand color: the name is the two words, and
 	// the wordmark should explain itself without a caption.
-	pi: "dim", red: "accent", label: "text", muted: "dim", accent: "accent", rule: "dim",
+	pi: "dim", red: "error", label: "text", muted: "dim", accent: "accent", rule: "dim",
 };
 
 const BROWSER_TONE_COLOR: Record<BrowserTone, ThemeColor> = {
@@ -461,12 +461,17 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	 * reaches the handler that would restore it. The rail has to answer for the
 	 * key itself, and a second literal here is a toggle that only goes one way.
 	 */
-	const MAXIMIZE_KEY = Key.alt("m");
+	const MAXIMIZE_KEYS = [Key.f7, Key.alt("m")];
+	const PANEL_KEYS = [Key.f6, Key.alt("p")];
 	let railMax = false;
 	let railScroll = 0;
 	let railSel = 0;
 	/** Reading one finding rather than the list. */
 	let railDetail = false;
+	let railDetailScroll = 0;
+	let railFollowSelection = false;
+	let railPending = false;
+	let railEpoch = 0;
 	let railRerender: (() => void) | undefined;
 	let railCtx: ExtensionContext | undefined;
 	/**
@@ -475,21 +480,13 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	 * a multiplexer, and the panel would then be laid out for the wrong screen.
 	 */
 	let railTui: TUI | undefined;
-	let railDone: (() => void) | undefined;
 
 	/**
 	 * Overlay heights are `number | "<n>%"`, and an env var is neither until it is
 	 * checked — an unvalidated string here would be a runtime surprise in a
 	 * position where a wrong value silently mis-sizes the panel.
 	 */
-	const railHeight = (): number | `${number}%` => {
-		const raw = process.env.PIRED_RAIL_HEIGHT;
-		if (!raw) return "50%";
-		const pct = /^(\d{1,3})%$/.exec(raw);
-		if (pct) return `${Number(pct[1])}%`;
-		const rows = Number(raw);
-		return Number.isFinite(rows) && rows > 0 ? rows : "50%";
-	};
+	const railHeight = (): number | `${number}%` => panelHeight(process.env.PIRED_RAIL_HEIGHT);
 
 	/**
 	 * Rows the banner should reserve so the editor clears the panel.
@@ -514,13 +511,13 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		// actually laying out for, which is not the same thing when pired is driven
 		// through a pipe or a multiplexer.
 		const rows = tui?.terminal?.rows ?? railTui?.terminal?.rows ?? process.stdout.rows ?? 40;
-		if (railMax) return Math.max(6, Math.floor(rows * 0.9));
-		const h = railHeight();
-		return typeof h === "number" ? h : Math.floor((rows * Number.parseInt(h, 10)) / 100);
+		const h = railMax ? "90%" : railHeight();
+		const wanted = typeof h === "number" ? h : Math.floor((rows * Number.parseInt(h, 10)) / 100);
+		return Math.max(0, Math.min(wanted, rows - 1));
 	};
 
 	const bannerReserve = (): number => {
-		if (String(pi.getFlag("pired-panel") ?? "on").toLowerCase() === "off") return 0;
+		if (!railHandle && !railPending) return 0;
 		const rows = railTui?.terminal?.rows ?? process.stdout.rows ?? 40;
 		const cap = railRows();
 		// What the panel actually draws, not what it is allowed to draw. A fresh
@@ -620,17 +617,14 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	 * opened with.
 	 */
 	const setRailMax = async (next: boolean): Promise<void> => {
+		const ctx = railCtx;
+		closeInlineRail();
 		railMax = next;
 		railScroll = 0;
 		railSel = 0;
 		railDetail = false;
-		const ctx = railCtx;
-		try {
-			railHandle?.hide();
-		} catch {}
-		railHandle = undefined;
-		railDone = undefined;
-		if (ctx) await openInlineRail(ctx).catch(() => {});
+		railDetailScroll = 0;
+		if (ctx) await openInlineRail(ctx);
 	};
 
 	/**
@@ -643,7 +637,7 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	 * on top of one another.
 	 */
 	const bannerWidth = (full: number): number => {
-		if (String(pi.getFlag("pired-panel") ?? "on").toLowerCase() === "off") return full;
+		if (!railHandle && !railPending) return full;
 		return bannerColumns(full, railWidth(full));
 	};
 
@@ -651,10 +645,28 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		// Remembered so a maximise toggle can rebuild the overlay: capturing is
 		// fixed at creation, so the only way to change it is to open a new one.
 		railCtx = ctx;
+		if (railHandle || railPending) return;
+		if (ctx.mode !== "tui" || typeof ctx.ui.custom !== "function") {
+			panelOpen = ctx.mode === "tui";
+			return;
+		}
+		const epoch = ++railEpoch;
+		railPending = true;
+		let finish: (() => void) | undefined;
+		const failed = (): void => {
+			if (epoch !== railEpoch) return;
+			railPending = false;
+			railHandle = undefined;
+			railRerender = undefined;
+			panelOpen = true;
+			ctx.ui.notify("pired: side panel unavailable — showing the footer panel; /panel off hides it", "warning");
+		};
+		try {
 		void ctx.ui.custom<void>(
 			(tui, theme, _keybindings, done) => {
+				if (epoch !== railEpoch) throw new Error("Panel opening cancelled");
+				finish = done;
 				railTui = tui;
-				railDone = () => done();
 				railRerender = () => tui.requestRender();
 				return {
 					render: (w: number): string[] => {
@@ -662,16 +674,21 @@ export default function piredExtension(pi: ExtensionAPI): void {
 						const rows = railRows(tui);
 						const ink = (tone: PanelTone, text: string) => theme.fg(PANEL_TONE_COLOR[tone], text);
 						const truncate = (x: string, ww: number) => truncateToWidth(x, ww, theme.fg("dim", "…"));
-						const finds = panelData.recentFindings;
+						const finds = panelMode === "state" || panelMode === "findings" ? panelData.recentFindings : [];
+						railSel = Math.max(0, Math.min(railSel, finds.length - 1));
 
 						// Reading one finding, in the same frame the list was in. The rail
 						// stays a single surface: no second overlay, nothing to find.
 						const chosen = finds[railSel];
 						if (railMax && railDetail && chosen) {
+							const full = renderFindingDetail({ finding: chosen, engagement: scope.engagement,
+								width: w, maxLines: Number.MAX_SAFE_INTEGER, frame: true, ink, measure: visibleWidth, truncate });
+							railDetailScroll = Math.max(0, Math.min(railDetailScroll, full.length - rows + 1));
 							return renderFindingDetail({
+								scroll: railDetailScroll,
 								finding: chosen, engagement: scope.engagement,
 								width: w, maxLines: rows, frame: true,
-								hint: "esc back · ↑↓ list · q close",
+								hint: "↑↓ scroll · PgUp/PgDn · Esc back · F6 hide",
 								ink, measure: visibleWidth, truncate,
 							});
 						}
@@ -690,10 +707,12 @@ export default function piredExtension(pi: ExtensionAPI): void {
 							ink, measure: visibleWidth, truncate,
 						});
 						if (!railMax) return lines;
-						const win = scrollFramed(lines, railScroll, rows);
+						const win = scrollFramed(lines, railScroll, rows,
+							railFollowSelection ? lines.findIndex((line) => line.includes("▶")) : undefined);
+						railFollowSelection = false;
 						railScroll = win.scroll;
 						return win.below > 0
-							? [...win.lines.slice(0, -1), theme.fg("dim", truncateToWidth(`  ↓ ${win.below} more`, w))]
+							? [...win.lines.slice(0, -1), theme.fg("dim", `╰${truncateToWidth(`─ ↓ ${win.below} more · PgDn `, Math.max(0, w - 2)).padEnd(Math.max(0, w - 2), "─")}╯`)]
 							: win.lines;
 					},
 					invalidate(): void {},
@@ -701,18 +720,28 @@ export default function piredExtension(pi: ExtensionAPI): void {
 						// Restored, the rail is a view and must not take the keys the
 						// operator is using to talk to the agent.
 						if (!railMax) return false;
-						const finds = panelData?.recentFindings ?? [];
+						const finds = panelMode === "state" || panelMode === "findings" ? panelData?.recentFindings ?? [] : [];
 						const page = Math.max(1, railRows(tui) - 4);
 
-						if (matchesKey(data, MAXIMIZE_KEY)) {
+						if (PANEL_KEYS.some((key) => matchesKey(data, key))) {
+							closeInlineRail();
+							railMax = false;
+							return true;
+						}
+
+						if (MAXIMIZE_KEYS.some((key) => matchesKey(data, key))) {
 							void setRailMax(false);
 							return true;
 						}
 
 						if (railDetail) {
 							if (matchesKey(data, Key.escape) || matchesKey(data, Key.left) || data === "h") railDetail = false;
-							else if (matchesKey(data, Key.up) || data === "k") { railSel = Math.max(0, railSel - 1); }
-							else if (matchesKey(data, Key.down) || data === "j") { railSel = Math.min(finds.length - 1, railSel + 1); }
+							else if (matchesKey(data, Key.up) || data === "k") railDetailScroll = Math.max(0, railDetailScroll - 1);
+							else if (matchesKey(data, Key.down) || data === "j") railDetailScroll++;
+							else if (matchesKey(data, Key.pageUp)) railDetailScroll = Math.max(0, railDetailScroll - page);
+							else if (matchesKey(data, Key.pageDown)) railDetailScroll += page;
+							else if (matchesKey(data, Key.home) || data === "g") railDetailScroll = 0;
+							else if (matchesKey(data, Key.end) || data === "G") railDetailScroll = Number.MAX_SAFE_INTEGER;
 							else if (data === "q") void setRailMax(false);
 							else return false;
 							tui.requestRender();
@@ -722,10 +751,10 @@ export default function piredExtension(pi: ExtensionAPI): void {
 						if (matchesKey(data, Key.up) || data === "k") {
 							// With findings present the cursor moves; without them there is
 							// nothing to select and the same key scrolls instead.
-							if (finds.length > 0) railSel = Math.max(0, railSel - 1);
+							if (finds.length > 0) { railSel = Math.max(0, railSel - 1); railFollowSelection = true; }
 							else railScroll -= 1;
 						} else if (matchesKey(data, Key.down) || data === "j") {
-							if (finds.length > 0) railSel = Math.min(finds.length - 1, railSel + 1);
+							if (finds.length > 0) { railSel = Math.min(finds.length - 1, railSel + 1); railFollowSelection = true; }
 							else railScroll += 1;
 						} else if (matchesKey(data, Key.pageUp)) railScroll -= page;
 						else if (matchesKey(data, Key.pageDown)) railScroll += page;
@@ -734,6 +763,7 @@ export default function piredExtension(pi: ExtensionAPI): void {
 						else if (matchesKey(data, Key.enter) || matchesKey(data, Key.right) || data === "l") {
 							if (finds.length === 0) return false;
 							railDetail = true;
+							railDetailScroll = 0;
 						} else if (matchesKey(data, Key.escape) || data === "q") {
 							void setRailMax(false);
 							return true;
@@ -749,6 +779,9 @@ export default function piredExtension(pi: ExtensionAPI): void {
 				// Not a function: pi calls that form once, at show time. See railOverlay.
 				overlayOptions: railOverlay,
 				onHandle: (h) => {
+					// This overlay was just pushed, so completion removes exactly it.
+					if (epoch !== railEpoch) { finish?.(); return; }
+					railPending = false;
 					railHandle = h;
 					// Maximised, the rail is being read and needs the keyboard; restored,
 					// it is a view and must never take the keys meant for the agent.
@@ -761,17 +794,20 @@ export default function piredExtension(pi: ExtensionAPI): void {
 					// alt+m-from-closed open a scroller that ignored the arrow keys.
 				},
 			},
-		);
+		).catch(failed);
+		} catch { failed(); }
 	};
 
 	const closeInlineRail = (): void => {
-		try {
-			railHandle?.hide();
-		} catch {}
-		railDone?.();
+		const handle = railHandle;
+		railEpoch++;
+		railPending = false;
 		railHandle = undefined;
-		railDone = undefined;
 		railRerender = undefined;
+		// pi's done() blindly pops the top overlay, which can be a newer dialog.
+		// The persistent rail is fire-and-forget; remove its own handle only and
+		// release its callbacks. A pending open is closed by its onHandle guard.
+		try { handle?.hide(); } catch {}
 	};
 
 	const tmuxCmd = (args: string[]): Promise<string> =>
@@ -821,20 +857,9 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		ctx.ui.setStatus("pired", parts.join(" · "));
 	};
 
-	/**
-	 * Ask the operator about a blocker the moment it is recorded.
-	 *
-	 * The harness is built to never stall: the agent parks a blocker and routes
-	 * around it. That works only if the blocker reaches a human — and until now
-	 * it was a row in a ledger nobody was looking at, so "never stall" quietly
-	 * became "never finish". The dialog closes that loop at the moment the agent
-	 * needs the answer, which is also the moment the operator has the context.
-	 *
-	 * Answers are written back to the same record, so the ledger stays the single
-	 * source of truth and a resumed session sees the decision.
-	 */
+	/** Questions stay visible until an explicit /blockers action settles them. */
 	let coverageView: CoverageView | undefined;
-	const promptedBlockers = new Set<string>();
+	const announcedBlockers = new Set<string>();
 
 	/**
 	 * What the operator settled, waiting to be said to the agent.
@@ -894,20 +919,11 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		// will be drawn on because the selector does not scroll — see
 		// core/dialog.ts. railTui's terminal over process.stdout for the reason
 		// railRows gives: it is the size pi is actually laying out for.
-		const d = blockerDialog(b, {
-			columns: railTui?.terminal?.columns ?? process.stdout.columns,
-			rows: railTui?.terminal?.rows ?? process.stdout.rows,
-		});
 		try {
-			let answer: string | undefined;
-			if (d.shape === "confirm") {
-				answer = (await ctx.ui.confirm(d.title, d.detail)) ? "approved" : "denied";
-			} else if (d.shape === "select") {
-				answer = await ctx.ui.select(d.title, d.options ?? []);
-				if (answer === SKIP_OPTION) answer = undefined;
-			} else {
-				answer = await ctx.ui.input(d.title, d.placeholder);
-			}
+			const answer = await promptBlocker(ctx.ui, b, {
+				columns: railTui?.terminal?.columns ?? process.stdout.columns,
+				rows: railTui?.terminal?.rows ?? process.stdout.rows,
+			});
 			if (!answer) return false;
 			await settleBlocker(ctx, b, "answered", answer);
 			return true;
@@ -917,27 +933,18 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		}
 	};
 
-	/**
-	 * Ask the moment a blocker is recorded — once per blocker, and never again.
-	 *
-	 * A dialog that reappears every time the agent records something is a dialog
-	 * the operator learns to dismiss, and dismissing it is the correct answer to a
-	 * question asked at the wrong moment. `/blockers` is the way back: it lists
-	 * every one of them, waved-away included.
-	 */
-	const promptForNewBlockers = async (ctx: ExtensionContext): Promise<void> => {
+	/** Notify once per new question; answering is an explicit /blockers action. */
+	const announceNewBlockers = async (ctx: ExtensionContext): Promise<void> => {
 		if (!workspace || ctx.mode !== "tui") return;
 		let open: BlockerRecord[];
-		try {
-			open = (await workspace.read("blockers")).filter((b) => b.status === "open");
-		} catch {
-			return;
-		}
-		for (const b of open) {
-			if (promptedBlockers.has(b.id)) continue;
-			promptedBlockers.add(b.id);
-			await answerOne(ctx, b);
-		}
+		try { open = (await workspace.read("blockers")).filter((b) => b.status === "open"); }
+		catch { return; }
+		const fresh = open.filter((b) => !announcedBlockers.has(b.id));
+		if (fresh.length === 0) return;
+		for (const b of fresh) announcedBlockers.add(b.id);
+		// Tool events are awaited by the agent. An unsolicited input dialog both
+		// blocks its next step and competes with a form the operator is editing.
+		ctx.ui.notify(`pired: ${fresh.length} new question${fresh.length === 1 ? "" : "s"} need${fresh.length === 1 ? "s" : ""} your input — /blockers to review`, "info");
 	};
 
 	/**
@@ -1199,6 +1206,11 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	};
 
 	pi.on("session_start", async (_event, ctx) => {
+		closeInlineRail();
+		railMax = false;
+		railDetail = false;
+		panelOpen = false;
+		announcedBlockers.clear();
 		const flag = pi.getFlag("pired-profile");
 		profile = typeof flag === "string" && (PIRED_PROFILES as readonly string[]).includes(flag) ? (flag as PiredProfile) : "review";
 		scope = loadScope(ctx.cwd, profile, ctx.isProjectTrusted());
@@ -1864,7 +1876,7 @@ export default function piredExtension(pi: ExtensionAPI): void {
 			// the agent immediately rather than at the next session.
 			if (details?.kind === "model" && workspace) targetModel = await workspace.readModel();
 			await refreshStatus(ctx);
-			await promptForNewBlockers(ctx);
+			await announceNewBlockers(ctx);
 		}
 	});
 
@@ -1961,17 +1973,12 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	 * mode also opens the panel, so there is no state where naming a view leaves
 	 * it hidden.
 	 */
-	/**
-	 * A keypress for the panel, because a view you have to type a command for is
-	 * a view you check less often than you should. Every ctrl+letter is taken by
-	 * pi or readline — ctrl+g was registered and silently skipped as a conflict —
-	 * so alt+p it is, which is at least mnemonic.
-	 */
-	pi.registerShortcut(MAXIMIZE_KEY, {
+	/** Function keys avoid Alt transport and model-binding conflicts. Keep the legacy aliases. */
+	for (const key of MAXIMIZE_KEYS) pi.registerShortcut(key, {
 		description: "maximize the engagement panel and scroll it",
 		handler: async (ctx) => {
 			if (ctx.mode !== "tui") return;
-			if (!railHandle) {
+			if (!railHandle && !railPending) {
 				// Nothing to maximize yet: open it maximized rather than doing nothing.
 				railMax = true;
 				railScroll = 0;
@@ -1986,7 +1993,7 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		},
 	});
 
-	pi.registerShortcut("alt+p", {
+	for (const key of PANEL_KEYS) pi.registerShortcut(key, {
 		description: "pired: toggle the engagement panel",
 		handler: async (ctx) => {
 			await togglePanel("", ctx);
@@ -2000,13 +2007,16 @@ export default function piredExtension(pi: ExtensionAPI): void {
 				ctx.ui.notify("pired: the panel is a terminal view; nothing to maximize here", "warning");
 				return;
 			}
-			if (!railHandle) {
+			if (!railHandle && !railPending) {
 				railMax = true;
 				railScroll = 0;
+				railSel = 0;
+				railDetail = false;
+				railDetailScroll = 0;
 				await openInlineRail(ctx).catch(() => {});
 				return;
 			}
-			setRailMax(!railMax);
+			await setRailMax(!railMax);
 		},
 	});
 
@@ -2018,10 +2028,27 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	const togglePanel = async (args: string, ctx: ExtensionContext): Promise<void> => {
 		{
 			const arg = (args ?? "").trim().toLowerCase();
+			if (ctx.mode !== "tui") {
+				ctx.ui.notify("pired: the panel needs the terminal UI; use pired-state for a text view", "info");
+				return;
+			}
+			if (!["", "on", "off", "next", "footer", "tmux", ...PANEL_MODES].includes(arg)) {
+				ctx.ui.notify("pired: /panel [on | off | next | state | coverage | findings | blockers | footer | tmux]", "info");
+				return;
+			}
+			if (arg === "off") {
+				closeInlineRail();
+				await closeRail();
+				panelOpen = false;
+				railMax = false;
+				ctx.ui.notify("pired: panel hidden", "info");
+				return;
+			}
 			// Preference order: the in-TUI rail (works everywhere, no multiplexer),
 			// then a tmux pane if explicitly asked for, then the footer strip.
 			if (arg !== "footer" && arg !== "tmux") {
-				if (railHandle && (!arg || arg === "off")) {
+				if ((railHandle || railPending || panelOpen) && !arg) {
+					panelOpen = false;
 					closeInlineRail();
 					// Dismissing ends the maximised session too: reopening should give
 					// back the glance it was opened as, not a scroller nobody asked for.
@@ -2032,17 +2059,31 @@ export default function piredExtension(pi: ExtensionAPI): void {
 					ctx.ui.notify("pired: panel hidden", "info");
 					return;
 				}
+				if (arg === "next" || (PANEL_MODES as readonly string[]).includes(arg)) { railDetail = false; railScroll = 0; railSel = 0; }
 				if (arg === "next") {
 					panelMode = PANEL_MODES[(PANEL_MODES.indexOf(panelMode) + 1) % PANEL_MODES.length] as PanelMode;
 				} else if ((PANEL_MODES as readonly string[]).includes(arg)) {
 					panelMode = arg as PanelMode;
 				}
-				if (workspace && stats) panelData = await collectPanelData(workspace, scope, stats);
-				if (railHandle) closeInlineRail();
-				if (arg !== "off") {
-					await openInlineRail(ctx);
-					ctx.ui.notify(`pired: side panel · ${panelMode}`, "info");
+				if (railHandle || railPending) closeInlineRail();
+				panelOpen = false;
+				railPending = true;
+				const requestEpoch = railEpoch;
+				try {
+					// Counts and rows must both reflect edits made outside this session.
+					if (workspace) await refreshStatus(ctx);
+				} catch {
+					if (requestEpoch === railEpoch) {
+						railPending = false;
+						ctx.ui.notify("pired: could not refresh the panel; check the workspace and try again", "warning");
+					}
+					return;
 				}
+				// A hide or newer mode request during disk I/O cancels this open.
+				if (requestEpoch !== railEpoch) return;
+				railPending = false;
+				await openInlineRail(ctx);
+				ctx.ui.notify(`pired: ${panelOpen ? "footer" : "side"} panel · ${panelMode}`, "info");
 				return;
 			}
 
@@ -2064,10 +2105,10 @@ export default function piredExtension(pi: ExtensionAPI): void {
 
 			// `/panel footer` is the strip — kept because it survives without a
 			// multiplexer and without stealing width from the transcript.
+			closeInlineRail();
+			railMax = false;
 			panelOpen = !panelOpen;
-			if (panelOpen && workspace && stats) {
-				panelData = await collectPanelData(workspace, scope, stats);
-			}
+			if (panelOpen && workspace) await refreshStatus(ctx);
 			ctx.ui.notify(panelOpen ? `pired: panel · ${panelMode}` : "pired: panel hidden", "info");
 		}
 	};
@@ -2142,6 +2183,7 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		// arrives as an escape sequence, so checking it first would close the
 		// browser on every press of up.
 		if (matchesKey(data, Key.escape) || matchesKey(data, Key.left) || data === "h") return "out";
+		if (matchesKey(data, Key.shift("tab"))) return "switchBack";
 		if (matchesKey(data, Key.tab)) return "switch";
 		if (data === "q") return "close";
 		if (data === "R") return "refresh";
@@ -2169,8 +2211,8 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	};
 
 	/** Body rows the browser gets: the overlay's height, less its chrome. */
-	const browserHeight = (tui?: { terminal?: { rows: number } }): number =>
-		Math.max(1, overlayRows(tui) - BROWSER_CHROME);
+	const browserHeight = (view: BrowserView, tui?: { terminal?: { rows: number } }): number =>
+		browserBodyRows(view, overlayRows(tui));
 
 	/** Open the browser at `view`; shared by /surface, /hypotheses, /findings and /blockers. */
 	const openBrowser = async (ctx: ExtensionContext, view: "coverage" | "surface" | "hypotheses" | "findings" | "blockers"): Promise<void> => {
@@ -2196,13 +2238,18 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		// Rebuildable: the browser is open while the agent is still recording, and a
 		// snapshot taken at open time quietly goes stale — a finding recorded a
 		// second later simply is not in the list. `R` re-reads the ledger.
-		let model = await build();
+		let model: BrowserModel;
+		try { model = await build(); }
+		catch {
+			ctx.ui.notify("pired: could not read the engagement; check the workspace and try again", "warning");
+			return;
+		}
 
-		if (ctx.mode !== "tui") {
+		if (ctx.mode !== "tui" || typeof ctx.ui.custom !== "function") {
 			const c = model.counts;
 			ctx.ui.notify(
 				`pired: ${model.surface.length} surface element(s) · ${c.all} hypotheses ` +
-				`(${c.confirmed} confirmed, ${c.refuted} refuted, ${c.open} open)`,
+				`(${c.confirmed} confirmed, ${c.refuted} refuted, ${c.open} open) · ${model.findings.length} findings · ${model.blockerCounts.open} open questions`,
 				"info",
 			);
 			return;
@@ -2219,14 +2266,24 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		// loop and not a single call.
 		for (;;) {
 			let pending: { action: "answer" | "dismiss"; id: string } | undefined;
+			let browserClosed = false;
+			let lastHeight = -1;
 			await ctx.ui.custom<void>(
 				(tui, theme, _keybindings, done) => ({
+					dispose(): void { browserClosed = true; reloadGen++; },
 					render: (width: number): string[] => {
+						const height = browserHeight(state.view, tui);
+						if (width !== lastWidth || height !== lastHeight) {
+							const rows = detailRowCount({ model, state, width, height,
+								ink: (_tone, text) => text, measure: visibleWidth, truncate: truncateToWidth });
+							state = reconcileBrowserState(state, model, model, height, rows);
+						}
 						lastWidth = width;
+						lastHeight = height;
 						return renderBrowser({
 							model, state, width,
 							// Chrome is the box edges, the tally, two rules and the legend.
-							height: browserHeight(tui),
+							height: browserHeight(state.view, tui),
 							maxLines: overlayRows(tui),
 							ink: (tone, text) => theme.fg(BROWSER_TONE_COLOR[tone], text),
 							// Background, not foreground: theme.fg resets with \x1b[39m, so an
@@ -2243,7 +2300,7 @@ export default function piredExtension(pi: ExtensionAPI): void {
 					handleInput(data: string): void {
 						const key = toBrowserKey(data, state.view);
 						if (!key) return;
-						const height = browserHeight(tui);
+						const height = browserHeight(state.view, tui);
 						const detailRows = detailRowCount({
 							model, state, width: lastWidth, height,
 							ink: (_t: BrowserTone, text: string) => text,
@@ -2255,19 +2312,20 @@ export default function piredExtension(pi: ExtensionAPI): void {
 							// order and the older read can win.
 							const gen = ++reloadGen;
 							void build().then((fresh) => {
-								if (gen !== reloadGen) return;
+								if (browserClosed || gen !== reloadGen) return;
+								const previous = model;
 								model = fresh;
-								// The surface list re-sorts by progress on every build, so a kept
-								// cursor lands on a different row. Clamp it back into range.
+								// Keep the selected record by ID when a refresh reorders the list.
 								const rows = detailRowCount({
-									model, state, width: lastWidth, height: browserHeight(tui),
+									model, state, width: lastWidth, height: browserHeight(state.view, tui),
 									ink: (_t: BrowserTone, x: string) => x, measure: visibleWidth,
 									truncate: (x: string, ww: number) => truncateToWidth(x, ww),
 								});
-								state = { ...state, cursor: 0, scroll: 0, ...(rows === 0 ? {} : {}) };
+								state = reconcileBrowserState(state, previous, model, browserHeight(state.view, tui), rows);
 								tui.requestRender();
 							}).catch((err) => {
 								// A failed reload must not look like a successful empty one.
+								if (browserClosed || gen !== reloadGen) return;
 								ctx.ui.notify(`pired: reload failed — ${err instanceof Error ? err.message : String(err)}`, "warning");
 							});
 							return;
@@ -2278,11 +2336,13 @@ export default function piredExtension(pi: ExtensionAPI): void {
 							const b = selectedBlocker(model, state);
 							if (!b) return;
 							pending = { action: key, id: b.id };
+							browserClosed = true;
 							done();
 							return;
 						}
 						const next = reduceBrowser(state, key, model, height, detailRows);
 						if (next === "close") {
+							browserClosed = true;
 							done();
 							return;
 						}
@@ -2313,6 +2373,7 @@ export default function piredExtension(pi: ExtensionAPI): void {
 			state = {
 				...state,
 				view: "blockers",
+				parent: undefined,
 				blockerId: undefined,
 				cursor: landed >= 0 ? landed : Math.min(state.cursor, Math.max(0, rows.length - 1)),
 				scroll: 0,

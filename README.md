@@ -226,15 +226,15 @@ The transcript is the conversation; the ledger is the artifact. Coverage you can
 │  ⬤ crit 1  ⬤ high 2  ⬤ med 3                         │
 │  ▸ SQLi in /api/transfer amount                      │
 │                                                      │
-│                                        alt+p to hide │
+│                                  F7 expand · F6 hide │
 ╰──────────────────────────────────────────────────────╯
 ```
 
-`/panel` toggles it, `alt+p` does the same without leaving the editor, and `pired --no-panel` starts without it. The dismiss hint is platform-aware — macOS terminals send Option+P as `π` rather than as Meta, so a Mac is told `/panel to hide` instead of a key it cannot press.
+`/panel` or `F6` toggles it; `F7` or `/maximize` expands it for reading and scrolling. Use F6/F7 in Windows Terminal / PowerShell to avoid Alt+P model-binding conflicts. Legacy Alt shortcuts remain available where supported; macOS hints show the command fallbacks. `pired --no-panel` starts without it.
 
 The coverage section counts **cells** and the hypotheses section counts **claims** — `record` fans one piece of reasoning across every target it applies to, so the two are different numbers over the same ledger — and the `!` line counts confirmed claims that no finding has been written for yet, because confirming settles a cell and only a finding reaches the client.
 
-Alongside it: a status line carrying findings-by-severity, coverage and the **armed state of the scope gate**; `/coverage` for the full checklist × surface matrix; and blocker dialogs that put the agent's parked questions in front of you the moment they are recorded, so "never stall" doesn't quietly become "never finish" — with `/blockers` — a browsable list of every parked question, waiting ones first, answerable in place — as the way back to any you waved away.
+Alongside it: a status line carrying findings-by-severity, coverage and the **armed state of the scope gate**; `/coverage` for the full checklist × surface matrix; and notifications for new questions, without interrupting an active form. `/blockers` lists every parked question, waiting ones first, with explicit answer and dismiss actions. Escape from an approval leaves it unanswered.
 
 The panel also renders outside the TUI — `pired-state --watch` for a tmux pane, `--json` for your own status bar. Full tour: **[docs/ui.md](./docs/ui.md)**.
 

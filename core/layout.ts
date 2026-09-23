@@ -83,3 +83,23 @@ export const OVERLAY_HEIGHT_SHARE = 0.8;
  * tally, two section rules and the key legend.
  */
 export const BROWSER_CHROME = 6;
+
+
+/** The row budget used by both browser navigation and rendering. */
+export function browserBodyRows(view: string, maxLines: number): number {
+	const glyphLegend = ["coverage", "surface", "class", "element"].includes(view);
+	const chrome = BROWSER_CHROME + Number(glyphLegend);
+	return maxLines < chrome + 1 ? Math.max(1, maxLines) : Math.max(1, maxLines - chrome);
+}
+
+/** Invalid rail heights must not overrun the terminal or hide its close hint. */
+export function panelHeight(raw?: string): number | `${number}%` {
+	if (raw === undefined) return "50%";
+	const percent = /^(\d{1,3})%$/.exec(raw);
+	if (percent) {
+		const n = Number(percent[1]);
+		return n >= 1 && n <= 100 ? `${n}%` : "50%";
+	}
+	const n = Number(raw);
+	return Number.isInteger(n) && n > 0 ? n : "50%";
+}

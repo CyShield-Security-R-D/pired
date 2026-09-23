@@ -142,8 +142,8 @@ describe("dismiss hint", () => {
 });
 
 describe("dismissHint", () => {
-	it("names the shortcut where the terminal sends Meta", () => {
-		expect(dismissHint("linux")).toBe("alt+m expand · alt+p hide");
+	it("names function keys that do not depend on Alt handling", () => {
+		expect(dismissHint("linux")).toBe("F7 expand · F6 hide");
 	});
 
 	it("names the commands on macOS, where Option+P types π instead", () => {
@@ -163,7 +163,7 @@ describe("dismissHint", () => {
 	});
 
 	it("falls back to the way out when the rail is too narrow for both", () => {
-		expect(dismissHint("linux", 20)).toBe("alt+p to hide");
+		expect(dismissHint("linux", 20)).toBe("F6 to hide");
 		expect(dismissHint("darwin", 20)).toBe("/panel to hide");
 	});
 });
@@ -465,3 +465,34 @@ describe("saying whether the gate is armed", () => {
 	});
 });
 
+
+describe("reliable panel reading", () => {
+	it("offers the function-key fallback on Windows", () => {
+		expect(dismissHint("win32")).toBe("F7 expand · F6 hide");
+	});
+
+	it("keeps a selected finding visible while scrolling the framed body", () => {
+		const lines = ["top", ...Array.from({ length: 30 }, (_, i) => `row ${i}`), "bottom"];
+		const scrolled = scrollFramed(lines, 0, 8, 24);
+		expect(scrolled.lines).toContain("row 23");
+		expect(scrolled.lines[0]).toBe("top");
+		expect(scrolled.lines.at(-1)).toBe("bottom");
+		expect(scrollFramed(lines, scrolled.scroll, 8, 2).lines).toContain("row 1");
+	});
+
+	it("makes the end of a long finding reachable and preserves repro line breaks", () => {
+		const finding = { severity: "high", title: "Long finding", description: "Details. ".repeat(100),
+			repro: "FIRST_STEP\nSECOND_STEP", evidence: ["evidence/" + "a".repeat(120) + "/final.txt"] };
+		const opts = { finding, engagement: "lab", width: 50, maxLines: 12, frame: true, hint: "Esc back", ink, measure, truncate };
+		const first = renderFindingDetail(opts);
+		const last = renderFindingDetail({ ...opts, scroll: 99999 });
+		expect(last.join("\n")).toContain("final.txt");
+		expect(last.join("\n")).toContain("SECOND_STEP");
+		expect(first.join("\n")).not.toContain("final.txt");
+		for (const lines of [first, last]) {
+			expect(lines.length).toBeLessThanOrEqual(12);
+			expect(lines.at(-1)).toContain("╯");
+			expect(lines.join("\n")).toContain("Esc back");
+		}
+	});
+});
