@@ -343,14 +343,13 @@ export interface EngagementScope {
 	 */
 	maxAgents?: number;
 	/**
-	 * Tool names that spawn a subagent, when the loaded package does not use one
-	 * of the defaults.
+	 * Extra spawn-style tool names to cap, for a delegation package that is not
+	 * pi-subagents.
 	 *
-	 * pired ships no spawn machinery — the tool belongs to whichever subagent
-	 * package is loaded — so the cap has to recognise it by name. Getting the
-	 * name wrong fails open (the cap never fires) rather than blocking a
-	 * legitimate tool, which is the safer of the two mistakes but is worth
-	 * knowing about.
+	 * pired delegates through pi-subagents' `subagent` tool, which the gate knows
+	 * by name and vets in full; these names extend the generic per-call cap
+	 * (`spawn`/`delegate`) and share the session's maxAgents budget. An unknown
+	 * external tool the gate has never heard of cannot be counted.
 	 */
 	agentTools?: string[];
 	/**

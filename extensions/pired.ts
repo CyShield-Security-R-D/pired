@@ -31,9 +31,11 @@ import { promptBlocker } from "./lib/blocker-prompt.ts";
 import { exportFindingsMarkdown, notReportReady } from "../core/export.ts";
 import { bannerColumns, browserBodyRows, OVERLAY, OVERLAY_HEIGHT_SHARE, panelHeight, railColumns } from "../core/layout.ts";
 import type { BlockerRecord, Checklist, EngagementScope, FindingRecord, PassLens, Severity, TargetType } from "../core/ontology.ts";
-import type { Gate, ToolContext, ToolDefinition } from "../core/ports.ts";
+import type { ToolContext, ToolDefinition } from "../core/ports.ts";
 import { buildSystemPrompt, PIRED_PROFILES, type PiredProfile } from "../core/prompts.ts";
-import { createScopeGate, pickTargetType } from "../core/scope.ts";
+import { publishParentScope } from "../core/child.ts";
+import { createScopeGate, pickTargetType, type ScopeGate, scopeGuidance, summarizeScope } from "../core/scope.ts";
+import { buildPiredAgentDefinitions, eagerSubagentSchema, SUBAGENTS_ABSENT_NOTICE, SUBAGENTS_EAGER_NOTICE } from "../core/subagents.ts";
 import { renderCoveragePanel, type Tone } from "../core/coverage-panel.ts";
 import { complete } from "@earendil-works/pi-ai/compat";
 import type { AssistantMessage, Message, UserMessage } from "@earendil-works/pi-ai/compat";
@@ -61,6 +63,62 @@ import { toPiTool } from "./lib/tools.ts";
 const PIRED_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const SKILLS_DIR = join(PIRED_ROOT, "skills");
 const CHECKLISTS_DIR = join(PIRED_ROOT, "checklists");
+/**
+ * Absolute path to pired's child extension, resolved from this module's own
+ * location so it is right whether pired runs from source or a copied install.
+ * pi-subagents loads it into every pired worker (each agent's `extensions`),
+ * which is what gives a worker pired's record/recall bound to the same ledger.
+ */
+const CHILD_EXTENSION = join(PIRED_ROOT, "extensions", "child.ts");
+
+/**
+ * The pi-subagents runtime-agent registration contract (ADR-027). pired never
+ * imports pi-subagents; it emits this event and reads the result the listener
+ * writes back. `result` stays undefined when pi-subagents is absent — which is
+ * how graceful absence is detected — and otherwise carries a disposer or an
+ * error. The names are verified against pi-subagents 0.66 and 0.71 source.
+ */
+const RUNTIME_AGENT_REGISTER_EVENT = "pi-subagents:runtime-agent-register:v1";
+/**
+ * Emitted by pi-subagents 0.71 when a foreground child that was DETACHED later
+ * exits (`onDetachedExit` is its only caller). A normal foreground worker ends
+ * with the parent's own `subagent` tool execution, which is where pired refreshes
+ * and announces blockers; this subscription only covers a detached one.
+ */
+const SUBAGENT_FOREGROUND_COMPLETE_EVENT = "subagent:foreground-complete";
+/** pi-subagents tools pired hides: it delegates foreground only, so it wants no wait/supervisor tools. */
+const HIDDEN_SUBAGENT_TOOLS = new Set(["bg_wait", "subagent_supervisor"]);
+
+interface RuntimeAgentRegistration {
+	dispose(): void;
+}
+
+/**
+ * Register one runtime agent through the event contract.
+ *
+ * Returns `absent` when nothing handled the event (pi-subagents not installed),
+ * the disposer on success, or an error message on a rejected definition.
+ */
+function registerRuntimeAgent(
+	pi: ExtensionAPI,
+	name: string,
+	definition: unknown,
+): { absent: true } | { ok: true; registration: RuntimeAgentRegistration } | { ok: false; error?: string } {
+	const request: { version: number; name: string; definition: unknown; result?: unknown } = { version: 1, name, definition };
+	try {
+		pi.events.emit(RUNTIME_AGENT_REGISTER_EVENT, request);
+	} catch (err) {
+		return { ok: false, error: err instanceof Error ? err.message : String(err) };
+	}
+	const result = request.result as
+		| { ok?: boolean; error?: { message?: string }; registration?: RuntimeAgentRegistration }
+		| undefined;
+	if (result === undefined) return { absent: true };
+	if (result.ok === true && result.registration && typeof result.registration.dispose === "function") {
+		return { ok: true, registration: result.registration };
+	}
+	return { ok: false, error: result.error?.message };
+}
 
 // Brand and spinner are drawn through the active theme rather than hardcoded
 // truecolor: that way they degrade correctly on 256-color terminals and stay
@@ -257,7 +315,7 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	const services = makeHostServices();
 	let profile: PiredProfile = "review";
 	let scope: EngagementScope = defaultScope("review", "engagement");
-	let gate: Gate = createScopeGate(scope);
+	let gate: ScopeGate = createScopeGate(scope);
 	let workspace: Workspace | undefined;
 	let checklistClasses: string[] = [];
 	/**
@@ -294,6 +352,106 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	 * wants answered every time they look up, not once at startup. ADR-005.
 	 */
 	let foreignOrigin: string | undefined;
+
+	/**
+	 * Delegation state, all session-scoped.
+	 *
+	 * `delegationAvailable` gates the prompt's `<delegation>` block, so a model is
+	 * never pointed at workers that are not registered. `subagentsPresent` is
+	 * `undefined` until the first registration attempt settles it, `false` once we
+	 * have found pi-subagents absent (so before_agent_start stops retrying every
+	 * turn), and `true` when the agents are live. `registeredSignature` is the
+	 * model+thinking the agents were built for, so a model or thinking-level change
+	 * re-registers them with the child's model kept in step with the parent's.
+	 */
+	let agentRegistrations: RuntimeAgentRegistration[] = [];
+	let delegationAvailable = false;
+	let subagentsPresent: boolean | undefined;
+	let subagentsNotified = false;
+	/** Whether this session already said the installed pi-subagents costs its full schema every request. */
+	let eagerSchemaNotified = false;
+	/** Withdraws the scope this session published for its workers (core/child.ts publishParentScope). */
+	let withdrawScope: (() => void) | undefined;
+	let registeredSignature: string | undefined;
+	/** The most recent context, so a pi.events lifecycle callback (which carries none) can refresh the panel. */
+	let liveCtx: ExtensionContext | undefined;
+	/** Unsubscribe for the foreground-complete lifecycle subscription, torn down on shutdown. */
+	let foregroundCompleteOff: (() => void) | undefined;
+
+	const disposeAgents = (): void => {
+		for (const reg of agentRegistrations) {
+			try {
+				reg.dispose();
+			} catch {}
+		}
+		agentRegistrations = [];
+	};
+
+	/** The model+thinking the workers should be built for this turn. */
+	const delegationSignature = (model: string | undefined, thinking: string): string => `${model ?? ""}|${thinking}`;
+
+	/**
+	 * Register (or re-register) the four pired workers with pi-subagents.
+	 *
+	 * A no-op when the signature is unchanged and the agents are already live, so
+	 * this is safe to call every turn. On absence or a rejected definition it
+	 * rolls back to a clean state, turns delegation off, and says so once — pired
+	 * otherwise runs exactly as before, with no delegation guidance in the prompt.
+	 */
+	const registerPiredAgents = (ctx: ExtensionContext): void => {
+		if (!workspace) return;
+		const model = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
+		const thinking = (typeof pi.getThinkingLevel === "function" ? pi.getThinkingLevel() : ctx.thinkingLevel) ?? "off";
+		const signature = delegationSignature(model, thinking);
+		if (delegationAvailable && signature === registeredSignature) return;
+
+		disposeAgents();
+		delegationAvailable = false;
+		registeredSignature = undefined;
+
+		const definitions = buildPiredAgentDefinitions({
+			childExtension: CHILD_EXTENSION,
+			...(model ? { model } : {}),
+			thinking,
+			workspace: workspace.dir,
+			scopeGuidance: scopeGuidance(scope),
+		});
+		let absent = false;
+		let error: string | undefined;
+		for (const { name, definition } of definitions) {
+			const result = registerRuntimeAgent(pi, name, definition);
+			if ("absent" in result) {
+				absent = true;
+				break;
+			}
+			if (result.ok) {
+				agentRegistrations.push(result.registration);
+			} else {
+				error = result.error;
+				break;
+			}
+		}
+
+		if (absent || agentRegistrations.length !== definitions.length) {
+			disposeAgents();
+			subagentsPresent = absent ? false : subagentsPresent ?? true;
+			// Only the first time, and never for a transient re-registration after
+			// delegation was already working: a model swap that fails should not spam.
+			if (!subagentsNotified) {
+				subagentsNotified = true;
+				ctx.ui.notify(
+					absent
+						? SUBAGENTS_ABSENT_NOTICE
+						: `pired: could not register the pired workers${error ? ` — ${error}` : ""}; delegation is off.`,
+					"info",
+				);
+			}
+			return;
+		}
+		subagentsPresent = true;
+		delegationAvailable = true;
+		registeredSignature = signature;
+	};
 
 	pi.registerFlag("pired-profile", { description: "pired profile: review | recon | pentest", type: "string", default: "review" });
 	// The panel is the operator's view of the ledger, so it is on by default:
@@ -1211,10 +1369,20 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		railDetail = false;
 		panelOpen = false;
 		announcedBlockers.clear();
+		liveCtx = ctx;
+		// A fresh session re-evaluates delegation from scratch.
+		disposeAgents();
+		delegationAvailable = false;
+		subagentsPresent = undefined;
+		subagentsNotified = false;
+		eagerSchemaNotified = false;
+		registeredSignature = undefined;
 		const flag = pi.getFlag("pired-profile");
 		profile = typeof flag === "string" && (PIRED_PROFILES as readonly string[]).includes(flag) ? (flag as PiredProfile) : "review";
 		scope = loadScope(ctx.cwd, profile, ctx.isProjectTrusted());
-		gate = createScopeGate(scope);
+		// The subagent gate needs the engagement directory to refuse a worker cwd
+		// outside it; a launch of anything but the four pired workers is refused too.
+		gate = createScopeGate(scope, { cwd: ctx.cwd });
 
 		const dir = scope.workspace ? expandHome(scope.workspace) : join(homedir(), ".pired", "engagements", scope.engagement);
 		// Recorded once, so a later session opening the same engagement name from a
@@ -1241,6 +1409,13 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		// work in a shell whose cwd is the target. Without it the only way to write
 		// evidence where the ledger looks for it is to paste an absolute path.
 		process.env.PIRED_WORKSPACE = dir;
+		// Workers take their scope from here, in-process, keyed by this same
+		// directory — never from the scope.json written below, which is the
+		// panel's copy and which `write`, `edit` or a local bash redirect can
+		// change mid-session. Published wherever `scope` is (re)assigned; today
+		// that is only here.
+		withdrawScope?.();
+		withdrawScope = publishParentScope(globalThis, dir, scope);
 		// The scope is read from the target directory, so anything outside this
 		// process cannot see it. `pired-state` reads it from the workspace and had
 		// been finding nothing there since it shipped — its scope section never
@@ -1286,6 +1461,29 @@ export default function piredExtension(pi: ExtensionAPI): void {
 			pi.registerTool(toPiTool(tool, () => services, presentation));
 		}
 		pi.setActiveTools([...new Set([...pi.getActiveTools(), "record", "recall"])]);
+
+		// Delegation runs through pi-subagents (ADR-027): register the four pired
+		// workers now that the workspace and scope are ready. A worker is an
+		// in-process pi child that loads pired's child extension, so it writes to
+		// this same ledger. Absence is graceful — registerPiredAgents turns
+		// delegation off and the prompt simply omits the guidance.
+		registerPiredAgents(ctx);
+		// A normal worker ends with this session's own `subagent` tool execution,
+		// handled in tool_execution_end below. This covers the other way one can
+		// end in 0.71: a foreground child that was detached and exits later. The
+		// subscription is torn down at shutdown with the agent registrations.
+		try {
+			foregroundCompleteOff?.();
+			foregroundCompleteOff = pi.events?.on?.(SUBAGENT_FOREGROUND_COMPLETE_EVENT, () => {
+				const c = liveCtx;
+				if (!c) return;
+				void (async () => {
+					if (workspace) targetModel = await workspace.readModel();
+					await refreshStatus(c);
+					await announceNewBlockers(c);
+				})();
+			});
+		} catch {}
 
 		applyUiPolish(ctx);
 		await refreshStatus(ctx);
@@ -1461,18 +1659,62 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		return { messages: [...kept, ...add] };
 	});
 
-	pi.on("before_agent_start", (event) => {
+	pi.on("before_agent_start", (event, ctx) => {
 		// The backstop to the `input` handler: a queued follow-up, a steering
 		// message or a command that starts a run never passes through `input`, and
 		// every one of them means the model is wanted elsewhere.
 		stopScribe();
+		liveCtx = ctx;
+		// Keep the workers' model and thinking level in step with the parent's.
+		// registerPiredAgents is a no-op when nothing changed, and skips entirely
+		// once pi-subagents has been found absent, so this stays cheap per turn.
+		if (subagentsPresent !== false) registerPiredAgents(ctx);
+		// Once per session, and only when the workers are live: an older
+		// pi-subagents registers them fine but puts its whole `subagent` schema in
+		// front of every request. Checked here, not at session_start, because the
+		// lazy loader settles the active set in its own session_start handler.
+		if (delegationAvailable && !eagerSchemaNotified) {
+			try {
+				const all = typeof pi.getAllTools === "function" ? pi.getAllTools().map((t) => t.name) : undefined;
+				const active = typeof pi.getActiveTools === "function" ? pi.getActiveTools() : undefined;
+				if (Array.isArray(all) && Array.isArray(active) && eagerSubagentSchema(all, active)) {
+					eagerSchemaNotified = true;
+					ctx.ui.notify(SUBAGENTS_EAGER_NOTICE, "info");
+				}
+			} catch {}
+		}
+		// pired delegates in the foreground only, so the wait/supervisor tools
+		// pi-subagents adds to the parent are hidden — re-applied each turn because
+		// the lazy loader can re-add them. `subagent`/`subagents_enable` stay.
+		try {
+			const active = typeof pi.getActiveTools === "function" ? pi.getActiveTools() : undefined;
+			if (Array.isArray(active) && active.some((name) => HIDDEN_SUBAGENT_TOOLS.has(name))) {
+				pi.setActiveTools(active.filter((name) => !HIDDEN_SUBAGENT_TOOLS.has(name)));
+			}
+		} catch {}
 		return {
-			systemPrompt: `${event.systemPrompt}\n\n${buildSystemPrompt({ profile, scope, checklist: checklistClasses, workspace: workspace?.dir, targetModel, ...(passNow() ? { pass: passNow() } : {}) })}`,
+			systemPrompt: `${event.systemPrompt}\n\n${buildSystemPrompt({ profile, scope, checklist: checklistClasses, workspace: workspace?.dir, targetModel, delegation: delegationAvailable, ...(passNow() ? { pass: passNow() } : {}) })}`,
 		};
 	});
 
+	// pi-subagents registrations are process-local and outlive the session unless
+	// disposed, and a re-registration on the next session would collide on the
+	// agent names. Tear them down (and the lifecycle subscription) on shutdown.
+	pi.on("session_shutdown", () => {
+		disposeAgents();
+		delegationAvailable = false;
+		registeredSignature = undefined;
+		withdrawScope?.();
+		withdrawScope = undefined;
+		try {
+			foregroundCompleteOff?.();
+		} catch {}
+		foregroundCompleteOff = undefined;
+	});
+
 	pi.on("tool_call", async (event, ctx) => {
-		const decision = await gate({ name: event.toolName, args: event.input });
+		// The id is how the gate knows which end releases a running worker.
+		const decision = gate({ name: event.toolName, args: event.input, id: event.toolCallId });
 		if (decision.allow) return undefined;
 		// The refusal reaches the model as a tool result, but the operator needs to
 		// see it too: an out-of-scope call that is silently blocked is
@@ -1869,6 +2111,21 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	};
 
 	pi.on("tool_execution_end", async (event, ctx) => {
+		// Every `subagent` end, allowed or refused: pi emits it for a blocked call
+		// too, and the gate matches it to the launch it let through by id. It is
+		// the moment a worker is known to be finished, so the next may launch, and
+		// the moment a launch that started no child gets its budget back.
+		if (event.toolName === "subagent") {
+			gate.settle({ id: event.toolCallId, name: event.toolName, isError: event.isError, result: event.result });
+			// A worker writes to the ledger as it works, and parks its questions as
+			// blockers because contact_supervisor is refused — this is where the
+			// operator hears about them. pi-subagents' foreground-complete event
+			// fires only for detached runs, so it cannot be the cue.
+			if (workspace) targetModel = await workspace.readModel();
+			await refreshStatus(ctx);
+			await announceNewBlockers(ctx);
+			return;
+		}
 		if (event.toolName === "record" && !event.isError) {
 			const details = (event.result as { details?: { kind?: unknown } } | undefined)?.details;
 			// Re-read only when the model actually changed. The next turn's prompt

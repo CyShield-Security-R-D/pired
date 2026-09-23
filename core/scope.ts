@@ -10,7 +10,8 @@
  */
 
 import type { EngagementScope, ScopeTargets, TargetType } from "./ontology.ts";
-import type { Gate, GateDecision, ToolCall } from "./ports.ts";
+import type { GateDecision, ToolCall } from "./ports.ts";
+import { PIRED_AGENT_NAMES } from "./subagents.ts";
 
 // --- IPv4 helpers -----------------------------------------------------------
 
@@ -294,13 +295,231 @@ const LOCAL_TOOLS = new Set<string>([
 export const DEFAULT_MAX_AGENTS = 8;
 
 /**
- * Tool names taken to mean "spawn a subagent".
- *
- * pired ships no spawn machinery, so the cap has to recognise someone else's
- * tool by name. Wrong name means the cap never fires, which is why it is
- * overridable per engagement rather than only a constant here.
+ * The pi-subagents lazy-loader tool. It only makes the `subagent` tool active;
+ * it launches nothing, so it is always allowed and never charged to the budget.
  */
-const AGENT_TOOLS = new Set<string>(["spawn", "subagent", "delegate"]);
+const SUBAGENT_ENABLE_TOOL = "subagents_enable";
+
+/**
+ * Generic spawn-tool names, kept as a safety net for a package that is not
+ * pi-subagents.
+ *
+ * pired itself delegates only through pi-subagents' `subagent` tool, which has
+ * its own richer gate below (`checkSubagentLaunch`). `subagent` is deliberately
+ * NOT in this set — a call to it must reach that gate, not this plain per-call
+ * counter. Engagements can add other names via `agentTools`; all of them share
+ * the one session budget.
+ */
+const AGENT_TOOLS = new Set<string>(["spawn", "delegate"]);
+
+/**
+ * Management/control actions on the `subagent` tool that only read state.
+ *
+ * These are allowed and never counted — an operator (or the model on their
+ * behalf) has to be able to see the fleet and run doctor. Everything else in
+ * management mode creates, changes, or destroys agents, runs, schedules, or
+ * config, which pired does not let a delegated flow do, so it is denied.
+ */
+const SUBAGENT_READONLY_ACTIONS = new Set<string>([
+	"list", "get", "models", "children.list", "guide", "status", "doctor", "validate",
+	"watchdog.status", "watchdog.check", "watchdog.recommend-model",
+	"lane.status", "refine.show", "mission.list", "mission.show",
+	"inspector.status", "project.status",
+	"schedule.list", "schedule.show", "schedule.history", "debug.run",
+]);
+
+/**
+ * The only top-level keys a pired worker launch may carry.
+ *
+ * An allowlist, because the denylist it replaced kept missing things. The
+ * `subagent` schema has some eighty top-level keys and changed between 0.66 and
+ * 0.71, and several of them move work outside the scope gate or around the
+ * worker definition pired registered. `gate` and `acceptance.verify` run a host
+ * shell command after the worker, through `spawn(..., {shell:true})`, where no
+ * tool_call hook sees it: a probe's `gate` wrote a marker file and went on to
+ * curl evil.example.com, while the same command through `bash` was refused.
+ * `model` with a `:max` suffix sends client code to whichever provider the call
+ * names. `context:"fork"` hands the worker the parent's whole transcript.
+ * `sessionDir` moves the child's session out of the directory the accounting
+ * reads. The registered definition is the contract; a launch says which worker,
+ * what to do, and at most where inside the engagement to do it.
+ *
+ * `async` and `context` are on the list only for the values the definition
+ * already sets (`false`, `"fresh"`), which a model restating them should not be
+ * refused for. There is no display-only key to add: neither version has a label
+ * or description on a launch, and the progress and artifact switches
+ * (`includeProgress`, `chatProgress`, `artifacts`) change what lands in this
+ * session's context or on disk.
+ */
+const LAUNCH_KEYS = new Set<string>(["agent", "task", "cwd", "async", "context"]);
+
+/** The value a constrained launch key must hold, when it is present at all. */
+const LAUNCH_KEY_VALUES: Readonly<Record<string, unknown>> = { async: false, context: "fresh" };
+
+/**
+ * Why the keys a model is likeliest to reach for are refused. A bare "not
+ * allowed" gets retried with the next field over; a reason says what pired
+ * holds fixed instead.
+ */
+const LAUNCH_KEY_REASONS: Readonly<Record<string, string>> = {
+	gate: "it runs a shell command on this host after the worker, outside pired's scope gate",
+	acceptance: "its verify commands run on this host outside pired's scope gate, and the worker's handoff is already fixed",
+	model: "a worker runs on your model and thinking level",
+	fast: "a worker runs on your model and tier",
+	thinking: "a worker runs at your thinking level",
+	async: "workers run in the foreground (async:false) so their work stays accountable to this session",
+	context: "a worker starts fresh (context:\"fresh\"); put what it needs in the task, not your transcript",
+	sessionDir: "a worker's session stays where pired's accounting reads it",
+	timeoutMs: "a worker's time limit is set by its definition",
+	maxRuntimeMs: "a worker's time limit is set by its definition",
+	toolBudget: "a worker's tool budget is set by its definition",
+	usageBudget: "a worker's budget is set by its definition",
+	output: "a worker hands back at most 200 words and records to the ledger",
+	outputMode: "a worker hands back at most 200 words and records to the ledger",
+	outputSchema: "a worker hands back at most 200 words and records to the ledger",
+	skill: "a worker loads no skills beyond its definition",
+	tasks: "launch one worker per call",
+	chain: "launch one worker per call",
+	parallel: "launch one worker per call",
+	workflow: "scripted workflows are not allowed",
+	workflowScript: "scripted workflows are not allowed",
+	workflowScriptPath: "scripted workflows are not allowed",
+	worktree: "workers share the engagement directory",
+	isolation: "workers share the engagement directory",
+	extensionBindings: "a worker's extensions are pired's own",
+};
+
+function launchKeyRefusal(key: string): SubagentLaunchDecision {
+	const why = LAUNCH_KEY_REASONS[key];
+	return {
+		allow: false,
+		count: 0,
+		reason: `Subagent launch field \`${key}\` is not allowed${why ? ` — ${why}` : ""}. Launch a pired worker with { agent, task } only (a cwd inside the engagement is also accepted); its registered definition fixes everything else.`,
+	};
+}
+
+/** The outcome of vetting one `subagent` tool call. */
+export interface SubagentLaunchDecision {
+	allow: boolean;
+	reason?: string;
+	/** Children this call would launch, to charge against the session budget (0 for a non-launch). */
+	count: number;
+}
+
+/** What `checkSubagentLaunch` needs from the session to decide. */
+export interface SubagentGateContext {
+	/** Agent names treated as pired's own workers. */
+	agents: ReadonlySet<string>;
+	/** The engagement directory; a launch whose `cwd` resolves outside it is refused. */
+	cwd?: string;
+	/** Children already launched this session. */
+	spawned: number;
+	/** The per-session cap (0 disables delegation). */
+	maxAgents: number;
+	/** A launch this gate allowed has not finished executing yet. */
+	running?: boolean;
+}
+
+/** Forward slashes, and an upper-case drive letter, so a Windows path compares with itself. */
+function slashed(path: string): string {
+	return path.replace(/\\/g, "/").replace(/^([a-z]):/, (_, drive: string) => `${drive.toUpperCase()}:`);
+}
+
+/**
+ * Whether `candidate` resolves to `base` or somewhere under it.
+ *
+ * Resolved the way pi-subagents resolves a launch's cwd — `path.resolve` against
+ * the session's directory, so a relative path is taken from the engagement and
+ * `..` is followed — but without `node:path`, which core may not import. The
+ * earlier check compared the strings, so `src` and `/eng/src` were refused with
+ * a reason saying the cwd had to stay inside the engagement, which it did.
+ */
+export function isWithinDir(base: string, candidate: string): boolean {
+	const root = collapsePath(slashed(base));
+	const c = slashed(candidate);
+	const absolute = c.startsWith("/") || /^[A-Z]:\//.test(c);
+	const target = collapsePath(absolute ? c : `${slashed(base)}/${c}`);
+	return target === root || target.startsWith(`${root}/`);
+}
+
+/**
+ * Vet one `subagent` tool call against pired's delegation policy.
+ *
+ * pired delegates only to its own foreground workers. A launch is allowed when
+ * it names one pired worker and carries nothing outside `LAUNCH_KEYS`, its `cwd`
+ * (if any) is the engagement directory or under it, no other launch is still
+ * running, and one more child fits the `maxAgents` budget. Everything else is
+ * refused with a reason naming what to drop: a builtin or external-runner agent
+ * (claude-code, codex-exec, cursor-agent …), any per-call override, a second
+ * launch while one runs, and any management action that mutates agents, runs
+ * or config. Read-only management (list/status/doctor …) is allowed and
+ * uncounted.
+ *
+ * One at a time is enforced here rather than trusted: pi runs the tool calls of
+ * one assistant message in parallel unless a tool declares itself sequential,
+ * and `subagent` does not, so a model that emitted two launches in one message
+ * had two workers sending requests to one local GPU at once.
+ */
+export function checkSubagentLaunch(rawArgs: unknown, ctx: SubagentGateContext): SubagentLaunchDecision {
+	const args = (rawArgs !== null && typeof rawArgs === "object" && !Array.isArray(rawArgs) ? rawArgs : {}) as Record<string, unknown>;
+
+	const action = typeof args.action === "string" ? args.action.trim() : undefined;
+	if (action) {
+		if (SUBAGENT_READONLY_ACTIONS.has(action)) return { allow: true, count: 0 };
+		return {
+			allow: false,
+			count: 0,
+			reason: `Subagent management action "${action}" is not allowed; pired permits only read-only inspection (list, status, doctor, …) and launching its own workers.`,
+		};
+	}
+
+	if (ctx.maxAgents === 0) {
+		return { allow: false, count: 0, reason: "Delegation is disabled for this engagement (maxAgents=0). Do the work in this session." };
+	}
+
+	for (const [key, value] of Object.entries(args)) {
+		if (value === undefined) continue;
+		if (!LAUNCH_KEYS.has(key)) return launchKeyRefusal(key);
+		if (key in LAUNCH_KEY_VALUES && value !== LAUNCH_KEY_VALUES[key]) return launchKeyRefusal(key);
+	}
+
+	const agent = args.agent;
+	if (agent === undefined) {
+		return { allow: false, count: 0, reason: "Subagent launch names no agent; pired allows only its own workers (pired-scout, pired-investigate, pired-verify, pired-escalate)." };
+	}
+	if (typeof agent !== "string" || !ctx.agents.has(agent)) {
+		const shown = typeof agent === "string" ? agent : JSON.stringify(agent);
+		return { allow: false, count: 0, reason: `Only pired workers may be launched (pired-scout, pired-investigate, pired-verify, pired-escalate); refused: ${shown}.` };
+	}
+
+	const cwd = args.cwd;
+	if (cwd !== undefined && (typeof cwd !== "string" || ctx.cwd === undefined || !isWithinDir(ctx.cwd, cwd))) {
+		const shown = typeof cwd === "string" ? cwd : JSON.stringify(cwd);
+		return {
+			allow: false,
+			count: 0,
+			reason: `A worker's cwd must be the engagement directory${ctx.cwd ? ` (${ctx.cwd})` : ""} or a directory inside it; refused: ${shown}. Omit cwd to use the engagement directory.`,
+		};
+	}
+
+	if (ctx.running) {
+		return {
+			allow: false,
+			count: 0,
+			reason: "A pired worker launched from this session is still running, and workers run one at a time. Wait for its handoff, then launch the next in a later message.",
+		};
+	}
+
+	if (ctx.spawned + 1 > ctx.maxAgents) {
+		const left = Math.max(0, ctx.maxAgents - ctx.spawned);
+		return {
+			allow: false,
+			count: 0,
+			reason: `Subagent budget spent: ${ctx.maxAgents} per session, ${ctx.spawned} already launched (${left} left). Record what the existing workers returned and do the rest here — or raise maxAgents in the scope file.`,
+		};
+	}
+	return { allow: true, count: 1 };
+}
 
 /** A property name that plausibly holds a network destination (matched case-insensitively). */
 function isTargetKey(key: string): boolean {
@@ -341,22 +560,91 @@ function collectTargetsFromArgs(args: unknown): { urls: string[]; hosts: string[
 	return { urls, hosts };
 }
 
+/** Extra facts the gate needs that are not in the scope file. */
+export interface ScopeGateOptions {
+	/** The engagement directory, so a `subagent` launch whose `cwd` resolves outside it is refused. */
+	cwd?: string;
+	/** The agent names to treat as pired's own workers; defaults to the four built-ins. */
+	agents?: ReadonlySet<string>;
+}
+
+/** A tool call as the host hands it to the gate: the port's call, plus the id the host will report its end under. */
+export type GatedToolCall = ToolCall & { id?: string };
+
+/** What the host reports when a tool call's execution ends (pi's `tool_execution_end`). */
+export interface ToolCallEnd {
+	/** The id the call reached the gate under. */
+	id?: string;
+	name: string;
+	isError: boolean;
+	/** The tool's result. For `subagent`, pi-subagents lists the children that ran in `details.results`. */
+	result?: unknown;
+}
+
+/**
+ * The gate, plus the one thing it has to hear back: that a `subagent` call it
+ * allowed has finished. Without it the gate cannot know a worker is still
+ * running, and cannot give back the budget of a launch that never started one.
+ */
+export type ScopeGate = ((call: GatedToolCall) => GateDecision) & {
+	settle(end: ToolCallEnd): void;
+};
+
+/** How many children a `subagent` result says ran; 0 when it lists none. */
+function childrenInResult(result: unknown): number {
+	const results = (result as { details?: { results?: unknown } } | null | undefined)?.details?.results;
+	return Array.isArray(results) ? results.length : 0;
+}
+
 /**
  * Build the scope gate used before every tool call. Bash is checked by extracting
  * targets from its command; other tools by their url/target/host/ip arguments.
  * pired's own tools and local file tools are always allowed.
+ *
+ * Delegation is gated in two places that share one session budget: the
+ * pi-subagents `subagent` tool goes through `checkSubagentLaunch` (one pired
+ * worker per call, no overrides, in-engagement cwd, one at a time, read-only
+ * management), and any other spawn-style tool name is capped per call. The
+ * budget is per session on purpose — the gate is built at session start and a
+ * counter is all it can honestly hold, and a fresh session getting a fresh
+ * budget is what an operator restarting a run expects.
+ *
+ * A launch is charged when the gate allows it, which is the only moment the
+ * gate can stop the next one, and refunded by `settle` when it ends in an error
+ * with no child in its result: a launch pi-subagents rejected — an unknown
+ * model, a cwd that does not exist, a malformed project settings file — started
+ * nothing, and charging it left "8 already launched" on a session that had run
+ * none.
  */
-export function createScopeGate(scope: EngagementScope): Gate {
+export function createScopeGate(scope: EngagementScope, options: ScopeGateOptions = {}): ScopeGate {
 	const maxAgents = typeof scope.maxAgents === "number" && scope.maxAgents >= 0
 		? scope.maxAgents
 		: DEFAULT_MAX_AGENTS;
-	const agentTools = scope.agentTools?.length ? new Set(scope.agentTools) : AGENT_TOOLS;
-	// Per session, not per engagement: the gate is built at session start and a
-	// counter is all it can honestly hold. A fresh session gets a fresh budget,
-	// which is the behaviour an operator restarting a run expects.
+	// Custom external tools extend the defaults; they never uncap the built-ins.
+	const agentTools = new Set([...AGENT_TOOLS, ...(scope.agentTools ?? [])]);
+	const piredAgents = options.agents ?? PIRED_AGENT_NAMES;
 	let spawned = 0;
+	/** The allowed `subagent` launch whose execution has not ended, with what it was charged. */
+	let running: { id?: string; count: number } | undefined;
 
-	return (call: ToolCall): GateDecision => {
+	const gate = (call: GatedToolCall): GateDecision => {
+		// The lazy loader only makes `subagent` active; it launches nothing.
+		if (call.name === SUBAGENT_ENABLE_TOOL) return { allow: true };
+		if (call.name === "subagent") {
+			const decision = checkSubagentLaunch(call.args, {
+				agents: piredAgents,
+				...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
+				spawned,
+				maxAgents,
+				running: running !== undefined,
+			});
+			if (!decision.allow) return { allow: false, reason: decision.reason };
+			if (decision.count > 0) {
+				spawned += decision.count;
+				running = { ...(call.id !== undefined ? { id: call.id } : {}), count: decision.count };
+			}
+			return { allow: true };
+		}
 		if (agentTools.has(call.name)) {
 			if (spawned >= maxAgents) {
 				return {
@@ -410,9 +698,53 @@ export function createScopeGate(scope: EngagementScope): Gate {
 		}
 		return { allow: true };
 	};
+
+	/**
+	 * A tool call ended. Only the running launch's own end releases it: a second
+	 * launch the gate refused in the same message ends too, immediately, and
+	 * must not free the slot of the worker still running.
+	 */
+	const settle = (end: ToolCallEnd): void => {
+		if (end.name !== "subagent" || running === undefined) return;
+		if (running.id !== undefined && end.id !== running.id) return;
+		if (end.isError && childrenInResult(end.result) === 0) spawned = Math.max(0, spawned - running.count);
+		running = undefined;
+	};
+
+	return Object.assign(gate, { settle });
 }
 
 // --- Summary ----------------------------------------------------------------
+
+function hasScopeTargets(scope: EngagementScope): boolean {
+	const t = scope.targets ?? {};
+	return Boolean(t.domains?.length || t.ips?.length || t.cidrs?.length || t.urls?.length);
+}
+
+/**
+ * What the model may touch, in the one wording both the operator's prompt and
+ * every pired worker's prompt use. Two renderings of one scope disagreed once:
+ * the parent read a review engagement (mode off, no targets) as "read-only local
+ * work is fine" while its worker read the same file as "off / not authorized —
+ * stop", parked a blocker, and the parent stopped behind it (measured on the
+ * 2026-09-24 smoke run: an empty review after 61 s).
+ */
+export function scopeGuidance(scope: EngagementScope | undefined): string {
+	if (!scope || (scope.mode === "off" && !hasScopeTargets(scope))) {
+		return "No engagement scope is loaded. Offensive and network actions are blocked until a scope file is present and marked authorized. Read-only local work (e.g. code review) is still fine.";
+	}
+	const lines = [
+		`Authorized engagement: ${summarizeScope(scope)}`,
+		"Touch only these targets; anything else is out of scope — stop and say so.",
+	];
+	const t = scope.targets ?? {};
+	if (t.domains?.length) lines.push(`domains: ${t.domains.join(", ")}`);
+	if (t.ips?.length) lines.push(`ips: ${t.ips.join(", ")}`);
+	if (t.cidrs?.length) lines.push(`cidrs: ${t.cidrs.join(", ")}`);
+	if (t.urls?.length) lines.push(`urls: ${t.urls.join(", ")}`);
+	if (scope.exclude && Object.keys(scope.exclude).length > 0) lines.push(`excluded: ${JSON.stringify(scope.exclude)}`);
+	return lines.join("\n");
+}
 
 export function summarizeScope(scope: EngagementScope): string {
 	const t = scope.targets ?? {};

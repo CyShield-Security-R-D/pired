@@ -133,11 +133,18 @@ The same line rides in the agent's standing context block, beside the coverage m
 
 **The brief is built from the record and the class contract, never from the conversation.** That is what makes it safe to hand to a subagent: it opens with *"You have not seen the reasoning that produced it and you do not need it."* A verifier that inherits the finder's reasoning agrees with it — measured at precision 0.059 → 0.038, for 2.5× the wall clock.
 
-So a delegated verifier needs nothing from the parent conversation:
+So a delegated verifier needs nothing from the parent conversation. Hand the finding to a
+`pired-verify` worker, which loads pired's own tools and fetches its own brief:
 
-```bash
-pired-ledger recall challenge id=f3                       # the child fetches its own brief
-pired-ledger record kind=finding id=f3 status=confirmed \
+```
+subagent agent=pired-verify task="Refute or confirm finding f3; recall challenge id=f3 first."
+```
+
+The worker then, through pired's shared `record`/`recall`:
+
+```
+recall challenge id=f3                                    # the child fetches its own brief
+record kind=finding id=f3 status=confirmed \
     control="blind timing: ;sleep 9 -> 9.04s vs ;sleep 0 -> 0.07s"
 ```
 
@@ -327,11 +334,38 @@ pired-state [--engagement NAME] [--mode state|coverage|findings|blockers]
 
 Defaults to the most recently modified engagement under `~/.pired/engagements/`. `--json` emits the underlying data structure. See [The engagement panel](panel.md#outside-the-tui-pired-state).
 
+## Delegation
+
+pired registers four agents with [pi-subagents](https://github.com/nicobailon/pi-subagents) — `pired-scout`, `pired-investigate`, `pired-verify`, `pired-escalate` — and the model launches them with the `subagent` tool. A child is an in-process foreground pi session that loads pired's own `record`/`recall` bound to the parent's workspace and arms the engagement scope gate, so its records reach the ledger the parent reads. There is no delegation CLI: a child holds the real tools, not a `bash` shim. See [Delegation](delegation.md) and [ADR-027](decisions.md).
+
+```
+subagent agent=pired-scout       task="Map the auth surface under src/api."
+subagent agent=pired-investigate task="Deep-dive f3's endpoint e_search; recall it first."
+subagent agent=pired-verify      task="Refute finding f3; recall challenge id=f3 first."
+subagent agent=pired-escalate    task="Chain the open findings; cite record IDs and file:line."
+```
+
+The parent keeps the plan, cross-component reasoning and final severity judgment; the prompt authorizes delegation but never forces it.
+
+### Subagent budget
+
+```jsonc
+{ "maxAgents": 8 }   // in the scope file
+```
+
+`maxAgents` defaults to **8 per session**, and `0` disables delegation entirely. Each launch the gate allows counts against it, and one that pi-subagents rejects before a worker starts is refunded. Past the budget the gate refuses with a reason, and the work continues in the current session. It is per session rather than per engagement because the gate is built at session start, so a restarted run gets a fresh budget.
+
+The parent gate allows a `subagent` launch in one shape only: `{agent, task}`, where `agent` is one of the four pired agents. The only additions it accepts are a `cwd` inside the engagement directory, and `async: false` or `context: "fresh"`, which restate the definition. Every other field is refused with a reason that names it. That covers `gate` and `acceptance`, whose verify commands run on the host outside the scope gate. It also covers `model` and thinking overrides, `context: "fork"`, `sessionDir`, per-call limits, fan-outs and workflow scripts. Workers run one at a time: a launch while another is still running is refused. Agent and config management is refused. Read-only `list`/`status`/`doctor` are allowed and uncounted. External runner agents (claude-code, codex-exec, cursor-agent, …) are therefore refused.
+
+The child fails closed the other way. Its `tools` allowlist names `record`, and pi-subagents fails a child at start if that tool's extension did not load, so a child never runs with the gate off. The gate reports the boundary; it is not a shell sandbox, so restate the authorized targets in every task. See [Delegation](delegation.md#what-the-gate-and-the-child-enforce) and [`ops-delegation`](skills.md).
+
+`agentTools` is for other packages. `spawn` and `delegate` are counted against the same budget, one per call, and `agentTools` adds more names to that count. `subagent` is not on the list, because it goes through the launch check above. A tool name the gate does not recognise **fails open**: the cap never fires for it.
+
 ## `pired-ledger`
 
-`record` and `recall`, for a process that never loaded pired's extension.
+`record` and `recall`, for a process that never loaded pired's extension: a shell script, CI, or an agent you started outside pi yourself (Claude Code, Codex, Cursor). pired's gate refuses to launch such runners through the `subagent` tool.
 
-pi-subagents spawns children with extension bindings stripped, so a delegated child has neither tool — everything the ledger is for is invisible to exactly the agents you were told to delegate to. This is the same two tools, over the same `Workspace`, through the same `core/tools.ts` code the extension calls, reached over `bash`.
+pired's own agents do not need it: they load `extensions/child.ts` and get the real tools and the scope gate (see [delegation](delegation.md)). This is the same two tools, over the same `Workspace`, through the same `core/tools.ts` code the extension calls, reached over `bash`.
 
 ```bash
 pired-ledger recall <query> [key=value]...
@@ -350,19 +384,7 @@ pired-ledger record kind=finding title="SQLi in /search" severity=high target=e_
 
 Repeating a key builds a list, as `evidence` does above. Exit status is `0` on success, `1` when the tool rejected the call, `2` for a usage error or a missing engagement.
 
-`scope` prints what the engagement authorizes — and says plainly that it reports the boundary rather than enforcing one. **Scope is not inherited by a child**: `createScopeGate` lives in the parent's tool pipeline, and a child outside the extension is outside the gate. Restate the authorized targets in every handoff. See [`ops-delegation`](skills.md).
-
-### Subagent budget
-
-pired ships no spawn machinery — delegation comes from whichever subagent package is loaded — but the scope gate sees the call, so the cap is real:
-
-```jsonc
-{ "maxAgents": 8, "agentTools": ["spawn"] }   // in the scope file
-```
-
-`maxAgents` defaults to **8 per session**; `0` disables delegation entirely. Past the budget the gate refuses with a reason, and the work continues in the current session. It is per session rather than per engagement because the gate is built at session start — a restarted run gets a fresh budget.
-
-`agentTools` only matters if the loaded package names its tool something other than `spawn`, `subagent` or `delegate`. A name the gate does not recognise **fails open** — the cap never fires — so set it if your package differs.
+`scope` prints what the engagement authorizes — and says plainly that it reports the boundary rather than enforcing one. **Scope does not reach a process outside pi**: `createScopeGate` runs in pi's tool pipeline, and a script or external runner is outside the gate. Restate the authorized targets in every handoff. See [`ops-delegation`](skills.md).
 
 ## Environment variables
 
@@ -385,8 +407,9 @@ The agent has two tools beyond pi's own. They are documented in full at [Tools](
 ```
 record   kind=note|evidence|host|service|endpoint|param|tech
               |hypothesis|finding|blocker|loot
-recall   query=status|next|coverage|surface|gaps|inventory|hypotheses
-              |findings|loot|blockers|notes
+recall   query=status|next|coverage|surface|gaps|cleared|pass|inventory
+              |hypotheses|findings|finding|challenge|loot|blockers|notes
+              |model|context
 ```
 
 ## Files pired reads

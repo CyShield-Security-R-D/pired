@@ -105,15 +105,19 @@ export function toPiProvider(cfg: LocalProviderConfig): PiProviderConfig {
  * Mirror pired's providers into pi's own `~/.pi/agent/models.json`.
  *
  * `registerProvider` only exists inside the process that loaded this extension.
- * pi-subagents spawns async children with extension bindings deliberately
- * stripped (`omitExtensionBindingsEnv`), so a child never loads pired and never
- * sees a provider pired registered. The child then cannot resolve its model,
- * reports `0 turns | 0 tokens | 0 tools`, and a parent that was told to delegate
- * and then block on the fleet waits on it forever — a silent deadlock at ~0% CPU
- * that only an external timeout ends. Two full mlflow scans died this way.
+ * pired's own delegation children need nothing from this file: they are
+ * in-process foreground pi sessions (ADR-027) and see the providers pired
+ * registered. The mirror is for a *separate* pi process — a bare `pi` the
+ * operator starts, or pi-subagents' out-of-process external/background runners —
+ * which never loaded pired and would otherwise fail to resolve a pired-only
+ * provider. (An earlier note here blamed `omitExtensionBindingsEnv` for
+ * "stripping" a child's access; that reads one metadata env var's removal as
+ * whole-extension isolation. See ADR-027 for the correction. The measured
+ * `0 turns | 0 tokens | 0 tools` deadlock was an out-of-process child that could
+ * not resolve its model, and the mirror is what fixes exactly that case.)
  *
  * pi reads `~/.pi/agent/models.json` natively in *every* process, extension or
- * not, so writing the same providers there makes them resolvable to children.
+ * not, so writing the same providers there makes them resolvable out of process.
  *
  * Merges by provider id and preserves everything else in the file: a user's own
  * entries are never touched, and a no-op change never rewrites the file.

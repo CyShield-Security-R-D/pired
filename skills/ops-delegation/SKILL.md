@@ -1,91 +1,96 @@
 ---
 name: ops-delegation
-description: Use when a spawn/sub-agent tool exists — delegate noisy recon and adversarial verification to a child to keep parent context clean and cut false positives.
+description: Use when the pi-subagents `subagent` tool is available — delegate noisy recon and adversarial verification to a pired worker to keep the parent context clean and cut false positives.
 ---
 
-# Delegating to sub-agents
+# Delegating to pired workers
 
 Goal: use a child agent to keep the **parent's context clean** and to **reduce false positives**, not for raw parallelism. The two big wins on local models are context isolation (a noisy enumeration burns the child's context, and only a distilled result returns) and adversarial verification (a fresh agent tries to *refute* a hypothesis before it becomes a finding).
 
+pired delegates through the **pi-subagents** package. It registers four workers you launch with the `subagent` tool; each starts in a fresh context with your model, runs pired's own child extension (so it has `record`/`recall` bound to the same ledger and the same scope gate), and returns a short handoff. There is no separate native delegate tool — the four workers below are it.
+
 ## 0. Availability
-pired ships **no** sub-agent machinery itself. Delegation exists only if a `spawn`/subagent tool is loaded (e.g. the external **pi-subagents** package: roles like scout, reviewer, oracle, worker, researcher, delegate; or pired's documented `investigate`/`verify` roles). First check your tool list:
-- If a `spawn`-style tool is present, use it as below.
-- If not, don't fabricate it — do the work inline but apply the same discipline: capture raw output to `evidence/`, distill into `record`, and self-review hypotheses adversarially before promoting them.
+When pi-subagents is loaded and the workers registered, a `<delegation>` block in your prompt lists them, and that is your standing authorization to use them. Delegation is off in two cases:
+- **No `<delegation>` block:** pi-subagents is not loaded, or the workers did not register. The operator was shown the install command (`pi install npm:pi-subagents`).
+- **A block that says delegation is off:** the engagement set `maxAgents=0`, and the gate refuses every launch.
 
-## 0b. The child has no tools of yours — give it `pired-ledger`
-pi-subagents spawns children with extension bindings stripped, so **a child never loads pired and has no `record` or `recall`**. It reaches the ledger over `bash` instead, through the CLI that wraps the same two tools on the same workspace:
-```bash
-pired-ledger recall gaps                     # the same matrix you see
-pired-ledger recall challenge id=f3          # the brief for one finding
-pired-ledger record kind=endpoint host=h1 method=GET path=/api/user file=api/user.go
-pired-ledger record kind=hypothesis statement="..." target=e_search class=sqli outcome=testing
-pired-ledger scope                           # what the engagement authorizes
+Either way, do the work inline: capture raw output to `evidence/`, distill it into `record`, and review hypotheses adversarially yourself before promoting them.
+
+The `subagent` tool may start hidden behind a small `subagents_enable` tool; call that first, then `subagent`. pired hides pi-subagents' background tools (`bg_wait`, `subagent_supervisor`) on purpose: pired workers run in the **foreground**, one at a time, so their work stays accountable to this session.
+
+Launch with `agent` and `task`, and nothing else. The worker's definition already fixes its model and effort (yours), its fresh context, its timeout and its tools. pired's gate refuses a launch that tries to override any of that. It also refuses a `gate`/`acceptance` check, because that is a shell command pi-subagents runs on the host, outside the scope gate. A refused launch costs a turn.
+
+## 0a. The four pired workers
+Each is a real pi child that loads pired. It reads and writes the same ledger you see, and its records appear to you immediately, with no bash bridge needed. It runs under the same scope you do. It cannot delegate again, run in the background, or use a git worktree, and pired's gate refuses any agent that is not one of these four. It starts in the engagement directory (or a `cwd` inside it). Beyond that its `read` and `bash` reach the same local files yours do: the scope gate governs network targets, not paths. Name the files it should work on in the task.
+
+- **`pired-scout`** — map an area's attack surface: routes, handlers, inputs, trust boundaries, sinks. Records surface (with the source file) and proposes hypotheses. Breadth, not confirmation.
+- **`pired-investigate`** — deep-dive one module or lead in isolation, so the grind burns the child's context, not yours. Records hypotheses with verdicts and findings (suspected until verified), citing exact `file:line`.
+- **`pired-verify`** — a fresh, skeptical pass that tries to **refute** a finding or a cleared cell before a client reads it. Records a grounded verdict. The cheapest guard against both a false positive and a false negative.
+- **`pired-escalate`** — trace what your findings and open hypotheses unlock (reachable sinks, privileged ops, secrets, boundaries crossed), try to chain them, and record a chained finding only with a concrete path.
+
+## 0b. Verifying a cleared cell — part of the coverage loop, not of a direct request
+
+**This is the routine one.** A hypothesis recorded `refuted` turns its coverage cell `clear`, and that cell counts toward the percentage the client is handed. It is the only verdict in the harness nothing revisits — findings get challenged, clearances were taken at their word. During a normal engagement, hand them out to `pired-verify`:
+
 ```
-Repeat a key to build a list (`evidence=a.js:1 evidence=b.js:2`). **Put these lines in the task prompt** — a child that is not told the command exists will report its results as prose, and prose is not the ledger.
-
-## 0c. Verifying a test case — part of the coverage loop, not of a direct request
-
-**This is the routine one.** A hypothesis recorded `refuted` turns its coverage cell `clear`, and that cell counts toward the percentage the client is handed. It is the only verdict in the harness nothing revisits — findings get challenged, clearances were taken at their word. During a normal engagement, hand them out:
-
-```bash
-pired-ledger recall cleared                      # cells a refutation settled, oldest first
-pired-ledger recall challenge id=<hypothesis id> # the brief for one
+recall cleared                      # cells a refutation settled, oldest first
+recall challenge id=<hypothesis id> # the brief for one
 ```
 
-`recall cleared` is the list to sample from — `gaps` and `next` will never show these, because a cleared cell is settled and the router moves on. It shows oldest first on purpose: a cell cleared in the first hour was cleared by an agent that had not yet read the code it was clearing. Cells already re-checked drop off, so the same one is not handed out twice.
+`recall cleared` is the list to sample from — `gaps` and `next` will never show these, because a cleared cell is settled and the router moves on. It shows oldest first on purpose: a cell cleared in the first hour was cleared by an agent that had not yet read the code it was clearing.
 
-That brief inverts the usual framing: the child's job is to *disagree with the clearance*, by finding the input the refutation did not consider or the call path it did not follow. It arrives carrying the class contract, the element, the target model, and the findings the engagement has recorded nearby — the same class confirmed on a neighbouring route is exactly the sort of thing that overturns a clearance, and none of it is the reasoning that produced the verdict.
+Hand the hypothesis id and its source path to `pired-verify` in the task. The worker reads `recall challenge id=<id>`, tries to overturn the clearance, and records the verdict against the hypothesis with what it was grounded in (`basis=file:line` or `live=true`). That writes a `verification` on the row — `stands` if the clearance held, `amended` if it was overturned — which is what lets the report say a cell was independently checked.
 
 Sample rather than sweep. One cell per class, or the ones cleared earliest, buys most of the value; challenging every refutation costs more than the engagement.
-
-Record the verdict against the hypothesis, with what it was grounded in:
-```bash
-pired-ledger record kind=hypothesis id=<id> outcome=refuted basis=core/db.js:41 live=true \
-    statement="<the mechanism you checked>"
-```
-That writes a `verification` on the row — `stands` if the clearance held, `amended` if it was overturned — which is what lets the report say a cell was independently checked, and what keeps it off the next `recall cleared`. Like a finding's, it is earned by recording the verdict and cannot be asserted.
 
 **When the operator asked for specific test cases, do them yourself.** A direct request is addressed to you; answering it by spawning a child and relaying the result is slower, loses your context, and is not what was asked. Delegation belongs to the coverage loop you are driving on your own initiative — not to work someone just handed you.
 
 ## 1. When to delegate
 Delegate work that is **noisy** (floods context) or **needs a fresh, skeptical pass**:
-- **Isolated recon / enumeration** — a full subdomain sweep, a directory brute, per-host service enum. The child does the grinding; you get back a distilled inventory + proposed hypotheses, not 4,000 lines.
-- **Adversarial verification** — two directions, and both are worth a child. Hand a borderline hypothesis to one whose job is to *break* it (the false-positive gate before a finding), and hand a *cleared* cell to one whose job is to break the clearance (§0c — the false-negative gate, which is the costlier miss).
-- **Bounded research** — "what CVEs affect nginx 1.18 + this module?" — answered in a child, summary returned.
+- **Isolated recon / enumeration** (`pired-scout`) — a full route sweep, a per-host service enum. The child does the grinding; you get back a distilled inventory + proposed hypotheses, not 4,000 lines.
+- **Deep dive on one lead** (`pired-investigate`) — a single module you want traced end to end without it swamping your context.
+- **Adversarial verification** (`pired-verify`) — two directions, both worth a child. Hand a borderline hypothesis to one whose job is to *break* it (the false-positive gate before a finding), and hand a *cleared* cell to one whose job is to break the clearance (§0b — the false-negative gate, which is the costlier miss).
+- **Impact amplification** (`pired-escalate`) — once you have a few findings, have a worker trace what they unlock and try to chain them.
 
 Do **not** delegate: the core planning/coverage loop, final finding decisions, or anything needing your accumulated context. Keep judgment in the parent.
 
 ## 2. How to hand off (give the child a clean, bounded task)
-- **One clear objective + explicit scope.** Name the exact target(s) and the authorized scope; the child inherits the engagement workspace but re-state the boundary in the task.
-- **Say what to return.** Ask for a *distilled* result: recorded inventory + a short list of proposed hypotheses (for recon), or a verdict + evidence path (for verify). Not a transcript.
-- **Point it at the workspace.** The child should `pired-ledger record` inventory/hypotheses directly to the shared workspace and save raw output to `$PIRED_WORKSPACE/evidence/` — so results are durable, not just in its reply.
+- **Record what you already know first.** The worker gets a bounded snapshot of the ledger (`recall context`), not your transcript, so a lead only reaches it if it is written down.
+- **Pass the exact refs.** Put the exact file paths and record IDs in the task; the worker will `recall context` and read source by path.
+- **One clear objective + explicit scope.** Name the target(s). The worker runs inside pired's scope gate, so it is guarded — but naming the boundary keeps the task unambiguous for the model.
+- **Say what to return.** Ask for a *distilled* handoff: recorded surface + a short list of proposed hypotheses (scout), a verdict + evidence path (verify), or the record IDs it wrote (investigate/escalate). The handoff is capped at ~200 words; the ledger carries the detail.
 
-Example task prompts:
+Example launches (`subagent` tool):
+```json
+{"agent":"pired-scout","task":"Map the attack surface of src/api/. Record each route/handler/input with its file, and propose hypotheses with their checklist class. Do not try to confirm anything."}
 ```
-spawn role=investigate task="Enumerate services on 10.10.20.7. IN SCOPE: 10.10.20.0/24 ONLY - nothing else, and you are outside pired's gate so this boundary is yours to keep; run `pired-ledger scope` to confirm it. Write each host/service/tech with `pired-ledger record kind=... `, save raw scans to \$PIRED_WORKSPACE/evidence/. Return only: open services + 3-5 proposed hypotheses with checklist classes. Do not exploit."
-```
-```
-spawn role=verify task="Try to REFUTE hypothesis y7: 'GET /api/user?id= is IDOR-able'. Read the brief with `pired-ledger recall challenge id=y7`. Reproduce with two accounts, capture request/response to \$PIRED_WORKSPACE/evidence/. Return confirmed|refuted|inconclusive with the evidence path. Do not record a finding - report the verdict."
+```json
+{"agent":"pired-verify","task":"Try to REFUTE hypothesis y7: 'GET /api/user?id= is IDOR-able'. Read `recall challenge id=y7`, inspect the code, and record a grounded verdict (confirmed|refuted|inconclusive) with basis=file:line. Do not promote it to a finding."}
 ```
 
 ## 3. What to do with the result
-- Read the child's **distilled** return, not its internal steps. Trust the workspace it wrote (`recall inventory` / `recall hypotheses`) over prose.
-- On a `verify` verdict: `confirmed` → promote to a finding yourself (see `ops-finding-writeup`) and mark the hypothesis; `refuted`/`inconclusive` → update the hypothesis outcome (retained, no re-test).
-- If the child hit a wall needing the operator, it should have parked a `blocker` — pick it up via `recall blockers` and route around it.
+- Read the worker's **distilled** return and its records (`recall hypotheses`, `recall findings`, `recall context`), not its steps. Trust the ledger over prose.
+- On a `pired-verify` verdict: `confirmed` → promote to a finding yourself (see `ops-finding-writeup`); `refuted`/`inconclusive` → update the hypothesis outcome (retained, no re-test).
+- If the worker hit a wall needing the operator, it should have parked a `blocker` — pick it up via `recall blockers` and route around it.
+- **A worker's return is a lead to weigh, never tested coverage until you have weighed it.** Keep the cross-component reasoning and the final severity judgment in the parent.
 
-## 4. Invariants & limits (don't fight them)
-Harness-owned in `enforce` mode (PLAN.md §11):
-- **Depth 1** — sub-agents cannot spawn sub-agents. Don't design multi-level plans.
-- **Caps are real now.** The scope gate counts spawns and refuses past `maxAgents` (default **8** per session, set it in the scope file; `0` disables delegation). Spend the budget where isolation or verification pays off, not on trivial tasks — when it is gone the gate says so and the rest of the work happens in this session.
-- **Scope is NOT inherited — restate it, every time.** The gate is `createScopeGate` and it lives in the parent's tool pipeline; a child that never loaded pired runs *outside* it. There is nothing stopping a child touching an out-of-scope host except the boundary you write into its task prompt. Name the authorized targets explicitly in every handoff, and have the child run `pired-ledger scope` and stay inside what it prints. Treat any delegated network action as unguarded work you authorized personally.
-- **Sequential, not parallel** — locally one GPU serves serially, so delegation buys cleanliness and rigor, not speed. Don't fan out expecting concurrency.
+## 4. Limits and the fleet view
+- **Foreground only, one at a time.** A worker blocks your turn until it returns, and there is no background/async delegation. Launch one worker per message: a second launch while one is still running is refused. This is deliberate, because it keeps the work accountable and sends one GPU one request at a time.
+- **Depth 1.** A worker cannot delegate again; the gate refuses it.
+- **Budgeted.** The engagement's `maxAgents` (default **8**, `0` disables delegation) caps the workers you may launch per session. Each worker runs for a bounded number of turns (scout/escalate 20, investigate 24, verify 16) and at most 45 minutes.
+- **Scoped.** Worker tool calls pass through pired's scope gate, the same one you run under.
 
-## 5. The payoff
+In the TUI, pi-subagents shows a persistent **FleetView** under the editor while work runs; from an empty editor its navigation keys expand it, and `/subagents-fleet` opens the live inspector to browse a child, read its transcript, or stop a run. pired refreshes its own panel when a worker finishes, and announces any blocker the worker parked.
+
+## 5. Note on other pi-subagents agents
+Only the four pired workers load pired and get `record`/`recall` on the shared ledger; a generic pi-subagents agent (a builtin or an external CLI runner) does not, and pired's gate refuses to launch it through the `subagent` tool. If you deliberately run such an agent by other means, it is unguarded: state the authorized boundary in its task, and treat any network action as work you authorized personally. This is the exception, not the path — prefer the four pired workers.
+
+## 6. The payoff
 - Parent context stays small → weak models don't drown and compaction keeps scope/findings.
-- A second skeptical pass kills false positives before they reach the report.
+- A second skeptical pass kills false positives before they reach the report, and re-checks clearances before they become silent false negatives.
 - Distilled inventory/verdicts flow back into the same `record`/`recall` loop, so the engagement state stays single-source-of-truth — the delegation is only worth it once its result is recorded, not just reported in prose.
 
 ## References
-- PTES — Vulnerability Analysis (Validation) — Penetration Testing Execution Standard — https://pentest-standard.readthedocs.io/en/latest/vulnerability_analysis.html (manual validation & correlation to cut false positives — the verify agent's job)
+- PTES — Vulnerability Analysis (Validation) — Penetration Testing Execution Standard — https://pentest-standard.readthedocs.io/en/latest/vulnerability_analysis.html (manual validation & correlation to cut false positives — the verify worker's job)
 - Technical Guide to Information Security Testing and Assessment — NIST SP 800-115 — https://csrc.nist.gov/pubs/sp/800/115/final (validating findings and reducing false positives before reporting)
 - PTES — Reporting — Penetration Testing Execution Standard — https://pentest-standard.readthedocs.io/en/latest/reporting.html (distilled inventory/verdicts feed the single-source report)

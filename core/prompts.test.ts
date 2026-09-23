@@ -41,6 +41,36 @@ describe("buildSystemPrompt", () => {
 		expect(review).toMatch(/semgrep|opengrep|sast/i);
 	});
 
+	/**
+	 * The prompt must never name a tool the session cannot offer. Delegation is
+	 * added only when the four pired workers actually registered with
+	 * pi-subagents; the standing-authorization block is otherwise absent, and the
+	 * old always-on `pired_delegate` guidance is gone for good (ADR-027).
+	 */
+	it("adds the delegation block only when delegation is available", () => {
+		const off = buildSystemPrompt({ profile: "pentest", scope });
+		// The block itself (opened on its own line) is absent; the identity may
+		// still mention the tag in prose, so anchor on the newline the block adds.
+		expect(off).not.toContain("<delegation>\n");
+		expect(off).not.toContain("pired-scout");
+		// The removed native tool must not linger in the identity text either.
+		expect(off).not.toContain("pired_delegate");
+
+		const on = buildSystemPrompt({ profile: "pentest", scope, delegation: true });
+		expect(on).toContain("<delegation>\n");
+		expect(on).toContain("pired-scout");
+		expect(on).toMatch(/standing authorization/i);
+		// It still points at the recall-context handoff even with delegation off.
+		expect(off).toMatch(/recall context/i);
+	});
+
+	it("says delegation is off in the block when the engagement sets maxAgents to zero", () => {
+		const p = buildSystemPrompt({ profile: "pentest", scope: { ...scope, maxAgents: 0 }, delegation: true });
+		expect(p).toContain("<delegation>\n");
+		expect(p).toMatch(/turned off|disabled/i);
+		expect(p).not.toContain("pired-scout");
+	});
+
 	it("lists methodology skills when provided", () => {
 		const p = buildSystemPrompt({
 			profile: "pentest",

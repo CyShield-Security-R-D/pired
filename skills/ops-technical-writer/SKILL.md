@@ -24,26 +24,18 @@ A field that is already filled is not necessarily finished. The scribe pass copi
 
 `recall finding id=<id>` is what makes this possible: it returns the whole record — description, impact, remediation, repro, evidence, cwe, cvss, target — not the one-line summary the list shows. **Never rewrite a finding from memory of having tested it.** Read it back first; the ledger is the source of truth and your context may have been compacted since.
 
-## 1. Delegate it when a subagent tool exists
-A writer is an ideal delegation: the task is bounded, the input is a record rather than a conversation, and the child needs none of the parent's accumulated context (see `ops-delegation` for the general rules).
+## 1. Delegate it when the `subagent` tool exists
+A writing pass delegates well. The task is bounded, the input is a record rather than a conversation, and the child needs none of the parent's accumulated context (see `ops-delegation` for the general rules).
 
-Hand the child **the id, not the story** — it reads the finding itself:
+pired has no writer agent, and its gate launches only its own four workers. Use **`pired-investigate`**: it reads the finding's evidence and the source behind it, and it has `record` on the same ledger to write the fields back. Hand the child **the id, not the story**, because it reads the finding itself:
 
-```
-spawn role=worker task="Technical writing pass on finding f3a9. Run: recall finding id=f3a9.
-Rewrite three fields to consulting standard and record them back with record id=f3a9:
-  description — what the flaw is and where (file:line or route), the mechanism, in plain language
-  impact      — what it costs THIS client in their terms: records exposed, money moved, service
-                lost, obligation breached. Concrete and quantified where the evidence supports it.
-  remediation — the concrete change that fixes it, specific to this codebase/stack
-Do not change severity, cwe, cvss, status or target. Do not invent facts: use only what the
-record and its evidence files contain. If a claim needs a number you do not have, say what
-would establish it instead of estimating. Return: the three fields you wrote, nothing else."
+```json
+{"agent":"pired-investigate","task":"Technical writing pass on finding f3a9 — no new testing. Run: recall finding id=f3a9, then read the evidence files and source it cites. Rewrite three fields to consulting standard and record them back with record id=f3a9: description (what the flaw is and where — file:line or route — and the mechanism, in plain language); impact (what it costs THIS client in their terms: records exposed, money moved, service lost, obligation breached; concrete and quantified where the evidence supports it); remediation (the concrete change that fixes it, specific to this codebase/stack). Do not change severity, cwe, cvss, status or target. Do not invent facts: use only what the record, its evidence and the source show. If a claim needs a number you do not have, say what would establish it instead of estimating. Hand back the finding id and one line per field on what changed; the fields themselves are in the ledger."}
 ```
 
-Delegate **one finding per child**. A child given twelve findings writes twelve paragraphs of the same shape; a child given one reads the evidence.
+Delegate **one finding per child**. A child given twelve findings writes twelve paragraphs of the same shape. A child given one reads the evidence.
 
-If no `spawn` tool is loaded, do exactly the same work inline — the standard below is the point, not the delegation.
+If the `subagent` tool is not available, do exactly the same work inline. That covers a prompt with no `<delegation>` block, and an engagement with `maxAgents=0`. The standard below is the point, not the delegation.
 
 ## 2. Description — what it is
 - Lead with the flaw, not the journey: "The `/api/user` endpoint returns any user's record when `id` is changed, because the handler never checks that the requested id belongs to the caller (`backend/routes/user_routes.py:41`)."

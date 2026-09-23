@@ -12,7 +12,9 @@ curl -fsSL https://raw.githubusercontent.com/mamgad/pired/main/install.sh | sh
 powershell -c "irm https://raw.githubusercontent.com/mamgad/pired/main/install.ps1 | iex"
 ```
 
-Either one installs [pi](https://pi.dev) if it is missing, installs pired, and puts the `pired` command on your PATH. Neither registers anything with pi — a bare `pi` stays exactly the pi you had, and the security layer arrives only through `pired`, which passes it to pi with `-e` for that run ([ADR-017](decisions.md)).
+Either one installs [pi](https://pi.dev) if it is missing (or upgrades one older than 0.86.1), installs pired, and puts the `pired` command on your PATH. Neither registers pired with pi. A bare `pi` does not load the security layer. That arrives only through `pired`, which passes it to pi with `-e` for that run ([ADR-017](decisions.md)).
+
+The one thing the installers do register with pi is [pi-subagents](https://github.com/nicobailon/pi-subagents), the package pired delegates through ([Delegation](delegation.md)). It gets its own row in the plan, and it loads in every `pi`, not only in `pired`. A missing package is installed. An `npm:pi-subagents` below 0.71.0 is upgraded. A pinned or forked entry is left alone and reported. `PIRED_SKIP_SUBAGENTS=1` declines the row ([ADR-021](decisions.md)).
 
 On macOS and Linux the script starts by surveying the box and printing the plan — every component, where it goes, and the exact PATH line it wants to add — then asks once before doing any of it:
 
@@ -22,10 +24,11 @@ On macOS and Linux the script starts by surveying the box and printing the plan 
     + node       ~/.local/share/pired/node     v22 from nodejs.org, checksum-verified
     + pi         ~/.local/share/pired/bin      @earendil-works/pi-coding-agent
     + pired      ~/.local/share/pired/bin      from github:mamgad/pired
+    + subagents  ~/.pi                         npm:pi-subagents — delegation, loads in every pi
     + PATH       ~/.bashrc                     export PATH="$HOME/.local/share/pired/bin:$PATH"
 
   Nothing runs as root. No daemon, no service, no shell hooks.
-  Undo: rm -rf ~/.local/share/pired ~/.pired
+  Undo: rm -rf ~/.local/share/pired ~/.pired · pi remove npm:pi-subagents
 
   Proceed? [Y/n]
 ```
@@ -90,7 +93,8 @@ pi -e ./extensions/pired.ts -e ./extensions/hosts.ts --pired-profile review
 |---|---|---|
 | `PIRED_SOURCE` | `github:mamgad/pired` | npm spec to install from — a fork, a tag, a local path. |
 | `NPM_PREFIX` | npm's global root | Install somewhere else. When the script brings its own Node the default is `~/.local/share/pired`; when npm's root is not writable — a root-owned system node — it falls back to `~/.local` on its own and says so. |
-| `PIRED_SKIP_PI` | unset | `1` to not install pi. |
+| `PIRED_SKIP_PI` | unset | `1` to not install or upgrade pi. A pi kept below 0.86.1 this way also holds back the pi-subagents row, since pi-subagents 0.71 needs pi ≥ 0.86.1. |
+| `PIRED_SKIP_SUBAGENTS` | unset | `1` to not install or upgrade pi-subagents. pired then runs without delegation. |
 | `PIRED_YES` | unset | `1` to install without the confirmation prompt (same as `-y`). |
 | `PIRED_NO_ANIM` | unset | `1` for plain line-at-a-time output instead of spinners. |
 

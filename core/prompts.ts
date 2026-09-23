@@ -15,7 +15,8 @@
  */
 
 import type { EngagementScope } from "./ontology.ts";
-import { summarizeScope } from "./scope.ts";
+import { scopeGuidance } from "./scope.ts";
+import { delegationBlock } from "./subagents.ts";
 
 import { PASS_LENS_HELP, type PassState } from "./passes.ts";
 
@@ -40,6 +41,14 @@ export interface BuildPromptOptions {
 	 */
 	pass?: PassState;
 	skills?: Array<{ name: string; description: string }>;
+	/**
+	 * Whether the four pired workers are registered and reachable this turn.
+	 *
+	 * Drives the standing-authorization `<delegation>` block. Off (the default)
+	 * when pi-subagents is absent or registration failed, so the prompt never
+	 * points a model at a tool it does not have.
+	 */
+	delegation?: boolean;
 	/** Extra instructions appended verbatim (e.g. from --append-system-prompt or a context file). */
 	extra?: string;
 }
@@ -50,6 +59,7 @@ The operator is in the room, and their message decides what happens this turn. A
 
 What the harness gives you — use it as your judgment dictates:
 - Memory that outlives the turn: \`record\` what you learn (the target model; inventory: hosts/services/endpoints/params/tech; hypotheses; findings; blockers; loot) and \`recall\` it back. Trust the workspace over your own memory — it does not forget across turns or sessions.
+- Record discoveries immediately, before moving to another lead or delegating: surface first (include the source file), a plausible hypothesis as proposed/testing before verification, and a finding as soon as supported (suspected until confirmed). Update the same IDs as evidence changes. Do not hold these in prose until a final report or scribe pass. Tell the operator what you discovered when you record it; distinguish a lead from a verified result.
 - A place to keep the bigger picture: \`record kind=model\` holds what the system is for, its actors, its invariants, its trust boundaries and its key flows. Every other record is an atom — one endpoint, one cell, one bug — and atoms do not add up to an understanding of the target. Write that understanding down as you form it and correct it as it changes: it is what turns a list of endpoints into a theory of where this application breaks, and unlike your context, it survives compaction.
 - Situational awareness: \`recall next\` / \`recall gaps\` / \`recall coverage\` project a matrix of checklist \`class\`es x the surface **you have recorded**, so you can see what is tested, what is not, and what is blocked. **A cell of that matrix is one test case** — this weakness class, asked of this element ("is POST /api/login vulnerable to SQL injection?") — so the matrix is your test plan, \`recall gaps\` is the list of test cases you have not run yet, and a hypothesis is a test case executed and given a verdict. The plan exists so nothing falls through; it is not an instruction on what order to work in. You do not have to ask for it: a \`<pired-coverage>\` block is refreshed into your context automatically, naming the classes not yet asked of anything you recorded and the surface still carrying no hypothesis. Read it as a statement of what the ledger can and cannot yet account for — a class listed there has not been examined and cleared, it has not been examined at all, and the difference matters when the engagement ends and coverage is what you hand over. Note the dependency: surface you never recorded has no cells, so a review that records only findings leaves the plan empty and its own coverage unmeasurable.
 - On-demand methodology: the skills below are reference to pull in and adapt when useful, never a mandatory script.
@@ -60,7 +70,7 @@ What matters here:
 - Keep context clean: put raw tool output in \`evidence/\` files and carry only what's relevant into context — your read on what matters beats dumping everything.
 - Honesty and scope: keep hypotheses and confirmed findings distinct and state your confidence; never fabricate output, results, or CVEs; \`verify\` scanner/SAST hits against the code or response. Prefer the least-intrusive PoC; no destructive or DoS actions unless the engagement authorizes them.
 - Momentum: when you need an operator decision, credential, or scope call, \`record kind=blocker\` and route around it via \`recall next\` — don't stall the whole engagement.
-- If a subagent/spawn tool is available, delegate isolated recon or adversarial confirmation when it sharpens your judgment and keeps context clean.`;
+- After a handoff or compaction, \`recall context\` reads the current shared state back (narrow it with refs to avoid loading the whole ledger). If delegation is available, a \`<delegation>\` block below says which workers you may call and when; never treat a worker's return as tested coverage until you have weighed it yourself.`;
 
 const PROFILE_BLOCKS: Record<PiredProfile, string> = {
 	pentest: `<profile name="pentest">
@@ -81,11 +91,6 @@ SAST (semgrep/opengrep), secrets scanners, and dependency/SCA widen coverage fas
 };
 
 /** Does this scope actually name anything to touch? */
-function hasTargets(scope: EngagementScope): boolean {
-	const t = scope.targets ?? {};
-	return Boolean(t.domains?.length || t.ips?.length || t.cidrs?.length || t.urls?.length);
-}
-
 /**
  * What the model is allowed to touch, and what to do when the answer is "nothing
  * in particular".
@@ -99,22 +104,7 @@ function hasTargets(scope: EngagementScope): boolean {
  * configuration at all. Select on what the scope says instead. See ADR-002.
  */
 function scopeBlock(scope: EngagementScope | undefined): string {
-	if (!scope || (scope.mode === "off" && !hasTargets(scope))) {
-		return `<scope>
-No engagement scope is loaded. Offensive and network actions are blocked until a scope file is present and marked authorized. Read-only local work (e.g. code review) is still fine.
-</scope>`;
-	}
-	const lines = [
-		`Authorized engagement: ${summarizeScope(scope)}`,
-		`Touch only these targets; anything else is out of scope — stop and say so.`,
-	];
-	const t = scope.targets ?? {};
-	if (t.domains?.length) lines.push(`domains: ${t.domains.join(", ")}`);
-	if (t.ips?.length) lines.push(`ips: ${t.ips.join(", ")}`);
-	if (t.cidrs?.length) lines.push(`cidrs: ${t.cidrs.join(", ")}`);
-	if (t.urls?.length) lines.push(`urls: ${t.urls.join(", ")}`);
-	if (scope.exclude && Object.keys(scope.exclude).length > 0) lines.push(`excluded: ${JSON.stringify(scope.exclude)}`);
-	return `<scope>\n${lines.join("\n")}\n</scope>`;
+	return `<scope>\n${scopeGuidance(scope)}\n</scope>`;
 }
 
 function skillsBlock(skills: BuildPromptOptions["skills"]): string {
@@ -237,6 +227,7 @@ export function buildSystemPrompt(opts: BuildPromptOptions): string {
 		methodologyBlock(opts.checklist),
 		passBlock(opts.pass),
 		scopeBlock(opts.scope),
+		opts.delegation ? delegationBlock(opts.scope) : "",
 		skillsBlock(opts.skills),
 		opts.extra?.trim() ? opts.extra.trim() : "",
 	];

@@ -197,7 +197,7 @@ pi -e ./extensions/pired.ts -e ./extensions/hosts.ts --pired-profile review -p "
 
 - **The report carries its own coverage** — the exported Markdown ends with what was tested, not only what was found: cases settled, the hypotheses that ruled a class out against specific surface, and the classes and surface nobody reached, named rather than counted. A findings list answers "what did you find" and cannot answer "what did you look at", and the second question is what separates an assessment from a scanner run. Targets read as `POST /api/split-bill` rather than as the inventory id behind them.
 
-- **Report-grade findings** — a finding carries what the flaw is, what it costs the client in their terms, and the concrete fix; `record` says which of the three is still missing, and the exported report marks an unwritten section rather than quietly leaving it out. CVSS vectors are validated against the version they claim — v4.0 by default, v3.1 when an engagement requires it — so a v3.1 vector cannot enter the ledger under a v4.0 label. `recall finding id=<id>` reads one back in full, which is what a rewrite pass (or a delegated technical writer — see `skills/ops-technical-writer`) works from.
+- **Report-grade findings** — a finding carries what the flaw is, what it costs the client in their terms, and the concrete fix; `record` says which of the three is still missing, and the exported report marks an unwritten section rather than quietly leaving it out. CVSS vectors are validated against the version they claim — v4.0 by default, v3.1 when an engagement requires it — so a v3.1 vector cannot enter the ledger under a v4.0 label. `recall finding id=<id>` reads one back in full, which is what a rewrite pass (inline, or handed to a `pired-investigate` worker — see `skills/ops-technical-writer`) works from.
 
 - **Correcting the ledger** — tell the agent a finding is not real, that the client has accepted the risk, or to set it aside, and it records the decision as a status with your reason; the finding keeps its place in the report and leaves the open count. A row that should never have been recorded can be retired outright. Nothing is erased: the ledger is append-only, so every version is still in the file above the tombstone. `/dedupe` folds duplicates an older engagement already accumulated into one row each, moving every reference onto the surviving id so no coverage is lost — it shows what it would do and writes only when you say so.
 
@@ -295,7 +295,7 @@ core/          security engine — no host imports, test-first (162 tests)
 extensions/
   pired.ts     the pi extension (tools, scope gate, prompt, UI, commands, providers)
   lib/         node host services · core->pi tool bridge · provider registration
-bin/           pired (launcher) · pired-state (the panel, outside the TUI) · pired-ledger (record/recall for subagents)
+bin/           pired (launcher) · pired-state (the panel, outside the TUI) · pired-ledger (record/recall from outside pi)
 skills/  checklists/   opt-in methodology (web, api, network, code-review)
 themes/        the pired theme
 docs/          the documentation
@@ -306,9 +306,13 @@ FORMAT.md  PLAN.md
 
 ## Sub-agents
 
-pired ships **no** sub-agent machinery and takes **no** dependency on one. For delegated recon or adversarial confirmation it cooperates with [**pi-subagents**](https://github.com/nicobailon/pi-subagents) when it is present, and works fine without it.
+pired delegates through [**pi-subagents**](https://github.com/nicobailon/pi-subagents) when it is installed; without it pired works as before and simply does not delegate. The supported stack is `pi-subagents ≥ 0.71.0` on `pi ≥ 0.86.1`, which is what the installers enforce and what was measured. An older pi-subagents, such as 0.66, still registers the workers. But it sends the full `subagent` tool schema with every request, while 0.71's lazy loader keeps the parent's standing cost small. At session start pired registers four security-operator agents — **`pired-scout`** (attack-surface mapping), **`pired-investigate`** (deep dive on one lead), **`pired-verify`** (adversarial refutation) and **`pired-escalate`** (impact amplification) — and authorizes the model to use them without forcing it to.
 
-The installers register it for you — it is a row in the plan, it is skipped when a subagents package is already registered, and `PIRED_SKIP_SUBAGENTS=1` declines it. On a box that was installed before, or by hand:
+A child is an in-process foreground pi session that loads pired's own `record`/`recall` bound to the parent's workspace and arms the engagement scope gate: its records are durable immediately, and the parent reads them back with `recall`. Children start fresh, share no conversation history, run one at a time, have per-role turn and time budgets, and return a short handoff. The parent gate refuses any agent that is not one of the four, so external runners (claude-code, codex-exec, …) cannot be launched. See [Delegation](docs/delegation.md) and [ADR-027](docs/decisions.md).
+
+`recall query=context refs=["src/routes.ts"]` retrieves the relevant shared model, surface, claims and blockers after delegation or compaction. A worker's durable output is what it records in the ledger and saves under `evidence/`. pi-subagents keeps the worker's transcript and run artifacts under pi's own session directory (`~/.pi/agent/sessions/…`, or the OS temp directory), not in the owner-only engagement workspace.
+
+The installers register the package with pi and require a compatible version; `PIRED_SKIP_SUBAGENTS=1` declines it (delegation is then unavailable). To install it separately:
 
 ```bash
 pi install npm:pi-subagents

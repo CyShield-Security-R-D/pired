@@ -84,8 +84,10 @@ export interface Ids {
 
 /**
  * Host-provided services core factories accept. Fakes satisfy this in tests.
- * Sub-agents are deliberately NOT here — pired composes with the external
- * `pi-subagents` package rather than shipping its own spawn machinery.
+ * Subagents are deliberately NOT here — pired delegates through the external
+ * `pi-subagents` package (ADR-027) rather than shipping its own spawn machinery;
+ * a delegated worker reaches this same workspace through pired's own child
+ * extension, not through a port.
  */
 export interface HostServices {
 	fs: Fs;

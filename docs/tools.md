@@ -125,12 +125,15 @@ recall query=<query> [limit=50]
 | `inventory` | Recorded surface. |
 | `hypotheses` | Each with outcome, class, target. |
 | `findings` | Each with severity, status, target. |
+| `finding` | With `id=<finding>`, one finding in full: description, impact, remediation, repro, evidence, CWE, CVSS, target. |
+| `cleared` | Cells a refutation settled, oldest first, for a second look. `class=` narrows it. |
 | `pass` | Which pass is open, the lens it runs under, and what that lens can reach. A single-pass engagement says so and points back at coverage. |
 | `challenge` | What is unchallenged, worst first. With `id=<finding>`, the brief for breaking that one: the class's control case, the entitlement question, and what its evidence does not yet show. |
 | `blockers` | Open blockers only. |
 | `loot` | **Handles only** — never secrets. |
 | `notes` | The engagement notebook. |
 | `model` | The target model, or how to write one if there is none. |
+| `context` | A bounded snapshot of the shared state: the model, the checklist, surface, hypotheses, findings and open blockers. `refs=[…]` narrows it to exact ledger IDs or source paths. It is rebuilt from disk on every call, so a worker sees what another just recorded. It carries no transcript and no loot secrets. |
 
 `next` and `gaps` are the ones that keep an engagement honest: they are how the agent stays systematic and avoids quitting early.
 

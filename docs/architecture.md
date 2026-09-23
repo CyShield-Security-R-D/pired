@@ -5,7 +5,8 @@ pired is a **ports-and-adapters** design with one governing constraint: the secu
 ```
 core/          the security engine — no pi imports, no third-party, not even node builtins
 extensions/
-  pired.ts     the pi adapter: tools, scope gate, prompt, commands, UI
+  pired.ts     the pi adapter: tools, scope gate, prompt, commands, UI, worker registration
+  child.ts     what a pi-subagents worker loads: record/recall on the parent's ledger, the gate
   hosts.ts     LLM providers: the "Add a custom provider…" entry in /login, and /provider
   lib/         node host services · core→pi tool bridge · provider registration
 skills/        opt-in methodology (42)
@@ -53,6 +54,9 @@ Two directions, both small on purpose.
 | `passes.ts` | The pass ladder, the per-lens worklist, and what a pass added. |
 | `scope.ts` | Scope parsing, target matching, the gate decision. |
 | `tools.ts` | `record` and `recall`, as host-agnostic definitions. |
+| `delegation.ts` | `recall query=context`: the bounded ledger snapshot a worker or a compacted parent reads back. |
+| `subagents.ts` | The four pired workers and the runtime agent definitions registered with pi-subagents. |
+| `child.ts` | The worker side: which ledger and scope a worker gets, what it may never call, and when it stops. |
 | `prompts.ts` | The security-operator prompt, per profile. |
 | `redaction.ts` | Loot masking at export boundaries. |
 | `stats.ts` | Derived engagement stats and the coverage view. |
@@ -70,7 +74,7 @@ The adapter is a good citizen in pi's extension chain:
 - **The prompt is appended**, never replaced. pi hands over its fully-assembled prompt — its own instructions, loaded skills, project context, plus whatever earlier extensions contributed — and pired adds its security overlay to the end. Neither pi's base nor another extension's contribution is clobbered.
 - **The status line carries other extensions' statuses** on a second line, exactly as pi's own footer does.
 - **Every UI call is guarded.** A missing or older pi API disables a feature; it never breaks the session.
-- **No sub-agent machinery**, and no dependency on any. pired cooperates with [pi-subagents](https://github.com/nicobailon/pi-subagents) when it is present and works fine without it. The installers register that package — the one thing they put on pi's global resource path, and the one the operator can decline with `PIRED_SKIP_SUBAGENTS=1` (ADR-021).
+- **Delegation is pi-subagents', not pired's.** pired has no worker loop and imports nothing from [pi-subagents](https://github.com/nicobailon/pi-subagents). When the package is loaded, pired registers four agents over its runtime-agent event. Each agent's `extensions` names `extensions/child.ts`, so the in-process child pi-subagents starts gets pired's `record`/`recall` on the parent's ledger and the scope gate (ADR-027). Without the package pired works as before and does not delegate. The installers register that package. It is the one thing they put on pi's global resource path, and the operator can decline it with `PIRED_SKIP_SUBAGENTS=1` (ADR-021). See [Delegation](delegation.md).
 
 ## Testing
 

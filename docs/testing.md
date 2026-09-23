@@ -13,6 +13,50 @@ Two suites, and they answer different questions.
 
 The installation regressions also pack the shipping files and upgrade an existing npm global installation in a temporary prefix. They load both extensions with pi's real loader, outside the checkout and without development dependencies, and verify that the installer rejects missing extension flags even when pi's help exits successfully. These checks run offline and require no model credentials.
 
+## Delegation, end to end
+
+pi-subagents is not a dependency of pired (ADR-027), so `npm run check` does not run the one test
+that needs it. The wiring cases in `extensions/child.test.ts` drive the child extension against a
+stand-in for pi's API, and they always run. They check that the child fails closed without the
+parent's workspace, arms with `record`/`recall` only, blocks out-of-scope `bash` with pired's own
+reason, refuses delegation and the supervisor channel, and stops a worker at its role's turn
+budget.
+
+The end-to-end case in the same file is **skipped** unless `PIRED_TEST_PI_SUBAGENTS` names an
+installed pi-subagents package. Point it at the pinned copy:
+
+```bash
+PIRED_TEST_PI_SUBAGENTS=eval/artifacts/pi-subagents-0.71.0/node_modules/pi-subagents \
+  npx vitest run extensions/child.test.ts
+```
+
+That case loads the real `extensions/pired.ts` and pi-subagents into a pi 0.87.1 session with a
+scripted faux model and no network. The parent launches `pired-scout` through the `subagent` tool.
+The test then checks that:
+- pired's child extension acknowledged it was armed
+- the worker saw `record`/`recall` and none of `subagent`, `subagents_enable`, `bg_wait` or
+  `subagent_supervisor`
+- its record reached the parent's `inventory.jsonl`
+- an out-of-scope `curl` was refused with the reason the parent's gate gives and never ran
+- the parent's `scope.json` and `PIRED_WORKSPACE` were unchanged
+- the child's `session.jsonl` landed in the configured session directory with one usage row per
+  response
+
+`eval/artifacts/` is not in git. If the pinned copy is missing, rebuild it with
+`npm install --prefix eval/artifacts/pi-subagents-0.71.0 --ignore-scripts --save-exact pi-subagents@0.71.0`.
+
+The comparison harness (`eval/delegation-compare.ts`) has the sealed counterpart: one **delegation
+probe** per grid, run under the Landlock+seccomp seal on the pinned pi and pi-subagents, part of
+every `--dry-run`. A scripted parent launches `pired-scout` under an enforced loopback-only scope.
+The worker must record into the parent's ledger and have an out-of-scope `bash` call blocked. It
+must also leave a child session that the token accounting reconciles with the parent's `subagent`
+result. That probe is the evidence that the real child extension works inside the seal, with its
+session directory granted. Neither check needs a model, and neither says anything about finding
+quality or tokens. That question belongs to the [matched comparison](../eval/delegation-compare.md).
+
+The live synthetic assay in [`eval/delegation.md`](../eval/delegation.md) measured the deleted
+native worker. Its script is gone, and the page is kept as history.
+
 ## What is tested, and what deliberately is not
 
 Coverage is measured over what ships — `core/`, `extensions/`, `bin/`, and the
@@ -90,8 +134,12 @@ because each exists to stop a specific failure that already happened:
   `login()` with callbacks that reject on dismissal, and expects a credential
   back — none of which is obvious from the types, and all of which the entry
   rests on. It also pins the two things a wrong wiring loses silently: the
-  mirror an extension-less subagent resolves from, and the `0600` on a file that
-  holds a client's token.
+  mirror into pi's own `models.json` that any out-of-process `pi` resolves from,
+  and the `0600` on a file that holds a client's token. (A foreground worker on
+  pi-subagents ≥ 0.68 inherits the providers its parent registered, so it does not
+  need the mirror. On older pi-subagents, such as 0.66, it does: before 0.68 an
+  in-process child knew only pi's own providers, and the mirror is how it
+  resolves pired's. The mirror is also what external `pi` processes read.)
 - **`extensions/lib/host.test.ts`** — the error semantics, not the delegation.
   The workspace decides "no engagement yet" from a swallowed `ENOENT` and the
   lock decides "someone else holds it" from a swallowed `EEXIST`; a swallowed

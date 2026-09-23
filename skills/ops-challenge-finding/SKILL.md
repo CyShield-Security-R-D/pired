@@ -12,7 +12,11 @@ Goal: try to **break** a finding before a client reads it, without ever losing a
 ## 0. Do it in a fresh context
 A verifier that has already read the reasoning behind a claim agrees with it. Measured: the scribe pass, which re-read the agent's own review buffer, cost 2.5x the wall clock and moved precision from 0.059 to 0.038.
 
-If a `spawn`/subagent tool is loaded (`ops-delegation`), hand the brief to a child and let it work from the record and the target alone. If not, work from `recall challenge id=<id>` and the code/target **without** re-reading your own notes about it.
+If the `subagent` tool is available (`ops-delegation`), hand the finding to the `pired-verify` worker. It starts in a fresh context and works from the record and the target alone. Tell it to leave the finding's status alone, because §6 needs the operator's agreement first:
+```json
+{"agent":"pired-verify","task":"Challenge finding <id>: read recall challenge id=<id>, run the control case (re-run reads only, never a write), and try to refute it. Do not change the finding's status. Hand back the verdict, what you ran, what came back, and the evidence path."}
+```
+Then bring its verdict to the operator as §6 describes. If the tool is not available, work from `recall challenge id=<id>` and the code/target **without** re-reading your own notes about it.
 
 ## 1. The two bars, and why missing either is safe
 - **To confirm:** run the control case and say what it returned.

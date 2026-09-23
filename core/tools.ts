@@ -11,6 +11,7 @@
  */
 
 import { buildBrowserModel, recordLabel } from "./browser.ts";
+import { workerContext } from "./delegation.ts";
 import { auditFinding, challengeBrief, hypothesisBrief, judge, SEVERITY_RANK, unchallengedQueue, verdictPatch } from "./challenge.ts";
 import { computeCoverage, coveragePercent, findGaps, selectNext } from "./coverage.ts";
 import { CVSS_DEFAULT_VERSION, CVSS_EXAMPLE, cvssVersion, validateCvss } from "./cvss.ts";
@@ -67,7 +68,7 @@ type RecordKind = (typeof RECORD_KINDS)[number];
 type LedgerKind = Exclude<RecordKind, "note" | "evidence" | "model">;
 
 const RECALL_QUERIES = [
-	"status", "next", "coverage", "surface", "gaps", "cleared", "pass", "inventory", "hypotheses", "findings", "finding", "challenge", "loot", "blockers", "notes", "model",
+	"status", "next", "coverage", "surface", "gaps", "cleared", "pass", "inventory", "hypotheses", "findings", "finding", "challenge", "loot", "blockers", "notes", "model", "context",
 ] as const;
 
 /**
@@ -1452,6 +1453,7 @@ export function createRecallTool(deps: ToolDeps): ToolDefinition {
 			"next (the next test case to run), gaps (test cases not run yet, plus the ones blocked), " +
 			"pass (which pass is open, the lens it runs under, and what that lens can reach — a single-pass engagement says so), " +
 			"model (the target model: what the system does, its actors, its invariants), " +
+			"context (a bounded live handoff: model, checklist, surface, hypotheses, findings and blockers; filter with refs), " +
 			"inventory, hypotheses, findings, loot (handles only), blockers, notes, " +
 			"finding (ONE finding in full — pass id — every field as recorded: description, impact, remediation, repro, evidence, cwe, cvss). " +
 			"Use 'status' to see where the engagement stands, 'coverage'/'surface' to see WHERE the holes are, " +
@@ -1461,6 +1463,7 @@ export function createRecallTool(deps: ToolDeps): ToolDefinition {
 			required: ["query"],
 			properties: {
 				query: { enum: RECALL_QUERIES },
+				refs: { type: "array", items: { type: "string" }, description: "For query=context: exact ledger IDs or source paths; omit for an engagement overview." },
 				id: { type: "string", description: "For query=finding, or query=challenge: which finding or hypothesis." },
 				class: { type: "string", description: "For query=cleared: only cells of this checklist class." },
 				limit: { type: "integer", description: "Max items (default 50)." },
@@ -1473,6 +1476,7 @@ export function createRecallTool(deps: ToolDeps): ToolDefinition {
 			const limit = num(a.limit) ?? 50;
 
 			switch (query) {
+				case "context": return text(await workerContext(deps.workspace, asList(a.refs)));
 				case "model": {
 					const model = (await deps.workspace.readModel()).trim();
 					if (model.length > 0) return text(model);

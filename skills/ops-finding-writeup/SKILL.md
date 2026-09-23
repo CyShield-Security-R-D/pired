@@ -55,7 +55,7 @@ Field-by-field:
 
 ## Confirmation gate (avoid false positives)
 - Never promote on a scanner/SAST hit alone — reproduce it by hand and save the evidence first. Raw tool output is a lead, not a finding — but don't drop the lead either: keep it as a hypothesis (`outcome=inconclusive`) so it survives to be retested.
-- If a subagent/`spawn` tool exists, hand borderline hypotheses to an adversarial `verify` agent to try to refute them; only survivors become findings (see `ops-delegation`).
+- If the `subagent` tool is available, hand a borderline hypothesis to the adversarial `pired-verify` worker (`{"agent":"pired-verify","task":"Try to REFUTE hypothesis <id> …"}`) and promote only what survives (see `ops-delegation`). Without the tool, do the same refutation pass yourself before promoting.
 - State confidence honestly. If impact is likely but unproven, say so and consider `medium`/`info` with a note, or keep it a hypothesis with a blocker for the missing step.
 
 ## After recording

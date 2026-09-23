@@ -1,7 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ExtensionSelectorComponent, initTheme } from "@earendil-works/pi-coding-agent";
+import { readParentScope } from "../core/child.ts";
 import { blockerDialog } from "../core/dialog.ts";
+import { SUBAGENTS_ABSENT_NOTICE, SUBAGENTS_EAGER_NOTICE } from "../core/subagents.ts";
 import { createRecallTool, createRecordTool } from "../core/tools.ts";
+import { Workspace } from "../core/workspace.ts";
+import { makeHostServices } from "./lib/host.ts";
 import piredExtension, { applyOwnTheme, describeUnready } from "./pired.ts";
 
 /**
@@ -60,6 +67,14 @@ describe("pired extension registration", () => {
 		const { api, seen } = stubApi();
 		piredExtension(api as never);
 		expect(seen.events).toContain("tool_execution_end");
+	});
+
+	it("hooks session_shutdown, so pi-subagents worker registrations are disposed", () => {
+		// Runtime agents registered with pi-subagents are process-local and would
+		// otherwise outlive the session and collide on the next one's names.
+		const { api, seen } = stubApi();
+		piredExtension(api as never);
+		expect(seen.events).toContain("session_shutdown");
 	});
 });
 
@@ -399,5 +414,173 @@ describe("applying pired's theme", () => {
 	it("does nothing on a pi too old to have the theme API rather than throwing into session start", () => {
 		expect(() => applyOwnTheme({})).not.toThrow();
 		expect(() => applyOwnTheme({ getTheme: () => ({ name: "pired" }) })).not.toThrow();
+	});
+});
+
+/**
+ * Delegation, driven through session_start the way pi drives it, against a
+ * stand-in host whose `pi.events` plays pi-subagents' registration listener.
+ * The engagement is a temp directory with its own workspace, so nothing here
+ * touches ~/.pired.
+ */
+describe("delegation in a live session", () => {
+	type Handler = (event: unknown, ctx: unknown) => unknown;
+	const REGISTER = "pi-subagents:runtime-agent-register:v1";
+
+	/**
+	 * `subagents` is what the host has: nothing (`absent`), 0.71's lazy loader on
+	 * a pi >= 0.86.1 (`lazy`), or an eager `subagent` with no loader (`eager`).
+	 */
+	function sessionHost(subagents: "absent" | "lazy" | "eager") {
+		const root = mkdtempSync(join(tmpdir(), "pired-session-"));
+		const target = join(root, "target");
+		const ws = join(root, "ws");
+		mkdirSync(target, { recursive: true });
+		writeFileSync(join(target, "pired.scope.json"), JSON.stringify({
+			v: 1, engagement: "live", authorized: true, mode: "enforce", workspace: ws,
+			targets: { domains: ["app.live.test"] },
+		}));
+		const handlers = new Map<string, Handler[]>();
+		const notices: string[] = [];
+		const all = new Set<string>(["read", "bash"]);
+		if (subagents !== "absent") all.add("subagent");
+		if (subagents === "lazy") all.add("subagents_enable");
+		let active = subagents === "eager" ? ["read", "bash", "subagent"] : ["read", "bash"];
+		const api = {
+			registerCommand: () => {},
+			registerShortcut: () => {},
+			registerTool: (t: { name: string }) => all.add(t.name),
+			registerFlag: () => {},
+			registerProvider: () => {},
+			getFlag: (name: string) => (name === "pired-profile" ? "review" : "off"),
+			on: (e: string, h: Handler) => handlers.set(e, [...(handlers.get(e) ?? []), h]),
+			getAllTools: () => [...all].map((name) => ({ name })),
+			getActiveTools: () => active,
+			setActiveTools: (names: string[]) => {
+				active = names;
+			},
+			getThinkingLevel: () => "off",
+			events: {
+				emit: (event: string, request: { result?: unknown }) => {
+					if (event === REGISTER && subagents !== "absent") request.result = { ok: true, registration: { dispose: () => {} } };
+				},
+				on: () => () => {},
+			},
+		};
+		piredExtension(api as never);
+		const ctx = (mode = "print") => ({
+			cwd: target, mode, isProjectTrusted: () => true, model: { provider: "p", id: "m" }, thinkingLevel: "off",
+			ui: new Proxy({ notify: (m: string) => notices.push(m) } as Record<string, unknown>, {
+				get: (t, k) => (k in t ? t[k as string] : () => undefined),
+			}),
+		});
+		const fire = async (event: string, payload: unknown, on: unknown = ctx()): Promise<unknown[]> => {
+			const out: unknown[] = [];
+			for (const h of handlers.get(event) ?? []) out.push(await h(payload, on));
+			return out;
+		};
+		const launch = async (id: string, agent = "pired-scout") =>
+			(await fire("tool_call", { type: "tool_call", toolCallId: id, toolName: "subagent", input: { agent, task: "map src/" } }))[0] as { block?: boolean; reason?: string } | undefined;
+		const end = (id: string, isError = false, results: unknown[] = [{ agent: "pired-scout", exitCode: 0 }], on: unknown = ctx()) =>
+			fire("tool_execution_end", { type: "tool_execution_end", toolCallId: id, toolName: "subagent", isError, result: { content: [], details: { results } } }, on);
+		return { root, target, ws, notices, fire, ctx, launch, end };
+	}
+
+	let host: ReturnType<typeof sessionHost> | undefined;
+	let savedWorkspace: string | undefined;
+	beforeEach(() => {
+		savedWorkspace = process.env.PIRED_WORKSPACE;
+	});
+	afterEach(async () => {
+		if (host) {
+			await host.fire("session_shutdown", {});
+			rmSync(host.root, { recursive: true, force: true });
+			host = undefined;
+		}
+		if (savedWorkspace === undefined) delete process.env.PIRED_WORKSPACE;
+		else process.env.PIRED_WORKSPACE = savedWorkspace;
+	});
+
+	it("tells an operator without pi-subagents to install it, since `pi update` only upgrades what is there", async () => {
+		host = sessionHost("absent");
+		await host.fire("session_start", { type: "session_start" });
+		expect(host.notices).toContain(SUBAGENTS_ABSENT_NOTICE);
+		expect(SUBAGENTS_ABSENT_NOTICE).toContain("pi install npm:pi-subagents");
+	});
+
+	it("says once that an eager pi-subagents costs its whole schema every request, and never with the lazy loader", async () => {
+		host = sessionHost("eager");
+		await host.fire("session_start", { type: "session_start" });
+		await host.fire("before_agent_start", { systemPrompt: "base" });
+		await host.fire("before_agent_start", { systemPrompt: "base" });
+		expect(host.notices.filter((n) => n === SUBAGENTS_EAGER_NOTICE)).toHaveLength(1);
+
+		const lazy = sessionHost("lazy");
+		try {
+			await lazy.fire("session_start", { type: "session_start" });
+			await lazy.fire("before_agent_start", { systemPrompt: "base" });
+			expect(lazy.notices).not.toContain(SUBAGENTS_EAGER_NOTICE);
+		} finally {
+			await lazy.fire("session_shutdown", {});
+			rmSync(lazy.root, { recursive: true, force: true });
+		}
+	});
+
+	it("publishes the session's scope for its workers under the workspace, and withdraws it at shutdown", async () => {
+		host = sessionHost("lazy");
+		await host.fire("session_start", { type: "session_start" });
+		expect(process.env.PIRED_WORKSPACE).toBe(host.ws);
+		expect(readParentScope(globalThis, host.ws)).toMatchObject({ engagement: "live", mode: "enforce", targets: { domains: ["app.live.test"] } });
+		await host.fire("session_shutdown", {});
+		expect(readParentScope(globalThis, host.ws)).toBeUndefined();
+	});
+
+	/**
+	 * Two `subagent` calls in one assistant message run concurrently in pi, and
+	 * a probe had two workers overlapping against one GPU. The gate must refuse
+	 * the second, and the first launch's end — not the refused one's — frees it.
+	 */
+	it("refuses a second launch while the first runs, and frees the slot when that launch's execution ends", async () => {
+		host = sessionHost("lazy");
+		await host.fire("session_start", { type: "session_start" });
+		expect(await host.launch("call-1")).toBeUndefined();
+		const second = await host.launch("call-2", "pired-verify");
+		expect(second?.block).toBe(true);
+		expect(second?.reason).toMatch(/one at a time/);
+		await host.end("call-2", true, []);
+		expect((await host.launch("call-3", "pired-verify"))?.block).toBe(true);
+		await host.end("call-1");
+		expect(await host.launch("call-4", "pired-verify")).toBeUndefined();
+	});
+
+	it("gives a launch that started no child its budget back", async () => {
+		host = sessionHost("lazy");
+		writeFileSync(join(host.target, "pired.scope.json"), JSON.stringify({
+			v: 1, engagement: "live", authorized: true, mode: "enforce", workspace: host.ws, targets: {}, maxAgents: 1,
+		}));
+		await host.fire("session_start", { type: "session_start" });
+		expect(await host.launch("rejected")).toBeUndefined();
+		await host.end("rejected", true, []);
+		expect(await host.launch("ran")).toBeUndefined();
+		await host.end("ran");
+		expect((await host.launch("over"))?.reason).toMatch(/budget spent/);
+	});
+
+	/**
+	 * A worker parks its questions as blockers (contact_supervisor is refused),
+	 * and the only announcement was on the parent's own `record` or on
+	 * pi-subagents' foreground-complete event, which 0.71 emits only for a
+	 * detached run. So a worker's question sat unannounced.
+	 */
+	it("announces a blocker a worker parked when the worker's launch ends", async () => {
+		host = sessionHost("lazy");
+		await host.fire("session_start", { type: "session_start" });
+		await new Workspace(host.ws, makeHostServices()).append("blockers", {
+			v: 1, id: "BLK-9", kind: "blocker", createdAt: "2026-09-23T10:00:00Z", type: "decision",
+			question: "Is staging in scope?", priority: "high", status: "open",
+		});
+		expect(await host.launch("w1")).toBeUndefined();
+		await host.end("w1", false, [{ agent: "pired-scout", exitCode: 0 }], host.ctx("tui"));
+		expect(host.notices.some((n) => /1 new question needs your input/.test(n))).toBe(true);
 	});
 });

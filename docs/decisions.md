@@ -745,7 +745,14 @@ nothing scoped it to a job the operator had actually asked for.
 
 ## ADR-013 — A subagent reaches the ledger through a CLI, not through the extension
 
-**Status:** accepted
+**Status:** superseded by ADR-027 · 2026-09-23
+
+> The premise below — that `omitExtensionBindingsEnv` strips a child's extension
+> bindings so a child never loads pired — is a misreading, corrected in ADR-027: it
+> deletes one metadata env var, only for out-of-process runners, and a foreground child
+> loads the extensions its agent lists. A child now gets `record`/`recall` directly
+> through `extensions/child.ts`, so the `pired-ledger` CLI is no longer part of the
+> delegation path. The history below is kept for the reasoning it records.
 
 ### Context
 
@@ -1483,7 +1490,15 @@ status line is carrying two rows below, truncated mid-word.
 
 ## ADR-021 — The installers register pi-subagents, and only pi-subagents
 
-**Status:** accepted · 2026-09-22
+**Status:** accepted · 2026-09-22 · reframed by ADR-027 · 2026-09-23
+
+> The decision stands: the installers register pi-subagents and nothing else. ADR-027 adds
+> version floors (`pi ≥ 0.86.1`, `pi-subagents ≥ 0.71.0`), which the installers enforce, now that
+> delegation runs *only* through the package. It also corrects the `omitExtensionBindingsEnv`
+> premise cited below. Foreground children now load pired's own tools directly. On
+> pi-subagents ≥ 0.68 they also inherit the providers the parent registered, so the provider
+> mirror is not what makes delegation work there. Before 0.68 it still is: an in-process child
+> knew only pi's own providers, and the mirror is how it resolved pired's.
 
 ### Context
 
@@ -1682,3 +1697,297 @@ truecolor and 256-color conversion, and text contrast on the shipped dark and
 selected backgrounds. Provider tests check neutral forms and corrective error
 messages without relying on color. ADR-023’s keyboard, focus, navigation and
 explicit-decision behavior remains in place.
+
+## ADR-025 — Native workers share durable state and isolate conversation context
+
+**Status:** superseded by ADR-027 · 2026-09-23 · never accepted
+
+> The matched comparison this waited on (ADR-026) was overtaken by ADR-027: the native
+> worker existed to route around a child that could not load pired, and no such child
+> exists. `pired_delegate` and `extensions/lib/delegation.ts` are deleted; a foreground
+> pi-subagents child carries `record`/`recall` and the scope gate through
+> `extensions/child.ts`. Kept for the requirements it framed, which ADR-027 inherits
+> (shared ledger, isolated context, bounded handoff, sequential foreground runs).
+
+External subagents lose pired's extension bindings, tools and scope gate. A
+prompt telling the parent to delegate cannot ensure its child can consult or
+update the engagement. Local models also pay heavily for long transcripts and
+concurrent requests to one GPU.
+
+The extension now provides `pired_delegate`, with `investigate` and `verify`
+roles. The distinct name avoids a collision with external `delegate` tools.
+Each worker uses the parent's selected model and provider registry, current
+source directory, scope and shared core `record`/`recall` tools. It receives a
+bounded snapshot built from exact record IDs or source paths, including related
+claims, model, checklist and open blockers. `recall context` refreshes that
+snapshot from disk. Neither conversation history nor the loot ledger is
+injected into the brief; source and evidence remain accessible on demand.
+
+The host adapter owns the model loop. Workers expose no delegation tool, run
+sequentially, and have turn, time and estimated input budgets. Every successful
+record refreshes the parent's UI before the worker's next model request. Tool
+output and progress events are saved in owner-only workspace artifacts, while
+the parent receives at most 4,000 characters. A limit, cancellation or provider
+failure returns an explicit unfinished state with references to retained work.
+The existing scope gate applies to each worker tool call; its documented shell
+indirection limits remain unchanged.
+
+`completed` is an execution status, not a new verification authority. The
+existing ledger rules still decide whether a finding is suspected or confirmed.
+The parent owns cross-component reasoning and final judgment. Prompts require
+surface and hypotheses to be recorded when discovered, followed by findings
+when supported; the scribe remains an optional recovery path.
+
+Regression tests exercise real shared workspaces and tool execution with
+scripted model replies. A separate live synthetic assay checks early recording,
+child source/shared-model access, parent recall, and bounded handoffs against
+Luna and a configured local model. It measures orchestration behavior, not
+vulnerability recall or a performance advantage. External pi-subagents and
+`pired-ledger` remain supported under their existing, explicitly unguarded
+child-process contract.
+
+---
+
+## ADR-026 — Native delegation is accepted on a pre-registered corpus margin, not on every target
+
+**Status:** accepted · 2026-09-23 · governs the acceptance of ADR-027 (written for ADR-025)
+
+> Written for ADR-025's native worker. ADR-027 replaced the candidate with pired's workers through
+> pi-subagents and kept this rule unchanged. Read "ADR-025" below as "the candidate under test",
+> which is now ADR-027's change. The protocol of record is `eval/delegation-compare.md`.
+
+### Context
+
+ADR-025 is accepted only if it finds vulnerabilities about as well as the baseline while spending
+fewer tokens. In the operator's words: "similar quality with less tokens." The test is a matched
+comparison (`eval/delegation-compare.ts`, protocol in `eval/delegation-compare.md`). It runs the
+five research applications, three fixed passes per version, on GPT-6 Luna and GLM-5.3 Flash at medium
+effort. It counts every parent, worker and compaction token.
+
+The first draft of the protocol approved the candidate only when its observed mean true positives
+and precision were no lower on *every* target. Resampling the research's own per-target runs showed
+what that rule measures:
+- A candidate of identical quality and 10% fewer tokens was approved in 8.4% of Luna grids and 7.3%
+  of GLM grids, and in 0.7% of grids when both models had to pass.
+- With three passes per target, and one or two labelled locations on four of the five targets,
+  "no lower on every target" mostly measures noise.
+
+Two further problems:
+- **Precision as a mean of per-run ratios**, with a zero-claim run counted as 0, pointed both ways.
+  It rejected a candidate with the same true positives over the same claims. It approved one that
+  spent four times the claims for the same hits, because a single 1/1 run lifted its mean.
+- **The research defines precision as pooled TP over claims.**
+
+### Decision
+
+The rule was fixed with the operator before any scored session. The candidate is approved on a model
+when the grid is complete and official, and all of the following hold:
+- Its pass-mean pooled true positives reach at least 85% of the baseline's.
+- Its pooled precision (ΣTP/Σclaims over the grid) reaches at least 85% of the baseline's.
+- On no target does every candidate pass find fewer true positives than the worst baseline pass.
+- Its mean total tokens are lower.
+
+ADR-025 is accepted only if both models approve. Per-target results, pooled precision per target and
+token ranges are reported alongside, and each decision label names the part that failed.
+
+### Consequences
+
+The same resampling puts the rule's error rates, for both models together, at:
+
+| Candidate's true positives | Chance of approval |
+|---|---:|
+| Identical to baseline | ~62% |
+| 15% fewer | ~15% |
+| 25% fewer | ~3% |
+
+The margin chooses which error the experiment prefers; it does not remove either. Five passes would
+move the identical-quality figure to ~77%, at 100 sessions instead of 60, and were declined.
+
+The rates come from bootstrapping three historical runs per target, which understates variance, so
+the real ones are somewhat worse. A rejection therefore does not show that the candidate is worse,
+and an approval does not show that it is better. Both are screens on this corpus, and the retained
+findings still need reading before either is believed.
+
+---
+
+## ADR-027 — Delegation is pi-subagents' in-process children, not a native worker
+
+**Status:** provisional · 2026-09-23 · supersedes ADR-025 · supersedes ADR-013 · reframes ADR-021
+
+> The design is settled, but whether the change is kept is not. Under ADR-026 it is taken only if
+> the matched comparison (`eval/delegation-compare.md`) approves on both priority models: similar
+> quality with fewer total tokens. That comparison has not run, and no candidate snapshot is frozen
+> yet. A rejection means this change is not taken as it stands.
+
+### Context
+
+ADR-013, ADR-021, ADR-025 and `research/07 §3` all rest on one sentence: *pi-subagents
+spawns children with extension bindings deliberately stripped (`omitExtensionBindingsEnv`),
+so a child never loads pired.* Everything downstream — the `pired-ledger` CLI, the
+provider mirror, the native `pired_delegate` worker — was built to route around that.
+
+The sentence is a misreading, and reading the package settles it.
+`omitExtensionBindingsEnv` (`pi-subagents-0.71.0/.../runs/shared/extension-bindings.js`)
+deletes exactly one environment variable, `PI_SUBAGENT_EXTENSION_BINDINGS` — a ≤16 KiB
+JSON metadata blob a parent passes down — and returns the rest of the env untouched. It is
+called only in the *out-of-process* runners (`external-cli-runner.js`, background
+`async-execution.js`); a foreground child never goes through it. Since pi-subagents 0.65
+a foreground child is an **in-process pi `AgentSession`**, not a spawned process, so there
+is no env to strip in the first place. And pired is not an ambient extension that a child
+would or would not inherit: `bin/launch.mjs` assembles it with one `pi -e <path>` per
+extension (ADR-017), so "child disables ambient extensions" never bore on pired's own
+loading. What is true, and all that was ever true, is narrower: a *packaged* agent
+definition ships no `record`/`recall`, and a child launched with `extensions: []` loads
+nothing — including any provider extension it needs to resolve its model. The
+`0 turns | 0 tokens | 0 tools` deadlock in `research/07` was a child that could not
+resolve its model, not a child that could not load pired.
+
+An agent's `extensions: [<abs path>]` loads that extension into the in-process child, the
+way `pi -e` does for the parent. So pired can give a child its own `record`, `recall` and
+scope gate directly, with no CLI. On pi-subagents ≥ 0.68, where an in-process child inherits the
+parent's registered providers, it needs no mirror either.
+
+### Decision
+
+**pired delegates only through pi-subagents. The supported and measured stack is pi 0.87.1 +
+pi-subagents 0.71.0. The native worker is deleted.**
+
+- Four agents, registered at runtime through pi-subagents' process-local event contract
+  (`pi-subagents:runtime-agent-register:v1`), never by importing the package:
+  `pired-scout` (attack-surface mapping — routes, handlers, inputs, trust boundaries,
+  sinks), `pired-investigate` (deep dive on one lead), `pired-verify` (fresh adversarial
+  refutation) and `pired-escalate` (impact amplification — chains existing findings into
+  concrete paths, never inflating severity without one).
+- Each agent's child loads `extensions/child.ts` (logic in `core/child.ts`, which imports
+  only ports), binding `record`/`recall` to the parent's workspace and arming the scope
+  gate at `maxAgents: 0`.
+- `extensions/lib/delegation.ts`, `pired_delegate` and its activation are removed.
+- Both installers enforce the floors, `pi ≥ 0.86.1` and `pi-subagents ≥ 0.71.0`. They install
+  or upgrade an unpinned `npm:pi-subagents`, and leave a pinned or forked entry alone with a
+  note. pired reads no version number. The agent definitions use the subset 0.66 and 0.71 both
+  accept, so an older package still registers the workers. It costs the full `subagent` schema
+  on every request, and pired tells the operator once when it sees that schema active without the
+  lazy loader. Before 0.68 its children also resolve pired's providers only through the
+  `~/.pi/agent/models.json` mirror (0.68 made in-process children inherit the parent's providers).
+
+The measured facts behind this come from no-model runs with a scripted faux provider. Three
+sources, and they show different things.
+
+- **spike-core** (pi-subagents 0.66 on pi 0.84.2, a prototype child extension built from
+  pired's core `record`/`recall` and scope gate). Unsealed, a child loaded through a runtime
+  agent wrote a hypothesis into the **parent's** ledger (`recall` in the parent read it back).
+  Its out-of-scope bash was blocked with pired's exact reason, and its nested `subagent` call
+  found no such tool. The parent's `scope.json` and `process.env.PIRED_WORKSPACE` were unchanged
+  afterward. Under the Landlock+seccomp seal (`eval/corpus/fs-seal.c`) the same script showed
+  much less. The first launch named a session directory the seal did not grant, and failed with
+  `EACCES`. The parent then consumed the scripted child steps itself: its own record, its own
+  blocked `curl`, and a second launch. That second launch fell back to pi-subagents' default
+  session directory inside the writable agent directory. There the child loaded, read the
+  parent's scope and armed its gate, but it only returned a final message. So under the seal,
+  spike-core shows only that a child loads and arms once its session directory is writable.
+- **spike-latest** (pi-subagents 0.71 on pi 0.87.1) used a stand-in child extension: a
+  record-like tool writing its own ledger file, and a gate hard-coded to one IP. It does not
+  exercise pired's `record`/`recall` or scope gate. What it shows is 0.71's mechanics: a runtime
+  agent's `extensions` load into the in-process foreground child, the tripwire below, and the
+  lazy loader's overhead.
+- **The real child extension on 0.71 / pi 0.87.1** is shown end to end by
+  `extensions/child.test.ts`, which runs when `PIRED_TEST_PI_SUBAGENTS` names the package
+  (docs/testing.md). The parent launches `pired-scout`. The child's record lands in the parent's
+  ledger, and its out-of-scope bash is refused with the parent gate's reason and never runs. It
+  sees no delegation tool. The parent's `scope.json` and `PIRED_WORKSPACE` are unchanged, and its
+  usage is in its own `session.jsonl`. Under the seal it is shown by the comparison harness's
+  delegation probe, which grants `<cell>/child-sessions`. There the record reaches the parent's
+  ledger, out-of-scope bash is blocked, and the child session reconciles with the parent's
+  `subagent` result. Nested-delegation refusal and scope/env integrity have not been measured
+  under the seal.
+
+What those runs established:
+
+- The child extension is a **fail-closed tripwire** (spike-latest). An agent whose `tools`
+  allowlist names `record` fails at agent_start if that extension does not load, so a child never
+  runs half-armed. When `record` was absent from the allowlist *and* the gate extension was
+  missing, the spike's out-of-scope bash executed (the `LEAKED` marker). That is why the allowlist
+  must carry `record`.
+- Parent overhead is a real cost and the reason delegation is opt-in in the prompt. The
+  full `subagent` tool schema is ~5k tokens/request on 0.66 (~21k chars for `subagent`
+  alone). 0.71's lazy loader shows the parent a ~0.5k-char `subagents_enable` stub until
+  first use, cutting the standing cost to ~1.4k tokens. Hiding `bg_wait` (~4.4k chars,
+  ~1.1k tokens) drops pi-subagents' residual to ~0.3k until the model first delegates. pired's
+  own `<delegation>` block adds 1,886 characters (~470 tokens at four characters a token) to the
+  system prompt on every request once the workers register (measured as
+  `delegationBlock({}).length`). So the standing cost of having delegation available on 0.71 is
+  about 0.8k tokens per request, not 0.3k.
+- **The first wording did not get used.** The first `<delegation>` block called delegation
+  "never required" and "for when your context gets noisy", next to pi-subagents' own "direct
+  execution is the default; complexity alone never authorizes delegation". In the first
+  official grid (2026-09-24, interrupted), four of five candidate sessions ran 18–97 turns of
+  whole-application review on GPT-6 Luna and GLM-5.3 Flash without once calling
+  `subagents_enable`; the fifth (Luna, filebrowser) enabled it in its first turn. A capture of
+  the scored parent's prompt showed the block was present, so the cause was the model's
+  reading, not a harness fault. The block now states the operator's authorization in
+  pi-subagents' own terms ("applicable instructions") and informs the economics — every read
+  is re-sent on every later request; a worker reads in a fresh context and returns 200 words —
+  without requiring a single launch. The grid was restarted with the revised candidate; its
+  interrupted runs are not mixed into the comparison.
+
+### Consequences
+
+- The pinned pi runtime moved 0.84.2 → 0.87.1. `extensions/lib/context-guard.ts` now
+  handles both context shapes so a downgrade does not break the guard.
+- pired stays foreground and synchronous by design (accountable, and kind to one GPU): the
+  parent gate denies `async: true`, and pired hides `bg_wait` and `subagent_supervisor`
+  from the parent's active tools, re-applied each `before_agent_start`.
+- **The parent gate vets a launch against an allowlist, not a denylist.** A launch is
+  `{agent, task}`, where `agent` is one of the four pired agents. The only additions allowed are
+  a `cwd` inside the engagement directory, `async: false` and `context: "fresh"`. The last two
+  restate the definition. Everything else is refused with a reason naming the field. The
+  denylist it replaced missed fields that defeat the design. `gate` and `acceptance.verify` run a
+  shell command on the host after the worker, through `spawn(…, {shell: true})`, outside every
+  `tool_call` hook. In a review probe, a `gate` command wrote a marker file, while the same
+  command through `bash` was refused. `model` with a `:level` suffix put a worker on another
+  provider, which sends client code there. In the comparison, a model mismatch also invalidates
+  the run and halts the grid. `context: "fork"` handed the worker the parent's whole transcript,
+  and `sessionDir` moved its session out of the pinned directory. The schema has dozens of
+  top-level keys and changed between 0.66 and 0.71. An allowlist fails closed on the next one.
+- **Workers run one at a time, and the gate enforces it.** pi runs the tool calls of one
+  assistant message in parallel unless a tool declares itself sequential. `subagent` does not,
+  so two launches in one message ran two workers at once: a review probe showed their runs
+  overlapping. The gate refuses a launch while one it allowed is still running. It releases the
+  slot when that call ends, and refunds the budget when pi-subagents rejected the launch before
+  any worker started.
+- **A worker takes its scope from the parent in-process, never from `scope.json`.** The parent
+  publishes a deep-frozen copy of the scope its own gate was built from, on `globalThis` under
+  `Symbol.for("pired.parent-scope.v1")`, keyed by workspace. The child arms from that copy and
+  refuses to start without it. The workspace's `scope.json` is written for the panel and
+  `pired-state`, and the gated model can write it, since the scope gate does not police local
+  paths. One edit would have re-armed every later worker with a wider scope while the parent's
+  own gate stayed as it was.
+- External runner agents (claude-code, codex-exec, cursor-agent, …) are denied by the
+  parent gate, since only the four pired names pass it.
+- pired still imports nothing from pi-subagents; the cooperation is the event contract and
+  the `extensions: [child.ts]` path, nothing more.
+- ADR-026's acceptance comparison re-runs **both** arms on 0.87.1: baseline is pired at
+  `496b190` without pi-subagents, candidate is pired + pinned pi-subagents 0.71.0, both on
+  pi 0.87.1 with cacheWarming off. The candidate is a snapshot of the current tree. Its digest
+  goes into `eval/delegation-compare.pins.json` before any scored run, and until then every grid
+  is exploratory. The native-worker snapshot pinned for ADR-025 (`675bd2ef…`) does not apply.
+
+### Rejected
+
+**The native worker (ADR-025).** It existed to solve a problem that was not there. Once a
+child can load pired's own tools, a second delegation engine inside pired is glue to
+maintain, a `complete()` loop to keep correct, and a divergence from the ecosystem every
+operator already knows.
+
+**A hybrid thin tool over pi-subagents' foreground delegation API.** pired keeps a small
+`pired_delegate`-shaped tool and drives the worker from inside its `execute()`, hiding
+pi-subagents' own model-facing tools — measured cheapest on 0.66 (parent tool schema ~7k
+vs ~25k chars). It buys that by speaking pi-subagents' internal `prompt-template:subagent:*`
+event names, which are not a contract. More glue against a private surface, for a saving 0.71's
+lazy loader already delivers. (Its other drawback when it was rejected, one worker at a time, is
+now the rule anyway: see Consequences.)
+
+**Loading `pired.ts` unchanged into children.** The full extension in a child re-runs
+pired's session bootstrap: with no engagement handed down it drops the scope gate back to
+`off` and overwrites the parent's `scope.json`. A child gets `core/child.ts` — record,
+recall and the gate, and nothing that writes engagement state.
