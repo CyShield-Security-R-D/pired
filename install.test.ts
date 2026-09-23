@@ -97,7 +97,7 @@ function sandbox(): Sandbox {
 			'  prefix) echo "$NPM_PREFIX" ;;',
 			"  install)",
 			'    mkdir -p "$NPM_PREFIX/bin"',
-			`    printf '#!/bin/sh\\nexit 0\\n' > "$NPM_PREFIX/bin/pired"`,
+			'    cp "$PIRED_STUB" "$NPM_PREFIX/bin/pired"',
 			'    chmod +x "$NPM_PREFIX/bin/pired"',
 			// Installing pi has to leave a pi behind, or the step that registers the
 			// subagents package has nothing to register it with.
@@ -128,6 +128,17 @@ function sandbox(): Sandbox {
 	].join("\n");
 	script(join(box.stub, "pi"), pi);
 	script(join(box.stub, "pi-template"), pi);
+	script(join(box.stub, "pired-template"), [
+		"#!/bin/sh",
+		'echo "pired $* offline=${PI_OFFLINE:-0}" >> "$CALLS"',
+		'if [ "$*" = "-- --help" ]; then',
+		'  [ "${PIRED_VERIFY_FAILS:-0}" = 1 ] && { echo "Error: failed to load extension" >&2; exit 1; }',
+		'  echo "Usage: pi [options]"',
+		'  [ "${PIRED_VERIFY_MISSING_FLAG:-0}" = 1 ] || echo "  --pired-profile <value>  pired profile"',
+		"fi",
+		"exit 0",
+		"",
+	].join("\n"));
 
 	return box;
 }
@@ -157,6 +168,7 @@ function run(
 				CALLS: box.calls,
 				REGISTERED: box.registered,
 				PI_STUB: join(box.stub, "pi-template"),
+				PIRED_STUB: join(box.stub, "pired-template"),
 				NPM_PREFIX: box.prefix,
 				PIRED_SOURCE: box.source,
 				PIRED_NO_ANIM: "1",
@@ -182,6 +194,25 @@ const piInstalls = (result: RunResult): string[] => result.calls.filter((call) =
 
 describe.each(shells())("install.sh under %s", (shell) => {
 	const start = (box: Sandbox, options: Parameters<typeof run>[1] = {}) => run(box, { ...options, shell });
+
+	it("loads the extension through pi when verifying an upgrade", () => {
+		const box = sandbox();
+		script(join(box.prefix, "bin", "pired"), "#!/bin/sh\nexit 0\n");
+		const result = start(box);
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain("reinstall from");
+		expect(result.calls).toContain("pired -- --help offline=1");
+		expect(result.stdout).toContain("pi loaded the pired extension");
+	});
+
+	it.each(["PIRED_VERIFY_FAILS", "PIRED_VERIFY_MISSING_FLAG"])("rejects a broken extension when %s=1", (failure) => {
+		const box = sandbox();
+		const result = start(box, { env: { [failure]: "1" } });
+		expect(result.status).toBe(1);
+		expect(result.stdout).toContain("pi could not load its extension");
+		expect(result.stdout).not.toContain("Ready.");
+		if (failure === "PIRED_VERIFY_FAILS") expect(result.stdout).toContain("Error: failed to load extension");
+	});
 
 	it("installs pi-subagents after pired, because the delegation the prompt hints at should exist on a fresh box", () => {
 		const box = sandbox();

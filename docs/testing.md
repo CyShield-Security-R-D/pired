@@ -11,6 +11,8 @@ Two suites, and they answer different questions.
 
 `npm run check` runs both, plus `tsc --noEmit`. That is the gate.
 
+The installation regressions also pack the shipping files and upgrade an existing npm global installation in a temporary prefix. They load both extensions with pi's real loader, outside the checkout and without development dependencies, and verify that the installer rejects missing extension flags even when pi's help exits successfully. These checks run offline and require no model credentials.
+
 ## What is tested, and what deliberately is not
 
 Coverage is measured over what ships — `core/`, `extensions/`, `bin/`, and the

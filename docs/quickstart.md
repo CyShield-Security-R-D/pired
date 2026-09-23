@@ -32,6 +32,10 @@ On macOS and Linux the script starts by surveying the box and printing the plan 
 
 `--dry-run` prints that plan and changes nothing; `-y` (or `PIRED_YES=1`) skips the question, which is what you want in a provisioning script. With no terminal to ask at — a CI job, `curl … | sh` under a pipe — the plan is still printed and the install proceeds.
 
+Run the installer again to update pired. From a clone, run `git pull --ff-only` first so the installer uses the updated checkout. Verification loads the installed extension through pi and checks that `--pired-profile` is registered; it needs no model credentials or network access.
+
+If an earlier update reports `unknown option: --pired-profile` together with `failed to load extension`, update and rerun the installer. The profile error follows the extension failing to register its flags. A previous release imported a provider adapter through a path pi's loader could not resolve outside a development checkout. `pired --help` alone did not catch that failure; `pired -- --help` reaches pi and should list `--pired-profile` under its extension flags.
+
 **Node.js ≥ 22.19** is required — pired's extension is TypeScript that pi type-strips at load — but on macOS and Linux you do not have to install it yourself. When the box has none, or has one too old, the script fetches the current v22 from nodejs.org, checks its SHA-256 against the release manifest, and unpacks it under `~/.local/share/pired/node`. It is a `.tar.gz` rather than the smaller `.tar.xz` on purpose: a minimal Ubuntu has no `xz`, and installing one would mean the `sudo` the script promised not to ask for. A vanilla Ubuntu has no `git` either, so a `github:` source is fetched over HTTPS from codeload instead of cloned.
 
 Nothing runs as root, there is no daemon and no service, and everything written lives in `~/.local/share/pired`, `~/.pi` and `~/.pired`. The one thing it changes outside those is a single PATH line in your shell rc — shown in the plan, appended under its own `# pired` comment.

@@ -893,15 +893,17 @@ case "$PATH_STATE" in
 esac
 
 # --- verify -----------------------------------------------------------------
-# An install that cannot start is indistinguishable from a working one until the
-# first engagement. Find out now, while there is still something to say about it.
+# pired's own --help exits before loading pi. Forward --help to pi instead and
+# require the flag registered by the extension: pi can print help and exit 0
+# even when an extension failed to load. No model or network access is needed.
 if [ -n "$PI" ]; then
-	STEP_HINT="starting pired"
-	if step "verify" quiet_label "$BIN_DIR/pired" --help; then
-		done_line "verify" "pired starts"
+	STEP_HINT="loading pired in pi"
+	if PI_OFFLINE=1 step "verify" quiet_label "$BIN_DIR/pired" -- --help &&
+		grep -Eq '^[[:space:]]*--pired-profile([[:space:]]|$)' "$LOG"; then
+		done_line "verify" "pi loaded the pired extension"
 	else
 		spill
-		die "pired installed but could not start."
+		die "pired installed but pi could not load its extension (--pired-profile was not registered)."
 	fi
 fi
 

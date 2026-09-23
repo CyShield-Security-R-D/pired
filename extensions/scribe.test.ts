@@ -24,7 +24,8 @@ const llm = vi.hoisted(() => ({
 	hang: false,
 }));
 
-vi.mock("@earendil-works/pi-ai/compat", () => ({
+vi.mock("@earendil-works/pi-ai/compat", async (importOriginal) => ({
+	...await importOriginal<typeof import("@earendil-works/pi-ai/compat")>(),
 	complete: vi.fn(async (_model: unknown, context: { systemPrompt: string }, options: { signal?: AbortSignal }) => {
 		llm.calls.push({ system: context.systemPrompt, signal: options?.signal });
 		if (llm.hang) {

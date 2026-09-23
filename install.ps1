@@ -1163,14 +1163,20 @@ function Invoke-PiredInstaller {
 			Stop-Pired "npm reported success but $piredCmd is missing."
 		}
 
-		# An install that cannot start is indistinguishable from a working one
-		# until the first engagement. Find out now, while there is still
-		# something to say about it.
+		# pired's own help does not load pi. pi's help can exit 0 even after an
+		# extension fails, so require the flag that pired registers as well.
 		if ($pi) {
 			Write-Step "verifying"
-			if (-not (Invoke-Logged -Command $piredCmd -Arguments @("--help"))) {
+			$previousOffline = $env:PI_OFFLINE
+			try {
+				$env:PI_OFFLINE = "1"
+				$verified = Invoke-Logged -Command $piredCmd -Arguments @("--", "--help")
+			} finally {
+				$env:PI_OFFLINE = $previousOffline
+			}
+			if ((-not $verified) -or (-not (Select-String -LiteralPath $script:LogPath -Pattern '^\s*--pired-profile(\s|$)' -Quiet))) {
 				Show-Log
-				Stop-Pired "pired installed but could not start."
+				Stop-Pired "pired installed but pi could not load its extension (--pired-profile was not registered)."
 			}
 		}
 

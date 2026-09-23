@@ -1,6 +1,8 @@
 /** Reserve output headroom before a gateway can hide an overflow behind a generic 400. */
 import type { Context, Model, Api, SimpleStreamOptions } from "@earendil-works/pi-ai";
-import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
+// pi aliases the package root to a file when loading extensions. Deep imports
+// beneath that root fail in installed packages without our dev dependencies.
+import { openAICompletionsApi } from "@earendil-works/pi-ai/compat";
 import { calculateContextTokens, estimateTokens } from "@earendil-works/pi-coding-agent";
 
 type Stream = ReturnType<typeof openAICompletionsApi>["streamSimple"];
