@@ -9,16 +9,17 @@
 #   powershell -c "irm https://raw.githubusercontent.com/mamgad/pired/main/install.ps1 | iex"
 #
 # It surveys the box, prints exactly what it will do and where, asks once, and
-# then does all of it: Node.js (when missing or too old), pi, pired, and the
-# PATH line that makes the command typeable.
+# then does all of it: Node.js (when missing or too old), pi (when missing or
+# older than 0.86.1), pired, and the PATH line that makes the command typeable.
 #
 # It does not register pired with pi. `pi` stays the pi you installed; the
 # security layer arrives only when you type `pired`, which passes it to pi with
 # -e for that run. See ADR-017.
 #
-# It does register pi-subagents, the delegation extension pired cooperates with.
-# That is a package the operator would otherwise install by hand, it is named in
-# the plan, and PIRED_SKIP_SUBAGENTS=1 declines it. See ADR-021.
+# It does register pi-subagents, the package pired delegates through, and
+# upgrades a registered npm:pi-subagents older than 0.71.0. That is a package
+# the operator would otherwise install by hand, it is named in the plan, and
+# PIRED_SKIP_SUBAGENTS=1 declines it. See ADR-021 and ADR-027.
 #
 # Nothing runs as root. A vanilla Ubuntu has neither Node nor git, and neither
 # absence is a reason to reach for sudo:
@@ -39,18 +40,23 @@
 #   NPM_PREFIX            prefix to install into     (default npm's own global root;
 #                         ~/.local/share/pired when this script brings its own Node,
 #                         ~/.local when npm's root is not writable)
-#   PIRED_SKIP_PI         1 to not install pi
-#   PIRED_SKIP_SUBAGENTS  1 to not install pi-subagents
+#   PIRED_SKIP_PI         1 to not install or upgrade pi
+#   PIRED_SKIP_SUBAGENTS  1 to not install or upgrade pi-subagents
 #   PIRED_YES             1 to skip the confirmation prompt
 #   PIRED_NO_ANIM         1 for plain line-at-a-time output
 
 set -eu
 
 PI_PACKAGE="@earendil-works/pi-coding-agent"
-# The delegation extension pired cooperates with: `spawn a subagent` is a thing
-# the operator can ask for on a fresh box, rather than a README step they find
-# out about after the first engagement wanted one. See ADR-021.
+# The package pired delegates through: `spawn a subagent` is a thing the
+# operator can ask for on a fresh box, rather than a README step they find out
+# about after the first engagement wanted one. See ADR-021.
 SUBAGENTS_PACKAGE="npm:pi-subagents"
+# Floors, not preferences. pired's delegation is built on pi-subagents 0.71
+# (ADR-027), and 0.86.1 is the oldest pi host that release supports — so a
+# box that meets neither has pired without delegation, and says so.
+PI_FLOOR=0.86.1
+SUBAGENTS_FLOOR=0.71.0
 NODE_LINE=22
 NODE_MIN_MAJOR=22
 NODE_MIN_MINOR=19
@@ -116,8 +122,8 @@ case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
 esac
 case "${TERM_PROGRAM:-}" in Apple_Terminal|iTerm.app|vscode|WezTerm) UNICODE=1 ;; esac
 
-if [ "$UNICODE" = 1 ]; then TICK='✓'; CROSS='✗'; DOT='·'; PLUS='+'; ARROW='→'
-else TICK='ok'; CROSS='!!'; DOT='-'; PLUS='+'; ARROW='->'; fi
+if [ "$UNICODE" = 1 ]; then TICK='✓'; CROSS='✗'; DOT='·'; PLUS='+'; ARROW='→'; UP='↑'; GE='≥'
+else TICK='ok'; CROSS='!!'; DOT='-'; PLUS='+'; ARROW='->'; UP='^'; GE='>='; fi
 
 # A fractional sleep is what makes a spinner a spinner. Every coreutils and BSD
 # sleep takes one, but busybox's does not always — so ask before relying on it.
@@ -311,6 +317,39 @@ sha256_of() {
 	fi
 }
 
+# --- versions ---------------------------------------------------------------
+# 0 when version $1 is at least $2. Only the first three numbers count, so a
+# pre-release reads as its release. A version that does not parse — a pi that
+# would not start, a package.json with no version — is never new enough:
+# "could not tell" is not a reason to leave a floor unchecked.
+version_at_least() {
+	awk -v have="$1" -v want="$2" 'BEGIN {
+		sub(/^v/, "", have)
+		if (have !~ /^[0-9]+\.[0-9]+\.[0-9]+/) exit 1
+		split(have, h, /[^0-9]+/); split(want, w, /[^0-9]+/)
+		for (i = 1; i <= 3; i++) {
+			if (h[i] + 0 > w[i] + 0) exit 0
+			if (h[i] + 0 < w[i] + 0) exit 1
+		}
+		exit 0
+	}'
+}
+
+# What a pi says it is, or nothing. `pi --version` prints the bare version.
+pi_version() {
+	[ -n "$1" ] || return 0
+	"$1" --version 2>/dev/null |
+		sed -n 's/^[^0-9]*\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*[-+.0-9A-Za-z]*\).*/\1/p' | head -n 1
+}
+
+# The version in <dir>/package.json, or nothing. Read with node rather than
+# sed: a minified manifest puts every "version" key on one line.
+package_version() {
+	[ -n "$1" ] && [ -f "$1/package.json" ] || return 0
+	node -e 'try { const v = require(process.argv[1]).version; if (typeof v === "string") process.stdout.write(v) } catch {}' \
+		"$1/package.json" 2>/dev/null || true
+}
+
 # --- layout -----------------------------------------------------------------
 # When this script brings its own Node, everything it owns lives under one
 # directory:
@@ -453,12 +492,35 @@ command -v npm >/dev/null 2>&1 || [ "$DO_NODE" = 1 ] ||
 # Resolved by path first: under a custom prefix, pi lands in a bin directory that
 # is typically not on PATH yet, and `command -v pi` would miss the copy we are
 # about to install — reinstalling it, then silently skipping the registration.
+SURVEY_PI=""
+if [ -x "$BIN_DIR/pi" ]; then SURVEY_PI="$BIN_DIR/pi"
+elif [ "$DO_NODE" = 0 ]; then SURVEY_PI=$(command -v pi 2>/dev/null || true)
+fi
+
+# missing   no pi here; this run installs one
+# present   pi at or above the floor
+# old       pi below it, or one that cannot say; this run upgrades it
+# held      pi below it and PIRED_SKIP_PI=1; kept, with a warning
+# declined  no pi here and PIRED_SKIP_PI=1
+#
+# An upgrade is the same `npm install --global` a fresh install runs, into the
+# same prefix, rather than `pi update pi`. pired starts the pi it finds beside
+# itself first (bin/launch.mjs, findPi), so the copy in this prefix is the one
+# that has to meet the floor; `pi update pi` upgrades wherever that pi came
+# from — a managed install, bun, another npm prefix — which need not be here.
 DO_PI=1
 PI_STATE=missing
-if [ -x "$BIN_DIR/pi" ] || { [ "$DO_NODE" = 0 ] && command -v pi >/dev/null 2>&1; }; then
-	DO_PI=0; PI_STATE=present
+PI_VERSION=""
+if [ -n "$SURVEY_PI" ]; then
+	PI_VERSION=$(pi_version "$SURVEY_PI")
+	if version_at_least "$PI_VERSION" "$PI_FLOOR"; then DO_PI=0; PI_STATE=present
+	else PI_STATE=old
+	fi
 fi
-if [ "${PIRED_SKIP_PI:-0}" = 1 ]; then DO_PI=0; fi
+if [ "${PIRED_SKIP_PI:-0}" = 1 ]; then
+	DO_PI=0
+	case "$PI_STATE" in missing) PI_STATE=declined ;; old) PI_STATE=held ;; esac
+fi
 
 # --- subagents --------------------------------------------------------------
 # Asked of the pi that is already here, if one is. On a box where this run is
@@ -468,28 +530,96 @@ if [ "${PIRED_SKIP_PI:-0}" = 1 ]; then DO_PI=0; fi
 # The match is any package whose name ends in `pi-subagents`, not the one spec
 # this script installs. The ecosystem is mostly forks — @gotgenes, @nklisch,
 # @tintinweb — and an operator who chose one did not ask for a second
-# implementation of the same tool registered underneath it.
-subagents_registered() {
-	[ -n "$1" ] || return 1
-	"$1" list 2>/dev/null | grep -Eq '(^|[:/[:space:]])(@[^[:space:]/]+/)?pi-subagents([[:space:]]|$)'
+# implementation of the same tool registered underneath it, or for this script
+# to decide what version of theirs is new enough.
+#
+# `pi list` prints each source with its installed path on the line below, so
+# this reads entries rather than grepping lines: a grep for `pi-subagents` also
+# matched that path, and counted a pinned npm:pi-subagents@0.66.0 as registered
+# by the name of its directory rather than by its source. Sets
+#   SUBAGENTS_KIND     canonical  npm:pi-subagents, which `pi update` moves
+#                      pinned     npm:pi-subagents@<version>, which it does not
+#                      fork       any other package by that name
+#                      (empty)    nothing registered
+#   SUBAGENTS_SOURCE   the source as pi recorded it
+#   SUBAGENTS_VERSION  the version in the package.json under that path
+ESC=$(printf '\033')
+subagents_survey() {
+	SUBAGENTS_KIND=""; SUBAGENTS_SOURCE=""; SUBAGENTS_VERSION=""
+	[ -n "$1" ] || return 0
+	_entry=$("$1" list 2>/dev/null | sed "s/${ESC}\[[0-9;]*m//g" | awk '
+		function classify(s,   name, ver, at, last) {
+			if (s ~ /^npm:/) {
+				name = substr(s, 5); ver = ""
+				# An @ past the first character starts the version.
+				at = index(substr(name, 2), "@")
+				if (at > 0) { ver = substr(name, at + 2); name = substr(name, 1, at) }
+				if (name == "pi-subagents") return (ver == "" || ver == "latest") ? "canonical" : "pinned"
+				return (name ~ /^@[^\/]+\/pi-subagents$/) ? "fork" : ""
+			}
+			# git:host/owner/pi-subagents@ref, a URL, a local checkout.
+			last = s
+			sub(/\/+$/, "", last); sub(/.*[\/:]/, "", last); sub(/@[^@]*$/, "", last); sub(/\.git$/, "", last)
+			return (last == "pi-subagents") ? "fork" : ""
+		}
+		function keep() {
+			if (kind != "" && kind != "fork" && best == "") best = kind "\n" src "\n" path
+			if (kind == "fork" && other == "") other = kind "\n" src "\n" path
+			kind = ""
+		}
+		/^  [^ ]/ { keep(); src = $1; path = ""; kind = classify(src); next }
+		/^    [^ ]/ { if (kind != "" && path == "") { path = $0; sub(/^ +/, "", path); sub(/ +$/, "", path) } next }
+		{ keep() }
+		END { keep(); if (best != "") print best; else if (other != "") print other }
+	') || _entry=""
+	[ -n "$_entry" ] || return 0
+	SUBAGENTS_KIND=$(printf '%s\n' "$_entry" | sed -n 1p)
+	SUBAGENTS_SOURCE=$(printf '%s\n' "$_entry" | sed -n 2p)
+	SUBAGENTS_VERSION=$(package_version "$(printf '%s\n' "$_entry" | sed -n 3p)")
 }
 
-SURVEY_PI=""
-if [ -x "$BIN_DIR/pi" ]; then SURVEY_PI="$BIN_DIR/pi"
-elif [ "$DO_NODE" = 0 ]; then SURVEY_PI=$(command -v pi 2>/dev/null || true)
-fi
+# The survey as a state the plan and the run act on:
+#   missing  nothing registered
+#   present  npm:pi-subagents at or above the floor, pinned or not
+#   old      npm:pi-subagents below it, or with no version on disk to read
+#   pinned   npm:pi-subagents@<version> below it: `pi update` does not move a
+#            pin, and replacing the operator's pin is not this script's call
+#   fork     another package by that name
+subagents_state() {
+	subagents_survey "$1"
+	case "$SUBAGENTS_KIND" in
+		"") SUBAGENTS_STATE=missing ;;
+		fork) SUBAGENTS_STATE=fork ;;
+		*)
+			if version_at_least "$SUBAGENTS_VERSION" "$SUBAGENTS_FLOOR"; then SUBAGENTS_STATE=present
+			elif [ "$SUBAGENTS_KIND" = pinned ]; then SUBAGENTS_STATE=pinned
+			else SUBAGENTS_STATE=old
+			fi ;;
+	esac
+}
 
-DO_SUBAGENTS=1
+DO_SUBAGENTS=0
 SUBAGENTS_STATE=missing
+SUBAGENTS_KIND=""; SUBAGENTS_SOURCE=""; SUBAGENTS_VERSION=""
 if [ "${PIRED_SKIP_SUBAGENTS:-0}" = 1 ]; then
-	DO_SUBAGENTS=0; SUBAGENTS_STATE=declined
+	SUBAGENTS_STATE=declined
 elif [ "$DO_PI" = 0 ] && [ -z "$SURVEY_PI" ]; then
 	# No pi to register it with, and none coming. Saying "+ subagents" here would
 	# be promising something this run cannot do.
-	DO_SUBAGENTS=0; SUBAGENTS_STATE=nopi
-elif subagents_registered "$SURVEY_PI"; then
-	DO_SUBAGENTS=0; SUBAGENTS_STATE=present
+	SUBAGENTS_STATE=nopi
+else
+	subagents_state "$SURVEY_PI"
+	case "$SUBAGENTS_STATE" in
+		missing|old)
+			# pi-subagents 0.71's changelog names 0.86.1 its oldest supported pi,
+			# and a pi kept below that by PIRED_SKIP_PI=1 is one this run will not
+			# lift. Installing the latest onto it would be installing a package
+			# onto a host it has said it does not support.
+			if [ "$PI_STATE" = held ]; then SUBAGENTS_STATE=held; else DO_SUBAGENTS=1; fi ;;
+	esac
 fi
+# What was there before this run, for the plan, the undo line and the report.
+SUBAGENTS_WAS=$SUBAGENTS_VERSION
 
 REINSTALL=0
 if [ -x "$BIN_DIR/pired" ]; then REINSTALL=1; fi
@@ -535,6 +665,7 @@ fi
 # would otherwise run straight into the note with nothing between them.
 plan_row() { printf '    %b %-11s%-29s %b\n' "$1" "$2" "$3" "${DIM}$4${OFF}"; }
 PLUS_MARK="${RED}${PLUS}${OFF}"
+UP_MARK="${RED}${UP}${OFF}"
 KEEP_MARK="${DIM}${DOT}${OFF}"
 
 say "  ${BOLD}This will install${OFF}"
@@ -553,13 +684,13 @@ case "$NODE_STATE" in
 		plan_row "$PLUS_MARK" "node" "$(tilde "$NODE_HOME")" "v${NODE_LINE} from nodejs.org, checksum-verified" ;;
 esac
 
-if [ "$DO_PI" = 1 ]; then
-	plan_row "$PLUS_MARK" "pi" "$(tilde "$BIN_DIR")" "$PI_PACKAGE"
-elif [ "$PI_STATE" = present ]; then
-	plan_row "$KEEP_MARK" "pi" "$(tilde "$BIN_DIR")" "already installed"
-else
-	plan_row "$KEEP_MARK" "pi" "" "skipped — PIRED_SKIP_PI=1"
-fi
+case "$PI_STATE" in
+	missing) plan_row "$PLUS_MARK" "pi" "$(tilde "$BIN_DIR")" "$PI_PACKAGE" ;;
+	old) plan_row "$UP_MARK" "pi" "$(tilde "$BIN_DIR")" "${PI_VERSION:-version unknown} $ARROW latest  (pired needs $GE $PI_FLOOR)" ;;
+	present) plan_row "$KEEP_MARK" "pi" "$(tilde "$(dirname "$SURVEY_PI")")" "$PI_VERSION — already installed" ;;
+	held) plan_row "$KEEP_MARK" "pi" "$(tilde "$(dirname "$SURVEY_PI")")" "${PI_VERSION:-version unknown} kept — PIRED_SKIP_PI=1; delegation needs $GE $PI_FLOOR" ;;
+	*) plan_row "$KEEP_MARK" "pi" "" "skipped — PIRED_SKIP_PI=1" ;;
+esac
 
 if [ "$NEED_TARBALL" = 1 ]; then
 	PIRED_NOTE="from $SOURCE over HTTPS — no git here"
@@ -575,7 +706,16 @@ plan_row "$PLUS_MARK" "pired" "$(tilde "$BIN_DIR")" "$PIRED_NOTE"
 # someone might object to.
 case "$SUBAGENTS_STATE" in
 	missing) plan_row "$PLUS_MARK" "subagents" "$(tilde "$HOME/.pi")" "$SUBAGENTS_PACKAGE — delegation, loads in every pi" ;;
-	present) plan_row "$KEEP_MARK" "subagents" "$(tilde "$HOME/.pi")" "already registered with pi" ;;
+	old) plan_row "$UP_MARK" "subagents" "$(tilde "$HOME/.pi")" "${SUBAGENTS_WAS:-version unknown} $ARROW latest  (pired needs $GE $SUBAGENTS_FLOOR)" ;;
+	present) plan_row "$KEEP_MARK" "subagents" "$(tilde "$HOME/.pi")" "$SUBAGENTS_WAS — already registered with pi" ;;
+	pinned) plan_row "$KEEP_MARK" "subagents" "$(tilde "$HOME/.pi")" "$SUBAGENTS_SOURCE — pinned, left alone" ;;
+	fork) plan_row "$KEEP_MARK" "subagents" "$(tilde "$HOME/.pi")" "$SUBAGENTS_SOURCE — already registered with pi, left alone" ;;
+	held)
+		if [ -n "$SUBAGENTS_KIND" ]; then
+			plan_row "$KEEP_MARK" "subagents" "$(tilde "$HOME/.pi")" "${SUBAGENTS_WAS:-version unknown} kept — $SUBAGENTS_FLOOR needs pi $GE $PI_FLOOR"
+		else
+			plan_row "$KEEP_MARK" "subagents" "" "skipped — pi-subagents $SUBAGENTS_FLOOR needs pi $GE $PI_FLOOR"
+		fi ;;
 	declined) plan_row "$KEEP_MARK" "subagents" "" "skipped — PIRED_SKIP_SUBAGENTS=1" ;;
 	nopi) plan_row "$KEEP_MARK" "subagents" "" "skipped — no pi to register it with" ;;
 esac
@@ -592,12 +732,79 @@ say "  ${DIM}Nothing runs as root. No daemon, no service, no shell hooks.${OFF}"
 if [ "$NODE_STATE" = old ]; then
 	say "  ${DIM}The PATH line puts pired's Node.js ahead of $(command -v node) in new shells.${OFF}"
 fi
+if [ "$PI_STATE" = old ] && [ "$SURVEY_PI" != "$BIN_DIR/pi" ]; then
+	say "  ${DIM}The pi at $(tilde "$SURVEY_PI") stays as it is; pired runs the new one in $(tilde "$BIN_DIR").${OFF}"
+fi
+case "$SUBAGENTS_STATE" in
+	pinned) say "  ${DIM}pired's delegation needs pi-subagents $GE $SUBAGENTS_FLOOR. To lift the pin: pi install $SUBAGENTS_PACKAGE${OFF}" ;;
+	fork) say "  ${DIM}pired's delegation needs pi-subagents $GE $SUBAGENTS_FLOOR features, which a fork may not have.${OFF}" ;;
+esac
+
+# Whether the survey saw what pi already records. With no pi to ask — none on
+# the box, or one on PATH that a run bringing its own Node does not count — the
+# plan says "install". But an `npm rm -g` of pi leaves pi's agent directory
+# behind, and the step, asking the pi this run installs, can find the
+# operator's npm:pi-subagents there and upgrade it — under a plan whose undo
+# said `pi remove`, which would take the operator's package away. Only a
+# settings file there can record one, so without it the plan is certain.
+PI_AGENT_DIR=${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}
+case "$PI_AGENT_DIR" in
+	"~") PI_AGENT_DIR=$HOME ;;
+	"~"/*) PI_AGENT_DIR="$HOME/${PI_AGENT_DIR#"~/"}" ;;
+esac
+SUBAGENTS_UNASKED=0
+if [ "$DO_SUBAGENTS" = 1 ] && [ "$SUBAGENTS_STATE" = missing ] && [ -z "$SURVEY_PI" ] &&
+	[ -f "$PI_AGENT_DIR/settings.json" ]; then
+	SUBAGENTS_UNASKED=1
+	say "  ${DIM}Only the pi this run installs can say what $(tilde "$PI_AGENT_DIR") already records: the${OFF}"
+	say "  ${DIM}subagents step asks it, and upgrades or keeps a pi-subagents it finds there.${OFF}"
+fi
+
+# `pi install` of an exact version replaces the entry it matches by name, so
+# going back from an upgrade leaves npm:pi-subagents@<old> where
+# npm:pi-subagents was: a pin, which `pi update` never moves and the next run of
+# this script leaves alone. The undo says so where it is given, after a `#` so
+# that pasting the line runs only the command. It is always last on its line.
+subagents_undo_upgrade() {
+	printf 'pi install %s@%s  # pins it; pi install %s unpins' "$SUBAGENTS_PACKAGE" "$1" "$SUBAGENTS_PACKAGE"
+}
+
+# The undo names only what this run changes, each where this run changed it.
+#
+# pi is in it only when this run put pi in the prefix. A pi that already met
+# the floor, one PIRED_SKIP_PI=1 kept, and one an upgrade stepped in front of
+# from outside the prefix all belong to the operator, and `npm rm -g` of the
+# package name removed theirs. An upgrade in place is undone by going back to
+# the version it replaced; one whose version could not be read has nothing to
+# go back to, and is left out rather than removed.
+#
+# Every npm command carries the prefix, as the retry does: under NPM_PREFIX or
+# the ~/.local fallback a bare `npm rm -g` runs against npm's own prefix, which
+# is usually where the operator's own pi lives.
+UNDO_PREFIX="--prefix $(tilde "$PREFIX")"
+UNDO_PI_RM=""
+UNDO_PI_BACK=""
+case "$PI_STATE" in
+	missing) UNDO_PI_RM=" $PI_PACKAGE" ;;
+	old)
+		if [ "$SURVEY_PI" != "$BIN_DIR/pi" ]; then
+			UNDO_PI_RM=" $PI_PACKAGE"
+		elif [ -n "$PI_VERSION" ]; then
+			UNDO_PI_BACK=" · npm install -g $UNDO_PREFIX $PI_PACKAGE@$PI_VERSION"
+		fi ;;
+esac
 UNDO_SUBAGENTS=""
-[ "$DO_SUBAGENTS" = 1 ] && UNDO_SUBAGENTS=" · pi remove $SUBAGENTS_PACKAGE"
+if [ "$SUBAGENTS_UNASKED" = 1 ]; then
+	UNDO_SUBAGENTS=" · pi remove $SUBAGENTS_PACKAGE  # only if the step installs it"
+elif [ "$DO_SUBAGENTS" = 1 ] && [ "$SUBAGENTS_STATE" = missing ]; then
+	UNDO_SUBAGENTS=" · pi remove $SUBAGENTS_PACKAGE"
+elif [ "$DO_SUBAGENTS" = 1 ] && [ -n "$SUBAGENTS_WAS" ]; then
+	UNDO_SUBAGENTS=" · $(subagents_undo_upgrade "$SUBAGENTS_WAS")"
+fi
 if [ "$OWNS_TREE" = 1 ]; then
 	say "  ${DIM}Undo: rm -rf $(tilde "$PIRED_HOME") ~/.pired${UNDO_SUBAGENTS}${OFF}"
 else
-	say "  ${DIM}Undo: npm rm -g pired $PI_PACKAGE · rm -rf ~/.pired${UNDO_SUBAGENTS}${OFF}"
+	say "  ${DIM}Undo: npm rm -g $UNDO_PREFIX pired${UNDO_PI_RM} · rm -rf ~/.pired${UNDO_PI_BACK}${UNDO_SUBAGENTS}${OFF}"
 fi
 say ""
 
@@ -757,15 +964,41 @@ resolve_pi() {
 PI=""
 resolve_pi
 
+# Spelled with the prefix: under NPM_PREFIX or the ~/.local fallback, a bare
+# `npm install -g` lands somewhere pired does not look.
+PI_RETRY="npm install -g --prefix $(tilde "$PREFIX") $PI_PACKAGE"
+
 if [ "$DO_PI" = 1 ]; then
 	STEP_HINT="resolving packages"
 	if step "pi" npm_label npm_global "$NPM_AGE_FLAG" "$PI_PACKAGE"; then
 		resolve_pi
-		done_line "pi" "$("$PI" --version 2>/dev/null || echo installed)  $(tilde "$BIN_DIR")"
+		PI_NOW=$(pi_version "$PI")
+		if [ "$PI_STATE" = missing ]; then
+			done_line "pi" "${PI_NOW:-installed}  $(tilde "$BIN_DIR")"
+		elif version_at_least "$PI_NOW" "$PI_FLOOR"; then
+			done_line "pi" "${PI_VERSION:-version unknown} $ARROW $PI_NOW  $(tilde "$BIN_DIR")"
+		else
+			# Asked rather than assumed: npm's exit code says npm finished, not that
+			# the pi pired will start is now one it can delegate from.
+			warn_line "pi" "still ${PI_NOW:-version unknown} — pired needs $GE $PI_FLOOR"
+			say "    ${DIM}retry: $PI_RETRY${OFF}"
+		fi
+	elif [ "$PI_STATE" = old ]; then
+		# The pi already here is left as it was. The floor is delegation's, so a
+		# failed upgrade is a warning with the retry, as the subagents step's
+		# failure is — and whether pired itself loads on that pi is the verify
+		# step's question, which it asks below and dies on.
+		spill
+		warn_line "pi" "could not upgrade ${PI_VERSION:-pi} — pired's delegation needs $GE $PI_FLOOR"
+		say "    ${DIM}retry: $PI_RETRY${OFF}"
+		resolve_pi
 	else
 		spill
 		die "could not install pi."
 	fi
+elif [ "$PI_STATE" = held ] && [ -n "$PI" ]; then
+	warn_line "pi" "${PI_VERSION:-version unknown} kept (PIRED_SKIP_PI=1) — pired's delegation needs pi $GE $PI_FLOOR"
+	say "    ${DIM}upgrade: $PI_RETRY${OFF}"
 elif [ -n "$PI" ]; then
 	done_line "pi" "$("$PI" --version 2>/dev/null || echo present)  $(tilde "$PI")"
 else
@@ -848,31 +1081,91 @@ fi
 # not a reason to fail an install of pired, which works without it. The warning
 # carries the one command that retries it.
 install_subagents() { "$PI" install "$SUBAGENTS_PACKAGE"; }
+# `pi update <source>` updates that one package and leaves pi and every other
+# package where they are (`pi update --help`, 0.85 and 0.87 alike).
+update_subagents() { "$PI" update "$SUBAGENTS_PACKAGE"; }
+
+# The line for a package this run leaves as it found it.
+subagents_kept() {
+	case "$SUBAGENTS_STATE" in
+		present) done_line "subagents" "already registered with pi${SUBAGENTS_VERSION:+, $SUBAGENTS_VERSION}" ;;
+		pinned)
+			# A warning, not a skip. A pin reaches this state only below the floor,
+			# where pired has no delegation, and the pin need not be one the
+			# operator chose: taking the undo of an earlier upgrade leaves one.
+			warn_line "subagents" "$SUBAGENTS_SOURCE — pinned, left alone"
+			say "    ${DIM}pired's delegation needs $GE $SUBAGENTS_FLOOR; to lift the pin: pi install $SUBAGENTS_PACKAGE${OFF}" ;;
+		fork)
+			skip_line "subagents" "$SUBAGENTS_SOURCE — already registered with pi, left alone"
+			say "    ${DIM}pired's delegation needs pi-subagents $GE $SUBAGENTS_FLOOR features, which a fork may not have${OFF}" ;;
+		held) skip_line "subagents" "held back — pi-subagents $SUBAGENTS_FLOOR needs pi $GE $PI_FLOOR" ;;
+	esac
+	return 0
+}
 
 if [ "$DO_SUBAGENTS" = 1 ]; then
 	resolve_pi
 	if [ -z "$PI" ]; then
 		# Only reachable when the pi step was skipped between the plan and here.
 		skip_line "subagents" "skipped — no pi to register it with"
-	elif subagents_registered "$PI"; then
-		# The survey had no pi to put the question to — a box with a ~/.pi but no
-		# pi on it, which is what `npm rm -g` then reinstalling leaves behind. Ask
-		# now rather than install a package over itself.
-		done_line "subagents" "already registered with pi"
+	elif ! version_at_least "$(pi_version "$PI")" "$PI_FLOOR"; then
+		# The pi upgrade failed or did not take, and the pi step already said so.
+		SUBAGENTS_STATE=held
+		subagents_kept
 	else
-		STEP_HINT="resolving $SUBAGENTS_PACKAGE"
-		# `pi install` exiting 0 is not the same as pi having recorded the package:
-		# the registration ADR-017 removed was guarded this way for that reason, and
-		# the guard is the part that was worth keeping.
-		if step "subagents" npm_label install_subagents && subagents_registered "$PI"; then
-			done_line "subagents" "$SUBAGENTS_PACKAGE  $(tilde "$HOME/.pi/agent")"
-		else
-			warn_line "subagents" "could not install $SUBAGENTS_PACKAGE — pired works without it"
-			say "    ${DIM}retry: pi install $SUBAGENTS_PACKAGE${OFF}"
-		fi
+		# Asked again rather than trusted from the survey, which may have had no pi
+		# to put the question to — a box with a ~/.pi but no pi on it, which is
+		# what `npm rm -g` then reinstalling leaves behind — or an older one.
+		SUBAGENTS_PLANNED=$SUBAGENTS_STATE
+		subagents_state "$PI"
+		case "$SUBAGENTS_STATE" in
+			missing|old)
+				# The plan offered `pi remove` for a package this step now finds
+				# already there, so the undo it printed is wrong for what happens next.
+				SUBAGENTS_FOUND=0
+				if [ "$SUBAGENTS_PLANNED" = missing ] && [ "$SUBAGENTS_STATE" = old ]; then SUBAGENTS_FOUND=1; fi
+				if [ "$SUBAGENTS_STATE" = old ]; then
+					SUBAGENTS_WAS=$SUBAGENTS_VERSION
+					SUBAGENTS_RETRY="pi update $SUBAGENTS_PACKAGE"
+					STEP_HINT="updating $SUBAGENTS_PACKAGE"
+					SUBAGENTS_ACTION=update_subagents
+				else
+					SUBAGENTS_WAS=""
+					SUBAGENTS_RETRY="pi install $SUBAGENTS_PACKAGE"
+					STEP_HINT="resolving $SUBAGENTS_PACKAGE"
+					SUBAGENTS_ACTION=install_subagents
+				fi
+				step "subagents" npm_label "$SUBAGENTS_ACTION" || spill
+				# Neither exit code is the answer. `pi install` can exit 0 and record
+				# nothing — the registration ADR-017 removed was guarded against that,
+				# and the guard is the part worth keeping — and `pi update` can exit 0
+				# and move nothing: with PI_OFFLINE=1 in the environment, pi 0.87.1
+				# prints "Updated npm:pi-subagents" and leaves 0.66.0 on disk. What pi
+				# lists, and what the package.json under it says, are the answer.
+				subagents_state "$PI"
+				case "$SUBAGENTS_STATE" in
+					present)
+						done_line "subagents" "$SUBAGENTS_PACKAGE ${SUBAGENTS_WAS:+$SUBAGENTS_WAS $ARROW }$SUBAGENTS_VERSION  $(tilde "$HOME/.pi/agent")"
+						if [ "$SUBAGENTS_FOUND" = 1 ] && [ -n "$SUBAGENTS_WAS" ]; then
+							say "    ${DIM}already registered at $SUBAGENTS_WAS, so updated rather than installed${OFF}"
+							say "    ${DIM}undo: $(subagents_undo_upgrade "$SUBAGENTS_WAS")${OFF}"
+						elif [ "$SUBAGENTS_FOUND" = 1 ]; then
+							say "    ${DIM}already registered, with no version to read, so updated rather than installed:${OFF}"
+							say "    ${DIM}the plan's pi remove would take away a package that was here before this run${OFF}"
+						fi ;;
+					old)
+						warn_line "subagents" "$SUBAGENTS_PACKAGE is ${SUBAGENTS_VERSION:-unreadable} — pired's delegation needs $GE $SUBAGENTS_FLOOR"
+						say "    ${DIM}retry: pi update $SUBAGENTS_PACKAGE${OFF}" ;;
+					pinned|fork) subagents_kept ;;
+					*)
+						warn_line "subagents" "could not install $SUBAGENTS_PACKAGE — pired works without it"
+						say "    ${DIM}retry: $SUBAGENTS_RETRY${OFF}" ;;
+				esac ;;
+			*) subagents_kept ;;
+		esac
 	fi
-elif [ "$SUBAGENTS_STATE" = present ]; then
-	done_line "subagents" "already registered with pi"
+else
+	subagents_kept
 fi
 
 # --- PATH -------------------------------------------------------------------
