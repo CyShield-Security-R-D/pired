@@ -1,8 +1,11 @@
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 
 export default defineConfig({
 	test: {
 		include: ["core/**/*.test.ts", "extensions/**/*.test.ts", "bin/**/*.test.ts", "eval/**/*.test.ts", "install.test.ts"],
+		// Frozen run snapshots and handoff bundles copy whole source trees, tests
+		// included. Collected, they re-run stale suites against the live modules.
+		exclude: [...configDefaults.exclude, "eval/artifacts/**"],
 		environment: "node",
 		coverage: {
 			provider: "v8",

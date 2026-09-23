@@ -1,11 +1,18 @@
 /** Reserve output headroom before a gateway can hide an overflow behind a generic 400. */
-import type { Context, Model, Api, SimpleStreamOptions } from "@earendil-works/pi-ai";
+import type { Context, Model, Api, SimpleStreamOptions, TranscriptContext } from "@earendil-works/pi-ai";
 // pi aliases the package root to a file when loading extensions. Deep imports
 // beneath that root fail in installed packages without our dev dependencies.
 import { openAICompletionsApi } from "@earendil-works/pi-ai/compat";
 import { calculateContextTokens, estimateTokens } from "@earendil-works/pi-coding-agent";
 
 type Stream = ReturnType<typeof openAICompletionsApi>["streamSimple"];
+/**
+ * pi 0.86 moved the system prompt and tool declarations into the transcript's
+ * system messages (`TranscriptContext`); pi 0.85 and earlier still pass them
+ * beside the messages. The guard runs under both, because the operator's pi is
+ * whatever their install left them with.
+ */
+type AnyContext = Context | TranscriptContext;
 const textTokens = (text: string): number => Math.ceil(text.length / 4);
 
 /**
@@ -13,7 +20,7 @@ const textTokens = (text: string): number => Math.ceil(text.length / 4);
  * summary invalidates older usage; another model's tokenizer cannot anchor it.
  * This is an estimate, not SGLang's tokenizer; the budget leaves room for error.
  */
-export function estimateInputTokens(model: Model<Api>, context: Context): number {
+export function estimateInputTokens(model: Model<Api>, context: AnyContext): number {
 	let prefixTimestamp = -Infinity;
 	let usageIndex = -1;
 	let tokens = 0;
@@ -29,11 +36,18 @@ export function estimateInputTokens(model: Model<Api>, context: Context): number
 		prefixTimestamp = Math.max(prefixTimestamp, message.timestamp);
 	}
 	const trailing = context.messages.slice(usageIndex + 1);
+	// A transcript's system messages are messages: estimateTokens counts their
+	// prompt text and toolsAdded, so nothing below applies to them.
 	for (const message of trailing) tokens += estimateTokens(message);
-	const addedTools = new Set(trailing.flatMap((message) => message.role === "toolResult" ? message.addedToolNames ?? [] : []));
-	const tools = usageIndex < 0 ? context.tools : context.tools?.filter((tool) => addedTools.has(tool.name));
+	const legacy = context as Partial<Context>;
+	if (legacy.systemPrompt === undefined && legacy.tools === undefined) return tokens;
+	// pi <= 0.85: prompt and tools ride beside the messages, and a tool added
+	// mid-conversation is named on the tool result that introduced it.
+	const addedTools = new Set(trailing.flatMap((message) => message.role === "toolResult"
+		? (message as { addedToolNames?: string[] }).addedToolNames ?? [] : []));
+	const tools = usageIndex < 0 ? legacy.tools : legacy.tools?.filter((tool) => addedTools.has(tool.name));
 	if (tools?.length) tokens += textTokens(JSON.stringify(tools));
-	if (usageIndex < 0 && context.systemPrompt) tokens += textTokens(context.systemPrompt);
+	if (usageIndex < 0 && legacy.systemPrompt) tokens += textTokens(legacy.systemPrompt);
 	return tokens;
 }
 
@@ -48,7 +62,7 @@ export function contextSafetyMargin(contextWindow: number): number {
  * Calling ctx.compact() during a running turn instead aborts it and can deadlock.
  */
 export function withContextGuard(stream: Stream): Stream {
-	return (model: Model<Api>, context: Context, options?: SimpleStreamOptions) => stream(model, context, {
+	return (model: Model<Api>, context: Parameters<Stream>[1], options?: SimpleStreamOptions) => stream(model, context, {
 		...options,
 		onPayload: async (payload, requestModel) => {
 			const replacement = await options?.onPayload?.(payload, requestModel);

@@ -16,6 +16,7 @@
     "skipLibCheck": true,
     "noEmit": true
   },
+  "exclude": ["node_modules", "eval/artifacts", "eval/coverage"],
   "include": [
     "core/**/*.ts",
     "bin/**/*.ts",

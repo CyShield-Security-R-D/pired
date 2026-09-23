@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { isContextOverflow, type AssistantMessage, type Context, type Model, type Tool } from "@earendil-works/pi-ai";
+import { isContextOverflow, normalizeContext, type AssistantMessage, type Context, type Model, type Tool } from "@earendil-works/pi-ai";
 import {
 	createAgentSession, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager,
 } from "@earendil-works/pi-coding-agent";
@@ -28,6 +28,8 @@ const assistant = (tokens: number, overrides: Partial<AssistantMessage> = {}): A
 	...overrides,
 });
 const contextAt = (tokens: number): Context => ({ messages: [assistant(tokens), user()] });
+/** What pi >= 0.86 hands a provider stream: the prompt and tools live in system messages. */
+const transcriptAt = (tokens: number) => normalizeContext(contextAt(tokens));
 const completion = (text = "ok") => new Response([
 	{ id: "test", object: "chat.completion.chunk", choices: [{ index: 0, delta: { content: text }, finish_reason: null }] },
 	{ id: "test", object: "chat.completion.chunk", choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
@@ -67,8 +69,18 @@ describe("input budget", () => {
 		const tools = [{ name: "new", description: "read", parameters: { type: "object" } }] as Tool[];
 		expect(estimateInputTokens(model, { systemPrompt: "already counted", tools, messages: [assistant(100), {
 			role: "toolResult", toolCallId: "1", toolName: "load", content: [], isError: false, timestamp: 2,
-			addedToolNames: ["new"],
+			// pi <= 0.85 named a mid-conversation tool on the tool result that loaded it.
+			...({ addedToolNames: ["new"] } as object),
 		}] })).toBe(100 + Math.ceil(JSON.stringify(tools).length / 4));
+	});
+
+	it("counts a transcript's system prompt and tools once, from its system messages", () => {
+		// pi 0.86 moved both into the transcript; counting them again from the
+		// legacy fields would double the unanchored estimate.
+		const tools = [{ name: "read", description: "read", parameters: { type: "object" } }] as Tool[];
+		const transcript = normalizeContext({ systemPrompt: "x".repeat(400), tools, messages: [user("x".repeat(400))] });
+		expect(transcript.messages[0]!.role).toBe("system");
+		expect(estimateInputTokens(model, transcript)).toBe(200 + Math.ceil(JSON.stringify(tools).length / 4));
 	});
 
 	it("scales the margin for small windows", () => {
@@ -81,7 +93,7 @@ describe("input budget", () => {
 describe("OpenAI-compatible context guard", () => {
 	it.each([212992, 230000, 245000])("blocks %i input tokens before HTTP and emits an overflow pi recognizes", async (tokens) => {
 		const fetch = fakeFetch();
-		const result = await guardedOpenAICompletions(model, contextAt(tokens), { apiKey: "test", fetch }).result();
+		const result = await guardedOpenAICompletions(model, transcriptAt(tokens), { apiKey: "test", fetch }).result();
 		expect(fetch).not.toHaveBeenCalled();
 		expect(result.stopReason).toBe("error");
 		expect(result.errorMessage).toContain("pired's safe context budget");
@@ -92,7 +104,7 @@ describe("OpenAI-compatible context guard", () => {
 		const fetch = fakeFetch();
 		const onResponse = vi.fn();
 		const onPayload = vi.fn((payload: unknown) => ({ ...(payload as object), user: "unchanged" }));
-		const result = await guardedOpenAICompletions(model, contextAt(212990), {
+		const result = await guardedOpenAICompletions(model, transcriptAt(212990), {
 			apiKey: "test", fetch, onResponse, onPayload, temperature: 0.3,
 		}).result();
 		expect(result.stopReason).toBe("stop");
@@ -106,14 +118,14 @@ describe("OpenAI-compatible context guard", () => {
 
 	it("honors a smaller explicit budget, including compaction requests", async () => {
 		const fetch = fakeFetch();
-		const result = await guardedOpenAICompletions(model, contextAt(230000), { apiKey: "test", fetch, maxTokens: 8192 }).result();
+		const result = await guardedOpenAICompletions(model, transcriptAt(230000), { apiKey: "test", fetch, maxTokens: 8192 }).result();
 		expect(result.stopReason).toBe("stop");
 		expect(JSON.parse(String(fetch.mock.calls[0]![1]!.body)).max_tokens).toBe(8192);
 	});
 
 	it.each(["max_tokens", "max_completion_tokens"])("checks a higher %s set by another extension", async (field) => {
 		const fetch = fakeFetch();
-		const result = await guardedOpenAICompletions(model, contextAt(200000), {
+		const result = await guardedOpenAICompletions(model, transcriptAt(200000), {
 			apiKey: "test", fetch, onPayload: (payload) => ({ ...(payload as object), [field]: 60000 }),
 		}).result();
 		expect(fetch).not.toHaveBeenCalled();
@@ -125,7 +137,7 @@ describe("OpenAI-compatible context guard", () => {
 			JSON.stringify({ error: { message: "provider api error (status 400)" } }),
 			{ status: 400, headers: { "Content-Type": "application/json" } },
 		));
-		const result = await guardedOpenAICompletions(model, contextAt(100), { apiKey: "test", fetch }).result();
+		const result = await guardedOpenAICompletions(model, transcriptAt(100), { apiKey: "test", fetch }).result();
 		expect(fetch).toHaveBeenCalledOnce();
 		expect(result.errorMessage).toContain("provider api error");
 		expect(isContextOverflow(result)).toBe(false);
@@ -133,7 +145,7 @@ describe("OpenAI-compatible context guard", () => {
 
 	it("respects a smaller output budget for summary requests", async () => {
 		const fetch = fakeFetch();
-		const result = await guardedOpenAICompletions(model, contextAt(220000), {
+		const result = await guardedOpenAICompletions(model, transcriptAt(220000), {
 			apiKey: "test", fetch, maxTokens: 8192,
 		}).result();
 		expect(result.stopReason).toBe("stop");
@@ -142,7 +154,7 @@ describe("OpenAI-compatible context guard", () => {
 
 	it.each([0, -1, Infinity])("leaves unknown context window %s to pi", async (contextWindow) => {
 		const fetch = fakeFetch();
-		const result = await guardedOpenAICompletions({ ...model, contextWindow }, contextAt(100), {
+		const result = await guardedOpenAICompletions({ ...model, contextWindow }, transcriptAt(100), {
 			apiKey: "test", fetch,
 		}).result();
 		expect(result.stopReason).toBe("stop");
@@ -152,7 +164,7 @@ describe("OpenAI-compatible context guard", () => {
 	it("preserves cancellation", async () => {
 		const controller = new AbortController();
 		controller.abort();
-		const result = await guardedOpenAICompletions(model, contextAt(100), {
+		const result = await guardedOpenAICompletions(model, transcriptAt(100), {
 			apiKey: "test", signal: controller.signal, fetch: fakeFetch(),
 		}).result();
 		expect(result.stopReason).toBe("aborted");
