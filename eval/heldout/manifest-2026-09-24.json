@@ -1,0 +1,105 @@
+[
+	{
+		"id": "CVE-2022-1850",
+		"package": "filegator/filegator",
+		"repo": "filegator/filegator",
+		"entries": 1,
+		"scope": [
+			"."
+		],
+		"cwe": [
+			"CWE-22"
+		],
+		"severity": "MODERATE",
+		"published": "2022-05-24",
+		"fix_commit": "6e2b68f17f48cdc1d6a4a93a2369d2069fe64989",
+		"scope_files": 78,
+		"scope_loc": 6478,
+		"advisory": "CVE-2022-1850",
+		"aliases": [
+			"CVE-2022-1850",
+			"GHSA-rrhw-54r8-545q"
+		],
+		"name": "filegator_filegator-l9zjk4",
+		"target": "PLACEHOLDER/targets/filegator_filegator-l9zjk4",
+		"truth": "PLACEHOLDER/targets/filegator_filegator-l9zjk4.truth.json"
+	},
+	{
+		"id": "CVE-2023-37469",
+		"package": "IceWhaleTech/CasaOS",
+		"repo": "IceWhaleTech/CasaOS",
+		"entries": 2,
+		"scope": [
+			"."
+		],
+		"cwe": [
+			"CWE-77"
+		],
+		"severity": "CRITICAL",
+		"published": "2023-08-24",
+		"fix_commit": "af440eac5563644854ff33f72041e52d3fd1f47c",
+		"scope_files": 130,
+		"scope_loc": 13692,
+		"advisory": "CVE-2023-37469",
+		"aliases": [
+			"CVE-2023-37469",
+			"GHSA-92vc-4fcw-g68q",
+			"GO-2023-2026"
+		],
+		"name": "IceWhaleTech_CasaOS-7bevo7",
+		"target": "PLACEHOLDER/targets/IceWhaleTech_CasaOS-7bevo7",
+		"truth": "PLACEHOLDER/targets/IceWhaleTech_CasaOS-7bevo7.truth.json"
+	},
+	{
+		"id": "CVE-2022-1553",
+		"package": "publify/publify",
+		"repo": "publify/publify",
+		"entries": 1,
+		"scope": [
+			"."
+		],
+		"cwe": [
+			"CWE-284",
+			"CWE-863"
+		],
+		"severity": "MODERATE",
+		"published": "2022-05-16",
+		"fix_commit": "1a78f16f460847274265a12a9555b3524892d7db",
+		"scope_files": 238,
+		"scope_loc": 17565,
+		"advisory": "CVE-2022-1553",
+		"aliases": [
+			"CVE-2022-1553",
+			"GHSA-5jm7-g527-m694"
+		],
+		"name": "publify_publify-c7hz4c",
+		"target": "PLACEHOLDER/targets/publify_publify-c7hz4c",
+		"truth": "PLACEHOLDER/targets/publify_publify-c7hz4c.truth.json"
+	},
+	{
+		"id": "CVE-2025-67502",
+		"package": "remram44/taguette",
+		"repo": "remram44/taguette",
+		"entries": 3,
+		"scope": [
+			"."
+		],
+		"cwe": [
+			"CWE-601"
+		],
+		"severity": "MODERATE",
+		"published": "2025-12-09",
+		"fix_commit": "67de2d2612e7e2572c61cd9627f89c2bfd0f2a36",
+		"scope_files": 47,
+		"scope_loc": 12911,
+		"advisory": "CVE-2025-67502",
+		"aliases": [
+			"CVE-2025-67502",
+			"GHSA-5923-r76v-mprm",
+			"PYSEC-2026-1948"
+		],
+		"name": "remram44_taguette-3awrde",
+		"target": "PLACEHOLDER/targets/remram44_taguette-3awrde",
+		"truth": "PLACEHOLDER/targets/remram44_taguette-3awrde.truth.json"
+	}
+]

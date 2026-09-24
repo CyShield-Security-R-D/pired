@@ -102,6 +102,29 @@ its grid-pooled precision stays at least 85% of the baseline's, and no target fa
 its baseline range — whatever the tokens, which are reported. Both models must approve, each by
 either path. See ADR-026's amendment for the error rates and why it is applied after the grids.
 
+### Held-out guard (amendment, 2026-09-24, before any held-out run)
+
+The candidate after v3 is tuned on defects found in the five research applications' runs, so it is
+also checked on four corpus applications no diagnosis read. They are listed in
+`eval/heldout/manifest-2026-09-24.json` (sha256 `29d31fd9aa185678d1052010621ea0fe3723e270cd19bd89dc607d8b44ed3705`):
+
+| target | application | answer key sha256 |
+|---|---|---|
+| CVE-2022-1850 | filegator_filegator-l9zjk4 | `3639aa8c959a16acb028ddcd78a8dff6f3c439358225379cb6021901c2a46bda` |
+| CVE-2023-37469 | IceWhaleTech_CasaOS-7bevo7 | `bcc6bbf9528191dc97feabd9417f23aecbd0059baa2a297e8454cd5ae10d0202` |
+| CVE-2022-1553 | publify_publify-c7hz4c | `28050d621b79edcbd46132797e5e6a08c4da9ce526473b0424b1997e800cea5b` |
+| CVE-2025-67502 | remram44_taguette-3awrde | `1bf97202260fa60c73636a6d8b384feffe6e521efd9bbbeba2fcdeefd1998b56` |
+
+Run it with the same harness, baseline, models and effort as the official grid, three passes, and
+`--manifest eval/heldout/manifest-2026-09-24.json --corpus /home/mamgad/corpus/targets --truth
+/home/mamgad/corpus/targets --only <the four ids>`. It is exploratory, so it can only veto.
+
+On each model it vetoes when either of these holds:
+- the candidate's pass-mean pooled true positives fall below 85% of the baseline's;
+- its grid-pooled precision falls below 85% of the baseline's.
+
+Tokens are reported, not gated. See ADR-026's second amendment.
+
 ## Measurement
 
 The efficiency measure is Pi's provider-reported `totalTokens`, summed over parent responses,

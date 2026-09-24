@@ -1834,6 +1834,43 @@ of catching a true +25% / +50% improvement of 58% / 95% (a 25% threshold would b
 The harness code is not changed while the grids run — a `--resume` after a provider-quota stop
 refuses when any pinned harness file differs — so the second path is applied to the finished
 grids' `runs.jsonl` afterwards, by the same `compareMatchedRuns` extended with this rule.
+
+### Amendment — a held-out guard against tuning on the graded corpus (2026-09-24, before any held-out run)
+
+The v3 grids surfaced defects in the delegation design (ADR-028), and the next candidate fixes them.
+Every one of those defects was found by reading runs on the five research applications, so the
+next candidate is tuned on the corpus that grades it, however generally its fixes are written. The
+operator's instruction was "DO NOT OVERFIT OVER THE CURRENT CORPUS".
+
+Four further corpus applications have answer keys and pristine trees, and no run on them was read
+during the diagnosis:
+
+| application | language | labelled locations |
+|---|---|---|
+| filegator | PHP | 3 |
+| CasaOS | Go | 3 |
+| publify | Ruby | 12 |
+| taguette | Python | 3 |
+
+The manifest is `eval/heldout/manifest-2026-09-24.json` (sha256 `29d31fd9aa18…ed3705`); the answer keys
+are the corpus's own `<name>.truth.json`, hashed in `eval/delegation-compare.md`.
+
+The candidate that follows the v3 grids is accepted only if both of these hold:
+- ADR-026's gate approves it on the official grid, both models, each by either path.
+- A held-out grid shows no quality regression on either model. The grid is the four applications
+  above, run on the same harness, baseline (496b190), models and effort, with three passes per
+  target. No regression means:
+  - candidate pass-mean pooled true positives are at least **85%** of the baseline's;
+  - grid-pooled precision is at least **85%** of the baseline's.
+
+Tokens are reported there, not gated; the official grid gates them. There is no per-target guard,
+because three of the four applications have three labelled locations or fewer.
+
+The held-out grid is exploratory in the harness's sense (not the research manifest), so it can only
+veto, never approve. The official scorer decides it; a range-aware re-score is reported beside it
+and decides nothing. Until the held-out grid is graded, no run on those four applications is read
+to shape a fix. Its error rates are not simulated: the research has no per-target history for these
+applications to resample.
 ---
 
 ## ADR-027 — Delegation is pi-subagents' in-process children, not a native worker
@@ -2017,3 +2054,112 @@ now the rule anyway: see Consequences.)
 pired's session bootstrap: with no engagement handed down it drops the scope gate back to
 `off` and overwrites the parent's `scope.json`. A child gets `core/child.ts` — record,
 recall and the gate, and nothing that writes engagement state.
+---
+
+## ADR-028 — Workers record verdicts, not rewrites; the ledger never loses an open lead
+
+**Status:** provisional · 2026-09-24 · amends ADR-027 · accepted only under ADR-026 and its held-out amendment
+
+> The first measured candidate of ADR-027 (the v3 snapshot) was not accepted. In the v4 grids it
+> found as many true positives as the baseline on GPT-6 Luna, for about half the mean tokens, but at
+> 75% of the baseline's precision. On GLM-5.3 Flash it found fewer (3 against 7 over five first-pass
+> pairs). These rules are what reading those runs turned up. Whether they are kept is decided by the
+> next grid and by the held-out guard in ADR-026's second amendment.
+
+### Context
+
+Nine read-only investigations of the finished v4 runs (all luna and GLM candidate cells, 64 workers)
+traced the candidate's losses to its delegation mechanics, not to the model's reading of the code.
+None of the five true positives GLM's candidate lost sat in code it never opened. Each of the
+following mechanisms is general; the corpus appears here only as evidence.
+
+- **A verifier could rewrite what it was sent to check.** An update by `id=` is last-write-wins by
+  design: it is the operator's escape hatch for correcting a record. `pired-verify` had the same
+  power. On GLM filebrowser pass 1, the candidate's ledger replayed to 4 true positives before its two
+  verifiers ran and to 2 after. They re-recorded two findings with new descriptions, which dropped the
+  investigator's cited locations. A verifier could also set operator dispositions (`false-positive`)
+  with no basis, and one did.
+- **A verdict had nowhere durable to go.** The verify mission said to record against the hypothesis.
+  The challenge brief said to set the finding's status. Parents told verifiers not to change status.
+  10 of 15 luna verify runs told to leave status alone left no verdict on any row, and 35 of 37
+  candidate findings ended `suspected`. In a code review, the refutation bar demanded a live target
+  that did not exist: `judge()` downgraded any refutation that said `live=false`. So an honest verifier
+  could not refute, while baseline parents confirmed and refuted by asserting `live=true` on scopes
+  with no target (17 of 18 of their verification records).
+- **An open lead could be erased by a check that never looked at it.** A hypothesis is its
+  `(target, class)` cell, and an implicit merge keeps the stronger outcome. `inconclusive` ranks below
+  `refuted`, so a later refutation of a different mechanism in the same cell silently closed a lead
+  that nobody had resolved. On GLM note-mark this was a stored-XSS lead ("cannot verify offline"); the
+  baseline confirmed the same issue. The same code is in both arms.
+- **Workers lost their own records.** The budget refusal blocked `record` along with everything else.
+  17–18 worker `record` calls were refused at the budget line, 11 of them neither in the ledger nor in
+  the handoff. 6 luna verifiers recorded nothing, 4 of them handing back early with a verdict in prose
+  only. 12–19% of worker turns went to tools that could never succeed: `grep` and `find` failed on
+  every call (45/45, 57/57) on a host without `rg`/`fd`, and pi-subagents' "use contact_supervisor
+  first" prompt section led to 31 refused calls.
+- **A spent worker budget handed everything left to the most expensive context.** The cap refusal
+  said "do the rest here". 43.5% of luna candidate parent tokens were spent after the last worker. One
+  run spent 65 requests and 11.7M tokens there, found 0 true positives, and added 8 claims. 23 of 25
+  verify launches covered one finding, and all 5 cap refusals were verify launches.
+- **The parent was told its context was a budget.** 4 of 5 GLM pass-1 candidates stopped with 12–49% of
+  their test cases settled. They gave context-budget reasons that echo the delegation block's "your
+  context is this review's scarcest budget … doing it yourself is often cheaper". No baseline run did.
+  This is correlation: a pass-2 candidate with byte-identical text reached 100% coverage and scored
+  best.
+
+### Decision
+
+- **A verifier records a verdict, never a rewrite** (`core/child.ts`, enforced in the child gate):
+  - On a finding it may set only `status` to `confirmed`, `refuted` or `suspected`, with `control`,
+    `entitlement`, `basis`, `live` and `reason`.
+  - Title, description, location, severity, evidence lists, operator dispositions and deletion are
+    refused, with the reason.
+  - It may create a finding only for a cleared hypothesis it confirmed, linked by `hypothesisId`. That
+    finding lands `suspected`, like every new finding.
+- **Scouts map and propose; they do not record findings.** Enforced the same way.
+- **A verdict is durable whatever it is.** `status=suspected` with a basis or reason records an
+  `unresolved` verification and keeps the finding. A finding that carries a verification leaves the
+  unchallenged queue, and `recall challenge id=` still reaches it for a deliberate re-check. In an
+  engagement with no live target (`isSourceOnly`), a refutation grounded in a cited basis is accepted
+  without `live`. With a live target, the reachability bar is unchanged.
+- **An open lead is closed only by a check that names it** (`core/identity.ts`):
+  - An implicit refutation does not move an `inconclusive` cell.
+  - A new inconclusive lead with a different statement reopens a cleared cell.
+  - The held lead keeps its own method and evidence.
+  - The tool reply names every lead it held or reopened.
+  - The explicit `id=` + basis re-check still moves it, and writes a verification.
+- **Workers keep their records:**
+  - The grace turns past a worker's budget still allow `record` and `recall`.
+  - A worker's last `RECORD_RESERVE_TURNS` turns refuse every other tool until it has recorded
+    something.
+  - A worker about to hand back with nothing recorded gets one reminder at `agent_before_settle` and
+    one more turn, and never a second reminder.
+  - Workers get the operator's toolset (`read`, `bash`, `record`, `recall`).
+  - pi-subagents' supervisor section is stripped from their prompt.
+- **Verify takes several findings.** One at a time, each verdict recorded before the next, the rest
+  handed back as unchallenged. Its budget is 24 turns: one finding is still a tight check, and a
+  measured 5-finding batch settled two in 16–18 turns.
+- **The worker budget is in the plan, and spending it means wrapping up.** The delegation block
+  states how many launches the engagement allows. The cap refusal no longer says "do the rest here":
+  it asks the parent to settle what the ledger holds first (unchallenged findings, open leads,
+  verdicts not yet acted on), and to prefer closing items to opening new surface. It is not a stop:
+  one post-cap phase found a true positive.
+- **Context is information, not a stopping rule.** The delegation block still says what reading costs
+  and what a worker returns. It now says that a filling context is a reason to hand an area to a
+  worker, and that when the review is done is decided by the method in the instructions.
+
+### Rejected
+
+- **Stripping disallowed keys from a verifier's update instead of refusing it.** The write would
+  succeed while doing something other than what the model asked, and the model would not learn the
+  boundary. A refusal costs one turn and says why.
+- **Ending a worker's run when it records nothing.** Its work would be thrown away. A refusal that
+  steers it to record keeps the work, and so does the one-time reminder before hand-back.
+- **A hard stop after the worker cap.** It would have lost the post-cap true positive. Wrap-up
+  guidance addresses the runaway without it.
+- **Grounding cited line numbers, and repairing the scorer's handling of `file:lo-hi` ranges.** Both
+  were measured to cost true positives. Both are driven by how the benchmark grades, so they are
+  outside a change to delegation mechanics. The scorer defect is reported beside the verdict as a
+  sensitivity check and is a separate decision.
+- **Row provenance (`by` on every ledger write).** It would make "who vetted what" answerable, but it
+  changes FORMAT.md, and nothing above depends on it.
