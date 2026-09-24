@@ -1917,6 +1917,40 @@ direction its result happened to fall. Fixing its weight now, before that result
 that. Where DeepSeek disagrees with the priority models, the disagreement is reported for a reader
 to weigh.
 
+### Amendment — luna's official grid runs a third time, with a try-again infrastructure class (2026-09-24, before the v5c grid)
+
+The v5b luna re-run was blocked after 7 matched pairs. Its filebrowser pass 3 baseline, the
+unchanged 496b190, failed after two minutes on "Codex error: Unable to verify Daybreak Blue access.
+Please try again." That is an entitlement check on OpenAI's side; the four other luna runs in flight
+at the time kept working. pi's retry list does not match the message, so the harness classed it as
+the run's own failure and blocked the pair, and a blocked pair keeps an official grid from approving.
+
+The operator chose a fresh official luna grid, v5c, with one change to the classifier, fixed here
+before it runs: a provider-originated error message that asks the client to try again ("please try
+again") counts as infrastructure, and its pair re-runs whole. Measured in `~/.pi/agent/sessions`,
+every provider message with that phrase was transient by its own wording: 20 codex overloads, which
+pi already retries, and this one access check. The quota patterns run first, so a spent plan whose
+message says "try again later" still stops the grid.
+
+Everything else is v5b's:
+- candidate snapshot v4 (`826bd8d0…`) against baseline 496b190;
+- the five research targets, three passes each, at medium effort;
+- the 4-hour per-run limit and the 900 s `bash` default;
+- the same gate.
+
+The v5b luna pairs are indicative only and are not pooled with v5c, as v5's were not pooled with v5b.
+
+v5b's pairs so far are recorded here so the re-run cannot be read as a rescue. Over 7 matched pairs:
+- true positives were 5 for both arms;
+- the candidate's pooled precision was 53% of the baseline's;
+- the candidate's mean tokens were 2.9 times the baseline's.
+
+That result failed both approval paths. The re-run exists because of the block, not because of those
+numbers.
+
+GLM's v5 grids keep the harness they started with, because a resume refuses changed pins. If the same
+message blocks a GLM pair, it will be reported as this gap, not re-classified after the fact.
+
 ---
 
 ## ADR-027 — Delegation is pi-subagents' in-process children, not a native worker

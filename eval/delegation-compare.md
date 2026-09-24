@@ -158,6 +158,13 @@ the held-out grid in the environment of the luna re-run: same candidate, baselin
 per run, and the 900 s `bash` default. Its verdicts are reported but do not gate: acceptance still
 needs GPT-6 Luna and GLM-5.3 Flash. See ADR-026's fourth amendment.
 
+### The luna v5c re-run (amendment, 2026-09-24, before it runs)
+
+The v5b luna grid was blocked by a provider access check ("Unable to verify … access. Please try
+again.") that pi's retry list does not match. v5c is a fresh official luna grid in the v5b
+environment with one classifier change: a provider message that asks the client to try again is
+infrastructure. The v5b luna pairs are indicative only. See ADR-026's fifth amendment.
+
 ## Measurement
 
 The efficiency measure is Pi's provider-reported `totalTokens`, summed over parent responses,
@@ -363,9 +370,11 @@ native-worker snapshot from ADR-025, which the candidate probe refuses because i
   - an errored worker's failure text, when the parent received the same text
   - the entry's `benchmark_fetch_error` lines
 
-  A failure counts as infrastructure when pi's own `isRetryableAssistantError` accepts it, when it
-  carries zai `1302`/`1308`/`1310`, when it is a quota message, or when it is an undici or socket
-  code. An arm the runner stopped on a signal also counts, as runner interruption.
+  A failure counts as infrastructure when pi's own `isRetryableAssistantError` accepts it, when the
+  provider's message asks the client to try again, when it carries zai `1302`/`1308`/`1310`, when
+  it is a quota message, or when it is an undici or socket code. An arm the runner stopped on a
+  signal also counts, as runner interruption. The try-again class was added before the luna v5c
+  grid (ADR-026, fifth amendment); a quota message that also says "try again" is still a quota stop.
 - **Resume:** `--resume <out-dir>` continues a stopped grid. Its rules:
   - **Pins:** it refuses unless every pin is byte-identical to the grid's original
     `manifest.json`, which is written once and never overwritten. Each resume keeps its own

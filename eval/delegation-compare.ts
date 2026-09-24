@@ -261,7 +261,8 @@ const RESUME_POLICY =
 	"from its child session (counted only when the parent's subagent result carries " +
 	"the same text), and the entry's " +
 	"benchmark_fetch_error lines. It is a failure pi itself would retry " +
-	"(isRetryableAssistantError), a zai 1302/1308/1310 code, a provider quota or usage " +
+	"(isRetryableAssistantError), a provider message that asks the client to try again, " +
+	"a zai 1302/1308/1310 code, a provider quota or usage " +
 	"limit, an undici/socket error code (UND_ERR_*, ECONNRESET, ECONNREFUSED, " +
 	"ETIMEDOUT, EAI_AGAIN), or an arm stopped by this runner's own signal handling " +
 	"(runner interruption). A quota or usage-window failure stops the grid, and the " +
@@ -2042,6 +2043,17 @@ const zaiCode = (code: string): RegExp => new RegExp(`"code"\\s*:\\s*"?${code}"?
  * by code before pi's rule runs.
  */
 const QUOTA_TEXT = /insufficient_quota|quota exceeded|out of budget|billing|available balance|usage limit/i;
+/**
+ * A provider that tells the client to retry. pi's list misses one such message: v5b's
+ * luna filebrowser pass 3 baseline (2026-09-24) failed on "Codex error: Unable to verify
+ * Daybreak Blue access. Please try again.", an entitlement check on OpenAI's side that
+ * the other luna runs in flight passed, and the pair was blocked as the run's own fault.
+ * Measured in ~/.pi/agent/sessions, every provider message with this phrase is transient
+ * by its own wording: 20 codex overloads (pi already retries those) and that one check.
+ * It runs after the quota patterns, so a spent plan that says "try again later" still
+ * stops the grid.
+ */
+const PROVIDER_SAYS_RETRY = /\bplease try again\b/i;
 /** undici and socket failure codes the entry's fetch wrapper records. */
 const TRANSIENT_FETCH_CODE = /^(UND_ERR_[A-Z_]+|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN)$/;
 
@@ -2075,6 +2087,7 @@ export function classifyInfra(failures: ProviderFailures, timedOut: boolean): In
 	for (const text of texts) {
 		if (zaiCode("1302").test(text)) return { infra: true, reason: "zai 1302 request rate limit", evidence: evidence(text) };
 		if (isRetryableAssistantError(failedReply(text))) return { infra: true, reason: "transient provider failure", evidence: evidence(text) };
+		if (PROVIDER_SAYS_RETRY.test(text)) return { infra: true, reason: "provider asked for a retry", evidence: evidence(text) };
 	}
 	for (const fetchError of failures.fetchErrors) {
 		const code = [fetchError.code, ...(fetchError.codes ?? [])].find((c): c is string => typeof c === "string" && TRANSIENT_FETCH_CODE.test(c));

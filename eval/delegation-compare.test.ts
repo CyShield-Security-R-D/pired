@@ -137,6 +137,23 @@ describe("classifyInfra", () => {
 		expect(classifyInfra(parentFails(text), false)).toMatchObject({ infra: true, reason: "transient provider failure" });
 	});
 
+	// v5b's luna filebrowser pass 3 baseline failed on this entitlement check, which
+	// pi's list does not match; the pair was blocked and the gating grid with it.
+	it("classes a provider message that asks the client to try again as infrastructure", () => {
+		const verdict = classifyInfra(parentFails("Codex error: Unable to verify Daybreak Blue access. Please try again."), false);
+		expect(verdict).toMatchObject({ infra: true, reason: "provider asked for a retry" });
+		expect(verdict.exhausted).toBeUndefined();
+	});
+
+	it("still stops the grid on a spent plan whose message also says to try again", () => {
+		expect(classifyInfra(parentFails("Codex error: The usage limit has been reached. Please try again later."), false))
+			.toMatchObject({ infra: true, reason: "provider quota exhausted", exhausted: true });
+	});
+
+	it("never reads try-again text from a timed-out run as infrastructure", () => {
+		expect(classifyInfra(parentFails("Please try again."), true).infra).toBe(false);
+	});
+
 	it("classes zai's 1302 request-rate 429 by its code", () => {
 		const verdict = classifyInfra(parentFails('429: {"code":"1302","message":"Rate limit reached for requests"}'), false);
 		expect(verdict).toMatchObject({ infra: true, reason: "zai 1302 request rate limit" });
