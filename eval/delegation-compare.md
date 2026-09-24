@@ -125,6 +125,21 @@ On each model it vetoes when either of these holds:
 
 Tokens are reported, not gated. See ADR-026's second amendment.
 
+**Runs that hit the time limit.** Amended 2026-09-24 at about 04:20Z, while the held-out grid was
+running and before its remaining results.
+
+The rule above did not say what happens to a held-out run that hits the harness's per-run limit
+(2 h). The harness classes such a run as non-infrastructure and never re-runs it. The first one was
+luna's CasaOS pass 1 candidate: it was still working at the limit, with 396 requests made and 25% of
+its test cases settled.
+
+The rule applies to both arms alike. A held-out run that hits the limit delivers its ledger as it
+stood at the limit: its findings are scored by the same pinned scorer, and its tokens up to the
+limit are counted.
+
+The official grid is unchanged. There, a run that hits the limit leaves its pair incomplete, and the
+grid cannot approve.
+
 ## Measurement
 
 The efficiency measure is Pi's provider-reported `totalTokens`, summed over parent responses,
