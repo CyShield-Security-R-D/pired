@@ -44,6 +44,8 @@ import { reapMarkedProcesses } from "./delegation-compare-proc.ts";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const ENTRY = join(ROOT, "eval/delegation-compare-entry.ts");
+/** Loaded in both arms' parent sessions: a default for bash calls that name no timeout (see the file). */
+const BASH_TIMEOUT_EXTENSION = join(ROOT, "eval/delegation-compare-bash-timeout.ts");
 const SCORE_PATH = join(ROOT, "eval/dvbank/score.ts");
 const WORKSPACE_PATH = join(ROOT, "core/workspace.ts");
 /** The script scoreFindings shells out to; pinned by content, since it is read afresh on every call. */
@@ -123,6 +125,7 @@ const HEARTBEAT_MS = 60_000;
 const HARNESS_FILES = [
 	"eval/delegation-compare.ts", "eval/delegation-compare-lib.ts", "eval/delegation-compare-entry.ts",
 	"eval/delegation-compare-stage.ts", "eval/delegation-compare-proc.ts", "eval/delegation-audit.ts", "eval/corpus/fs-seal.c",
+	"eval/delegation-compare-bash-timeout.ts",
 	"eval/delegation-compare.pins.json",
 ] as const;
 
@@ -769,7 +772,7 @@ async function pathRulesForCell(cell: CellPaths, stagedSnapshot: string, nodePat
 	// The config file alone, not the cell directory: the cell also holds this
 	// run's transcript and, once the process has exited, the host-side run.json
 	// that maps the opaque cell back to its target, pass and arm.
-	args.push("--read", ENTRY, "--read", cell.configPath);
+	args.push("--read", ENTRY, "--read", BASH_TIMEOUT_EXTENSION, "--read", cell.configPath);
 	// The candidate's pinned pi-subagents install, read-only and only in that arm:
 	// the baseline never loads it. Its dependencies resolve inside it; its peers
 	// (pi itself) resolve to the runtime systemReadRoots already grants.
@@ -1679,7 +1682,7 @@ async function prepareCell(ctx: Context, target: Target, pass: number, arm: Arm,
 		thinking: options.thinking as CompareEntryConfig["thinking"],
 		cwd: paths.targetDir, agentDir: paths.agentDir, authPath: join(AGENT_BASE, "auth.json"),
 		modelsPath: join(AGENT_BASE, "models.json"), modelsStorePath, prompt,
-		extensionPaths: arm === "candidate" ? [ctx.piSubagents.entry] : [],
+		extensionPaths: [BASH_TIMEOUT_EXTENSION, ...(arm === "candidate" ? [ctx.piSubagents.entry] : [])],
 		...(probe ? { probe } : {}),
 	};
 	const configText = `${JSON.stringify(config, null, 2)}\n`;

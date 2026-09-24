@@ -140,6 +140,17 @@ limit are counted.
 The official grid is unchanged. There, a run that hits the limit leaves its pair incomplete, and the
 grid cannot approve.
 
+### The luna official re-run (amendment, 2026-09-24, before it runs)
+
+The v5 official luna grid could not be decided: an unchanged baseline run passed the 2-hour limit on
+a slow provider night, and a blocked pair keeps an official grid from approving. The re-run keeps the
+same gate, candidate (v4, `826bd8d0…`), baseline, targets and passes. It changes two things in both
+arms:
+- the per-run limit is 4 hours (`--timeout 14400000`);
+- a `bash` call that names no timeout gets 900 s (`eval/delegation-compare-bash-timeout.ts`).
+
+The v5 official luna pairs are indicative only. See ADR-026's third amendment.
+
 ## Measurement
 
 The efficiency measure is Pi's provider-reported `totalTokens`, summed over parent responses,

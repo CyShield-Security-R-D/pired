@@ -1871,6 +1871,27 @@ veto, never approve. The official scorer decides it; a range-aware re-score is r
 and decides nothing. Until the held-out grid is graded, no run on those four applications is read
 to shape a fix. Its error rates are not simulated: the research has no per-target history for these
 applications to resample.
+### Amendment — the luna official grid is re-run with a 4-hour run limit (2026-09-24, before the re-run)
+
+The v5 official luna grid could not be decided. Its LinkAce pass 3 **baseline** (the unchanged
+pired@496b190) ran past the 2-hour per-run limit with 322 requests made, still working. The harness
+classes a timeout as non-infrastructure, so the pair was blocked, and an official grid with a
+blocked pair cannot approve. OpenAI answered about four times slower per request that night than in
+v4: about 30 s against about 8 s, so a baseline that finished in 41 minutes in v4 did not finish in
+120. One further run was held for 21 minutes by the model's own unbounded shell command, and only an
+operator's kill kept it from timing out.
+
+The operator chose a fresh official luna grid under the same gate, with two environment changes that
+apply to both arms and are fixed here before it runs:
+- the per-run limit is **4 hours** (`--timeout 14400000`);
+- a `bash` call that names no timeout gets **900 s**, loaded in both arms' parent sessions
+  (`eval/delegation-compare-bash-timeout.ts`). A timeout the model sets itself is kept.
+
+Everything else is unchanged: the candidate is snapshot v4 (digest `826bd8d0…`), the baseline is
+496b190, and the grid is the five research targets, three passes, at medium effort. The v5 official
+luna pairs are reported as indicative only and are not pooled with the re-run. GLM keeps its v5
+grid, which has had no timeout.
+
 ---
 
 ## ADR-027 — Delegation is pi-subagents' in-process children, not a native worker
