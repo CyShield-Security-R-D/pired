@@ -1,11 +1,11 @@
 {
 	"baselineCommit": "496b1900c2fae2d63ba8378b3c3f56a4b49f317c",
-	"candidateDigest": "65401cfcacb6cda58902dc1cdaec64560414cf4f67325c966802e7d39d5f939e",
+	"candidateDigest": "826bd8d0c5aab758be93cb94dddd9107297f7c835b3f9d733d195552fd07b397",
 	"candidateFrozenAt": "2026-09-24",
 	"piSubagents": {
 		"dir": "eval/artifacts/pi-subagents-0.71.0",
 		"version": "0.71.0",
 		"digest": "527c4abecea84fa11b01ff9cc7a2739852052ebd8ee27111bdd33fd9a219a456"
 	},
-	"candidateSnapshot": "eval/artifacts/candidate-subagents-2026-09-24-v3"
+	"candidateSnapshot": "eval/artifacts/candidate-subagents-2026-09-24-v4"
 }
