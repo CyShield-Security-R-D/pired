@@ -151,6 +151,13 @@ arms:
 
 The v5 official luna pairs are indicative only. See ADR-026's third amendment.
 
+### DeepSeek V4.1 Flash (amendment, 2026-09-24, before it runs)
+
+DeepSeek V4.1 Flash (`deepseek/deepseek-v4.1-flash` on commandcode.ai) runs the official grid and
+the held-out grid in the environment of the luna re-run: same candidate, baseline, gate and guard, 4 h
+per run, and the 900 s `bash` default. Its verdicts are reported but do not gate: acceptance still
+needs GPT-6 Luna and GLM-5.3 Flash. See ADR-026's fourth amendment.
+
 ## Measurement
 
 The efficiency measure is Pi's provider-reported `totalTokens`, summed over parent responses,

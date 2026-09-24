@@ -1892,6 +1892,31 @@ Everything else is unchanged: the candidate is snapshot v4 (digest `826bd8d0…`
 luna pairs are reported as indicative only and are not pooled with the re-run. GLM keeps its v5
 grid, which has had no timeout.
 
+### Amendment — DeepSeek V4.1 Flash is a third model, reported as evidence, not gating (2026-09-24, before any DeepSeek grid)
+
+On 2026-09-24 the operator added DeepSeek V4.1 Flash (`deepseek/deepseek-v4.1-flash`, served through
+commandcode.ai's OpenAI-compatible endpoint) to the comparison. By then luna and GLM grids had
+already reported pairs. This is recorded before any DeepSeek grid runs. The only DeepSeek traffic so
+far is two one-line prompts, which confirmed the endpoint answers and that thinking engages at
+medium effort.
+
+DeepSeek runs both grids in the v5b environment:
+- the official five research targets and the four held-out applications, three passes each;
+- candidate snapshot v4 (`826bd8d0…`) against baseline 496b190, at medium effort;
+- a 4-hour per-run limit and a 900 s default for `bash` calls that name no timeout, in both arms.
+
+Its official grid is judged by this gate (either path) and its held-out grid by the held-out guard.
+Both verdicts are reported, with the path named.
+
+**Its verdicts do not enter the acceptance rule.** Delegation is still accepted only when GPT-6 Luna
+and GLM-5.3 Flash both approve and the held-out guard vetoes neither. A DeepSeek approval cannot
+stand in for a missing or failed priority model, and a DeepSeek rejection cannot veto them.
+
+A gating model added after two grids have reported would move the acceptance bar in whichever
+direction its result happened to fall. Fixing its weight now, before that result exists, prevents
+that. Where DeepSeek disagrees with the priority models, the disagreement is reported for a reader
+to weigh.
+
 ---
 
 ## ADR-027 — Delegation is pi-subagents' in-process children, not a native worker
