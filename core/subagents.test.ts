@@ -3,6 +3,7 @@ import type { EngagementScope } from "./ontology.ts";
 import {
 	agentMarker,
 	buildPiredAgentDefinitions,
+	DEFAULT_MAX_AGENTS,
 	delegationBlock,
 	eagerSubagentSchema,
 	PIRED_AGENT_NAMES,
@@ -10,6 +11,7 @@ import {
 	SUBAGENTS_ABSENT_NOTICE,
 	SUBAGENTS_EAGER_NOTICE,
 	WORKER_TOOLS,
+	workerCap,
 	workerPrompt,
 	type AgentBuildContext,
 } from "./subagents.ts";
@@ -45,6 +47,16 @@ describe("buildPiredAgentDefinitions", () => {
 			expect(definition.tools).toContain("recall");
 			expect(definition.tools).toEqual([...WORKER_TOOLS]);
 			expect(definition.extensions).toEqual(["/home/op/pired/extensions/child.ts"]);
+		}
+	});
+
+	it("gives workers read and bash, not grep and find, which need binaries a sealed host lacks, nor ls, which bash covers", () => {
+		// v4 grid, 2026-09-24: every worker call to grep (45 of 45) and find (57
+		// of 57) failed, because pi's versions shell out to rg and fd. The parent
+		// never called either; it reads and searches with read and bash.
+		expect([...WORKER_TOOLS]).toEqual(["read", "bash", "record", "recall"]);
+		for (const { definition } of buildPiredAgentDefinitions(ctx())) {
+			for (const tool of ["grep", "find", "ls"]) expect(definition.tools).not.toContain(tool);
 		}
 	});
 
@@ -96,6 +108,15 @@ describe("buildPiredAgentDefinitions", () => {
 		}
 	});
 
+	it("gives the verifier 24 turns, room for two or three records rather than exactly one", () => {
+		// v4 grid, 2026-09-24: a five-finding verify batch settled 2 in the 16–18
+		// turns it had, and 23 of 25 gpt-6-luna verify launches covered a single
+		// finding — all 5 launches the cap refused were verifiers.
+		const verify = PIRED_AGENTS.find((a) => a.role === "verify")!;
+		expect(verify.maxTurns).toBe(24);
+		expect(workerPrompt(verify, ctx())).toMatch(/at most 24 turns/);
+	});
+
 	it("trims the description and system prompt, which the registry requires untrimmed to reject", () => {
 		for (const { definition } of buildPiredAgentDefinitions(ctx())) {
 			expect(definition.description).toBe(definition.description.trim());
@@ -132,6 +153,102 @@ describe("the worker prompt", () => {
 		const escalate = PIRED_AGENTS.find((a) => a.role === "escalate")!;
 		expect(workerPrompt(escalate, ctx()).toLowerCase()).toMatch(/never inflate|without evidence/);
 	});
+
+	it("tells the scout it proposes hypotheses and records no findings, so the gate's refusal is not a surprise", () => {
+		// v4 grid, 2026-09-24: a pired-scout recorded three findings, outside its
+		// role. A weakness it can already see is a lead for an investigator.
+		const scout = PIRED_AGENTS.find((a) => a.role === "scout")!;
+		const prompt = workerPrompt(scout, ctx());
+		expect(prompt).toMatch(/do not record findings/);
+		expect(prompt).toMatch(/pired refuses a finding from a scout/);
+		expect(prompt).toMatch(/`proposed`/);
+		expect(prompt).toMatch(/investigator to settle/);
+	});
+
+	it("tells the verifier its verdict is a status with grounds and that the finding's claim is not its to rewrite", () => {
+		// v4 grid, 2026-09-24: two verifiers re-recorded findings by id with new
+		// descriptions; last-write-wins replaced the investigator's text and the
+		// replayed ledger fell from 4 true positives to 2.
+		const verify = PIRED_AGENTS.find((a) => a.role === "verify")!;
+		const prompt = workerPrompt(verify, ctx());
+		for (const field of ["`control`", "`entitlement`", "`basis`", "`live=true`", "`reason`"]) expect(prompt).toContain(field);
+		expect(prompt).toMatch(/do not edit a finding's title, description, location or severity/);
+		expect(prompt).toMatch(/pired refuses that from a verifier/);
+		expect(prompt).toMatch(/the operator amends it/);
+	});
+
+	it("tells the verifier to record every verdict on the record by id, an unsettled one too, because the handoff is not durable", () => {
+		// v4 grid, 2026-09-24: 6 gpt-6-luna verifiers recorded nothing, 4 of them
+		// handing back early with a verdict stated only in the handoff, and 4 of 6
+		// amended or refuted verdicts never reached the finding.
+		const prompt = workerPrompt(PIRED_AGENTS.find((a) => a.role === "verify")!, ctx());
+		expect(prompt).toMatch(/Record the verdict whatever it is — an unsettled one too — by the record's id/);
+		expect(prompt).toMatch(/`inconclusive` when unsettled/);
+		expect(prompt).toMatch(/Your handoff is not durable; the ledger is/);
+		// Raw output goes on the ledger too, where the verdict can cite it.
+		expect(prompt).toMatch(/`record kind=evidence` and cite its path in `basis` or `control`/);
+	});
+
+	it("puts an unsettled verdict's grounds in basis or control, since a reason alone is only a note", () => {
+		// The record tool reads an unsettled challenge from what was checked —
+		// `basis` or `control`. A mission that said `reason` sent the grounds where
+		// they are kept as a note, and the finding still read as unchallenged.
+		const prompt = workerPrompt(PIRED_AGENTS.find((a) => a.role === "verify")!, ctx());
+		expect(prompt).toMatch(/when it is unsettled, `suspected` with what you checked in `basis` or `control` \(a `reason` alone is only a note\)/);
+		expect(prompt).not.toMatch(/what you checked in `reason`/);
+	});
+
+	it("claims live=true only for a running target and leaves it out when the basis is the source", () => {
+		// `live=true` is a claim about a running target, not a password for the
+		// bar: in the v4 grid 17 of 18 baseline verification records asserted it
+		// on scopes with no target.
+		const prompt = workerPrompt(PIRED_AGENTS.find((a) => a.role === "verify")!, ctx());
+		expect(prompt).toMatch(/`live=true` only when you tested a running target; leave it out when your basis is the source/);
+	});
+
+	it("lets the verifier record the finding a cleared hypothesis turned out to be, linked by hypothesisId", () => {
+		// "Do not promote anything to a finding" left an overturned clearance with
+		// nowhere to go but the handoff; linked, it meets the same bar as any
+		// investigator's finding.
+		const prompt = workerPrompt(PIRED_AGENTS.find((a) => a.role === "verify")!, ctx());
+		expect(prompt).toMatch(/the finding with its `hypothesisId`: it lands `suspected` unless it carries `status=confirmed` with the control case/);
+		expect(prompt).not.toMatch(/do not promote/i);
+	});
+
+	it("tells the verifier the order the gate holds it to: the hypothesis confirmed first, and no second finding for a covered one", () => {
+		// The child gate lets a verifier create a finding only for a hypothesis
+		// recorded confirmed that no finding already covers; a refusal the worker
+		// was never told about reads as a fault.
+		const prompt = workerPrompt(PIRED_AGENTS.find((a) => a.role === "verify")!, ctx());
+		expect(prompt).toMatch(/record its `outcome=confirmed` by id, then — unless a finding already covers it — the finding with its `hypothesisId`/);
+	});
+
+	it("tells the verifier to take a batch one record at a time and hand back what it did not reach as unchallenged", () => {
+		// v4 grid, 2026-09-24: a five-finding verify batch settled 2 within 16–18
+		// turns. Recording each verdict before the next keeps a batch that runs
+		// out from losing the ones it did settle.
+		const prompt = workerPrompt(PIRED_AGENTS.find((a) => a.role === "verify")!, ctx());
+		expect(prompt).toMatch(/take them one at a time and record each verdict before you start the next/);
+		expect(prompt).toMatch(/hand back the ones you did not reach as unchallenged/);
+	});
+
+	it("warns every worker that its other tools are refused if it reaches its last turns with nothing recorded", () => {
+		// v4 grid, 2026-09-24: a pired-investigate used all 26 of its turns and
+		// wrote no record; four runs flagged a pired-verify child with none.
+		for (const agent of PIRED_AGENTS) {
+			expect(workerPrompt(agent, ctx())).toMatch(/last few turns with nothing recorded is refused every other tool until it records/);
+		}
+	});
+
+	it("gives a worker that established nothing a way out of the reserve, so the warning does not read as a record owed", () => {
+		// The reserve refusal says "hand back and say so"; a prompt that stopped
+		// at "until it records" left a worker with nothing to record only filler.
+		for (const agent of PIRED_AGENTS) {
+			expect(workerPrompt(agent, ctx())).toContain(
+				"until it records what it has established — or, if it established nothing, hands back and says so.",
+			);
+		}
+	});
 });
 
 describe("the scope a worker is told", () => {
@@ -156,10 +273,12 @@ describe("the delegation prompt block", () => {
 		const block = delegationBlock(scope());
 		for (const agent of PIRED_AGENTS) expect(block).toContain(agent.name);
 		expect(block.toLowerCase()).toMatch(/standing authorization/);
-		// Keeps pired's voice: it informs the economics and leaves the choice open,
-		// without telling the model it must launch anything.
-		expect(block).toMatch(/doing it yourself is often cheaper/);
+		// Keeps pired's voice: it informs where each choice costs less and leaves
+		// the choice open, without telling the model it must launch anything.
+		expect(block).toMatch(/A check you can settle in a few reads costs less here than briefing a worker/);
+		expect(block).toMatch(/a large area's reading never enters your context if a worker does it/);
 		expect(block.toLowerCase()).not.toMatch(/must (delegate|launch|use)/);
+		expect(block).not.toMatch(/is what the workers are for/);
 		// States the authorization in pi-subagents' own terms, whose guidance holds
 		// delegation back until "applicable instructions" allow it.
 		expect(block).toMatch(/applicable instructions/);
@@ -173,10 +292,68 @@ describe("the delegation prompt block", () => {
 		expect(block).toMatch(/a second while one runs is refused/);
 	});
 
+	it("never frames context as a budget to conserve, so a filling context is not read as a reason to stop", () => {
+		// v4 grid, 2026-09-24: four of five GLM pass-1 candidates stopped with
+		// 12–49% of their test cases settled, citing context budget, under a block
+		// that called context "this review's scarcest budget" and doing it yourself
+		// "often cheaper". A byte-identical block also produced a 100% run, so this
+		// guards a plausible contributor, not a proven cause.
+		const block = delegationBlock(scope());
+		expect(block.toLowerCase()).not.toMatch(/scarcest budget/);
+		// The facts the old framing rested on are still stated.
+		expect(block).toMatch(/at most 200 words/);
+		expect(block).toMatch(/you keep the conclusions, not the reading/);
+		expect(block).toMatch(/you keep the plan/);
+		// Context pressure points at a worker, and the stop line is the method.
+		expect(block).toMatch(/a filling context is a reason to hand the next area to a worker/);
+		expect(block).toMatch(/whether you are done is decided by the method in your instructions, not by how much context you have used/);
+	});
+
+	it("states no flat rule about finishing, so the block sets no stop line of its own in either direction", () => {
+		// Round-two review: "never a reason to finish early" is a rule about when
+		// to stop, set by the block rather than the method it points at.
+		const block = delegationBlock(scope());
+		expect(block).not.toMatch(/finish early/);
+		expect(block).not.toMatch(/never a reason/);
+	});
+
+	it("points at the method for when to stop without paraphrasing it, so no second stop line competes with the method's", () => {
+		// Round-one review: a gloss of the floor ("each standard weakness class
+		// considered against the attack surface you recorded") traded a budget
+		// stop for a paraphrased floor stop that the method itself does not say.
+		expect(delegationBlock(scope())).not.toMatch(/weakness class/);
+	});
+
+	it("states how many worker launches the engagement allows, the same number the gate holds", () => {
+		// v4 grid, 2026-09-24: 43.5% of gpt-6-luna candidate parent tokens were
+		// spent after the last worker, and all 5 launches the cap refused were
+		// verifiers — a parent that is not told the number cannot plan for it.
+		expect(delegationBlock(scope())).toContain(`allows ${DEFAULT_MAX_AGENTS} worker launches per session`);
+		expect(delegationBlock(scope({ maxAgents: 3 }))).toContain("allows 3 worker launches per session");
+		expect(delegationBlock(scope({ maxAgents: 1 }))).toContain("allows 1 worker launch per session");
+		// A nonsense cap is the default, in the prompt as at the gate.
+		expect(delegationBlock(scope({ maxAgents: -3 }))).toContain(`allows ${DEFAULT_MAX_AGENTS} worker launches`);
+		expect(workerCap(undefined)).toBe(DEFAULT_MAX_AGENTS);
+		expect(workerCap(scope({ maxAgents: -3 }))).toBe(DEFAULT_MAX_AGENTS);
+		expect(workerCap(scope({ maxAgents: 0 }))).toBe(0);
+	});
+
+	it("tells the parent a verifier's verdict passes the same evidence checks, so it is not told to leave status alone", () => {
+		// v4 grid, 2026-09-24: 10 of 15 verify tasks that said "do not change
+		// status" left no verdict on any row.
+		const block = delegationBlock(scope());
+		expect(block).toMatch(/A verifier's verdict goes onto the record through the same evidence checks yours does/);
+		expect(block).toMatch(/needs no instruction to leave a status alone/);
+		expect(block).toMatch(/final severity judgment/);
+		// And that one launch can carry several records, settled one at a time.
+		expect(block).toMatch(/one launch takes several, settled one at a time/);
+	});
+
 	it("says delegation is off, without listing workers, when the engagement disables it", () => {
 		const block = delegationBlock(scope({ maxAgents: 0 }));
 		expect(block.toLowerCase()).toMatch(/turned off|disabled/);
 		expect(block).not.toContain("pired-scout");
+		expect(block).not.toMatch(/worker launch/);
 	});
 });
 

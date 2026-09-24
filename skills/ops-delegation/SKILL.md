@@ -21,11 +21,11 @@ The `subagent` tool may start hidden behind a small `subagents_enable` tool; cal
 Launch with `agent` and `task`, and nothing else. The worker's definition already fixes its model and effort (yours), its fresh context, its timeout and its tools. pired's gate refuses a launch that tries to override any of that. It also refuses a `gate`/`acceptance` check, because that is a shell command pi-subagents runs on the host, outside the scope gate. A refused launch costs a turn.
 
 ## 0a. The four pired workers
-Each is a real pi child that loads pired. It reads and writes the same ledger you see, and its records appear to you immediately, with no bash bridge needed. It runs under the same scope you do. It cannot delegate again, run in the background, or use a git worktree, and pired's gate refuses any agent that is not one of these four. It starts in the engagement directory (or a `cwd` inside it). Beyond that its `read` and `bash` reach the same local files yours do: the scope gate governs network targets, not paths. Name the files it should work on in the task.
+Each is a real pi child that loads pired. It reads and writes the same ledger you see, and its records appear to you immediately, with no bash bridge needed. It runs under the same scope you do. It cannot delegate again, run in the background, or use a git worktree, and pired's gate refuses any agent that is not one of these four. It starts in the engagement directory (or a `cwd` inside it). Its tools are your session's default `read` and `bash`, plus `record` and `recall`, and its `read` and `bash` reach the same local files yours do: the scope gate governs network targets, not paths. Name the files it should work on in the task.
 
 - **`pired-scout`** — map an area's attack surface: routes, handlers, inputs, trust boundaries, sinks. Records surface (with the source file) and proposes hypotheses. Breadth, not confirmation.
 - **`pired-investigate`** — deep-dive one module or lead in isolation, so the grind burns the child's context, not yours. Records hypotheses with verdicts and findings (suspected until verified), citing exact `file:line`.
-- **`pired-verify`** — a fresh, skeptical pass that tries to **refute** a finding or a cleared cell before a client reads it. Records a grounded verdict. The cheapest guard against both a false positive and a false negative.
+- **`pired-verify`** — a fresh, skeptical pass that tries to **refute** findings or cleared cells before a client reads them, one at a time. Records each verdict on the record by id. The cheapest guard against both a false positive and a false negative.
 - **`pired-escalate`** — trace what your findings and open hypotheses unlock (reachable sinks, privileged ops, secrets, boundaries crossed), try to chain them, and record a chained finding only with a concrete path.
 
 ## 0b. Verifying a cleared cell — part of the coverage loop, not of a direct request
@@ -39,9 +39,9 @@ recall challenge id=<hypothesis id> # the brief for one
 
 `recall cleared` is the list to sample from — `gaps` and `next` will never show these, because a cleared cell is settled and the router moves on. It shows oldest first on purpose: a cell cleared in the first hour was cleared by an agent that had not yet read the code it was clearing.
 
-Hand the hypothesis id and its source path to `pired-verify` in the task. The worker reads `recall challenge id=<id>`, tries to overturn the clearance, and records the verdict against the hypothesis with what it was grounded in (`basis=file:line` or `live=true`). That writes a `verification` on the row — `stands` if the clearance held, `amended` if it was overturned — which is what lets the report say a cell was independently checked.
+Hand the hypothesis ids and their source paths to `pired-verify` in the task. The worker reads `recall challenge id=<id>` for each, tries to overturn the clearance, and records the verdict on the hypothesis by its id with what it was grounded in (`basis=file:line`; `live=true` only when it tested a running target, left out when its basis is the source), or `inconclusive` when it cannot settle it. That writes a `verification` on the row — `stands` if the clearance held, `amended` if it was overturned — which is what lets the report say a cell was independently checked. A clearance it overturns is recorded `confirmed` on the hypothesis first, then comes back as a finding linked by `hypothesisId` unless one already covers it; that finding lands `suspected` unless it carries `status=confirmed` with the control case.
 
-Sample rather than sweep. One cell per class, or the ones cleared earliest, buys most of the value; challenging every refutation costs more than the engagement.
+Sample rather than sweep. One cell per class, or the ones cleared earliest, buys most of the value; challenging every refutation costs more than the engagement. One verifier can take two or three records in a launch: it settles them one at a time, records each verdict before the next, and names any it did not reach as unchallenged.
 
 **When the operator asked for specific test cases, do them yourself.** A direct request is addressed to you; answering it by spawning a child and relaying the result is slower, loses your context, and is not what was asked. Delegation belongs to the coverage loop you are driving on your own initiative — not to work someone just handed you.
 
@@ -65,19 +65,19 @@ Example launches (`subagent` tool):
 {"agent":"pired-scout","task":"Map the attack surface of src/api/. Record each route/handler/input with its file, and propose hypotheses with their checklist class. Do not try to confirm anything."}
 ```
 ```json
-{"agent":"pired-verify","task":"Try to REFUTE hypothesis y7: 'GET /api/user?id= is IDOR-able'. Read `recall challenge id=y7`, inspect the code, and record a grounded verdict (confirmed|refuted|inconclusive) with basis=file:line. Do not promote it to a finding."}
+{"agent":"pired-verify","task":"Try to REFUTE hypotheses y7 ('GET /api/user?id= is IDOR-able') and y9, one at a time. Read `recall challenge id=<id>` for each, inspect the code, and record each verdict on the hypothesis by id (confirmed|refuted|inconclusive) with basis=file:line."}
 ```
 
 ## 3. What to do with the result
 - Read the worker's **distilled** return and its records (`recall hypotheses`, `recall findings`, `recall context`), not its steps. Trust the ledger over prose.
-- On a `pired-verify` verdict: `confirmed` → promote to a finding yourself (see `ops-finding-writeup`); `refuted`/`inconclusive` → update the hypothesis outcome (retained, no re-test).
+- A `pired-verify` verdict is already on the record, through the same evidence checks yours go through, so a verify task need not tell it to leave a status alone. A clearance it overturned comes with a finding linked by `hypothesisId` — `suspected` unless the worker confirmed it with the control case — so weigh it and write it up (`ops-finding-writeup`). An `inconclusive` hypothesis or a still-`suspected` finding is an open item for you, and records it named as unchallenged were never reached. A verifier cannot change a `reported` finding's status; its verdict on one is in its handoff, for you to take to the operator.
 - If the worker hit a wall needing the operator, it should have parked a `blocker` — pick it up via `recall blockers` and route around it.
 - **A worker's return is a lead to weigh, never tested coverage until you have weighed it.** Keep the cross-component reasoning and the final severity judgment in the parent.
 
 ## 4. Limits and the fleet view
 - **Foreground only, one at a time.** A worker blocks your turn until it returns, and there is no background/async delegation. Launch one worker per message: a second launch while one is still running is refused. This is deliberate, because it keeps the work accountable and sends one GPU one request at a time.
 - **Depth 1.** A worker cannot delegate again; the gate refuses it.
-- **Budgeted.** The engagement's `maxAgents` (default **8**, `0` disables delegation) caps the workers you may launch per session. Each worker runs for a bounded number of turns (scout/escalate 20, investigate 24, verify 16) and at most 45 minutes.
+- **Budgeted.** The engagement's `maxAgents` (default **8**, `0` disables delegation) caps the workers you may launch per session; the `<delegation>` block states the number. Each worker runs for a bounded number of turns (scout/escalate 20, investigate 24, verify 24) and at most 45 minutes. After the last launch the rest is yours: settle what the ledger already holds — unchallenged findings, inconclusive leads, worker verdicts not yet acted on — then carry on with the rest of the method.
 - **Scoped.** Worker tool calls pass through pired's scope gate, the same one you run under.
 
 In the TUI, pi-subagents shows a persistent **FleetView** under the editor while work runs; from an empty editor its navigation keys expand it, and `/subagents-fleet` opens the live inspector to browse a child, read its transcript, or stop a run. pired refreshes its own panel when a worker finishes, and announces any blocker the worker parked.

@@ -2,8 +2,8 @@ import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
 	auditFinding, challengeBrief, type ChallengeReport, CLASS_ALIASES, CONTRACTS, contractFor,
-	challengeCommand, evidenceShape, GENERIC_CONTROL, hypothesisBrief, isUnchallenged, judge, modelAnswersEntitlement, unchallengedBrief, unchallengedQueue,
-	verdictPatch,
+	challengeCommand, evidenceShape, GENERIC_CONTROL, hasGrounds, hypothesisBrief, isEarned, isExaminedUnsettled, isUnchallenged, judge,
+	modelAnswersEntitlement, unchallengedBrief, unchallengedQueue, unsettledLabel, verdictPatch,
 } from "./challenge.ts";
 import type { FindingRecord, HypothesisRecord } from "./ontology.ts";
 
@@ -81,6 +81,157 @@ describe("what a challenge is allowed to conclude", () => {
 		expect(out.status).toBe("refuted");
 		expect(verdictPatch(out)).toMatchObject({ status: "refuted" });
 		expect(out.verification.basis).toEqual(["app/policies/note_policy.rb:14"]);
+	});
+});
+
+describe("refuting where there is no live target", () => {
+	// The live=false rule guards against a dead session refuting a true finding.
+	// In a source-only review there is no session and no target, so an honest
+	// verifier says live=false and every refutation it made was downgraded:
+	// measured on the 2026-09-24 grid, the runs that did settle findings got there
+	// by asserting live=true on scopes with no target (17 of 18 verification
+	// records), and the honest ones could not refute anything.
+	it("accepts a cited refutation that says live=false when the engagement is source-only", () => {
+		const out = judge(finding(), { verdict: "refuted", basis: ["src/policy.go:31"], live: false, sourceOnly: true }, NOW);
+		expect(out.status).toBe("refuted");
+		expect(out.downgraded).toBeUndefined();
+		expect(out.verification).toMatchObject({ verdict: "refuted", basis: ["src/policy.go:31"] });
+	});
+
+	/**
+	 * live=false there says nothing was running, not that a target was down.
+	 * Stored, the report printed "(target was not reachable)" beside a refutation
+	 * the source settled — the dead-session refutation the live rule rejects.
+	 */
+	it("stores no live flag on a source-only refutation that said live=false", () => {
+		const out = judge(finding(), { verdict: "refuted", basis: ["src/policy.go:31"], live: false, sourceOnly: true }, NOW);
+		expect(out.verification).not.toHaveProperty("live");
+		// A look that settled nothing is written the same way.
+		const look = judge(finding(), { verdict: "unresolved", basis: ["src/policy.go:31"], live: false, sourceOnly: true }, NOW);
+		expect(look.verification).not.toHaveProperty("live");
+		// live=true is a claim that a running target was tested, and is kept as said.
+		expect(judge(finding(), { verdict: "refuted", basis: ["src/policy.go:31"], live: true, sourceOnly: true }, NOW).verification.live).toBe(true);
+	});
+
+	it("still downgrades live=false when the engagement has a live target, and keeps the flag it was downgraded on", () => {
+		for (const sourceOnly of [false, undefined]) {
+			const out = judge(finding(), { verdict: "refuted", basis: ["src/policy.go:31"], live: false, sourceOnly }, NOW);
+			expect(out.status).toBe("suspected");
+			expect(out.downgraded).toMatch(/not reachable/);
+			expect(out.verification.live).toBe(false);
+		}
+	});
+
+	it("does not lift the basis requirement for a source-only review", () => {
+		// The cited line is the whole bar there, so it cannot be the bar that goes.
+		const out = judge(finding(), { verdict: "refuted", live: false, sourceOnly: true }, NOW);
+		expect(out.status).toBe("suspected");
+		expect(out.downgraded).toMatch(/no basis cited/);
+	});
+});
+
+describe("a challenge that could not settle the claim", () => {
+	// `status=suspected` carried nothing, so an honest "I could not settle this"
+	// had nowhere to be written. On the 2026-09-24 grid 10 of 15 verify tasks
+	// whose instructions said "do not change status" left no verdict on any row;
+	// those instructions conflicted with the brief (ADR-028), so the figure is
+	// verdicts that never reached a row, not this gap's effect alone.
+	it("keeps the finding suspected and writes the grounds as an unresolved verification", () => {
+		const out = judge(finding(), {
+			verdict: "unresolved", basis: ["src/notes.go:88"], control: "no second account was available to replay as",
+			notes: "the ownership check may live in middleware not in this tree",
+		}, NOW);
+		expect(out.status).toBe("suspected");
+		expect(out.downgraded).toBeUndefined();
+		expect(out.verification).toEqual({
+			verdict: "unresolved", at: NOW, basis: ["src/notes.go:88"],
+			control: "no second account was available to replay as",
+			notes: "the ownership check may live in middleware not in this tree",
+		});
+	});
+
+	it("takes a control case alone as grounds: it says what was run", () => {
+		const out = judge(finding(), { verdict: "unresolved", control: "no second account existed to replay the request as" }, NOW);
+		expect(out.verification).toMatchObject({ verdict: "unresolved", control: "no second account existed to replay the request as" });
+		expect(out.downgraded).toBeUndefined();
+	});
+
+	it("does not take a reason alone as a look, since any edit may carry one", () => {
+		// A finder rewording its own claim passes a reason too. Counted as a look,
+		// it would mark a finding examined that no challenge had opened.
+		const out = judge(finding(), { verdict: "unresolved", notes: "the handler is generated at build time; not in the tree" }, NOW);
+		expect(out.downgraded).toMatch(/no conclusion/);
+		expect(hasGrounds({ basis: ["  "], control: " " })).toBe(false);
+		expect(hasGrounds({ basis: ["src/notes.go:88"] })).toBe(true);
+	});
+
+	it("still says no conclusion was returned when nothing at all was said", () => {
+		const out = judge(finding(), { verdict: "unresolved", notes: "  " }, NOW);
+		expect(out.status).toBe("suspected");
+		expect(out.downgraded).toMatch(/no conclusion/);
+	});
+
+	it("warns when the finding had already gone to the client", () => {
+		const out = judge(finding({ status: "reported" }), { verdict: "unresolved", control: "could not reach the handler" }, NOW);
+		expect(out.wasReported).toBe(true);
+		expect(out.status).toBe("reported");
+	});
+});
+
+describe("a look that settles nothing does not move what was settled", () => {
+	// The unsettled branch wrote `suspected` whatever the finding held, so a
+	// verifier recording "could not settle it" on a confirmed or reported finding
+	// demoted it, and replaced a verification that had met its bar with one that
+	// had not. Nothing unproven may settle a finding; nor may it unsettle one.
+	const EARNED = { verdict: "stands" as const, at: "2026-09-01T00:00:00Z", control: "no-cookie request returned 401" };
+
+	it("keeps a confirmed finding confirmed, with its earned verification, and adds the look to its notes", () => {
+		const out = judge(finding({ status: "confirmed", verification: EARNED }), {
+			verdict: "unresolved", basis: ["src/notes.go:88"], notes: "could not find the route's middleware",
+		}, NOW);
+		expect(out.status).toBe("confirmed");
+		expect(out.kept).toEqual(EARNED);
+		expect(out.verification).toMatchObject({ verdict: "stands", at: EARNED.at, control: EARNED.control });
+		expect(out.verification.notes).toMatch(/later look 2026-09-07T12:00:00Z, unsettled: basis src\/notes.go:88; could not find the route's middleware/);
+		expect(out.downgraded).toBeUndefined();
+	});
+
+	it("leaves every settled or operator status where it was", () => {
+		for (const status of ["reported", "triaged", "confirmed", "refuted", "false-positive", "accepted-risk", "ignored"] as const) {
+			expect(judge(finding({ status }), { verdict: "unresolved", basis: ["x.go:1"] }, NOW).status, status).toBe(status);
+		}
+		// A legacy `open` is the unverified state under its old name.
+		expect(judge(finding({ status: "open" }), { verdict: "unresolved", basis: ["x.go:1"] }, NOW).status).toBe("suspected");
+	});
+
+	it("replaces a look that was itself unsettled, since neither earned anything", () => {
+		const out = judge(finding({ verification: { verdict: "unresolved", at: "t1", notes: "first look" } }), { verdict: "unresolved", basis: ["x.go:1"] }, NOW);
+		expect(out.kept).toBeUndefined();
+		expect(out.verification).toEqual({ verdict: "unresolved", at: NOW, basis: ["x.go:1"] });
+	});
+
+	it("holds for a refutation or confirmation that missed its bar, too", () => {
+		// The same demotion by the other door: a refutation with no basis landed a
+		// confirmed finding on suspected and wrote `unresolved` over its proof.
+		const confirmed = finding({ status: "confirmed", verification: EARNED });
+		const refuted = judge(confirmed, { verdict: "refuted", live: true }, NOW);
+		expect(refuted.status).toBe("confirmed");
+		expect(refuted.downgraded).toMatch(/no basis cited/);
+		expect(refuted.verification).toMatchObject({ verdict: "stands", control: EARNED.control });
+		expect(refuted.verification.notes).toMatch(/later look .*no basis cited/);
+
+		const cleared = finding({ status: "refuted", verification: { verdict: "refuted", at: "t1", basis: ["policy.rb:14"] } });
+		const reconfirmed = judge(cleared, { verdict: "stands" }, NOW);
+		expect(reconfirmed.status).toBe("refuted");
+		expect(reconfirmed.verification).toMatchObject({ verdict: "refuted", basis: ["policy.rb:14"] });
+	});
+
+	it("names which verdicts were earned", () => {
+		expect(isEarned({ verdict: "stands" })).toBe(true);
+		expect(isEarned({ verdict: "amended" })).toBe(true);
+		expect(isEarned({ verdict: "refuted" })).toBe(true);
+		expect(isEarned({ verdict: "unresolved" })).toBe(false);
+		expect(isEarned(undefined)).toBe(false);
 	});
 });
 
@@ -274,6 +425,51 @@ describe("the brief the challenger is given", () => {
 		expect(challengeBrief(finding({ class: "sqli" }))).not.toMatch(/who is this resource FOR/);
 	});
 
+	/**
+	 * The brief used to ask for a verdict in its own vocabulary and the grounds
+	 * in 'reason', which the gate does not read as a basis; a verifier that
+	 * followed it wrote a refutation recorded as unresolved, or nothing. On the
+	 * 2026-09-24 grid 4 of 6 amended or refuted verdicts never reached the finding.
+	 */
+	it("says how to write each verdict in the fields the gate reads", () => {
+		const brief = challengeBrief(finding({ id: "f9" }));
+		expect(brief).toContain("record kind=finding id=f9");
+		expect(brief).toMatch(/confirmed: control=/);
+		expect(brief).toMatch(/refuted: basis=/);
+		expect(brief).toMatch(/suspected: basis=\[[^\]]*\] or control=/);
+		expect(brief).toMatch(/A reason alone is a note, not a look/);
+		expect(brief).toMatch(/record kind=evidence/);
+		expect(brief).not.toMatch(/stands\|amended/);
+	});
+
+	it("asks for entitlement in the confirm line only where the class turns on it", () => {
+		expect(challengeBrief(finding({ class: "idor" }))).toMatch(/confirmed: control="[^"]*", entitlement=/);
+		expect(challengeBrief(finding({ class: "sqli" }))).not.toMatch(/confirmed: control="[^"]*", entitlement=/);
+	});
+
+	it("leaves the claim itself to the operator", () => {
+		expect(challengeBrief(finding())).toMatch(/title, description, location, severity — is the operator's to amend/);
+	});
+
+	it("asks for live=true only when the running target was tested, and for nothing when the basis is the source", () => {
+		// judge() downgrades live=false against a live target and takes an absent
+		// live as no claim. Asked for "live=true|false", a verifier whose grounds
+		// were the source had only the answer that refutes nothing.
+		const brief = challengeBrief(finding());
+		expect(brief).toMatch(/live=true when you tested the running target; leave live out when your basis is the source/);
+		expect(brief).not.toMatch(/live=true\|false/);
+		expect(judge(finding(), { verdict: "refuted", basis: ["src/policy.go:31"] }, NOW).status).toBe("refuted");
+	});
+
+	it("asks for reachability only where there is a live target", () => {
+		// judge() no longer downgrades live=false in a source-only review, so a
+		// brief that demanded proof of a session would be asking for something the
+		// gate does not.
+		const brief = challengeBrief(finding());
+		expect(brief).toMatch(/When the engagement has a live target, prove it is reachable/);
+		expect(brief).toMatch(/A review of source has no target to reach/);
+	});
+
 	it("names the entitlement question for a class that turns on intent and not for one that does not", () => {
 		expect(contractFor("idor")?.entitlement).toBeDefined();
 		expect(contractFor("sqli")?.entitlement).toBeUndefined();
@@ -346,6 +542,76 @@ describe("the unchallenged queue", () => {
 		expect(isUnchallenged(finding({ status: "confirmed" }))).toBe(false);
 	});
 
+	/**
+	 * Round two took any finding carrying a verification out of the queue, so a
+	 * look that said "could not tell" — or a refutation judge() downgraded — left
+	 * a claim still open while `recall challenge` said "Nothing unchallenged".
+	 */
+	it("keeps a finding whose only look settled nothing, after every finding nobody has examined", () => {
+		const looked = finding({ id: "f1", severity: "critical", verification: { verdict: "unresolved", at: NOW, notes: "no second account" } });
+		const fresh = finding({ id: "f2", severity: "low" });
+		expect(isUnchallenged(looked)).toBe(true);
+		expect(isExaminedUnsettled(looked)).toBe(true);
+		expect(isExaminedUnsettled(fresh)).toBe(false);
+		// Worse, but examined: a first look at the low one comes before a second at the critical.
+		expect(unchallengedQueue([looked, fresh]).map((f) => f.id)).toEqual(["f2", "f1"]);
+	});
+
+	it("takes a finding out only on an earned verdict or a settled status", () => {
+		for (const verdict of ["stands", "amended", "refuted"] as const) {
+			for (const status of ["triaged", "reported"] as const) {
+				expect(isUnchallenged(finding({ status, verification: { verdict, at: NOW, basis: ["x.go:1"] } })), `${status} ${verdict}`).toBe(false);
+			}
+		}
+		expect(isUnchallenged(finding({ status: "confirmed" }))).toBe(false);
+	});
+
+	/**
+	 * `judge` never leaves an earned verdict on an unverified status, so one
+	 * there means somebody moved the finding back down by id — the documented
+	 * way to correct a record. Read from the verification alone, the correction
+	 * took the finding out of the queue it had just been put back into.
+	 */
+	it("puts a finding moved back to an unverified status in the queue, whatever verification it carries", () => {
+		const earned = { verdict: "stands" as const, at: NOW, control: "the false payload returned the empty set" };
+		for (const status of ["suspected", "open", undefined] as const) {
+			const moved = finding({ id: "f1", status, verification: earned });
+			expect(isUnchallenged(moved), String(status)).toBe(true);
+			expect(unchallengedQueue([moved]).map((f) => f.id), String(status)).toEqual(["f1"]);
+		}
+	});
+
+	it("puts a confirmed finding moved back to suspected by id back in the queue", () => {
+		const confirmed = finding({ id: "f1", status: "confirmed", verification: { verdict: "stands", at: NOW, control: "401 without the cookie" } });
+		expect(unchallengedQueue([confirmed])).toEqual([]);
+		// What `record id=f1 status=suspected` leaves: the status moves, the stored verification stays.
+		const movedBack = { ...confirmed, status: "suspected" as const };
+		expect(unchallengedQueue([movedBack]).map((f) => f.id)).toEqual(["f1"]);
+	});
+
+	it("labels an examined finding with what its look could not settle", () => {
+		expect(unsettledLabel(finding({ verification: { verdict: "unresolved", at: NOW, notes: "no second account" } })))
+			.toBe("examined, unsettled: no second account");
+		expect(unsettledLabel(finding({ verification: { verdict: "unresolved", at: NOW, basis: ["a.go:1", "b.go:2"] } })))
+			.toBe("examined, unsettled: a.go:1, b.go:2");
+		expect(unsettledLabel(finding({ verification: { verdict: "unresolved", at: NOW } }))).toBe("examined, unsettled: no grounds recorded");
+		expect(unsettledLabel(finding({ verification: { verdict: "unresolved", at: NOW, notes: "x".repeat(400) } }))?.length).toBeLessThan(200);
+		expect(unsettledLabel(finding())).toBeUndefined();
+	});
+
+	it("labels a finding moved back down by what it was moved back from, not as a look that could not tell", () => {
+		const moved = finding({ status: "suspected", verification: { verdict: "stands", at: NOW, control: "401 without the cookie" } });
+		expect(unsettledLabel(moved)).toBe("examined, moved back to suspected from a stands verdict: 401 without the cookie");
+	});
+
+	it("hands out the brief for one already examined, and never says nothing is waiting while it is", () => {
+		const looked = finding({ id: "f8", verification: { verdict: "unresolved", at: NOW, notes: "no second account" } });
+		expect(challengeCommand({ findings: [looked], id: "f8" }).text).toContain("Challenge finding f8");
+		const list = challengeCommand({ findings: [looked] }).text;
+		expect(list).not.toMatch(/nothing unchallenged/);
+		expect(list).toContain("· f8 [high] IDOR on GET /api/notes/{id} — examined, unsettled: no second account");
+	});
+
 	/** A disposed finding keeps its row; it is not work waiting on anyone. */
 	it("leaves the disposed alone, however they were disposed of", () => {
 		for (const status of ["refuted", "false-positive", "accepted-risk", "ignored"] as const) {
@@ -401,6 +667,14 @@ describe("unchallengedBrief", () => {
 		const out = unchallengedBrief(many);
 		expect(out).toContain("+2 more");
 		expect(out).not.toContain("e [");
+	});
+
+	it("labels the examined-but-unsettled, and counts them when the list is cut", () => {
+		const unsettled = (id: string) => finding({ id, verification: { verdict: "unresolved", at: NOW, notes: "no second account" } });
+		expect(unchallengedBrief([unsettled("u1")])).toContain("u1 [high] IDOR on GET /api/notes/{id} (examined, unsettled: no second account)");
+		const out = unchallengedBrief([finding({ id: "a" }), finding({ id: "b" }), finding({ id: "c" }), unsettled("u1"), unsettled("u2")]);
+		expect(out).toContain("+2 more (2 examined, unsettled)");
+		expect(out).toContain("5 findings have not been settled by a challenge");
 	});
 
 	it("is empty when nothing is waiting, so it costs no prompt", () => {
@@ -470,7 +744,10 @@ describe("hypothesisBrief", () => {
 	/** The brief is for a cold agent; handing it its own row back is noise. */
 	it("does not list the hypothesis under challenge among its own siblings", () => {
 		const out = hypothesisBrief(hyp(), { siblings: [hyp()] });
-		expect(out.match(/y7/g)).toHaveLength(1);
+		// The id is named where the verdict is to be written; it must not also
+		// appear as a row of what the ledger knows nearby.
+		expect(out).not.toMatch(/^- y7 \[/m);
+		expect(out).not.toMatch(/already knows here/);
 	});
 
 	it("carries the target model, truncating rather than trailing off", () => {
@@ -491,6 +768,40 @@ describe("hypothesisBrief", () => {
 		const out = hypothesisBrief(hyp());
 		expect(out).toMatch(/I could not find anything/);
 		expect(out).toMatch(/file:line or evidence path/);
+	});
+
+	/**
+	 * It used to say "your basis in the reason". `reason` is a note; only `basis`
+	 * writes the verification that marks a cell re-checked, so a verifier that
+	 * followed the brief left the clearance looking as if nobody had looked twice.
+	 */
+	it("puts the grounds in basis, on the hypothesis by its id", () => {
+		const out = hypothesisBrief(hyp());
+		expect(out).toContain("record kind=hypothesis id=y7");
+		expect(out).toMatch(/basis=\[/);
+		expect(out).not.toMatch(/basis in the reason/);
+		expect(out).toMatch(/outcome=refuted/);
+		expect(out).toMatch(/outcome=inconclusive/);
+	});
+
+	it("turns a confirmed cell into a finding linked back to it", () => {
+		// Only a finding reaches the report; a confirmed cell alone does not.
+		const out = hypothesisBrief(hyp());
+		expect(out).toMatch(/outcome=confirmed, statement="what holds", then record the finding/);
+		expect(out).toContain("hypothesisId=y7");
+		expect(out).toContain("class=sqli");
+	});
+
+	it("names the two fields a finding is refused without, and what it lands as", () => {
+		// title and severity are required for a new finding; a brief that leaves them
+		// out walks the verifier into a refusal on the one write that reaches the report.
+		const out = hypothesisBrief(hyp());
+		expect(out).toContain('title="...", severity=...');
+		expect(out).toMatch(/title and severity are required/);
+		expect(out).toMatch(/lands suspected unless it carries status=confirmed with the control case you ran/);
+		expect(out).not.toMatch(/lands suspected[^\n]*entitlement=/);
+		// judge() asks entitlement of the access-control classes, so the brief does too.
+		expect(hypothesisBrief(hyp({ class: "idor" }))).toMatch(/lands suspected[^\n]*entitlement=/);
 	});
 });
 
@@ -516,7 +827,7 @@ describe("challengeCommand", () => {
 				finding({ id: "c", severity: "high", title: "IDOR on notes", status: "confirmed" }),
 			],
 		});
-		expect(view.text).toMatch(/2 finding\(s\) carry no verdict/);
+		expect(view.text).toMatch(/2 finding\(s\) carry no settled verdict/);
 		// Assert on the rows themselves: a bare indexOf("b") matches the "b" in
 		// any surrounding prose and passes for the wrong reason.
 		const rows = view.text.split("\n").filter((l) => l.startsWith("· "));
@@ -526,7 +837,7 @@ describe("challengeCommand", () => {
 	});
 
 	it("treats whitespace as no argument, not as an id", () => {
-		expect(challengeCommand({ findings: [finding()], id: "   " }).text).toMatch(/carry no verdict/);
+		expect(challengeCommand({ findings: [finding()], id: "   " }).text).toMatch(/carry no settled verdict/);
 	});
 
 	it("warns on an id it does not have, and points at the list", () => {
@@ -550,6 +861,7 @@ describe("challengeCommand", () => {
 		const view = challengeCommand({ findings: [finding({ id: "f3" })], id: "f3" });
 		expect(view.text).toContain("pired-ledger recall challenge id=f3");
 		expect(view.text).toContain("pired-ledger record kind=finding id=f3");
+		expect(view.text).toMatch(/status=suspected with basis or control/);
 		expect(view.text).toMatch(/cannot be asserted/);
 	});
 

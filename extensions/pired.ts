@@ -34,7 +34,7 @@ import type { BlockerRecord, Checklist, EngagementScope, FindingRecord, PassLens
 import type { ToolContext, ToolDefinition } from "../core/ports.ts";
 import { buildSystemPrompt, PIRED_PROFILES, type PiredProfile } from "../core/prompts.ts";
 import { publishParentScope } from "../core/child.ts";
-import { createScopeGate, pickTargetType, type ScopeGate, scopeGuidance, summarizeScope } from "../core/scope.ts";
+import { createScopeGate, isSourceOnly, pickTargetType, type ScopeGate, scopeGuidance, summarizeScope } from "../core/scope.ts";
 import { buildPiredAgentDefinitions, eagerSubagentSchema, SUBAGENTS_ABSENT_NOTICE, SUBAGENTS_EAGER_NOTICE } from "../core/subagents.ts";
 import { renderCoveragePanel, type Tone } from "../core/coverage-panel.ts";
 import { complete } from "@earendil-works/pi-ai/compat";
@@ -1452,7 +1452,12 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		passLadder = resolveLadder(scope.passes, parseLenses(process.env.PIRED_PASSES));
 		passNumber = passLadder ? await workspace.currentPass() : 1;
 
-		for (const tool of createCoreTools({ workspace, pass: passNow })) {
+		// A function, like `pass`, so the record tool reads `scope` when it judges a
+		// verdict rather than when it was built: any reassignment of `scope` reaches
+		// it with no second wiring. A source-only engagement (no live target) does
+		// not hold a refutation to a live-target bar it cannot meet — see
+		// core/scope.ts `isSourceOnly`.
+		for (const tool of createCoreTools({ workspace, pass: passNow, sourceOnly: () => isSourceOnly(scope) })) {
 			const presentation = tool.name === "record" ? { renderResult: renderRecordResult } : undefined;
 			// Held so phase two can write through the same tool the model would have
 			// called: same validation, same ids, same coverage effect. A second write

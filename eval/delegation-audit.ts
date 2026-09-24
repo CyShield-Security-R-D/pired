@@ -81,6 +81,9 @@ export function auditLimits(): AuditLimits {
  * `budgetRefusal`): the warning to hand back, and the stop. A call past the
  * budget whose result is neither ran, which means the gate did not hold.
  */
+/** The tools pired's child gate keeps open through a worker's grace turns (ADR-028). */
+const LEDGER_TOOLS: ReadonlySet<string> = new Set(["record", "recall"]);
+
 const BUDGET_REFUSAL = /pired: .{1,80}? (?:has used its \d+-turn budget|is \d+ turns past its \d+-turn budget)/;
 
 export interface AuditInput {
@@ -115,6 +118,12 @@ export interface ChildAudit {
 	callsRefusedPastBudget: number;
 	/** Calls that ran after the budget: the child gate did not hold. */
 	callsRunPastBudget: number;
+	/**
+	 * `record`/`recall` calls that ran in the grace turns after the budget. The
+	 * child gate keeps the ledger open there (ADR-028): 17–18 worker records were
+	 * refused at the budget line in the v4 grids, 11 of them lost entirely.
+	 */
+	ledgerCallsInGrace: number;
 	toolCalls: number;
 	toolErrors: number;
 	recordCalls: number;
@@ -212,6 +221,12 @@ function auditChild(child: SubagentChild, session: ChildSessionExtraction | unde
 	const maxTurns = limits.maxTurns[child.agent] ?? null;
 	const pastBudget = maxTurns === null ? [] : calls.filter((c) => c.turn > maxTurns && c.resultText !== undefined);
 	const refused = pastBudget.filter((c) => c.isError === true && BUDGET_REFUSAL.test(c.resultText ?? ""));
+	// The gate's grace window, in the audit's turn count (assistant messages, one
+	// ahead of the gate's turn_start count at the stop — the same +1 the ceiling
+	// below uses).
+	const graceEnd = maxTurns === null ? null : maxTurns + limits.handoffGraceTurns + 1;
+	const ranPast = pastBudget.filter((c) => !refused.includes(c));
+	const ledgerInGrace = ranPast.filter((c) => LEDGER_TOOLS.has(c.name) && graceEnd !== null && c.turn <= graceEnd);
 	const records = calls.filter((c) => c.name === "record");
 	const written = records.filter((c) => c.isError === false);
 	const recordKinds: Record<string, number> = {};
@@ -231,7 +246,8 @@ function auditChild(child: SubagentChild, session: ChildSessionExtraction | unde
 		turns: session?.turns ?? 0,
 		maxTurns,
 		callsRefusedPastBudget: refused.length,
-		callsRunPastBudget: pastBudget.length - refused.length,
+		callsRunPastBudget: ranPast.length - ledgerInGrace.length,
+		ledgerCallsInGrace: ledgerInGrace.length,
 		toolCalls: calls.length,
 		toolErrors: calls.filter((c) => c.isError === true).length,
 		recordCalls: records.length,
@@ -360,7 +376,8 @@ export function auditDelegation(input: AuditInput): DelegationAudit {
 			else if (c.outcome === null ? c.status !== "completed" : c.outcome !== "completed") violations.push(`${who}: ended ${c.status}${c.error ? `: ${c.error.split("\n")[0]}` : ""}`);
 			if (c.maxTurns !== null) {
 				const ceiling = c.maxTurns + limits.handoffGraceTurns + 1;
-				if (c.callsRunPastBudget) violations.push(`${who}: ${c.callsRunPastBudget} tool call(s) ran after its ${c.maxTurns}-turn budget; pired's child gate refuses every call past it`);
+				if (c.callsRunPastBudget) violations.push(`${who}: ${c.callsRunPastBudget} tool call(s) ran after its ${c.maxTurns}-turn budget; pired's child gate refuses every call past it except record and recall in its grace turns`);
+				if (c.ledgerCallsInGrace) notes.push(`${who}: ${c.ledgerCallsInGrace} record/recall call(s) in its grace turns after the ${c.maxTurns}-turn budget`);
 				if (c.turns > ceiling) violations.push(`${who}: ${c.turns} turns, past the ${ceiling} at which pired stops a ${c.maxTurns}-turn worker`);
 				else if (c.callsRefusedPastBudget && c.outcome !== "incomplete") notes.push(`${who}: ${c.callsRefusedPastBudget} call(s) refused past its ${c.maxTurns}-turn budget before it handed back`);
 			}

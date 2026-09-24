@@ -40,6 +40,13 @@ fresh, with none of the parent's conversation. It reads what it needs from the s
 `recall` queries for the rest, including loot handles (never the secrets). It returns at most 200 words: the record IDs it
 wrote, evidence paths, verdicts, and any work left open.
 
+A worker gets the parent's default toolset, `read` and `bash`, plus the ledger's `record` and
+`recall`. pi's `grep`, `find` and `ls` are left out for parity with the parent, which does not have
+them by default. `grep` and `find` also run the `rg` and `fd` binaries, which pi downloads on first
+use when they are missing. The 2026-09-24 v4 grid ran on a host with neither binary and no network,
+and there every worker call to them failed (grep 45 of 45, find 57 of 57). Where the binaries are
+installed or can be fetched, those tools work.
+
 The worker's scope is the parent's own, handed over in-process: the parent publishes the exact
 scope object its gate was built from, keyed by workspace, and the worker arms from that copy. It
 never reads `scope.json`. That file is the parent's copy for the panel and `pired-state`, and the
@@ -58,7 +65,7 @@ what it saved under `evidence/`.
 |---|---|---|
 | `pired-scout` | Attack-surface mapping of an area: routes, handlers, inputs, trust boundaries, sinks. | Surface elements (with file) and proposed hypotheses. |
 | `pired-investigate` | A deep dive on one module or lead. | Hypotheses with verdicts, findings (suspected until verified). |
-| `pired-verify` | A fresh adversarial check that tries to refute a finding or a cleared hypothesis, from source or a control case. | A grounded verdict. |
+| `pired-verify` | A fresh adversarial check that tries to refute findings or cleared hypotheses, one at a time, from source or a control case. | Each verdict on the record by id, `suspected` (finding) or `inconclusive` (hypothesis) when unsettled; a finding linked by `hypothesisId` for a clearance it overturns. |
 | `pired-escalate` | Impact amplification: what existing findings unlock, and whether they chain. | A chained finding only with a concrete path citing component record IDs and each hop's `file:line`; otherwise the chain as a hypothesis. |
 
 `pired-escalate` reads the ledger first (`recall`), traces reachable sinks, privileged
@@ -76,12 +83,19 @@ agents but never forces delegation.
 A launch is `{agent, task}`:
 
 ```json
-{"agent":"pired-verify","task":"Try to REFUTE finding f3. Read recall challenge id=f3 first; ground the verdict in file:line or a control case you ran."}
+{"agent":"pired-verify","task":"Try to REFUTE findings f3 and f5, one at a time. Read recall challenge id=<id> for each; ground each verdict in file:line or a control case you ran, and record it on the finding by id."}
 ```
 
-Each agent has a per-role turn budget: scout 20, investigate 24, verify 16, escalate 20. At the
-budget the worker is told to stop calling tools and hand back. If it keeps calling tools for more
-than two turns after that, the run is stopped. Each worker also has a 45-minute timeout, a safety net behind the turn budget.
+A verifier records its verdict on the record through the same evidence checks the parent's
+writes go through, so a task does not need to tell it to leave the status alone. One launch can
+carry two or three records: the verifier records each verdict before it starts the next, and names
+the ones it did not reach as unchallenged.
+
+Each agent has a per-role turn budget: scout 20, investigate 24, verify 24, escalate 20. At the
+budget the worker is told to hand back. The ledger stays open for two grace turns, so `record` and
+`recall` still run and it can write down what it established; every other tool is refused. A tool
+call after the grace turns, `record` included, ends the run. Each worker also has a 45-minute
+timeout, a safety net behind the turn budget.
 
 Workers run **one at a time**, in the foreground. pired is synchronous by design, which keeps
 accountability clear and does not send concurrent requests to one GPU. This is enforced, not
@@ -90,8 +104,11 @@ declare itself sequential, so two launches in one message used to run two worker
 gate refuses a launch while another is running.
 
 `maxAgents` (default 8) caps how many workers a session may launch, and `0` disables delegation.
-Each launch the gate allows counts against it. A launch that pi-subagents rejects before any worker
-starts is refunded.
+The delegation block states the number. Each launch the gate allows counts against it. A launch
+that pi-subagents rejects before any worker starts is refunded. A launch past the cap is refused
+with wrap-up guidance, not a stop: the rest is the parent's, starting with what the ledger already
+holds (unchallenged findings, inconclusive leads, worker verdicts not yet acted on) and then the
+rest of the method.
 
 ## What the gate and the child enforce
 
@@ -127,6 +144,28 @@ and pi-subagents fails a child at start when an allowlisted tool is missing. So 
 child refuses every tool call. Once armed, its own gate refuses nested delegation (`subagent`,
 `subagents_enable`) and pi-subagents' supervisor channel, and refuses any out-of-scope action with
 pired's exact scope reason.
+
+The child also holds each worker to its role and to the ledger. Where a rule below refuses a
+call, the refusal says why and what to record instead; nothing the worker sends is silently
+rewritten.
+- **Role rules.** A scout does not record findings; it proposes hypotheses for an investigator to
+  settle. A verifier records verdicts, not rewrites. On a finding it names by id it may pass only
+  the verdict keys (`status`, `basis`, `live`, `control`, `entitlement`, `reason`), and the status
+  only `confirmed`, `refuted` or `suspected`. It deletes nothing and does not change the status of a
+  finding already `reported`. It creates a finding only with `hypothesisId`, for a hypothesis
+  recorded `confirmed` that no finding already covers.
+- **The recording reserve.** A worker that reaches the last three turns of its budget with nothing
+  recorded may only `record` and `recall` until it records something. Saved evidence and notes do
+  not count, because neither says what the worker established.
+- **One reminder before hand-back.** A worker about to hand back with nothing recorded is told once,
+  while it still has turns, that its handoff is not durable. A second hand-back is let go.
+- **No supervisor section.** pi-subagents 0.71 appends a section to each worker's prompt inviting
+  it to contact its supervisor. A pired worker has none, so the child strips that section when it
+  matches the default template, and the gate refuses the tool either way.
+- **Source-only refutation.** A refutation needs a cited `basis`. When the scope lists a target, a
+  refutation that says `live=false` stays unresolved, because an unreachable target refutes
+  nothing. When the scope lists no target, whatever its mode, nothing is running to reach, so the
+  basis is the whole bar. The child reads this from the parent's scope, never from the worker.
 
 As with the parent, this gate catches mistakes; it is not a shell sandbox. It governs network
 targets, not local paths: a worker's `read` and `bash` reach the same files the parent's do.

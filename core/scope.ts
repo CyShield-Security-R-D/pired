@@ -11,7 +11,7 @@
 
 import type { EngagementScope, ScopeTargets, TargetType } from "./ontology.ts";
 import type { GateDecision, ToolCall } from "./ports.ts";
-import { PIRED_AGENT_NAMES } from "./subagents.ts";
+import { PIRED_AGENT_NAMES, workerCap } from "./subagents.ts";
 
 // --- IPv4 helpers -----------------------------------------------------------
 
@@ -279,20 +279,33 @@ const LOCAL_TOOLS = new Set<string>([
 ]);
 
 /**
- * How many subagents one session may spawn before the gate says no.
- *
- * PLAN.md §11 has always listed hard caps as harness-owned, and nothing
- * implemented one: `spawn` sat in the local-tools set and was waved through, so
- * a model that decided to fan out could spawn until something else ran out.
- * Delegation is not a scope violation, but it is the same shape of problem —
- * unbounded work nobody asked for, on the operator's budget and the client's
- * systems — and the gate is already the place that says no to that.
- *
- * Eight is enough for the patterns `ops-delegation` describes (a verifier per
- * cleared cell of a class, a scout per host) and low enough that a loop is
- * caught in one session rather than one invoice.
+ * How many subagents one session may spawn before the gate says no. Defined in
+ * core/subagents.ts beside the workers, whose delegation block states the same
+ * number; re-exported here because this is the module that enforces it.
  */
-export const DEFAULT_MAX_AGENTS = 8;
+export { DEFAULT_MAX_AGENTS } from "./subagents.ts";
+
+/**
+ * What the parent is told when its last worker launch is spent: how to finish,
+ * not that it is finished.
+ *
+ * The earlier refusal said "record what the existing workers returned and do the
+ * rest here", which named neither what "the rest" was nor what to do first. In
+ * the 2026-09-24 v4 grid 43.5% of gpt-6-luna candidate parent tokens were spent
+ * after the last worker had run; one run made 65 requests and 11.7M tokens
+ * there and found no true positive. A hard stop would be wrong — one post-cap
+ * phase found a true positive — so the refusal says what is left and in what
+ * order, and leaves the parent to do it: the ledger's open items first, because
+ * each is work already paid for (35 of 37 of those runs' candidate findings
+ * ended still `suspected`), then the rest of the method.
+ */
+function workersSpent(maxAgents: number, spawned: number): string {
+	const left = Math.max(0, maxAgents - spawned);
+	return `Subagent budget spent: ${maxAgents} per session, ${spawned} already launched (${left} left). ` +
+		"The workers are done for this session; what is left is yours to finish here. First settle what the ledger already holds — " +
+		"findings nobody has challenged yet, inconclusive leads, worker verdicts you have not acted on — then carry on with the rest of the method. " +
+		"Closing an open item usually settles more than opening new surface does. For more workers, raise maxAgents in the scope file.";
+}
 
 /**
  * The pi-subagents lazy-loader tool. It only makes the `subagent` tool active;
@@ -511,12 +524,7 @@ export function checkSubagentLaunch(rawArgs: unknown, ctx: SubagentGateContext):
 	}
 
 	if (ctx.spawned + 1 > ctx.maxAgents) {
-		const left = Math.max(0, ctx.maxAgents - ctx.spawned);
-		return {
-			allow: false,
-			count: 0,
-			reason: `Subagent budget spent: ${ctx.maxAgents} per session, ${ctx.spawned} already launched (${left} left). Record what the existing workers returned and do the rest here — or raise maxAgents in the scope file.`,
-		};
+		return { allow: false, count: 0, reason: workersSpent(ctx.maxAgents, ctx.spawned) };
 	}
 	return { allow: true, count: 1 };
 }
@@ -617,9 +625,7 @@ function childrenInResult(result: unknown): number {
  * none.
  */
 export function createScopeGate(scope: EngagementScope, options: ScopeGateOptions = {}): ScopeGate {
-	const maxAgents = typeof scope.maxAgents === "number" && scope.maxAgents >= 0
-		? scope.maxAgents
-		: DEFAULT_MAX_AGENTS;
+	const maxAgents = workerCap(scope);
 	// Custom external tools extend the defaults; they never uncap the built-ins.
 	const agentTools = new Set([...AGENT_TOOLS, ...(scope.agentTools ?? [])]);
 	const piredAgents = options.agents ?? PIRED_AGENT_NAMES;
@@ -651,8 +657,7 @@ export function createScopeGate(scope: EngagementScope, options: ScopeGateOption
 					allow: false,
 					reason: maxAgents === 0
 						? "Delegation is disabled for this engagement (maxAgents=0). Do the work in this session."
-						: `Subagent budget spent: ${maxAgents} already spawned this session. Finish or record what `
-							+ "the existing ones returned, and do the rest here — or raise maxAgents in the scope file.",
+						: workersSpent(maxAgents, spawned),
 				};
 			}
 			spawned++;
@@ -719,6 +724,30 @@ export function createScopeGate(scope: EngagementScope, options: ScopeGateOption
 function hasScopeTargets(scope: EngagementScope): boolean {
 	const t = scope.targets ?? {};
 	return Boolean(t.domains?.length || t.ips?.length || t.cidrs?.length || t.urls?.length);
+}
+
+/**
+ * Whether the engagement has no live target to test against: no scope loaded,
+ * or a scope that lists no target entries, whatever its mode. Code review is
+ * the usual case — the only evidence there is is the source.
+ *
+ * The mode is deliberately not consulted. A scope with targets and the gate
+ * switched off is still a live engagement — the operator turned off the
+ * refusals, not the running application — and `scopeGuidance` renders it as
+ * one ("Authorized engagement: …"). Reading `mode: "off"` as source-only would
+ * let a worker there refute with `live=false` while its own prompt listed the
+ * targets it could have tested.
+ *
+ * The record tool asks this before it holds a refutation to the live-target
+ * bar. Without it a refutation that honestly said `live=false` on a
+ * source-only engagement was downgraded to unresolved, so an honest verifier
+ * could not refute anything there; in the 2026-09-24 v4 grid the baseline runs
+ * that did confirm or refute did it by asserting `live=true` on scopes with no
+ * target (17 of 18 verification records). A bar only a false claim clears
+ * rewards the false claim.
+ */
+export function isSourceOnly(scope: EngagementScope | undefined): boolean {
+	return !scope || !hasScopeTargets(scope);
 }
 
 /**

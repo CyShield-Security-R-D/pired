@@ -29,8 +29,13 @@ export type PiredRole = "scout" | "investigate" | "verify" | "escalate";
  * `maxTurns` is the child's own stop line (the child extension enforces it) and
  * also seeds the definition's `toolBudget.hard`. The numbers come from what each
  * role actually needs: scouting an area and escalating impact are broad (20),
- * a deep single-module dive is the longest (24), and a fresh refutation is the
- * tightest because a check that sprawls has stopped being a check (16).
+ * and a deep single-module dive is long (24). A refutation of one record is
+ * still a tight check — one that sprawls has stopped being a check — but a
+ * verifier now takes a batch, one record at a time, and 24 turns fits two or
+ * three: in the 2026-09-24 v4 grid a five-finding verify batch settled 2 within
+ * 16–18 turns. When each launch covered one record — 23 of 25 gpt-6-luna verify
+ * launches did — verification spent the session's worker launches one record at
+ * a time: all 5 launches the cap refused were verifiers.
  */
 export interface PiredAgent {
 	name: string;
@@ -59,8 +64,22 @@ const TOOLS_PER_TURN = 8;
  */
 const WORKER_TIMEOUT_MS = 45 * 60 * 1000;
 
-/** The tools every worker gets: read-side exploration, bash, and pired's ledger. */
-export const WORKER_TOOLS = ["read", "grep", "find", "ls", "bash", "record", "recall"] as const;
+/**
+ * The tools every worker gets: the parent's own default toolset for reading and
+ * searching — pi's `read` and `bash` — plus pired's ledger (`record`, `recall`).
+ * A worker searches the way its parent does.
+ *
+ * Workers used to get pi's `grep`, `find` and `ls` as well, which the parent
+ * does not have by default. `grep` and `find` run the `rg` and `fd` binaries,
+ * and pi's tools manager downloads a missing one on first use. The v4 grid
+ * (2026-09-24) ran on a host with neither binary and no network, so there every
+ * worker call to them failed (grep 45 of 45, find 57 of 57); with the refused
+ * supervisor calls, that lost 12–19% of worker turns. Where the binaries are
+ * installed or can be fetched the tools work, so they are left out for parity
+ * with the parent, which never called either, not because they are broken.
+ * `ls` goes with them: `bash` already lists a directory.
+ */
+export const WORKER_TOOLS = ["read", "bash", "record", "recall"] as const;
 
 /**
  * The four workers.
@@ -70,6 +89,37 @@ export const WORKER_TOOLS = ["read", "grep", "find", "ls", "bash", "record", "re
  * own terms — record as you go, a suspected finding stays suspected until proven,
  * never inflate severity — because a fresh child does not carry the parent's
  * prompt and its only durable channel back is the shared ledger.
+ *
+ * The scout and verify missions also state where the role stops, because the
+ * child gate now refuses the step past it and a refusal the worker was never
+ * told about reads as a fault. In the 2026-09-24 v4 grid a pired-scout recorded
+ * three findings, outside its role; and two pired-verify workers re-recorded
+ * the findings they were checking by id with new descriptions. An update by id
+ * is last-write-wins, so the verifier's text replaced the investigator's and
+ * reordered the cited locations: that ledger, replayed, scored 4 true positives
+ * before the verifiers ran and 2 after. A verifier's verdict belongs in the
+ * status and its grounds; the claim itself stays the operator's to amend.
+ *
+ * The verify mission names the one place a verdict goes — the record's own
+ * status, by id, unsettled verdicts included — because the verdicts that were
+ * written anywhere else were lost. In the same grid 6 gpt-6-luna verifiers
+ * recorded nothing, 4 of them handing back early (turns 7, 7, 11 and 12 of 16)
+ * with a verdict stated only in the handoff; 10 of 15 verify tasks that said
+ * "do not change status" left no verdict on any row; 4 of 6 amended or refuted
+ * verdicts never reached the finding; and 35 of 37 candidate findings ended
+ * `suspected`. The handoff is a message the parent may summarise away; the
+ * ledger is what the report reads. The mission no longer says "do not promote
+ * anything to a finding": a cleared hypothesis the verifier overturns is a
+ * finding. It says the order the child gate holds it to — the hypothesis
+ * recorded `confirmed` first, and no second finding for one already covered —
+ * and that the finding lands `suspected` unless it carries `status=confirmed`
+ * with the control case, the same bar an investigator's finding meets.
+ *
+ * An unsettled verdict names what was checked in `basis` or `control`, because
+ * that is what the record tool reads as a challenge; a `reason` alone is kept
+ * as a note. And `live=true` is a claim that a running target was tested, so
+ * the mission says to leave it out when the basis is the source, rather than
+ * inviting the flag on every refutation.
  */
 export const PIRED_AGENTS: readonly PiredAgent[] = [
 	{
@@ -78,7 +128,7 @@ export const PIRED_AGENTS: readonly PiredAgent[] = [
 		maxTurns: 20,
 		description: "Map the attack surface of an area: routes, handlers, inputs, trust boundaries, sinks. Records surface (with file) and proposes hypotheses.",
 		mission:
-			"You are mapping the attack surface of the area named in your task. Enumerate what an attacker reaches: routes, request handlers, inputs and parameters, trust boundaries, and the dangerous sinks input flows into. `record` each element as surface (`kind=endpoint`/`host`/etc.) the moment you find it, ALWAYS with the source `file` so the coverage matrix has something to point at. Where you see a plausible weakness, `record kind=hypothesis` as `proposed` against the element and its checklist class — a lead, not a verdict. Do not try to confirm anything; scouting is breadth. Return a short list of the surface and hypotheses you recorded.",
+			"You are mapping the attack surface of the area named in your task. Enumerate what an attacker reaches: routes, request handlers, inputs and parameters, trust boundaries, and the dangerous sinks input flows into. `record` each element as surface (`kind=endpoint`/`host`/etc.) the moment you find it, ALWAYS with the source `file` so the coverage matrix has something to point at. Where you see a plausible weakness — even one you can already see plainly — `record kind=hypothesis` as `proposed` against the element and its checklist class: a lead for an investigator to settle, not a verdict. Scouts do not record findings (pired refuses a finding from a scout) and do not try to confirm anything; scouting is breadth. Return a short list of the surface and hypotheses you recorded.",
 	},
 	{
 		name: "pired-investigate",
@@ -91,10 +141,10 @@ export const PIRED_AGENTS: readonly PiredAgent[] = [
 	{
 		name: "pired-verify",
 		role: "verify",
-		maxTurns: 16,
-		description: "Fresh adversarial check of a finding or a cleared hypothesis. Tries to refute it from source or a control case; records a grounded verdict.",
+		maxTurns: 24,
+		description: "Fresh adversarial check of findings or cleared hypotheses, one at a time. Tries to refute each from source or a control case; records each verdict on the record.",
 		mission:
-			"You are a fresh, skeptical pair of eyes. Your job is to REFUTE the finding or cleared hypothesis named in your task, not to agree with it: read `recall challenge id=<id>` for the brief, then find the input it did not consider or the call path it did not follow. Ground the verdict in source (`basis=file:line`) or a control case you actually ran (`live=true`); `record` it against the hypothesis as `confirmed`, `refuted`, or `inconclusive`. Do not promote anything to a finding and do not widen the check — a verification that sprawls has stopped being one. Return the verdict, what it was grounded in, and the evidence path.",
+			"You are a fresh, skeptical pair of eyes. Your job is to REFUTE each finding or cleared hypothesis named in your task, not to agree with it: read `recall challenge id=<id>` for its brief, then find the input it did not consider or the call path it did not follow. When the task names several records, take them one at a time and record each verdict before you start the next; if your turns run out, hand back the ones you did not reach as unchallenged. Record the verdict whatever it is — an unsettled one too — by the record's id: a finding's `status` is `confirmed` (with the `control` case you ran, and `entitlement` where the brief asks), `refuted` (with a `basis`: `file:line`; `live=true` only when you tested a running target; leave it out when your basis is the source), or, when it is unsettled, `suspected` with what you checked in `basis` or `control` (a `reason` alone is only a note); a hypothesis's `outcome` likewise, with a `statement` and a `basis` (`inconclusive` when unsettled; a hypothesis keeps no `control` or `reason`). Your handoff is not durable; the ledger is. Save raw output with `record kind=evidence` and cite its path in `basis` or `control`. If a cleared hypothesis turns out vulnerable, record its `outcome=confirmed` by id, then — unless a finding already covers it — the finding with its `hypothesisId`: it lands `suspected` unless it carries `status=confirmed` with the control case. You do not edit a finding's title, description, location or severity (pired refuses that from a verifier): if one is wrong, say so in `reason` and in your handoff, and the operator amends it. Do not widen the check — a verification that sprawls has stopped being one. Return each verdict, what it was grounded in, and the evidence path.",
 	},
 	{
 		name: "pired-escalate",
@@ -108,6 +158,37 @@ export const PIRED_AGENTS: readonly PiredAgent[] = [
 
 /** The agent names the parent gate treats as pired's own, in a set for O(1) checks. */
 export const PIRED_AGENT_NAMES: ReadonlySet<string> = new Set(PIRED_AGENTS.map((a) => a.name));
+
+/**
+ * How many workers one session may launch before the gate says no.
+ *
+ * PLAN.md §11 has always listed hard caps as harness-owned, and nothing
+ * implemented one: `spawn` sat in the local-tools set and was waved through, so
+ * a model that decided to fan out could spawn until something else ran out.
+ * Delegation is not a scope violation, but it is the same shape of problem —
+ * unbounded work nobody asked for, on the operator's budget and the client's
+ * systems — and the gate is already the place that says no to that.
+ *
+ * Eight is enough for the patterns `ops-delegation` describes (a verifier per
+ * cleared cell of a class, a scout per host) and low enough that a loop is
+ * caught in one session rather than one invoice.
+ *
+ * It lives here, beside the workers, rather than in core/scope.ts, which
+ * enforces it: the delegation block states it too, and core/scope.ts already
+ * imports this module, so the reverse import would make a cycle.
+ */
+export const DEFAULT_MAX_AGENTS = 8;
+
+/**
+ * The session's worker cap: the engagement's `maxAgents`, or the default when
+ * it names none. A negative number is nonsense rather than a request to lock
+ * delegation out, so it falls back to the default too; `0` disables delegation.
+ * One function, so the number the prompt states is the number the gate holds.
+ */
+export function workerCap(scope: EngagementScope | undefined): number {
+	const n = scope?.maxAgents;
+	return typeof n === "number" && n >= 0 ? n : DEFAULT_MAX_AGENTS;
+}
 
 /**
  * The definition shape pi-subagents accepts, narrowed to the common subset this
@@ -167,6 +248,20 @@ export function agentMarker(name: string): string {
  * it regardless of how pi assembles the rest. The handoff bound is stated
  * explicitly because a worker's only accountable output is the ledger plus a
  * short return; a transcript-length answer defeats the point of delegating.
+ *
+ * "Record as you go" also says what happens to a worker that does not: the
+ * child gate refuses every other tool in its last few turns until it records
+ * what it has established. That reserve is for a worker that runs out of turns:
+ * in the v4 grid a pired-investigate spent all 26 of its turns and wrote no
+ * ledger record ("hypotheses and findings remain unrecorded"). It does not reach
+ * a worker that hands back early with nothing written — 4 of the 6 gpt-6-luna
+ * verifiers that recorded nothing stopped at turn 7, 7, 11 or 12 of 16 — which
+ * is the child gate's separate check on a hand-back, and why the verify mission
+ * says the handoff is not durable.
+ *
+ * The sentence ends on the way out the reserve refusal itself gives. Without it
+ * the prompt reads as though a record is owed whatever happened, and a worker
+ * with nothing established has only filler to write.
  */
 export function workerPrompt(agent: PiredAgent, ctx: AgentBuildContext): string {
 	return [
@@ -175,7 +270,7 @@ export function workerPrompt(agent: PiredAgent, ctx: AgentBuildContext): string 
 		`Scope — the same boundary the operator works under:\n${ctx.scopeGuidance}\nStay inside it. pired's scope gate refuses anything outside it with a reason; if it refuses a step, record what you could not do and carry on with the rest of your task.`,
 		`Shared workspace: ${ctx.workspace} (evidence under ${ctx.workspace}/evidence/, reachable as $PIRED_WORKSPACE in your shell). Your \`record\` and \`recall\` write to and read from this same ledger the operator sees — your records appear to them immediately.`,
 		"Read the shared state before you start: `recall context` (narrow it with the exact IDs and paths from your task) gives the model, checklist, surface, hypotheses, findings and open blockers as they stand now. Trust the ledger over your own assumptions; it does not forget.",
-		"Record as you go, not at the end: surface the moment you find it (with its source file), a hypothesis before you test it, a finding as soon as it is supported. A finding is `suspected` until the control case that had to fail has been run. Never fabricate output or a CVE, and never claim a severity you cannot show the reach for.",
+		"Record as you go, not at the end: surface the moment you find it (with its source file), a hypothesis before you test it, a finding as soon as it is supported. A finding is `suspected` until the control case that had to fail has been run. Never fabricate output or a CVE, and never claim a severity you cannot show the reach for. A worker that reaches its last few turns with nothing recorded is refused every other tool until it records what it has established — or, if it established nothing, hands back and says so.",
 		agent.mission,
 		`You have at most ${agent.maxTurns} turns; when they run out the harness stops you, so finish and hand back before then. Your handoff is your final message and must be at most 200 words: list the record IDs you wrote, the evidence paths, your verdicts, and anything you left unresolved. Do not paste transcripts or re-list what is already in the ledger — the operator reads the records, not your steps.`,
 	].join("\n\n").trim();
@@ -232,22 +327,49 @@ export function buildPiredAgentDefinitions(ctx: AgentBuildContext): Array<{ name
  * returns 200 words), without forcing a single launch. It is omitted entirely
  * when pi-subagents is absent, so a model is never told to use a tool it does
  * not have.
+ *
+ * The facts about context stay; the framing of context as a budget to conserve
+ * is gone. The previous text opened "your context is this review's scarcest
+ * budget" and closed "doing it yourself is often cheaper". In the v4 grid four
+ * of five GLM-5.3 Flash pass-1 candidates stopped with 12–49% of their test
+ * cases settled and gave context-budget reasons ("I've spent a lot of context…
+ * honest terminal state"); no baseline run did. The counter-evidence is real: a
+ * pass-2 candidate with byte-identical text reached 100% and scored best, so
+ * the wording is a plausible contributor, not a proven cause. The new text is
+ * aimed at the reading that failed: context pressure is a reason to hand an
+ * area to a worker, and whether the review is done is the method's call, not
+ * the context meter's. It points at the method rather than restating it, so the
+ * block cannot swap one stop line for a paraphrase of another. For the same
+ * reason it states no flat rule the other way ("never a reason to finish
+ * early"): that is a rule about when to stop, set by the block rather than the
+ * method. The closing sentence still says where each choice costs less, as
+ * information about context, not as a budget to protect.
+ *
+ * Three more facts are stated because their absence was measured:
+ * - The number of worker launches. After the cap the parent is on its own; in
+ *   the v4 grid 43.5% of gpt-6-luna candidate parent tokens were spent after the
+ *   last worker had run. A parent that knows the number can plan the launches.
+ * - A verifier takes several records. 23 of 25 gpt-6-luna verify launches
+ *   covered one finding, and all 5 launches the cap refused were verifiers.
+ * - A verifier's verdict passes the same evidence checks the operator's does.
+ *   10 of 15 verify tasks that said "do not change status" left no verdict on
+ *   any row, so the parent is told why that instruction is not needed.
  */
 export function delegationBlock(scope?: EngagementScope): string {
-	const disabled = scope?.maxAgents === 0;
-	if (disabled) {
+	const cap = workerCap(scope);
+	if (cap === 0) {
 		return `<delegation>
 Delegation is turned off for this engagement (maxAgents=0). Do the work in this session.
 </delegation>`;
 	}
 	return `<delegation>
 Standing authorization from the operator for this engagement: delegation to the four pired workers below is authorized. These are the applicable instructions pi-subagents asks for, so you do not need a request in the current message. Call \`subagents_enable\` once to load the \`subagent\` tool.
-Why it matters: your context is this review's scarcest budget. Every file you read and every tool output stays in your context and is sent again with every later request, so reading a whole module yourself is paid for on each turn that follows. A worker reads in a fresh context and hands back at most 200 words plus the records it wrote to this same ledger — you keep the conclusions, not the reading.
+How your context works: every file you read and every tool output stays in it and is sent again with every later request. A worker reads in a fresh context and hands back at most 200 words plus the records it wrote to this same ledger — you keep the conclusions, not the reading. So a filling context is a reason to hand the next area to a worker; whether you are done is decided by the method in your instructions, not by how much context you have used.
 - \`pired-scout\` — map an area's attack surface (routes, handlers, inputs, trust boundaries, sinks) and record it. A natural first move on each large area of an unfamiliar codebase, before you choose where to dig.
 - \`pired-investigate\` — take one module or lead to a verdict in isolation.
-- \`pired-verify\` — try to refute a finding or a cleared cell with fresh eyes before it reaches a report.
+- \`pired-verify\` — try to refute findings or cleared cells with fresh eyes before they reach a report; one launch takes several, settled one at a time.
 - \`pired-escalate\` — once findings exist, trace what they unlock and whether they chain.
-Record what you already know first, then launch with \`{ agent, task }\` and put the exact file paths and record IDs in the task — the worker sees a bounded snapshot, not your transcript; its model, context and limits are fixed, and a call that overrides them is refused. Workers run one at a time, in the foreground (one launch per message; a second while one runs is refused); read their records after the handoff. You keep the plan, the cross-component reasoning and the final severity judgment — a worker's return is a lead to weigh, not tested coverage. For a small, focused check, doing it yourself is often cheaper; for mapping or deep-diving a large area, a worker usually is.
+This engagement allows ${cap} worker launch${cap === 1 ? "" : "es"} per session; the work after the last one is yours. Record what you already know first, then launch with \`{ agent, task }\` and put the exact file paths and record IDs in the task — the worker sees a bounded snapshot, not your transcript; its model, context and limits are fixed, and a call that overrides them is refused. Workers run one at a time, in the foreground (one launch per message; a second while one runs is refused); read their records after the handoff. A verifier's verdict goes onto the record through the same evidence checks yours does, so it needs no instruction to leave a status alone; you keep the plan, the cross-component reasoning and the final severity judgment — a worker's return is a lead to weigh, not tested coverage. A check you can settle in a few reads costs less here than briefing a worker; a large area's reading never enters your context if a worker does it.
 </delegation>`;
 }
 

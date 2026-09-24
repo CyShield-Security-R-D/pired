@@ -12,10 +12,10 @@
 
 import { buildBrowserModel, recordLabel } from "./browser.ts";
 import { workerContext } from "./delegation.ts";
-import { auditFinding, challengeBrief, hypothesisBrief, judge, SEVERITY_RANK, unchallengedQueue, verdictPatch } from "./challenge.ts";
+import { auditFinding, challengeBrief, hasGrounds, hypothesisBrief, isExaminedUnsettled, judge, SEVERITY_RANK, unchallengedQueue, unsettledLabel, verdictPatch } from "./challenge.ts";
 import { computeCoverage, coveragePercent, findGaps, selectNext } from "./coverage.ts";
 import { CVSS_DEFAULT_VERSION, CVSS_EXAMPLE, cvssVersion, validateCvss } from "./cvss.ts";
-import { type Fields, findDuplicate, findNearDuplicate, type IdentityKind, isNoOp, mergeRecord } from "./identity.ts";
+import { type Fields, findDuplicate, findNearDuplicate, holdsLeadOpen, type IdentityKind, isNoOp, leadMeetsClearance, mergeRecord, reopensLead, updateById } from "./identity.ts";
 import { locateAcrossFiles, locateSink, sinkHints } from "./locate.ts";
 import { lensForPass, nextInPass, PASS_LENS_HELP, type PassState, passDelta, planPass } from "./passes.ts";
 import { buildTargetIndex, elementLabel, resolveElementTarget, type TargetIndex } from "./target.ts";
@@ -59,6 +59,18 @@ export interface ToolDeps {
 	 * every call, so the common path — passes off — costs no extra file read.
 	 */
 	pass?: () => PassState | undefined;
+	/**
+	 * Whether the engagement has no live target — a review of source, with
+	 * nothing running to reach. Undefined means it has one (the behaviour before
+	 * this existed).
+	 *
+	 * It decides what `live=false` means on a refutation. Against a live target
+	 * it means the check could not reach it, and refutes nothing; in a
+	 * source-only review it is simply true, and an honest verifier saying so was
+	 * refused every refutation it made (see `judge`). A function for the reason
+	 * `pass` is one: the host reads it from the scope, which can change mid-session.
+	 */
+	sourceOnly?: () => boolean;
 }
 
 const RECORD_KINDS = [
@@ -171,6 +183,21 @@ function strArr(v: unknown): string[] | undefined {
 	}
 	return undefined;
 }
+/**
+ * The fields that state a finding's claim — what it is, where, how bad, how to
+ * reproduce and fix it. A call that sends any of them is editing the claim, not
+ * challenging it.
+ */
+const CLAIM_FIELDS = [
+	"title", "description", "severity", "target", "locations", "repro", "impact", "remediation", "class", "cwe",
+] as const;
+/** The caller sent a value: not absent, not blank, not an empty list. */
+function sent(v: unknown): boolean {
+	if (v === undefined || v === null) return false;
+	if (typeof v === "string") return v.trim().length > 0;
+	if (Array.isArray(v)) return v.length > 0;
+	return true;
+}
 function oneOf<T extends readonly string[]>(v: unknown, allowed: T): T[number] | undefined {
 	return typeof v === "string" && (allowed as readonly string[]).includes(v) ? (v as T[number]) : undefined;
 }
@@ -248,12 +275,115 @@ function recordDetails(record: LedgerRecord, outcome: WriteOutcome): Record<stri
  * the two are separate acts — one engagement sat at 120 confirmed cells with an
  * empty findings ledger while every view said "none recorded". Said at the
  * moment the next action is obvious and cheap, and never enforced. ADR-004.
+ *
+ * It names the fields the finding's own gate reads, in the same words the
+ * challenge briefs use (core/challenge.ts): a finding written without the
+ * control case lands `suspected`, and saying so here is cheaper than the
+ * agent discovering it from the reply to the next call.
  */
-const CONFIRMED_OWES =
-	" Confirmed settles the coverage cell; only a finding reaches the report — " +
-	"record kind=finding for this, with hypothesisId to link them.";
+function confirmedOwes(id?: string): string {
+	return " Confirmed settles the coverage cell; only a finding reaches the report — " +
+		`record kind=finding for this with title="..." and severity=... (both required), hypothesisId=${id ?? "<the cell's id>"} ` +
+		"and the same class, citing the evidence (record kind=evidence saves raw output and returns the path to cite). " +
+		"A finding recorded this way lands suspected unless it carries status=confirmed with the control case you ran " +
+		"(control=\"what it returned\"), and entitlement where the class turns on it.";
+}
 
-function recordSummary(kind: string, record: LedgerRecord, outcome: WriteOutcome): string {
+/**
+ * What a refutation did not close.
+ *
+ * The merge leaves an inconclusive cell open when a refutation lands on it
+ * without naming it (core/identity.ts, `holdsLeadOpen`). Done silently, that
+ * trades one failure for another: the agent believes it cleared the cell and
+ * the lead sits unexamined. So the reply names each lead that was held, and the
+ * one call that settles it.
+ */
+function leadsLeftOpen(ids: string[]): string {
+	if (ids.length === 0) return "";
+	return ` ${ids.length} cell(s) hold an unresolved (inconclusive) lead and were left open — ` +
+		"a refutation that does not name a lead does not close it. Re-check each by id with a basis if it is settled " +
+		`(record kind=hypothesis id=<id> outcome=refuted statement="..." basis=[...]): ${namedIds(ids)}.`;
+}
+
+/**
+ * What a lead reopened.
+ *
+ * The other order of the same rule (core/identity.ts, `reopensLead`): a lead
+ * arriving on a cell a refutation had already cleared. The cell's verdict
+ * moved back from clear, which moves the coverage the client is handed, so the
+ * agent is told which cells and why rather than finding a percentage that fell.
+ */
+function leadsReopened(ids: string[]): string {
+	if (ids.length === 0) return "";
+	return ` Reopened ${namedIds(ids)}: a clearance recorded before ${ids.length === 1 ? "this lead" : "these leads"} ` +
+		`did not examine ${ids.length === 1 ? "it" : "them"}, so the cell reads inconclusive again. ` +
+		"Settle it by id with a basis (record kind=hypothesis id=<id> outcome=refuted|confirmed statement=\"...\" basis=[...]).";
+}
+
+/** A cleared cell a lead landed on without reopening it, and what its clearance says. */
+interface KeptClearance { id: string; statement?: string }
+
+/** Longest clearance sentence quoted back before it costs more than it informs. */
+const CLEARANCE_QUOTED = 120;
+
+/**
+ * What a lead did not reopen, and how to reopen it on purpose.
+ *
+ * A lead reopens a clearance only when it names that one cell and the clearance
+ * was never re-checked by id (core/identity.ts, `reopensLead`); otherwise the
+ * clearance is kept. Kept silently, the agent would believe its lead was on the
+ * ledger while the cell still read clear. So the reply names the cell, quotes
+ * what the stored clearance says so the agent can judge whether it covers the
+ * lead, and gives the by-id call that reopens it when it does not.
+ */
+function clearancesKept(cells: KeptClearance[], why: string): string {
+	if (cells.length === 0) return "";
+	const quote = (c: KeptClearance): string => {
+		const said = c.statement?.trim() ?? "";
+		if (said === "") return c.id;
+		return `${c.id} ("${said.length > CLEARANCE_QUOTED ? `${said.slice(0, CLEARANCE_QUOTED)}…` : said}")`;
+	};
+	const shown = cells.slice(0, IDS_NAMED).map(quote);
+	const rest = cells.length - shown.length;
+	return ` The lead landed on ${cells.length === 1 ? "a cell" : `${cells.length} cells`} already cleared, and the clearance was kept — ${why}: ` +
+		`${shown.join("; ")}${rest > 0 ? ` …and ${rest} more — recall hypotheses` : ""}. ` +
+		"If the lead covers something a clearance did not examine, re-record that cell by id to reopen it: " +
+		"record kind=hypothesis id=<id> outcome=inconclusive statement=\"what is still open\".";
+}
+
+/** Ids a reply names before the rest becomes a count. */
+const IDS_NAMED = 20;
+
+/**
+ * A list of ids, capped, with the query that has the rest.
+ *
+ * A reply that only counts leaves the agent nothing to address: measured on
+ * the 2026-09-24 grid, 566 of 787 ids workers wrote were never visible to the
+ * worker that wrote them, because a bulk hypothesis reply said how many and
+ * not which. Capped because a cross product can be hundreds of cells, and a
+ * reply that long is one nobody reads to the end.
+ */
+function namedIds(ids: string[]): string {
+	const shown = ids.slice(0, IDS_NAMED);
+	const rest = ids.length - shown.length;
+	return shown.join(", ") + (rest > 0 ? ` …and ${rest} more — recall hypotheses` : "");
+}
+
+/** The ids a bulk hypothesis call wrote, new first, under one cap. */
+function writtenIds(created: string[], updated: string[]): string {
+	const total = created.length + updated.length;
+	if (total === 0) return "";
+	const newShown = created.slice(0, IDS_NAMED);
+	const updShown = updated.slice(0, IDS_NAMED - newShown.length);
+	const parts = [
+		...(newShown.length > 0 ? [`new ${newShown.join(", ")}`] : []),
+		...(updShown.length > 0 ? [`updated ${updShown.join(", ")}`] : []),
+	];
+	const rest = total - newShown.length - updShown.length;
+	return ` Ids written: ${parts.join("; ")}${rest > 0 ? ` …and ${rest} more — recall hypotheses` : ""}.`;
+}
+
+function recordSummary(kind: string, record: LedgerRecord, outcome: WriteOutcome, byId = false): string {
 	// A repeat is told plainly what it matched, and that nothing was lost. The
 	// agent that re-recorded something usually did it because the first call
 	// scrolled out of context; "already there, as this id" is the answer to the
@@ -261,6 +391,9 @@ function recordSummary(kind: string, record: LedgerRecord, outcome: WriteOutcome
 	if (outcome === "merged") {
 		return `Already recorded as ${kind} ${record.id} (${recordLabel(record)}) — updated it in place rather than adding a second row. ` +
 			`Pass id=${record.id} to change it further.`;
+	}
+	if (outcome === "unchanged" && byId) {
+		return `Nothing to change on ${kind} ${record.id} (${recordLabel(record)}): every field this call sent already holds that value, so nothing was written.`;
 	}
 	if (outcome === "unchanged") {
 		return `Already recorded as ${kind} ${record.id} (${recordLabel(record)}) — nothing new in this call, so nothing was written. ` +
@@ -283,7 +416,7 @@ const RECORD_DESCRIPTION = `Record engagement state to the durable workspace. On
 - finding: title, severity[info|low|medium|high|critical] (+target, class, cwe, cvss, description, repro, evidence[], status)
   A finding is anything worth carrying into the report, not only a proven vulnerability. Use severity=info for an observation that costs nothing now but may matter later — a missing dependency pin, an unpinned base image, a permissive default, a lead you could not finish. 'target' is optional and accepts a recorded element id OR a raw string (a file path, a module, a component) when no element fits; give one when you can, and record the finding either way rather than leaving it in notes.
   A finding is a section of a document a client pays for, so it is written as one: 'description' says what the flaw is and where, 'impact' says what it costs THEM — the records exposed, the money moved, the service lost, the obligation breached — and 'remediation' says the concrete change that fixes it (the control to add, the call to replace; never "sanitize input"). 'repro' is numbered steps a third party can follow. Write impact in the client's terms, not the tool's: "any logged-in customer can read all 40k customer records, including national IDs" beats "confidentiality impact is high".
-  status[suspected|open|confirmed|triaged|reported|refuted|false-positive|accepted-risk|ignored] is how a finding is settled without losing it. New findings are 'suspected': recorded, not yet challenged. 'confirmed' is earned, not asserted — pass 'control' (the case that had to FAIL for this to mean anything: the unauthenticated request, the false payload, the absent guard) and, for access-control classes, 'entitlement' (how you established the caller was not MEANT to reach the resource — reading another user's object is a bug when the reader was not entitled and a feature when they were, and the response looks identical). To refute, pass 'basis' (file:line, an evidence path, or the model section that settles it) and 'live'. Short of either bar the finding stays 'suspected' and nothing is lost. 'recall challenge' lists what is unchallenged; 'recall challenge id=<id>' returns the brief. When the operator says a finding is not real, set status=false-positive; when they say the risk is accepted, status=accepted-risk; when they want it set aside, status=ignored. All three keep the row and its history, drop it out of the open-findings count, and take a 'reason' — which is what a client asks for three months later. Prefer them to deleting.
+  status[suspected|open|confirmed|triaged|reported|refuted|false-positive|accepted-risk|ignored] is how a finding is settled without losing it. New findings are 'suspected': recorded, not yet challenged. 'confirmed' is earned, not asserted — pass 'control' (the case that had to FAIL for this to mean anything: the unauthenticated request, the false payload, the absent guard) and, for access-control classes, 'entitlement' (how you established the caller was not MEANT to reach the resource — reading another user's object is a bug when the reader was not entitled and a feature when they were, and the response looks identical). To refute, pass 'basis' (file:line, an evidence path, or the model section that settles it), and 'live' when the engagement has a live target — a review of source has none to reach, and there the basis is the whole bar. A challenge that could not settle it is a result too: status=suspected with 'basis' or 'control' on the finding's id, and nothing about the claim itself, keeps its status and writes your grounds on it ('reason' alone is a note, not a look). Short of either bar the status does not move and nothing is lost. 'recall challenge' lists what no challenge has settled — findings nobody has examined first, then those examined but unsettled; 'recall challenge id=<id>' returns the brief for any finding, including one already examined. When the operator says a finding is not real, set status=false-positive; when they say the risk is accepted, status=accepted-risk; when they want it set aside, status=ignored. All three keep the row and its history, drop it out of the open-findings count, and take a 'reason' — which is what a client asks for three months later. Prefer them to deleting.
 - blocker: question (+blockerType, priority[low|medium|high], options[], blocks[] (work ids this gates), status[open|answered|dismissed], answer)
   A parked question stays open until someone closes it, and an open blocker is one you keep routing around. When the operator answers it — in a dialog, or just by telling you in chat that it is decided or already handled — write that down: \`recall blockers\` gives you the id, then \`record kind=blocker id=<id> status=answered answer=<what they said>\`. Answers given in the UI arrive on their own; you do not need a tool call to read them.
 - loot: handle (e.g. cred:web-admin), secret (+lootType, username, target, source)
@@ -335,8 +468,8 @@ const RECORD_PARAMETERS: JsonSchema = {
 		content: { type: "string", description: "For kind=evidence: the raw output to save to the file." },
 		title: { type: "string" }, severity: { enum: SEVERITIES }, cwe: { type: "string" }, cvss: { type: "string", description: `CVSS vector. v4.0 by default, e.g. "${CVSS_EXAMPLE["4.0"]}"; a v3.1 vector is accepted when the engagement requires one.` }, description: { type: "string", description: "What the flaw is and where: the mechanism, in plain language." }, impact: { type: "string", description: "What it costs the client in their terms — records exposed, money moved, service lost, obligation breached." }, remediation: { type: "string", description: "The concrete change that fixes it: the control to add, the call to replace. Not \"sanitize input\"." }, repro: { type: "string" }, status: { type: "string" }, evidence: { type: "array", items: { type: "string" }, description: "Workspace-relative paths to evidence files you wrote (e.g. [\"evidence/sqli-login.txt\"]). Not inline text." },
 		control: { type: "string", description: "For kind=finding: the control case you ran and what it returned — the request that had to FAIL for the finding to mean anything." },
-		basis: { type: "array", items: { type: "string" }, description: "The grounds for a refutation, a severity change, or a second look at a cleared cell — file:line, an evidence path, or the model section that settles it. On kind=hypothesis with an id, this is what marks the row as independently re-checked." },
-		live: { type: "boolean", description: "Was the target reachable and the session valid when you challenged it? A refutation against a dead session refutes nothing. Applies to kind=finding and to a re-checked kind=hypothesis." },
+		basis: { type: "array", items: { type: "string" }, description: "The grounds for a refutation, a severity change, or a second look at a cleared cell — file:line, an evidence path, or the model section that settles it. On kind=hypothesis with an id, this is what marks the row as independently re-checked. On kind=finding with an id and status=suspected (and no claim fields), it records a challenge that could not settle the claim." },
+		live: { type: "boolean", description: "For an engagement with a live target: was it reachable, and the session valid, when you challenged it? A refutation against a dead session refutes nothing. When there is no running target, leave it out: a review of source has no target to reach, and there the cited basis carries the refutation. Applies to kind=finding and to a re-checked kind=hypothesis." },
 		entitlement: { type: "string", description: "For kind=finding: how you established the caller was (or was not) meant to reach the resource. Required to confirm an access-control finding." },
 		question: { type: "string" }, blockerType: { enum: BLOCKER_TYPES }, priority: { enum: PRIORITIES }, options: { type: "array", items: { type: "string" } }, blocks: { type: "array", items: { type: "string" } }, context: { type: "string" },
 		handle: { type: "string" }, lootType: { enum: LOOT_TYPES }, username: { type: "string" }, secret: { type: "string" }, source: { type: "string" }, notes: { type: "string" },
@@ -839,6 +972,12 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 				const stamp = ctx.services.clock.nowIso();
 				const ids: string[] = [];
 				const created: string[] = [];
+				// Rows that were already there before this call: those it changed, and
+				// all it matched, so the reply can tell an update from a repeat.
+				const updated = new Set<string>();
+				const matched = new Set<string>();
+				const heldOpen = new Set<string>();
+				const kept = new Map<string, KeptClearance>();
 				await deps.workspace.upsert("hypotheses", (current) => {
 					// The cross product is where repeats concentrate: the extractor
 					// re-offers the same class verdict over the whole surface once a
@@ -856,12 +995,23 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 							});
 							const dup = findDuplicate("hypothesis", patch, working);
 							if (dup) {
+								// Noted before the no-op check: a refutation that changed
+								// nothing because the lead was held is still one to report.
+								if (holdsLeadOpen(dup, patch)) heldOpen.add(dup.id as string);
+								// A cross product never reopens a clearance (no `reopen` below).
+								// One sentence fanned across a surface is not evidence that each
+								// clearance it lands on missed that mechanism: every one of them
+								// examined its own element, and different wording is not a
+								// different mechanism. The reply names them instead.
+								if (leadMeetsClearance(dup, patch)) kept.set(dup.id as string, { id: dup.id as string, statement: str(dup.statement) });
 								const merged = defined({
 									...mergeRecord("hypothesis", dup, patch),
 									v: RECORD_VERSION, id: dup.id as string, kind: "hypothesis", createdAt: dup.createdAt, updatedAt: stamp,
 								}) as unknown as HypothesisRecord;
 								ids.push(merged.id);
+								if (!created.includes(merged.id)) matched.add(merged.id);
 								if (isNoOp(dup, merged as unknown as Fields)) continue;
+								if (!created.includes(merged.id)) updated.add(merged.id);
 								working.push(merged as unknown as Fields);
 								out.push(merged);
 								continue;
@@ -878,13 +1028,20 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 					}
 					return out;
 				});
-				const repeats = ids.length - created.length;
-				const owed = outcome === "confirmed" ? CONFIRMED_OWES : "";
+				const unchanged = matched.size - updated.size;
+				const repeats = matched.size === 0 ? "" :
+					` ${matched.size} cell(s) were already recorded and were ` +
+					(unchanged === 0 ? "updated in place" : updated.size === 0 ? "left as they were (nothing new)" : `updated in place (${unchanged} had nothing new)`) +
+					", not duplicated.";
+				const owed = outcome === "confirmed" ? confirmedOwes(ids.length === 1 ? ids[0] : undefined) : "";
 				return text(
 					`Recorded ${created.length} hypotheses (${targets.length} target(s) x ${classes.length} class(es)), outcome=${outcome}.` +
-					(repeats > 0 ? ` ${repeats} cell(s) were already recorded and were updated in place, not duplicated.` : "") +
+					repeats +
+					writtenIds(created, [...updated]) +
+					leadsLeftOpen([...heldOpen]) +
+					clearancesKept([...kept.values()], "a lead recorded across several cells at once does not reopen one") +
 					owed,
-					{ kind, ids, created },
+					{ kind, ids, created, updated: [...updated] },
 				);
 			}
 
@@ -908,6 +1065,9 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 			// and the finding survives either way. Recall above all: a finding the
 			// client needs is not improved by deleting it, and no check here may cost
 			// one.
+			// Whether this call says anything about the claim itself. Read before the
+			// locating below, which may write a target the caller never sent.
+			const claimSent = kind === "finding" && CLAIM_FIELDS.some((field) => sent(a[field]));
 			let unlocated = "";
 			if (kind === "finding") {
 				const hay = [a.target, a.description, a.repro, a.title, ...(strArr(a.evidence) ?? [])]
@@ -996,8 +1156,34 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 				// forgeable.
 				delete a.verification;
 				const wanted = oneOf(a.status, FINDING_STATUSES);
-				if (wanted === "confirmed" || wanted === "refuted") {
-					const existing = str(a.id) ? (await deps.workspace.read("findings")).find((f) => f.id === str(a.id)) : undefined;
+				const existing = str(a.id) ? (await deps.workspace.read("findings")).find((f) => f.id === str(a.id)) : undefined;
+				// A challenge that looked and could not settle the claim, said on the
+				// finding's id. Without a way to write that down a verifier had two
+				// choices — force a verdict it had not earned, or leave no trace. On the
+				// 2026-09-24 grid 10 of 15 verify tasks told "do not change status" left
+				// no verdict on any row, while the challenge brief told them to set it:
+				// that figure is verdicts that never reached a row under conflicting
+				// instructions, not what this path alone would have caught (ADR-028).
+				//
+				// Only a call shaped like a challenge counts. It is on an existing
+				// finding — a claim's first recording is not a challenge of it — and
+				// it says what was looked at (`hasGrounds`: a basis or a control
+				// case). And it leaves the claim alone: status=suspected beside a new
+				// description or severity is the finder editing its own claim, and a
+				// `reason` is a note any such edit may carry. Written as a
+				// verification, either would put an "examined" mark on a finding no
+				// challenge had looked at.
+				const grounded = hasGrounds({ basis: strArr(a.basis), control: str(a.control) });
+				const unsettled = wanted === "suspected" && existing !== undefined && !claimSent && grounded;
+				if (wanted === "suspected" && existing !== undefined && claimSent && grounded) {
+					// Said, because the grounds are otherwise dropped without a word:
+					// the edit is written, and the look it carried is not.
+					downgrade =
+						`\nNot recorded as a challenge: this call also changes the claim (${CLAIM_FIELDS.filter((f) => sent(a[f])).join(", ")}), ` +
+						`so it is an edit and its basis/control were not written as a look. If you looked and could not settle it, ` +
+						`record that on its own: record id=${existing.id} status=suspected with basis=[...] or control="...".`;
+				}
+				if (wanted === "confirmed" || wanted === "refuted" || unsettled) {
 					const subject = {
 						...(existing ?? {}),
 						kind: "finding",
@@ -1007,20 +1193,63 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 						status: existing?.status ?? UNVERIFIED_STATUS,
 					} as FindingRecord;
 					const outcome = judge(subject, {
-						verdict: wanted === "confirmed" ? "stands" : "refuted",
+						verdict: wanted === "confirmed" ? "stands" : wanted === "refuted" ? "refuted" : "unresolved",
 						control: str(a.control),
-						basis: strArr(a.basis) ?? (str(a.reason) && wanted === "refuted" ? undefined : undefined),
+						basis: strArr(a.basis),
 						live: typeof a.live === "boolean" ? a.live : undefined,
 						entitlement: str(a.entitlement),
 						notes: str(a.reason),
+						// The host's reading of the scope, never the caller's: whether
+						// live=false can refute anything is not the challenger's to say.
+						sourceOnly: deps.sourceOnly?.() === true,
 					}, ctx.services.clock.nowIso());
 					const patch = verdictPatch(outcome);
 					a.status = patch.status;
-					a.verification = patch.verification;
+					// A look that leaves the status where it was must not overwrite the
+					// finding's own `reason`: that is the operator's disposition rationale,
+					// which the report prints under the finding. The look's grounds already
+					// travel in the verification's notes (and a bare miss writes nothing).
+					if (existing !== undefined && patch.status === existing.status) delete a.reason;
+					// A verification is the record of a challenge, and a verdict that
+					// missed its bar is one only when the call said what it looked at.
+					//
+					// A finding's first recording is not a challenge: written on a
+					// create that fell short of `confirmed`, a verification would read
+					// as a look that had already happened (the queue labels it
+					// "examined, unsettled") when the only thing that happened is its
+					// finder asserting a proof it had not shown. Nor is a bare verdict
+					// on an existing finding — status=confirmed with no control, a
+					// refutation with no basis. Written as `unresolved`, it marked the
+					// finding examined and queued it after every never-examined one,
+					// so a critical claim nobody had looked at sorted below the lows.
+					// The bar is the one the unsettled path uses (`grounded`); a
+					// grounded miss, such as a cited refutation that says live=false
+					// against a live target, is a look and is kept. The reply below
+					// still says what was missing either way.
+					const looked = outcome.downgraded === undefined || (existing !== undefined && grounded);
+					if (looked) a.verification = patch.verification;
+					// The earned verdict that stayed, said so the verifier does not
+					// read "unresolved" as having replaced it.
+					const stood = outcome.kept
+						? `Its earlier ${outcome.kept.verdict} verification (${outcome.kept.at}) met its bar and stands — a look that ` +
+							`settles nothing does not replace one that did${looked ? "; your grounds were added to its notes" : ""}. `
+						: "";
+					// Said, so the caller does not take the reply for a recorded look.
+					const unexamined = existing !== undefined && !looked
+						? "Nothing was written as a look on it either: the call named no basis or control. "
+						: "";
+					if (unsettled && outcome.downgraded === undefined) {
+						downgrade = outcome.kept
+							? `\nRecorded your look on ${existing?.id}: unsettled. ${stood}The finding stays ${patch.status}. ` +
+								"To overturn the verdict, record status=refuted with basis, or status=confirmed with control."
+							: `\nRecorded the challenge on ${existing?.id}: unresolved. The finding stays ${patch.status} with your grounds on it, ` +
+								"and stays in the `recall challenge` queue as examined but unsettled, after the findings nobody has examined — " +
+								"`recall challenge id=" + existing?.id + "` returns the brief for another look.";
+					}
 					if (outcome.downgraded) {
 						downgrade =
-							`\nRecorded as ${patch.status}, not ${wanted}: ${outcome.downgraded}\n` +
-							"The finding is kept exactly as it was — nothing was lost. Re-run it with the missing " +
+							`\nNot recorded as ${wanted}: ${outcome.downgraded}\nThe finding stays ${patch.status}. ` +
+							`${stood}${unexamined}The finding is kept exactly as it was — nothing was lost. Re-run it with the missing ` +
 							"piece and record the outcome again.";
 					}
 					if (outcome.blocker) {
@@ -1239,24 +1468,48 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 			//
 			// An `id` the caller passed is an explicit update and is honoured exactly
 			// as sent — that is the escape hatch for correcting a record downward,
-			// including past anything the merge below would protect. Everything else
+			// including past anything the merge below would protect, and the one way
+			// to close an inconclusive lead as refuted. Everything else
 			// is checked against what is already recorded, because the agent asking
 			// to create a second copy of something is not making a claim that there
 			// are two of them; it is a turn that no longer remembers the first.
 			let record: LedgerRecord | undefined;
 			let outcome: WriteOutcome = "created";
 			let near: LedgerRecord | undefined;
+			let heldOpen: string[] = [];
+			let reopened: string[] = [];
+			let kept: KeptClearance[] = [];
 			await deps.workspace.upsert(store, (current) => {
 				const byId = existingId ? current.find((r) => r.id === existingId) : undefined;
 				if (byId) {
+					const updated = defined({
+						...updateById(kind, byId as unknown as Fields, patch),
+						v: RECORD_VERSION, id: byId.id, kind, createdAt: byId.createdAt, updatedAt: now,
+					}) as unknown as LedgerRecord;
+					// An update that says nothing new writes nothing, as a repeat does
+					// below. Appended anyway, an empty `record id=<id>` was a ledger
+					// write like any other: the line cost nothing to make, and a worker
+					// could lift its recording reserve with it while its verdict stayed
+					// unrecorded.
+					if (isNoOp(byId as unknown as Fields, updated as unknown as Fields)) {
+						outcome = "unchanged";
+						record = byId;
+						return undefined;
+					}
 					outcome = "updated";
-					record = defined({ ...byId, ...patch, v: RECORD_VERSION, id: byId.id, kind, createdAt: byId.createdAt, updatedAt: now }) as unknown as LedgerRecord;
+					record = updated;
 					return [record];
 				}
 				const dup = existingId ? undefined : findDuplicate(kind as IdentityKind, patch, current as unknown as Fields[]);
 				if (dup) {
+					const stored = dup as unknown as Fields;
+					if (kind === "hypothesis" && holdsLeadOpen(stored, patch)) heldOpen = [dup.id as string];
+					// One cell, named by itself: the only write that may reopen a
+					// clearance, and only one nobody re-checked by id with a basis.
+					if (kind === "hypothesis" && reopensLead(stored, patch)) reopened = [dup.id as string];
+					else if (kind === "hypothesis" && leadMeetsClearance(stored, patch)) kept = [{ id: dup.id as string, statement: str(stored.statement) }];
 					const merged = defined({
-						...mergeRecord(kind as IdentityKind, dup as unknown as Fields, patch),
+						...mergeRecord(kind as IdentityKind, stored, patch, { reopen: true }),
 						v: RECORD_VERSION, id: dup.id, kind, createdAt: dup.createdAt, updatedAt: now,
 					}) as unknown as LedgerRecord;
 					if (isNoOp(dup as unknown as Fields, merged as unknown as Fields)) {
@@ -1315,7 +1568,7 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 			// A single hypothesis does not take the cross-product return above, so the
 			// same thing has to be said on the way out of the general path.
 			if (kind === "hypothesis" && written.kind === "hypothesis" && written.outcome === "confirmed") {
-				linkage = CONFIRMED_OWES;
+				linkage = confirmedOwes(written.id);
 			}
 			if (kind === "finding" && written.kind === "finding" && !written.hypothesisId) {
 				const match = (await deps.workspace.read("hypotheses")).find((h) =>
@@ -1361,7 +1614,8 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 				if (advisory.length > 0) unverified += `\nAlso worth fixing:\n${advisory.join("\n")}`;
 			}
 			const digest = await macroDigest(deps, deps.surfaceKinds ?? DEFAULT_SURFACE_KINDS);
-			return text(recordSummary(kind, written, outcome) + warning + unlocated + pulled + incomplete + linkage + downgrade + unverified + digest, recordDetails(written, outcome));
+			return text((downgrade !== "" && (outcome as WriteOutcome) === "unchanged" && existingId !== undefined ? `Nothing was written on ${kind} ${written.id}.` : recordSummary(kind, written, outcome, existingId !== undefined)) + leadsLeftOpen(heldOpen) + leadsReopened(reopened) +
+				clearancesKept(kept, "it was re-checked by id with a basis, and a lead that does not name it by id does not undo that") + warning + unlocated + pulled + incomplete + linkage + downgrade + unverified + digest, recordDetails(written, outcome));
 		},
 	};
 }
@@ -1611,16 +1865,23 @@ export function createRecallTool(deps: ToolDeps): ToolDefinition {
 						// The same predicate the standing brief counts with, so what the
 						// block says is waiting and what this hands back cannot disagree.
 						const queue = unchallengedQueue(all);
-						if (queue.length === 0) return text("Nothing unchallenged. Every live finding has been through a challenge.");
+						if (queue.length === 0) return text("Nothing unchallenged. Every live finding has been through a challenge that settled it.");
 						const lines = queue.slice(0, limit).map((f) => {
 							const gaps = auditFinding({ finding: f, targetModel: model }).filter((g) => g.blocking);
+							const label = unsettledLabel(f);
 							return `${f.id} [${f.severity}/${f.status}] ${f.title}` +
+								(label ? `\n    ${label}` : "") +
 								(gaps.length > 0 ? `\n    needs: ${gaps.map((g) => g.kind).join(", ")}` : "\n    needs: nothing visible without re-running it");
 						});
+						const examined = queue.filter(isExaminedUnsettled).length;
 						return text(
-							`${queue.length} finding(s) not yet confirmed, worst first:\n${lines.join("\n")}\n\n` +
-							"`recall challenge id=<id>` returns the brief for one. Challenge it in a fresh context — " +
-							"a verifier that has already read the reasoning behind a claim agrees with it.",
+							`${queue.length} finding(s) no challenge has settled, worst first` +
+							(examined > 0 ? ` — the ${examined} examined but unsettled come after the ones nobody has examined` : "") +
+							`:\n${lines.join("\n")}` +
+							truncated(Math.min(limit, queue.length), queue.length, "findings", "never examined first") + "\n\n" +
+							"`recall challenge id=<id>` returns the brief for one — or for a finding already examined, for a " +
+							"deliberate second look. Challenge it in a fresh context — a verifier that has already read the " +
+							"reasoning behind a claim agrees with it.",
 						);
 					}
 					const found = all.find((f) => f.id === id);
@@ -1648,9 +1909,7 @@ export function createRecallTool(deps: ToolDeps): ToolDefinition {
 								...(model ? { targetModel: model } : {}),
 								neighbours,
 								siblings,
-							})}\n\n` +
-							"Record the outcome with `record kind=hypothesis id=" + hyp.id + " outcome=refuted|confirmed " +
-							"reason=\"...\"` — the grounds go in 'reason', and a confirmation means recording the finding too.",
+							})}`,
 						);
 					}
 					const evidence: Record<string, string> = {};
@@ -1659,10 +1918,13 @@ export function createRecallTool(deps: ToolDeps): ToolDefinition {
 						if (body !== undefined) evidence[rel] = body;
 					}
 					const gaps = auditFinding({ finding: found, evidence, targetModel: model });
+					// The brief ends on how to write the verdict, in the fields the gate
+					// reads. What followed it here used to put a refutation's grounds in
+					// 'reason', which the gate does not read as a basis — a verifier
+					// that did as told was recorded unresolved.
 					return text(
 						`${challengeBrief(found, gaps)}\n\n` +
-						"Record the outcome with `record id=" + found.id + " status=confirmed|refuted reason=\"...\"` — " +
-						"a refutation needs the grounds in 'reason', and the finding is kept either way.",
+						"Whatever the verdict, the finding is kept either way: a challenge changes its status and adds its grounds, never removes it.",
 					);
 				}
 				case "finding": {

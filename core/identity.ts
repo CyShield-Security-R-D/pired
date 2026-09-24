@@ -297,6 +297,86 @@ function rank(v: unknown): number {
 	return OUTCOME_RANK[norm(v) ?? "proposed"] ?? 0;
 }
 
+/**
+ * A refutation arriving on a cell that holds an unresolved lead.
+ *
+ * By rank alone `refuted` outranks `inconclusive`, so any later refutation in
+ * the same (target, class) cell closed the lead, whatever mechanism it was
+ * about. The cell is the identity, not the claim: two different checks of one
+ * class against one element land on one row. Measured on the 2026-09-24 grid:
+ * a lead was recorded inconclusive ("cannot verify offline"), a later record in
+ * the same cell refuted a different mechanism, and the lead was gone from the
+ * ledger with nobody having resolved it. The baseline run confirmed that issue.
+ *
+ * So an implicit merge leaves the lead open. Closing one is the explicit
+ * `record id=<id>` re-record with a basis, which names the lead it settles,
+ * never passes through here, and writes a verification saying so.
+ */
+export function holdsLeadOpen(existing: Fields, patch: Fields): boolean {
+	return norm(existing.outcome) === "inconclusive" && norm(patch.outcome) === "refuted";
+}
+
+/**
+ * The same situation read in the other order: a lead arriving on a cell that a
+ * refutation already cleared, saying something the clearance does not.
+ *
+ * A lead that says what the refutation already said is not new: it is the same
+ * claim re-offered. This names only a lead in different words — which is not
+ * yet a reason to reopen anything (`reopensLead` decides that), but always one
+ * to tell the agent which cell its lead landed on and what that cell says.
+ */
+export function leadMeetsClearance(existing: Fields, patch: Fields): boolean {
+	return norm(existing.outcome) === "refuted"
+		&& norm(patch.outcome) === "inconclusive"
+		&& norm(patch.statement) !== undefined
+		&& !same(existing.statement, patch.statement);
+}
+
+/**
+ * A clearance somebody re-checked by id and grounded: `record id=<id>
+ * basis=[...]` wrote a verification on it that is not itself unsettled.
+ */
+export function clearanceRechecked(existing: Fields): boolean {
+	const v = existing.verification;
+	if (typeof v !== "object" || v === null) return false;
+	const { verdict, basis } = v as { verdict?: unknown; basis?: unknown };
+	return norm(verdict) !== "unresolved" && Array.isArray(basis) && basis.some((b) => str(b) !== undefined);
+}
+
+/**
+ * Whether a lead reopens the clearance it lands on.
+ *
+ * `holdsLeadOpen` alone made the outcome depend on which record landed first:
+ * inconclusive-then-refuted kept the lead, refuted-then-inconclusive let rank
+ * keep a refutation recorded before the lead existed. Reopening on every lead
+ * in different words overcorrected, though. Different wording is not a
+ * different mechanism, and a clearance is a check of its own cell: a sentence
+ * fanned across a whole surface in one call, or re-offered against a clearance
+ * that a second look already grounded, is not evidence that any of them missed
+ * it.
+ *
+ * So a lead reopens a clearance only when the clearance was never re-checked
+ * by id with a basis, and only on a write that names that one cell by itself —
+ * the second is the caller's to say (`mergeRecord`'s `reopen`), since a pure
+ * pair of records cannot tell a single write from one cell of a cross product.
+ * Everywhere else the clearance stands, and `record` names the cell, quotes the
+ * clearance, and gives the by-id call that reopens it on purpose.
+ */
+export function reopensLead(existing: Fields, patch: Fields): boolean {
+	return leadMeetsClearance(existing, patch) && !clearanceRechecked(existing);
+}
+
+/** How a merge is being asked for, where the records alone cannot say. */
+export interface MergeOptions {
+	/**
+	 * The write names one hypothesis cell by itself — the only kind of write
+	 * allowed to reopen a clearance (`reopensLead`). A cross product, the
+	 * extractor's planner re-reading a buffer and a dedupe fold leave it off, so
+	 * none of them un-clears a cell.
+	 */
+	reopen?: boolean;
+}
+
 // --- the matcher ------------------------------------------------------------
 
 function isSame(kind: IdentityKind, patch: Fields, existing: Fields): boolean {
@@ -375,7 +455,10 @@ function maxSeverity(a: unknown, b: unknown): Severity | undefined {
  *   - severity takes the worse of the two, so a repeat filed as `info` cannot
  *     downgrade a `high`
  *   - description and repro keep whichever is fuller
- *   - a hypothesis keeps the strongest claim made about its cell
+ *   - a hypothesis keeps the strongest claim made about its cell, whole — its
+ *     outcome, statement, method and evidence together — and an inconclusive
+ *     lead is not closed by a refutation that never named it; a lead recorded
+ *     after a clearance reopens it only as `reopensLead` allows
  *
  * The explicit `record id=<id>` path does NOT come through here: an update the
  * agent asked for by id is last-write-wins as documented, which is the escape
@@ -395,7 +478,7 @@ function asLocations(rec: Fields): string[] {
 	return out;
 }
 
-export function mergeRecord(kind: IdentityKind, existing: Fields, patch: Fields): Fields {
+export function mergeRecord(kind: IdentityKind, existing: Fields, patch: Fields, opts: MergeOptions = {}): Fields {
 	const merged: Fields = { ...existing, ...patch };
 	for (const field of UNION_FIELDS) {
 		const before = existing[field];
@@ -429,13 +512,71 @@ export function mergeRecord(kind: IdentityKind, existing: Fields, patch: Fields)
 		}
 		if (locations.length > 1) merged.locations = locations;
 	}
-	if (kind === "hypothesis" && rank(existing.outcome) > rank(patch.outcome)) {
-		merged.outcome = existing.outcome;
-		// The statement has to travel with the outcome it explains, or a cell reads
-		// as refuted above the sentence that proposed it.
-		if (str(existing.statement) !== undefined) merged.statement = existing.statement;
+	if (kind === "hypothesis") {
+		if (opts.reopen === true && reopensLead(existing, patch)) {
+			// The lead wins whole. The clearance's method, evidence and any
+			// verification describe a check of something else, and left on the row
+			// they would read as the grounds for — or a second look at — a lead
+			// they never examined.
+			keepClaim(merged, patch, false);
+			if (patch.verification === undefined) delete merged.verification;
+		} else if (rank(existing.outcome) > rank(patch.outcome) || holdsLeadOpen(existing, patch)) {
+			merged.outcome = existing.outcome;
+			// The statement has to travel with the outcome it explains, or a cell reads
+			// as refuted above the sentence that proposed it.
+			if (str(existing.statement) !== undefined) merged.statement = existing.statement;
+			// So do the method and the evidence. Without this a held refutation
+			// carried its own `method` onto the open lead, and the row read as a
+			// lead grounded in the very check that did not settle it — and since the
+			// row then differed, the held call wrote a line instead of nothing. A
+			// repeat of the SAME claim may still fill what the stored one left out;
+			// a different claim may not.
+			keepClaim(merged, existing, same(existing.statement, patch.statement) && !holdsLeadOpen(existing, patch));
+		}
 	}
 	return merged;
+}
+
+/** What a hypothesis says about its cell beyond the outcome and the sentence. */
+const CLAIM_DETAIL = ["method", "evidence"] as const;
+
+/**
+ * Take the method and evidence from the side whose claim the row keeps.
+ *
+ * `fill` leaves the other side's value where the kept side has none — right
+ * only when both sides are the same claim.
+ */
+function keepClaim(merged: Fields, from: Fields, fill: boolean): void {
+	for (const field of CLAIM_DETAIL) {
+		if (from[field] !== undefined) merged[field] = from[field];
+		else if (!fill) delete merged[field];
+	}
+}
+
+/**
+ * Apply an update the caller asked for by id: last-write-wins, field by field,
+ * as `mergeRecord` documents.
+ *
+ * With the one exception `mergeRecord` makes when a lead reopens a clearance. A
+ * hypothesis whose outcome this changes, sent with no verification of its own
+ * (the record tool writes one only for a re-check with a basis), is a new
+ * claim about the cell. The stored verification, method and evidence describe
+ * the check that reached the old outcome. Spread onto the row, a deliberate
+ * reopen — `record id=<id> outcome=inconclusive` — kept the clearance's
+ * verification, and the open lead read as one that had already had its second
+ * look.
+ */
+export function updateById(kind: string, existing: Fields, patch: Fields): Fields {
+	const updated: Fields = { ...existing, ...patch };
+	const outcome = norm(patch.outcome);
+	if (kind === "hypothesis" && outcome !== undefined && outcome !== norm(existing.outcome)) {
+		// The old claim's method and evidence explained the old outcome; a moved
+		// cell must not carry a clearance's reasoning under a confirmed verdict.
+		keepClaim(updated, patch, false);
+		// With no basis there is no new look, so the old check no longer applies.
+		if (patch.verification === undefined) delete updated.verification;
+	}
+	return updated;
 }
 
 /**

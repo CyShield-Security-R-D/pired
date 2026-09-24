@@ -2109,31 +2109,46 @@ following mechanisms is general; the corpus appears here only as evidence.
 
 ### Decision
 
-- **A verifier records a verdict, never a rewrite** (`core/child.ts`, enforced in the child gate):
-  - On a finding it may set only `status` to `confirmed`, `refuted` or `suspected`, with `control`,
-    `entitlement`, `basis`, `live` and `reason`.
-  - Title, description, location, severity, evidence lists, operator dispositions and deletion are
-    refused, with the reason.
-  - It may create a finding only for a cleared hypothesis it confirmed, linked by `hypothesisId`. That
-    finding lands `suspected`, like every new finding.
+- **A verifier records a verdict, never a rewrite** (`core/child.ts`, enforced in the child gate, which
+  reads the ledger):
+  - Its write on a finding must carry a `status`: `confirmed` (with `control`, and `entitlement` where the
+    class needs it), `refuted` (with `basis`) or `suspected` (with `basis` or `control`: what it checked
+    when it could not settle it). A `reason` alone is a note, never a verdict.
+  - Title, description, location, severity, evidence lists and deletion are refused, with the reason.
+  - A finding in an operator disposition (`reported`, `triaged`, `false-positive`, `accepted-risk`,
+    `ignored`) keeps its status. The verifier may only add a grounded look.
+  - It may create a finding only for a hypothesis it recorded `confirmed`, linked by that hypothesis's
+    id, and only when the call duplicates no existing finding. That finding lands `suspected` unless it
+    carries `confirmed` with the control case.
 - **Scouts map and propose; they do not record findings.** Enforced the same way.
-- **A verdict is durable whatever it is.** `status=suspected` with a basis or reason records an
-  `unresolved` verification and keeps the finding. A finding that carries a verification leaves the
-  unchallenged queue, and `recall challenge id=` still reaches it for a deliberate re-check. In an
-  engagement with no live target (`isSourceOnly`), a refutation grounded in a cited basis is accepted
-  without `live`. With a live target, the reachability bar is unchanged.
+- **A verdict is durable whatever it is.**
+  - An unsettled look (`status=suspected` with a basis or control) records an `unresolved` verification.
+    It never moves a settled status and never replaces an earned verification; its grounds are added to
+    the earned one's notes.
+  - A verdict that misses its bar with no grounds at all writes nothing but the reply.
+  - Only an earned verdict (stands, amended or refuted) on a settled status, a confirmed status or a
+    disposed status takes a finding out of the challenge queue. Examined-but-unsettled findings stay in
+    the queue, after the unexamined ones, labelled with what was checked.
+  - In an engagement that lists no targets (`isSourceOnly`), a refutation grounded in a cited basis is
+    accepted without `live`, and no reachability flag is stored. With targets listed, the reachability
+    bar is unchanged.
 - **An open lead is closed only by a check that names it** (`core/identity.ts`):
-  - An implicit refutation does not move an `inconclusive` cell.
-  - A new inconclusive lead with a different statement reopens a cleared cell.
-  - The held lead keeps its own method and evidence.
-  - The tool reply names every lead it held or reopened.
+  - An implicit refutation does not move an `inconclusive` cell, and the held lead keeps its own method
+    and evidence.
+  - A new inconclusive lead reopens a cleared cell only on a single-cell write, and only over a clearance
+    nobody re-checked. Different wording is not taken as a different mechanism in bulk. A reopen drops the
+    clearance's verification.
+  - The tool reply names every lead it held, reopened or kept closed, with the call that reopens one
+    deliberately.
   - The explicit `id=` + basis re-check still moves it, and writes a verification.
 - **Workers keep their records:**
   - The grace turns past a worker's budget still allow `record` and `recall`.
   - A worker's last `RECORD_RESERVE_TURNS` turns refuse every other tool until it has recorded
     something.
   - A worker about to hand back with nothing recorded gets one reminder at `agent_before_settle` and
-    one more turn, and never a second reminder.
+    one more turn, and never a second reminder. What counts as recorded is a ledger row actually
+    written: evidence files, notes and no-op repeats do not count, and for a verifier only a finding or
+    hypothesis verdict does. A worker that established nothing is told it may hand back and say so.
   - Workers get the operator's toolset (`read`, `bash`, `record`, `recall`).
   - pi-subagents' supervisor section is stripped from their prompt.
 - **Verify takes several findings.** One at a time, each verdict recorded before the next, the rest

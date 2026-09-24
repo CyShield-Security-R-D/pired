@@ -151,7 +151,7 @@ describe("auditDelegation", () => {
 		expect(c!.handoffChars).toBe(`Run fan-out: 1/64 used, 63 remaining\n${HANDOFF}\nMission: 1ab828d1 (completed)`.length);
 		expect(c!.children).toEqual([{
 			childKey: CHILD_KEY, toolCallId: "d1", agent: "pired-investigate", status: "completed", ending: "handoff", outcome: "completed", sessionFound: true,
-			turns: 3, maxTurns: 24, callsRefusedPastBudget: 0, callsRunPastBudget: 0, toolCalls: 2, toolErrors: 0, recordCalls: 1, recordIds: ["c0ffee"], recordKinds: { finding: 1 }, findingIds: ["c0ffee"],
+			turns: 3, maxTurns: 24, callsRefusedPastBudget: 0, callsRunPastBudget: 0, ledgerCallsInGrace: 0, toolCalls: 2, toolErrors: 0, recordCalls: 1, recordIds: ["c0ffee"], recordKinds: { finding: 1 }, findingIds: ["c0ffee"],
 			firstRecordTurn: 1, tokens: 6039, handoffWords: 9,
 		}]);
 		expect(audit.parentTokens).toBe(1000 + 1500 + 2300 + 2600 + 4 * 50);
@@ -272,9 +272,31 @@ describe("auditDelegation", () => {
 		];
 		const audit = auditDelegation({ ...run, parentEvents, childSessions: { [SESSION]: budgetStoppedSession({ ranPast: 2 }) } });
 		expect(audit.violations).toEqual([
-			`child ${CHILD_KEY} (pired-investigate): 2 tool call(s) ran after its 24-turn budget; pired's child gate refuses every call past it`,
+			`child ${CHILD_KEY} (pired-investigate): 2 tool call(s) ran after its 24-turn budget; pired's child gate refuses every call past it except record and recall in its grace turns`,
 			`child ${CHILD_KEY} (pired-investigate): 29 turns, past the 27 at which pired stops a 24-turn worker`,
 		]);
+	});
+
+	it("counts record and recall in a worker's grace turns as the ledger staying open, not as the gate failing", () => {
+		// ADR-028: the grace turns after a worker's budget keep record and recall
+		// open, because the budget line used to refuse a worker's last records.
+		const rows = budgetStoppedSession().trimEnd().split("\n").map((line) => JSON.parse(line) as Row);
+		const graceTurn = 24 + 1;
+		for (const row of rows) {
+			const content = (row.message as { content?: Array<Record<string, unknown>> } | undefined)?.content;
+			const toolCall = Array.isArray(content) ? content.find((c) => c.type === "toolCall" && c.id === `tool:${graceTurn}`) : undefined;
+			if (toolCall) { toolCall.name = "record"; toolCall.arguments = { kind: "note", text: "what I established" }; }
+			if ((row.message as { toolCallId?: string } | undefined)?.toolCallId === `tool:${graceTurn}`) {
+				(row.message as Record<string, unknown>).toolName = "record";
+				(row.message as Record<string, unknown>).isError = false;
+				(row.message as Record<string, unknown>).content = [{ type: "text", text: "Noted." }];
+			}
+		}
+		const audit = auditDelegation(delegatingRun({ childSessions: { [SESSION]: rows.map((row) => JSON.stringify(row)).join("\n") + "\n" } }));
+		const child = audit.workers[0];
+		expect(child).toMatchObject({ callsRunPastBudget: 0, ledgerCallsInGrace: 1 });
+		expect(audit.violations.filter((v) => v.includes("ran after its"))).toEqual([]);
+		expect(audit.notes).toContain(`child ${CHILD_KEY} (pired-investigate): 1 record/recall call(s) in its grace turns after the 24-turn budget`);
 	});
 
 	it("notes calls refused past the budget when the worker then handed back on its own", () => {

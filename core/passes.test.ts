@@ -419,7 +419,7 @@ describe("the /pass command", () => {
 		const view = passCommand({ state: passState(["route", "file"], 1), arg: "next", unchallenged: 4 });
 		expect(view.open).toBe("file");
 		expect(view.tone).toBe("info");
-		expect(view.text).toContain("4 finding(s) still carry no verdict");
+		expect(view.text).toContain("4 finding(s) have no settled verdict (examined-but-unsettled included)");
 	});
 
 	it("does not say it when the pass being opened is the one that settles them", () => {
@@ -428,7 +428,7 @@ describe("the /pass command", () => {
 		// that only fires sometimes is how it stops being read.
 		const view = passCommand({ state: passState(["route", "adversarial"], 1), arg: "next", unchallenged: 4 });
 		expect(view.open).toBe("adversarial");
-		expect(view.text).not.toContain("carry no verdict");
+		expect(view.text).not.toContain("no settled verdict");
 	});
 
 	it("says the ladder is exhausted instead of silently repeating its last rung", () => {

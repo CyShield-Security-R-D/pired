@@ -37,7 +37,7 @@
 
 import {
 	type BlockerType, type ChallengeVerdict, DISPOSED_STATUSES, type FindingRecord, type FindingStatus,
-	type HypothesisRecord, type Severity, type Verification,
+	type HypothesisRecord, type Severity, UNVERIFIED_STATUS, type Verification,
 } from "./ontology.ts";
 
 // ---------------------------------------------------------------------------
@@ -852,6 +852,12 @@ export interface ChallengeReport {
 	/** A corrected severity, for `amended`. */
 	severity?: Severity;
 	notes?: string;
+	/**
+	 * The engagement has no live target — a review of source, with nothing
+	 * running to reach. Set by the host from the engagement's scope, never by
+	 * the challenger: it decides whether `live=false` can mean anything at all.
+	 */
+	sourceOnly?: boolean;
 }
 
 export interface ChallengeOutcome {
@@ -866,6 +872,33 @@ export interface ChallengeOutcome {
 	/** The finding had already gone to the client. */
 	wasReported?: boolean;
 	severity?: Severity;
+	/**
+	 * The earned verification this look was not allowed to replace. Set when the
+	 * look settled nothing and the finding already carried a verdict that met
+	 * its bar; `verification` is then that verdict, with this look's grounds
+	 * added to its notes.
+	 */
+	kept?: Verification;
+}
+
+/** Verdicts whose bar was met: they settle a finding, and nothing unproven replaces them. */
+const EARNED_VERDICTS: readonly ChallengeVerdict[] = ["stands", "amended", "refuted"];
+
+/** Whether a verification records a challenge that settled the finding. */
+export function isEarned(v: Pick<Verification, "verdict"> | undefined): boolean {
+	return v !== undefined && EARNED_VERDICTS.includes(v.verdict);
+}
+
+/**
+ * Whether a challenge said what it looked at: a cited basis, or the control
+ * case it ran. The bar for writing down a look that could not settle a claim.
+ *
+ * A `reason` alone does not meet it. `reason` is a note any edit may carry — a
+ * finder rewording its description passes one — and counting it as a look
+ * would record a challenge nobody made.
+ */
+export function hasGrounds(report: Pick<ChallengeReport, "basis" | "control">): boolean {
+	return (report.basis ?? []).some((b) => b.trim().length > 0) || said(report.control);
 }
 
 /**
@@ -877,38 +910,73 @@ export interface ChallengeOutcome {
  *   - To CONFIRM: the control case must have been run, and for the
  *     access-control classes entitlement must be settled. Reproducing an attack
  *     ten times does not make it a vulnerability if the caller was allowed.
- *   - To REFUTE: a cited basis is required, and the target must have been live.
- *     "I could not reproduce it" against an expired session refutes nothing, and
- *     an engagement re-verified on its last day with a dead token would
- *     otherwise refute every true finding it holds.
- *   - When either bar is missed the finding lands on `suspected` — not
- *     confirmed, not refuted, still in the ledger, still in the report under its
- *     own heading. An unproven challenge is not allowed to settle anything.
+ *   - To REFUTE: a cited basis is required, and — when the engagement has a
+ *     live target — that target must have been reachable. "I could not
+ *     reproduce it" against an expired session refutes nothing, and an
+ *     engagement re-verified on its last day with a dead token would otherwise
+ *     refute every true finding it holds. A source-only review has no target to
+ *     be unreachable, so there the cited basis is the whole bar.
+ *   - When either bar is missed the status does not move: an unverified finding
+ *     stays `suspected` — not confirmed, not refuted, still in the ledger,
+ *     still in the report under its own heading — and one already settled
+ *     stays settled. An unproven challenge is not allowed to settle anything,
+ *     and so it is not allowed to unsettle anything either.
+ *   - A challenge that reports `unresolved` with its grounds is kept as what it
+ *     is: a look that could not settle the claim. The status does not move and
+ *     the grounds go on the record, so the next reader knows it was examined
+ *     and what was missing.
+ *   - Neither kind of look replaces an earned verification (`stands`,
+ *     `amended`, `refuted`). The earned one stays the finding's verification,
+ *     and the new look's grounds are added to its notes.
  *
- * That last clause is the whole safety property. There is no input to this
- * function that removes a finding.
+ * The safety property is that there is no input to this function that removes
+ * a finding.
  */
 export function judge(finding: FindingRecord, report: ChallengeReport, at: string): ChallengeOutcome {
 	const contract = contractFor(finding.class);
 	const basis = (report.basis ?? []).filter((b) => b.trim().length > 0);
 	const wasReported = finding.status === "reported" ? true : undefined;
 
+	// `live=false` in a review of source says there was nothing running, not that
+	// a target was down. Stored, the report renders it as "target was not
+	// reachable" beside a refutation the source settled, which reads as the very
+	// dead-session refutation the live rule exists to reject. So it is left off
+	// there. Against a live target it is kept: there it is a claim about
+	// reachability, and the reason a refutation was not accepted.
+	const live = report.sourceOnly === true && report.live === false ? undefined : report.live;
 	const verification = (verdict: ChallengeVerdict): Verification => ({
 		verdict, at,
 		...(report.control !== undefined ? { control: report.control } : {}),
 		...(basis.length > 0 ? { basis } : {}),
-		...(report.live !== undefined ? { live: report.live } : {}),
+		...(live !== undefined ? { live } : {}),
 		...(report.entitlement !== undefined ? { entitlement: report.entitlement } : {}),
 		...(report.notes !== undefined ? { notes: report.notes } : {}),
 	});
 
-	const unresolved = (why: string, blocker?: ChallengeOutcome["blocker"]): ChallengeOutcome => ({
+	// What a look that settles nothing leaves behind. It may not move the status:
+	// written as `suspected` unconditionally, a verifier re-recording a confirmed
+	// or reported finding with "could not settle it" demoted it, and the child
+	// gate tells a verifier to do exactly that on a reported one. A legacy `open`
+	// is the same unverified state and is written as `suspected`. Nor may it
+	// replace a verification that met its bar: the earned verdict stays, and the
+	// new look's grounds go into its notes, where the report shows them.
+	const standing = isEarned(finding.verification) ? finding.verification : undefined;
+	const unmoved: FindingStatus = finding.status === undefined || finding.status === "open" ? "suspected" : finding.status;
+	const settledNothing = (look: Verification, why?: string): ChallengeOutcome => ({
 		verdict: "unresolved",
-		status: "suspected",
-		verification: { ...verification("unresolved"), notes: [report.notes, why].filter(Boolean).join(" — ") },
-		downgraded: why,
-		...(blocker ? { blocker } : {}),
+		status: unmoved,
+		verification: standing === undefined ? look : {
+			...standing,
+			notes: [standing.notes, `later look ${look.at}, unsettled: ${describeLook(look)}`].filter(Boolean).join(" — "),
+		},
+		...(why !== undefined ? { downgraded: why } : {}),
+		...(standing ? { kept: standing } : {}),
 		...(wasReported ? { wasReported } : {}),
+	});
+
+	const unresolved = (why: string, blocker?: ChallengeOutcome["blocker"]): ChallengeOutcome => ({
+		...settledNothing({ ...verification("unresolved"), notes: [report.notes, why].filter(Boolean).join(" — ") }, why),
+		...(blocker ? { blocker } : {}),
 	});
 
 	if (report.verdict === "refuted") {
@@ -925,7 +993,15 @@ export function judge(finding: FindingRecord, report: ChallengeReport, at: strin
 		// a new WAF rule, and reading "it does not work any more" as "it was never
 		// real". Reachability is the finding's problem only when the target is
 		// reachable.
-		if (report.live === false) {
+		//
+		// Only when there is a target, though. In a source-only review nothing is
+		// running, so an honest verifier says live=false and this downgraded every
+		// refutation it made: measured on the 2026-09-24 grid, the runs that did
+		// settle findings got there by asserting live=true on scopes with no
+		// target at all (17 of 18 verification records), and the ones that told
+		// the truth could not refute anything. A rule that only a false statement
+		// passes is teaching the statement, not guarding the finding.
+		if (report.live === false && report.sourceOnly !== true) {
 			return unresolved(
 				"the target was not reachable, or the session was not valid, while this was challenged. " +
 				"That refutes the connection, not the finding — re-challenge with a working session.",
@@ -972,7 +1048,34 @@ export function judge(finding: FindingRecord, report: ChallengeReport, at: strin
 		};
 	}
 
+	// A look that could not settle it, with what it did look at. Before this
+	// `status=suspected` carried nothing, so such a look had nowhere on the row
+	// to go. On the 2026-09-24 grid, 10 of 15 verify tasks whose instructions
+	// said "do not change status" left no verdict on any row, while the challenge
+	// brief told them to set the finding's status (ADR-028). That shows verdicts
+	// never reaching a row under conflicting instructions, not how many this path
+	// would have caught. Nothing is asserted here — the status does not move,
+	// and an earned verification is not replaced — so the bar is only having
+	// said what was looked at: a basis or a control case (`hasGrounds`).
+	if (report.verdict === "unresolved" && hasGrounds(report)) {
+		return settledNothing(verification("unresolved"));
+	}
+
 	return unresolved("challenge returned no conclusion");
+}
+
+function said(v: string | undefined): boolean {
+	return v !== undefined && v.trim().length > 0;
+}
+
+/** A look's grounds as one line, for the notes of the verdict it did not replace. */
+function describeLook(v: Verification): string {
+	const parts = [
+		v.basis?.length ? `basis ${v.basis.join(", ")}` : undefined,
+		said(v.control) ? `control ${v.control}` : undefined,
+		said(v.notes) ? v.notes : undefined,
+	].filter((p): p is string => p !== undefined);
+	return parts.length > 0 ? parts.join("; ") : "no grounds given";
 }
 
 /**
@@ -1026,35 +1129,132 @@ export function challengeBrief(finding: FindingRecord, gaps: Gap[] = []): string
 	out.push("");
 	out.push("Rules:");
 	out.push("- Re-run the read, never the write. Nothing destructive; park an approval blocker instead.");
-	out.push("- Prove the target is reachable and your session is valid BEFORE concluding anything failed. A dead session refutes nothing.");
+	out.push(`- ${LIVE_RULE}`);
 	out.push("- To refute, cite: the file:line, the evidence path, or the model section that makes this not a finding. An uncited refutation is recorded as unresolved and changes nothing.");
 	out.push("- To confirm, run the control case and say what it returned.");
 	out.push("- \"I could not reproduce it\" is not a refutation. Say what you ran and what came back.");
 	out.push("");
-	out.push("Return: verdict (stands|amended|refuted|unresolved), the control and its result, basis[] for any refutation or severity change, whether the target was live, and how entitlement was settled if this class needs it.");
+	// The same bar `judge` applies on the way in, stated in the fields `record`
+	// reads. The brief used to ask for a verdict in its own vocabulary
+	// (stands|amended|…) and the delegation text for grounds in `reason`, which
+	// the gate does not read as a basis — so a verifier following the brief
+	// wrote a refutation the gate recorded as unresolved, or wrote nothing.
+	// Measured on the 2026-09-24 grid: 6 pired-verify children recorded
+	// nothing, 4 of them handing back early with a verdict that was never
+	// written, and 4 of 6 amended or refuted verdicts never reached the finding.
+	out.push(`Record the verdict on this finding by its id — \`record kind=finding id=${finding.id}\` — as its status, with what earns it:`);
+	out.push(`- confirmed: control="the control case and what it returned"${contract?.entitlement ? `, entitlement="how you established the caller was not meant to reach it"` : ""}.`);
+	// `live` is asked for only where it is true. judge() takes an absent `live`
+	// as no claim about reachability and downgrades only live=false against a
+	// live target. Told "live=true|false", a verifier whose basis was the source
+	// has only the second to give, and on an engagement with a target that is
+	// the one answer that refutes nothing.
+	out.push("- refuted: basis=[the file:line, evidence path or model section that makes it not a finding]. live=true when you tested the running target; leave live out when your basis is the source.");
+	out.push("- suspected: basis=[what you read] or control=\"what you ran and what came back\", when you could not settle it. That is a result too: the finding keeps its status and your grounds are kept on it. A reason alone is a note, not a look.");
+	out.push("Save raw output with `record kind=evidence` and cite the path it returns in basis or control.");
+	out.push("The claim itself — title, description, location, severity — is the operator's to amend. If it stands but is overstated or misdescribed, record the verdict and say what is wrong in reason.");
 	return out.join("\n");
 }
 
 /**
- * Whether nobody has looked at this finding twice.
+ * When reachability matters, said once for both briefs.
+ *
+ * The rule exists for a live target — a dead session refutes nothing — and a
+ * review of source has nothing running to reach. Stated unconditionally it
+ * asked a source-only verifier to prove something that cannot exist; `judge`
+ * no longer asks it, so the brief does not either.
+ */
+const LIVE_RULE =
+	"When the engagement has a live target, prove it is reachable and your session is valid BEFORE concluding " +
+	"anything failed — a dead session refutes nothing. A review of source has no target to reach; there the cited line is the proof.";
+
+/**
+ * Whether this finding still waits on a challenge that settles it.
  *
  * `suspected` is the default status precisely because an absent `verification`
  * means unexamined rather than examined-and-cleared, so the queue is everything
- * still live that no challenge has settled. Exported because two places ask the
- * question — the `recall challenge` queue and the standing brief — and a second
- * copy of this predicate is a second answer to it.
+ * still live that no challenge has settled. Exported because several places
+ * ask the question — the `recall challenge` queue, the standing brief, the
+ * pass command's count — and a second copy of this predicate is a second answer
+ * to it.
+ *
+ * Only an earned verdict takes a finding out: a verification that met its bar
+ * (`isEarned`), or a confirmed or disposed status. A look that could not settle
+ * the claim — an `unresolved` verification, whether a verifier said so or
+ * `judge` downgraded a refutation or confirmation that missed its bar — leaves
+ * it in. Taking those out, as the rule before this did, let `recall challenge`
+ * say "Nothing unchallenged" over a finding whose only look said "could not
+ * tell", which hides exactly the work that is left. What the look found is on
+ * the row, and the queue lists it (`unsettledLabel`).
+ *
+ * And an earned verification settles only a finding whose status still says
+ * so. `judge` never leaves an earned verdict on an unverified status, so a
+ * finding that is `suspected` (or a legacy `open`, or has none) with one is a
+ * finding someone moved back down by id — the operator's documented escape
+ * hatch for correcting a record. Read from the verification alone, that
+ * correction took the finding out of the queue it was put back into.
  */
-export function isUnchallenged(finding: Pick<FindingRecord, "status">): boolean {
+export function isUnchallenged(finding: Pick<FindingRecord, "status" | "verification">): boolean {
 	if ((DISPOSED_STATUSES as readonly string[]).includes(finding.status ?? "")) return false;
-	return finding.status !== "confirmed";
+	if (finding.status === "confirmed") return false;
+	if (isUnverifiedStatus(finding.status)) return true;
+	return !isEarned(finding.verification);
 }
 
-/** Everything unsettled, worst first — a challenge budget is spent top-down. */
+/** `suspected`, the legacy `open`, or no status at all: nothing has settled it. */
+function isUnverifiedStatus(status: FindingStatus | undefined): boolean {
+	return status === undefined || status === UNVERIFIED_STATUS || status === "open";
+}
+
+/**
+ * Still in the queue, but somebody has already looked: the verification it
+ * carries is a look that could not settle it.
+ */
+export function isExaminedUnsettled(finding: Pick<FindingRecord, "status" | "verification">): boolean {
+	return finding.verification !== undefined && isUnchallenged(finding);
+}
+
+/**
+ * Everything unsettled, worst first — a challenge budget is spent top-down —
+ * with the examined-but-unsettled after every finding nobody has examined.
+ *
+ * A second look at a claim is worth less than a first look at one nobody has
+ * checked, so a fresh finding is not queued behind one a verifier already
+ * spent a launch on. On the 2026-09-24 grid 10 of 15 verify tasks told "do not
+ * change status" left no verdict on any row, so the queue could not tell those
+ * findings from ones nobody had opened, and would have handed them out again as
+ * if new. That they were re-handed is inferred from how the queue worked, not
+ * measured.
+ */
 export function unchallengedQueue(findings: FindingRecord[]): FindingRecord[] {
+	const examined = (f: FindingRecord): number => (isExaminedUnsettled(f) ? 1 : 0);
 	return findings
 		.filter(isUnchallenged)
 		.slice()
-		.sort((a, b) => SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity]);
+		.sort((a, b) => examined(a) - examined(b) || SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity]);
+}
+
+/** Longest look summary carried onto a queue line before it costs more than it informs. */
+const UNSETTLED_NOTE_BUDGET = 160;
+
+/**
+ * "examined, unsettled: <what the look said>" for a finding in the queue that
+ * somebody has already looked at, and undefined for one nobody has.
+ *
+ * Said wherever the queue is listed, so whoever spends the next look knows it is
+ * a second one and what the first could not settle.
+ */
+export function unsettledLabel(finding: Pick<FindingRecord, "status" | "verification">): string | undefined {
+	if (!isExaminedUnsettled(finding)) return undefined;
+	const v = finding.verification;
+	const gist = [v?.notes, v?.control, v?.basis?.join(", ")].find((x) => x !== undefined && x.trim().length > 0)?.trim();
+	const note = gist === undefined ? "no grounds recorded"
+		: gist.length > UNSETTLED_NOTE_BUDGET ? `${gist.slice(0, UNSETTLED_NOTE_BUDGET)}…` : gist;
+	// A verdict that met its bar, on a finding moved back down by id. "Unsettled"
+	// beside the control case of a `stands` would read as a look that could not
+	// tell; what happened is that someone set the verdict aside.
+	if (isEarned(v)) return `examined, moved back to ${finding.status ?? UNVERIFIED_STATUS} from a ${v?.verdict} verdict: ${note}`;
+	return `examined, unsettled: ${note}`;
 }
 
 /** How many of the queue to name before the rest becomes a count. */
@@ -1079,11 +1279,17 @@ export function unchallengedBrief(findings: FindingRecord[]): string {
 	const queue = unchallengedQueue(findings);
 	if (queue.length === 0) return "";
 
-	const named = queue.slice(0, BRIEF_NAMED).map((f) => `${f.id} [${f.severity}] ${f.title}`);
+	const named = queue.slice(0, BRIEF_NAMED).map((f) => {
+		const label = unsettledLabel(f);
+		return `${f.id} [${f.severity}] ${f.title}${label ? ` (${label})` : ""}`;
+	});
 	const rest = queue.length - named.length;
-	const list = rest > 0 ? `${named.join("; ")}; +${rest} more` : named.join("; ");
+	// The examined sort last, so they are the ones a short list drops; the count
+	// still says they are there.
+	const restExamined = queue.slice(BRIEF_NAMED).filter(isExaminedUnsettled).length;
+	const more = rest > 0 ? `; +${rest} more${restExamined > 0 ? ` (${restExamined} examined, unsettled)` : ""}` : "";
 	const subject = queue.length === 1 ? "1 finding has" : `${queue.length} findings have`;
-	return `${subject} been through no challenge: ${list}. `
+	return `${subject} not been settled by a challenge: ${named.join("; ")}${more}. `
 		+ "`recall challenge id=<id>` returns the brief for one — it is built from the record and the "
 		+ "class contract, never from the conversation, so it can be handed to a fresh agent that has "
 		+ "not seen the reasoning that produced the claim.";
@@ -1191,12 +1397,26 @@ export function hypothesisBrief(h: HypothesisRecord, ctx: HypothesisContext = {}
 		out.push("- Run the control case. Output that merely contains the payload is not the effect.");
 		out.push("- Ruling the class out is a result. Record it, with the specific reason.");
 	}
-	out.push("- Prove the target is reachable BEFORE concluding anything failed. A dead session refutes nothing.");
+	out.push(`- ${LIVE_RULE}`);
 	out.push("- Re-run the read, never the write. Nothing destructive; park an approval blocker instead.");
 	out.push("");
-	out.push("Return: verdict (vulnerable|clear|unresolved), what you ran and what came back, and the "
-		+ "file:line or evidence path that grounds it. If vulnerable, record a finding against this class "
-		+ "and element. If clear, record the hypothesis outcome again with your basis in the reason.");
+	// Stated in the fields `record` reads. This used to say "your basis in the
+	// reason", and `reason` is a note: only `basis` writes the verification that
+	// marks a cell as re-checked, so a verifier that followed the brief to the
+	// letter left the clearance looking as if nobody had looked twice.
+	out.push(`Record the verdict on this hypothesis by its id — \`record kind=hypothesis id=${h.id}\` — with `
+		+ "basis=[the file:line or evidence path that grounds it]; the basis is what marks the cell as re-checked:");
+	out.push("- clear: outcome=refuted, statement=\"what you checked and why it holds\".");
+	// title and severity are the two fields a new finding is refused without,
+	// so a brief that leaves them out walks the verifier into a refusal on the
+	// one write that reaches the report.
+	out.push(`- vulnerable: outcome=confirmed, statement="what holds", then record the finding — \`record kind=finding\` with title="...", severity=..., `
+		+ `class=${h.class}, its file:line or element as target and hypothesisId=${h.id} (title and severity are required). `
+		+ "It lands suspected unless it carries status=confirmed with the control case you ran — control=\"what it returned\""
+		+ `${contract?.entitlement ? ", and entitlement=\"how you established the caller was not meant to reach it\"" : ""}. `
+		+ "Only a finding reaches the report; a confirmed cell does not.");
+	out.push("- unsettled: outcome=inconclusive, statement=\"what is missing\", basis=[what you checked] — a hypothesis keeps no reason.");
+	out.push("Save raw output with `record kind=evidence` and cite the path it returns in basis.");
 	return out.join("\n");
 }
 
@@ -1236,12 +1456,15 @@ export function challengeCommand(input: ChallengeCommandInput): ChallengeCommand
 	if (!id) {
 		const queue = unchallengedQueue(input.findings);
 		if (queue.length === 0) {
-			return { tone: "info", text: "pired: nothing unchallenged — every live finding has been through a challenge" };
+			return { tone: "info", text: "pired: nothing unchallenged — every live finding has been through a challenge that settled it" };
 		}
-		const list = queue.map((f) => `· ${f.id} [${f.severity}] ${f.title}`).join("\n");
+		const list = queue.map((f) => {
+			const label = unsettledLabel(f);
+			return `· ${f.id} [${f.severity}] ${f.title}${label ? ` — ${label}` : ""}`;
+		}).join("\n");
 		return {
 			tone: "info",
-			text: `pired: ${queue.length} finding(s) carry no verdict\n${list}\n\n/challenge <id> for the brief on one.`,
+			text: `pired: ${queue.length} finding(s) carry no settled verdict\n${list}\n\n/challenge <id> for the brief on one.`,
 		};
 	}
 
@@ -1263,7 +1486,8 @@ export function challengeCommand(input: ChallengeCommandInput): ChallengeCommand
 		finding,
 		text: `${brief}\n\nTo hand this to a subagent, spawn one whose job is to break the claim. It needs nothing `
 			+ `from this conversation — it reads the brief itself with \`pired-ledger recall challenge id=${id}\` and `
-			+ `records the verdict with \`pired-ledger record kind=finding id=${id} status=confirmed|refuted control="..."\`. `
+			+ `records the verdict with \`pired-ledger record kind=finding id=${id}\` — status=confirmed with control, `
+			+ "status=refuted with basis, or status=suspected with basis or control when it cannot be settled. "
 			+ "The verdict is judged against the class contract on the way in, so it cannot be asserted.",
 	};
 }

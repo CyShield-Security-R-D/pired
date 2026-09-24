@@ -61,6 +61,29 @@ describe("record tool", () => {
 		expect(findings[0]?.updatedAt).toBeDefined();
 	});
 
+	/**
+	 * The by-id path always appended, so `record id=X` with nothing new was a
+	 * ledger write like any other: it cost a line, and it lifted a worker's
+	 * recording reserve while its verdict stayed unrecorded.
+	 */
+	it("writes no line for a by-id re-record that says nothing new, and says so", async () => {
+		const { svc, ws, ctx, record } = await setup();
+		const created = await record.execute({ kind: "finding", title: "IDOR", severity: "high", target: "e1" }, ctx);
+		const id = (created.details as { id: string }).id;
+		const before = await svc.fs.readFileIfExists(ws.storePath("findings"));
+		svc.clock.advance(5000);
+		for (const call of [{}, { severity: "high" }, { status: "suspected" }]) {
+			const out = textOf(await record.execute({ kind: "finding", id, ...call }, ctx));
+			expect(await svc.fs.readFileIfExists(ws.storePath("findings")), JSON.stringify(call)).toBe(before);
+			expect(out).toContain(`Nothing to change on finding ${id}`);
+			expect(out).toContain("nothing was written");
+		}
+		// A real change still lands.
+		await record.execute({ kind: "finding", id, severity: "medium" }, ctx);
+		expect(await svc.fs.readFileIfExists(ws.storePath("findings"))).not.toBe(before);
+		expect((await ws.read("findings"))[0]?.severity).toBe("medium");
+	});
+
 	it("rejects a finding without a severity", async () => {
 		const { ctx, record } = await setup();
 		await expect(record.execute({ kind: "finding", title: "x", target: "e1" }, ctx)).rejects.toThrow(/severity/i);
@@ -1370,7 +1393,7 @@ describe("challenging a finding", () => {
 		await record.execute({ kind: "finding", title: "IDOR on notes", severity: "critical", target: "notes.py:42", class: "idor" }, ctx);
 		const out = textOf(await recall.execute({ query: "challenge" }, ctx));
 		expect(out.indexOf("IDOR on notes")).toBeLessThan(out.indexOf("Verbose errors"));
-		expect(out).toMatch(/2 finding\(s\) not yet confirmed/);
+		expect(out).toMatch(/2 finding\(s\) no challenge has settled, worst first:/);
 		expect(out).toMatch(/fresh context/);
 	});
 
@@ -1424,7 +1447,7 @@ describe("settling a finding is checked, not taken on trust", () => {
 		// rather than in the prompt, and the finding is kept either way.
 		const { ctx, ws, record, id } = await idor();
 		const out = textOf(await record.execute({ kind: "finding", id, status: "refuted" }, ctx));
-		expect(out).toMatch(/Recorded as suspected, not refuted/);
+		expect(out).toMatch(/Not recorded as refuted/);
 		expect(out).toMatch(/no basis cited/);
 		expect(out).toMatch(/nothing was lost/);
 		const kept = (await ws.read("findings")).find((f) => f.id === id);
@@ -1589,6 +1612,586 @@ describe("cleared cells and their second look", () => {
 		const out = textOf(await recall.execute({ query: "cleared", class: "authz" }, ctx));
 		expect(out).toContain("authz");
 		expect(out).not.toContain("sqli");
+	});
+});
+
+describe("an open lead is not closed by a refutation that never named it", () => {
+	// A hypothesis's identity is its (target, class) cell, and the merge used to
+	// keep the higher-ranked outcome, so refuted(3) silently replaced
+	// inconclusive(2). Measured on the 2026-09-24 grid: a lead recorded
+	// inconclusive ("cannot verify offline") was overwritten by a later refutation
+	// of a different mechanism in the same cell, and the baseline run confirmed
+	// the issue the lead was about. Nobody had resolved it; it just disappeared.
+	const LEAD = "stored script through the upload path reaches the viewer; cannot verify offline";
+	const OTHER = "the comment renderer escapes every field through the template engine before output";
+
+	async function withLead(outcome = "inconclusive") {
+		const kit = await setup();
+		const res = await kit.record.execute({ kind: "hypothesis", target: "e1", class: "xss", outcome, statement: LEAD }, kit.ctx);
+		return { ...kit, id: (res.details as { id: string }).id };
+	}
+
+	it("leaves the lead inconclusive under a bulk refutation, and the reply names it", async () => {
+		const { ws, ctx, record, id } = await withLead();
+		const res = await record.execute({ kind: "hypothesis", target: "e1", class: ["xss", "ssti"], outcome: "refuted", statement: OTHER }, ctx);
+		const hyps = await ws.read("hypotheses");
+		const lead = hyps.find((h) => h.id === id);
+		expect(lead).toMatchObject({ outcome: "inconclusive", statement: LEAD });
+		// The rest of the call is untouched: the cell nobody had opened is cleared.
+		expect(hyps.find((h) => h.class === "ssti")?.outcome).toBe("refuted");
+		const out = textOf(res);
+		expect(out).toContain("1 cell(s) hold an unresolved (inconclusive) lead and were left open");
+		expect(out).toContain(`: ${id}.`);
+	});
+
+	it("leaves the lead inconclusive under a single refutation, and the reply names it", async () => {
+		const { ws, ctx, record, id } = await withLead();
+		const res = await record.execute({ kind: "hypothesis", target: "e1", class: "xss", outcome: "refuted", statement: OTHER }, ctx);
+		expect(await ws.read("hypotheses")).toHaveLength(1);
+		expect((await ws.read("hypotheses"))[0]).toMatchObject({ id, outcome: "inconclusive", statement: LEAD });
+		const out = textOf(res);
+		expect(out).toContain("hold an unresolved (inconclusive) lead and were left open");
+		expect(out).toContain(`: ${id}.`);
+	});
+
+	it("still closes the lead when it is re-checked by id with a basis, and records the verification", async () => {
+		// The explicit id path never passes through the merge: it is last-write-wins,
+		// and the basis is what makes the move a second look rather than an overwrite.
+		const { ws, ctx, record, id } = await withLead();
+		const res = await record.execute(
+			{ kind: "hypothesis", id, outcome: "refuted", statement: OTHER, basis: ["views/comment.html:12"], live: false },
+			ctx,
+		);
+		const after = (await ws.read("hypotheses")).find((h) => h.id === id);
+		expect(after).toMatchObject({ outcome: "refuted", statement: OTHER });
+		expect(after?.verification).toMatchObject({ verdict: "amended", basis: ["views/comment.html:12"], live: false });
+		expect(textOf(res)).not.toContain("left open");
+	});
+
+	it("still lets an implicit refutation settle a cell that was only proposed or being tested", async () => {
+		for (const outcome of ["proposed", "testing"]) {
+			const single = await withLead(outcome);
+			const one = await single.record.execute({ kind: "hypothesis", target: "e1", class: "xss", outcome: "refuted", statement: OTHER }, single.ctx);
+			expect((await single.ws.read("hypotheses"))[0]).toMatchObject({ outcome: "refuted", statement: OTHER });
+			expect(textOf(one)).not.toContain("left open");
+
+			const bulk = await withLead(outcome);
+			const many = await bulk.record.execute({ kind: "hypothesis", target: "e1", class: ["xss", "ssti"], outcome: "refuted", statement: OTHER }, bulk.ctx);
+			expect((await bulk.ws.read("hypotheses")).find((h) => h.id === bulk.id)?.outcome).toBe("refuted");
+			expect(textOf(many)).not.toContain("left open");
+		}
+	});
+
+	it("still keeps a confirmed cell confirmed, without reporting it as an open lead", async () => {
+		const { ws, ctx, record, id } = await withLead("confirmed");
+		const res = await record.execute({ kind: "hypothesis", target: "e1", class: ["xss", "ssti"], outcome: "refuted", statement: OTHER }, ctx);
+		expect((await ws.read("hypotheses")).find((h) => h.id === id)?.outcome).toBe("confirmed");
+		expect(textOf(res)).not.toContain("left open");
+	});
+});
+
+describe("an open lead reopens a clearance that was recorded before it", () => {
+	// Round one held a lead open only when the lead was recorded first. Recorded
+	// second, rank kept the refutation, although it was written before the lead
+	// existed and so cannot have examined it — and two workers on one cell finish
+	// in whichever order they finish.
+	const CLEARED = "the upload handler resolves the path and checks it stays under the storage root";
+	const LEAD = "the export route writes a caller-named file; cannot verify offline";
+
+	async function withClearance(approach?: string) {
+		const kit = await setup();
+		const res = await kit.record.execute(
+			{ kind: "hypothesis", target: "e1", class: "traversal", outcome: "refuted", statement: CLEARED, ...(approach ? { approach } : {}) },
+			kit.ctx,
+		);
+		return { ...kit, id: (res.details as { id: string }).id };
+	}
+
+	it("reopens the cell under a single lead that says something new, and names it", async () => {
+		const { ws, ctx, record, id } = await withClearance("read the upload handler");
+		const res = await record.execute({ kind: "hypothesis", target: "e1", class: "traversal", outcome: "inconclusive", statement: LEAD }, ctx);
+		const after = (await ws.read("hypotheses")).find((h) => h.id === id);
+		expect(after).toMatchObject({ outcome: "inconclusive", statement: LEAD });
+		// The clearance's method describes a check of something else.
+		expect(after?.method).toBeUndefined();
+		expect(textOf(res)).toContain(`Reopened ${id}: a clearance recorded before this lead did not examine it`);
+	});
+
+	/**
+	 * Round two reopened every refuted cell a bulk lead crossed. One sentence
+	 * fanned across a surface is not evidence that each clearance it lands on
+	 * missed that mechanism — each examined its own cell — so the cross product
+	 * keeps the clearances and names them, with what each says.
+	 */
+	it("does not reopen from a bulk lead, and names each cleared cell it landed on", async () => {
+		const kit = await setup();
+		const other = "the fetcher allow-lists hosts before any request is made";
+		const a = (await kit.record.execute({ kind: "hypothesis", target: "e1", class: "traversal", outcome: "refuted", statement: CLEARED }, kit.ctx)).details as { id: string };
+		const b = (await kit.record.execute({ kind: "hypothesis", target: "e1", class: "ssrf", outcome: "refuted", statement: other }, kit.ctx)).details as { id: string };
+		const res = await kit.record.execute({ kind: "hypothesis", target: "e1", class: ["traversal", "ssrf"], outcome: "inconclusive", statement: LEAD }, kit.ctx);
+		const hyps = await kit.ws.read("hypotheses");
+		expect(hyps.find((h) => h.id === a.id)).toMatchObject({ outcome: "refuted", statement: CLEARED });
+		expect(hyps.find((h) => h.id === b.id)).toMatchObject({ outcome: "refuted", statement: other });
+		const out = textOf(res);
+		expect(out).not.toContain("Reopened");
+		expect(out).toContain("The lead landed on 2 cells already cleared, and the clearance was kept — a lead recorded across several cells at once does not reopen one");
+		expect(out).toContain(`${a.id} ("${CLEARED}")`);
+		expect(out).toContain(`${b.id} ("${other}")`);
+		expect(out).toMatch(/re-record that cell by id to reopen it: record kind=hypothesis id=<id> outcome=inconclusive/);
+	});
+
+	it("does not reopen a clearance re-checked by id with a basis, and says what it says", async () => {
+		const { ws, ctx, record, id } = await withClearance();
+		await record.execute({ kind: "hypothesis", id, outcome: "refuted", statement: CLEARED, basis: ["upload.go:31"] }, ctx);
+		const res = await record.execute({ kind: "hypothesis", target: "e1", class: "traversal", outcome: "inconclusive", statement: LEAD }, ctx);
+		const after = (await ws.read("hypotheses")).find((h) => h.id === id);
+		expect(after).toMatchObject({ outcome: "refuted", statement: CLEARED });
+		expect(after?.verification).toMatchObject({ verdict: "stands", basis: ["upload.go:31"] });
+		const out = textOf(res);
+		expect(out).not.toContain("Reopened");
+		expect(out).toContain(`The lead landed on a cell already cleared, and the clearance was kept — it was re-checked by id with a basis`);
+		expect(out).toContain(`${id} ("${CLEARED}")`);
+	});
+
+	it("reopens an unverified clearance on a single-cell lead, dropping its stale verification with its method and evidence", async () => {
+		// A look that settled nothing is no protection, and left on the reopened
+		// row it would read as a second look at the lead.
+		const { ws, ctx, record } = await setup();
+		await ws.upsert("hypotheses", () => [{
+			v: 1, id: "h9", kind: "hypothesis", createdAt: "t0", target: "e1", class: "traversal", outcome: "refuted",
+			statement: CLEARED, method: "read the upload handler", evidence: "evidence/upload.txt",
+			verification: { verdict: "unresolved", at: "t1", notes: "could not reach the export route" },
+		}]);
+		const res = await record.execute({ kind: "hypothesis", target: "e1", class: "traversal", outcome: "inconclusive", statement: LEAD }, ctx);
+		const after = (await ws.read("hypotheses")).find((h) => h.id === "h9");
+		expect(after).toMatchObject({ outcome: "inconclusive", statement: LEAD });
+		expect(after?.verification).toBeUndefined();
+		expect(after?.method).toBeUndefined();
+		expect(after?.evidence).toBeUndefined();
+		expect(textOf(res)).toContain("Reopened h9:");
+	});
+
+	/**
+	 * The clearance's own reply names this call as the way to reopen a cell on
+	 * purpose. The by-id path spread the stored row, so the reopened lead kept
+	 * the clearance's verification and read as one already given a second look.
+	 */
+	it("reopens a verified clearance by id without its stale verification, method or evidence", async () => {
+		const { ws, ctx, record, id } = await withClearance("read the upload handler");
+		await record.execute({ kind: "hypothesis", id, outcome: "refuted", statement: CLEARED, basis: ["upload.go:31"] }, ctx);
+		expect((await ws.read("hypotheses")).find((h) => h.id === id)?.verification?.verdict).toBe("stands");
+		await record.execute({ kind: "hypothesis", id, outcome: "inconclusive", statement: LEAD }, ctx);
+		const after = (await ws.read("hypotheses")).find((h) => h.id === id);
+		expect(after).toMatchObject({ outcome: "inconclusive", statement: LEAD });
+		expect(after?.verification).toBeUndefined();
+		expect(after?.method).toBeUndefined();
+		expect(after?.evidence).toBeUndefined();
+	});
+
+	it("ends in the same state whichever of the two was recorded first", async () => {
+		const clearanceFirst = await withClearance();
+		await clearanceFirst.record.execute({ kind: "hypothesis", target: "e1", class: "traversal", outcome: "inconclusive", statement: LEAD }, clearanceFirst.ctx);
+
+		const leadFirst = await setup();
+		await leadFirst.record.execute({ kind: "hypothesis", target: "e1", class: "traversal", outcome: "inconclusive", statement: LEAD }, leadFirst.ctx);
+		await leadFirst.record.execute({ kind: "hypothesis", target: "e1", class: "traversal", outcome: "refuted", statement: CLEARED }, leadFirst.ctx);
+
+		for (const kit of [clearanceFirst, leadFirst]) {
+			const hyps = await kit.ws.read("hypotheses");
+			expect(hyps).toHaveLength(1);
+			expect(hyps[0]).toMatchObject({ outcome: "inconclusive", statement: LEAD });
+		}
+	});
+
+	it("does not reopen a clearance for the same claim offered again", async () => {
+		// The extractor re-reads its buffer every turn; a re-offer of the sentence
+		// that cleared the cell is not a new lead.
+		const { ws, ctx, record, id } = await withClearance();
+		const res = await record.execute({ kind: "hypothesis", target: "e1", class: "traversal", outcome: "inconclusive", statement: CLEARED }, ctx);
+		expect((await ws.read("hypotheses")).find((h) => h.id === id)?.outcome).toBe("refuted");
+		expect(textOf(res)).not.toContain("Reopened");
+	});
+});
+
+describe("a held refutation adds nothing to the lead it did not close", () => {
+	it("writes no line, and leaves the refutation's method off the lead", async () => {
+		// The refutation's `method` used to ride onto the lead, so the held call
+		// differed from the stored row and wrote a line saying the open lead was
+		// grounded in the check that did not settle it.
+		const { svc, ws, ctx, record } = await setup();
+		await record.execute({ kind: "hypothesis", target: "e1", class: "xss", outcome: "inconclusive", statement: "stored script through the upload path; cannot verify offline" }, ctx);
+		const before = await svc.fs.readFileIfExists(ws.storePath("hypotheses"));
+		const res = await record.execute({
+			kind: "hypothesis", target: "e1", class: "xss", outcome: "refuted", approach: "read the renderer",
+			statement: "the renderer escapes every field through the template engine before output",
+		}, ctx);
+		expect(await svc.fs.readFileIfExists(ws.storePath("hypotheses"))).toBe(before);
+		expect((await ws.read("hypotheses"))[0]?.method).toBeUndefined();
+		expect(textOf(res)).toMatch(/nothing new in this call/);
+		expect(textOf(res)).toContain("left open");
+	});
+});
+
+describe("refuting a finding in a review with no live target", () => {
+	// An honest verifier in a source-only review says live=false, and judge()
+	// downgraded every refutation it made. Measured on the 2026-09-24 grid, the
+	// runs that did settle findings got there by asserting live=true on scopes
+	// with no target (17 of 18 verification records).
+	async function withFinding(sourceOnly?: () => boolean) {
+		const svc = makeFakeServices();
+		const ws = await Workspace.open("/ws/acme", "acme", svc);
+		const ctx: ToolContext = { cwd: "/target", services: svc };
+		const record = createRecordTool({ workspace: ws, ...(sourceOnly ? { sourceOnly } : {}) });
+		const made = await record.execute({ kind: "finding", title: "Path escape in export", severity: "high", target: "src/export.go:40", class: "traversal" }, ctx);
+		return { ws, ctx, record, id: (made.details as { id: string }).id };
+	}
+
+	it("settles a cited refutation that honestly says live=false", async () => {
+		const { ws, ctx, record, id } = await withFinding(() => true);
+		const out = textOf(await record.execute({ kind: "finding", id, status: "refuted", basis: ["src/export.go:31"], live: false }, ctx));
+		const f = (await ws.read("findings")).find((x) => x.id === id);
+		expect(f?.status).toBe("refuted");
+		expect(f?.verification).toMatchObject({ verdict: "refuted", basis: ["src/export.go:31"] });
+		expect(out).not.toMatch(/not reachable/);
+	});
+
+	it("stores no live flag on it, so the report does not call the target unreachable", async () => {
+		// live=false there means nothing was running. Stored, the report rendered
+		// "(target was not reachable)" beside a refutation the source settled.
+		const { ws, ctx, record, id } = await withFinding(() => true);
+		await record.execute({ kind: "finding", id, status: "refuted", basis: ["src/export.go:31"], live: false }, ctx);
+		expect((await ws.read("findings")).find((x) => x.id === id)?.verification).not.toHaveProperty("live");
+	});
+
+	it("keeps the downgrade when the engagement has a live target", async () => {
+		for (const sourceOnly of [() => false, undefined]) {
+			const { ws, ctx, record, id } = await withFinding(sourceOnly);
+			await record.execute({ kind: "finding", id, status: "refuted", basis: ["src/export.go:31"], live: false }, ctx);
+			expect((await ws.read("findings")).find((x) => x.id === id)?.status).toBe("suspected");
+		}
+	});
+
+	it("tells the model that live applies only where there is a live target", async () => {
+		const { record } = await setup();
+		const live = (record.parameters as { properties: Record<string, { description?: string }> }).properties.live?.description ?? "";
+		expect(live).toMatch(/live target/);
+		expect(live).toMatch(/review of source has no target to reach/);
+		// The same instruction the mission and the brief give: leave it out.
+		expect(live).toMatch(/no running target, leave it out/);
+		expect(live).not.toMatch(/say live=false/);
+		expect(record.description).toMatch(/'live' when the engagement has a live target/);
+	});
+});
+
+describe("a challenge that could not settle a finding", () => {
+	// status=suspected carried nothing, so a look that settled nothing had
+	// nowhere on the row to go. On the 2026-09-24 grid 10 of 15 verify tasks
+	// whose instructions said "do not change status" left no verdict on any row;
+	// those instructions conflicted with the brief (ADR-028), so the figure is
+	// verdicts that never reached a row, not this gap's effect alone.
+	async function withSuspect() {
+		const kit = await setup();
+		const made = await kit.record.execute({ kind: "finding", title: "SQLi in search", severity: "high", target: "search.py:9", class: "sqli" }, kit.ctx);
+		return { ...kit, id: (made.details as { id: string }).id };
+	}
+
+	it("writes an unresolved verification and keeps the finding suspected", async () => {
+		const { ws, ctx, record, id } = await withSuspect();
+		const out = textOf(await record.execute({
+			kind: "finding", id, status: "suspected", basis: ["search.py:9"],
+			control: "no database was available to run the false payload against",
+			reason: "the query is built by concatenation but the caller may cast to int first",
+		}, ctx));
+		const f = (await ws.read("findings")).find((x) => x.id === id);
+		expect(f?.status).toBe("suspected");
+		expect(f?.verification).toMatchObject({
+			verdict: "unresolved", basis: ["search.py:9"],
+			control: "no database was available to run the false payload against",
+			notes: "the query is built by concatenation but the caller may cast to int first",
+		});
+		expect(out).toMatch(/Recorded the challenge on .*: unresolved/);
+		expect(out).not.toMatch(/Not recorded as/);
+	});
+
+	/**
+	 * A reason is a note any edit may carry, and status=suspected beside a new
+	 * description is the finder editing its own claim. Round two wrote either as
+	 * a challenge, putting an "examined" mark on a finding no challenge had opened.
+	 */
+	it("writes no verification for the finder's routine edit", async () => {
+		const { ws, ctx, record, id } = await withSuspect();
+		await record.execute({ kind: "finding", id, status: "suspected", description: "The search term is concatenated into the WHERE clause.", reason: "reworded after reading the caller" }, ctx);
+		await record.execute({ kind: "finding", id, status: "suspected", reason: "the sink is in generated code not present in this tree" }, ctx);
+		const f = (await ws.read("findings")).find((x) => x.id === id);
+		expect(f?.verification).toBeUndefined();
+		expect(f?.description).toBe("The search term is concatenated into the WHERE clause.");
+	});
+
+	it("writes none for grounds sent beside a change to the claim", async () => {
+		const { ws, ctx, record, id } = await withSuspect();
+		for (const claim of [{ severity: "medium" }, { target: "search.py:12" }, { title: "SQLi in the search handler" }, { cwe: "CWE-89" }]) {
+			const out = textOf(await record.execute({ kind: "finding", id, status: "suspected", basis: ["search.py:9"], ...claim }, ctx));
+			expect((await ws.read("findings")).find((x) => x.id === id)?.verification, JSON.stringify(claim)).toBeUndefined();
+			// The grounds are not dropped without a word.
+			expect(out).toContain(`Not recorded as a challenge: this call also changes the claim (${Object.keys(claim)[0]})`);
+			expect(out).toContain(`record id=${id} status=suspected with basis=[...] or control="..."`);
+		}
+	});
+
+	it("stays in the challenge queue, labelled as examined and unsettled, with its brief there for a second look", async () => {
+		const { ctx, record, recall, id } = await withSuspect();
+		await record.execute({ kind: "finding", id, status: "suspected", control: "no database was available to run the false payload against" }, ctx);
+		const queue = textOf(await recall.execute({ query: "challenge" }, ctx));
+		expect(queue).not.toMatch(/Nothing unchallenged/);
+		expect(queue).toContain("examined, unsettled: no database was available to run the false payload against");
+		expect(textOf(await recall.execute({ query: "challenge", id }, ctx))).toContain(`Challenge finding ${id}`);
+	});
+
+	it("lists the examined after every finding nobody has examined, whatever their severity", async () => {
+		const { ctx, record, recall, id } = await withSuspect();
+		await record.execute({ kind: "finding", id, status: "suspected", basis: ["search.py:9"] }, ctx);
+		await record.execute({ kind: "finding", title: "Verbose errors", severity: "low", target: "app.py:3", class: "misconfig" }, ctx);
+		const out = textOf(await recall.execute({ query: "challenge" }, ctx));
+		expect(out.indexOf("Verbose errors")).toBeLessThan(out.indexOf("SQLi in search"));
+		expect(out).toMatch(/2 finding\(s\) no challenge has settled, worst first — the 1 examined but unsettled come after the ones nobody has examined/);
+	});
+
+	it("writes nothing of the kind for a bare status=suspected, or one handed a verification", async () => {
+		const { ws, ctx, record, id } = await withSuspect();
+		await record.execute({ kind: "finding", id, status: "suspected" }, ctx);
+		await record.execute({ kind: "finding", id, status: "suspected", verification: { verdict: "refuted", at: "t", basis: ["x.go:1"] } }, ctx);
+		expect((await ws.read("findings")).find((x) => x.id === id)?.verification).toBeUndefined();
+	});
+
+	it("is not a challenge when the finding is being recorded for the first time", async () => {
+		// A claim's first recording is not a challenge of it; writing a verification
+		// there would take a brand-new finding out of the queue.
+		const { ws, ctx, record, recall } = await setup();
+		await record.execute({ kind: "finding", title: "SQLi in search", severity: "high", target: "search.py:9", class: "sqli", status: "suspected", reason: "looks concatenated" }, ctx);
+		expect((await ws.read("findings"))[0]?.verification).toBeUndefined();
+		expect(textOf(await recall.execute({ query: "challenge" }, ctx))).toMatch(/1 finding\(s\) no challenge has settled, worst first:\n/);
+	});
+
+	it("keeps a finding recorded as confirmed without its control in the queue", async () => {
+		// The finder asserted a proof it had not shown. The downgrade is said in the
+		// reply; written as a verification it would read as a challenge that had
+		// already happened, and the claim that most needs a second look would get none.
+		const { ws, ctx, record, recall } = await setup();
+		const out = textOf(await record.execute({ kind: "finding", title: "SQLi in search", severity: "high", target: "search.py:9", class: "sqli", status: "confirmed" }, ctx));
+		const f = (await ws.read("findings"))[0];
+		expect(f?.status).toBe("suspected");
+		expect(f?.verification).toBeUndefined();
+		expect(out).toMatch(/Not recorded as confirmed/);
+		expect(textOf(await recall.execute({ query: "challenge" }, ctx))).toContain("SQLi in search");
+	});
+});
+
+describe("an unsettled look on a settled finding", () => {
+	// The unsettled path wrote status=suspected and an `unresolved` verification
+	// whatever the finding held, so a verifier saying "could not settle it" on a
+	// confirmed or reported finding demoted it and erased the proof it carried.
+	it("leaves a confirmed finding confirmed, with the verification it earned", async () => {
+		const { ws, ctx, record } = await setup();
+		const made = await record.execute({ kind: "finding", title: "SQLi in search", severity: "high", target: "search.py:9", class: "sqli" }, ctx);
+		const id = (made.details as { id: string }).id;
+		await record.execute({ kind: "finding", id, status: "confirmed", control: "the false payload returned the empty result set" }, ctx);
+		const earned = (await ws.read("findings")).find((x) => x.id === id)?.verification;
+		expect(earned?.verdict).toBe("stands");
+
+		const out = textOf(await record.execute({ kind: "finding", id, status: "suspected", basis: ["search.py:9"] }, ctx));
+		const f = (await ws.read("findings")).find((x) => x.id === id);
+		expect(f?.status).toBe("confirmed");
+		expect(f?.verification).toMatchObject({ verdict: "stands", at: earned?.at, control: "the false payload returned the empty result set" });
+		expect(f?.verification?.notes).toMatch(/later look .*unsettled: basis search\.py:9/);
+		expect(out).toMatch(/Its earlier stands verification .* met its bar and stands/);
+		expect(out).toMatch(/The finding stays confirmed/);
+	});
+
+	it("puts a confirmed finding moved back to suspected by id back in the challenge queue", async () => {
+		// The operator's documented downward correction. The stored verification
+		// still says `stands`, and read alone it kept the finding out of the queue.
+		const { ctx, record, recall } = await setup();
+		const made = await record.execute({ kind: "finding", title: "SQLi in search", severity: "high", target: "search.py:9", class: "sqli" }, ctx);
+		const id = (made.details as { id: string }).id;
+		await record.execute({ kind: "finding", id, status: "confirmed", control: "the false payload returned the empty result set" }, ctx);
+		expect(textOf(await recall.execute({ query: "challenge" }, ctx))).toMatch(/Nothing unchallenged/);
+		await record.execute({ kind: "finding", id, status: "suspected" }, ctx);
+		const queue = textOf(await recall.execute({ query: "challenge" }, ctx));
+		expect(queue).not.toMatch(/Nothing unchallenged/);
+		expect(queue).toContain("SQLi in search");
+		expect(queue).toContain("examined, moved back to suspected from a stands verdict");
+	});
+
+	it("leaves a reported finding reported", async () => {
+		const { ws, ctx, record } = await setup();
+		const made = await record.execute({ kind: "finding", title: "SQLi in search", severity: "high", target: "search.py:9", class: "sqli" }, ctx);
+		const id = (made.details as { id: string }).id;
+		await record.execute({ kind: "finding", id, status: "reported" }, ctx);
+		const out = textOf(await record.execute({ kind: "finding", id, status: "suspected", control: "could not reach a database to replay against" }, ctx));
+		const f = (await ws.read("findings")).find((x) => x.id === id);
+		expect(f?.status).toBe("reported");
+		expect(f?.verification?.verdict).toBe("unresolved");
+		expect(out).toMatch(/The finding stays reported/);
+	});
+});
+
+describe("a challenge that missed its bar keeps the finding in the queue", () => {
+	// Round two took any finding with a verification out of the queue, so a
+	// downgraded verdict left `recall challenge` saying "Nothing unchallenged"
+	// over a claim nothing had settled. Round three wrote every downgrade on an
+	// existing finding as an `unresolved` verification, grounds or none, so a
+	// bare verdict marked the finding examined and sorted a critical claim
+	// nobody had looked at below the never-examined lows.
+	async function withSuspect(sourceOnly?: () => boolean) {
+		const svc = makeFakeServices();
+		const ws = await Workspace.open("/ws/acme", "acme", svc);
+		const ctx: ToolContext = { cwd: "/target", services: svc };
+		const deps = { workspace: ws, ...(sourceOnly ? { sourceOnly } : {}) };
+		const record = createRecordTool(deps);
+		const recall = createRecallTool(deps);
+		const made = await record.execute({ kind: "finding", title: "SQLi in search", severity: "high", target: "search.py:9", class: "sqli" }, ctx);
+		return { ws, ctx, record, recall, id: (made.details as { id: string }).id };
+	}
+
+	it("keeps it there after a live=false refutation with a basis on an engagement with a target, labelled as examined and unsettled", async () => {
+		// Grounded: the verifier said what it read. That is a look, and it is kept.
+		const { ws, ctx, record, recall, id } = await withSuspect(() => false);
+		await record.execute({ kind: "finding", id, status: "refuted", basis: ["search.py:9"], live: false }, ctx);
+		const f = (await ws.read("findings")).find((x) => x.id === id);
+		expect(f?.status).toBe("suspected");
+		expect(f?.verification).toMatchObject({ verdict: "unresolved", basis: ["search.py:9"], live: false });
+		const queue = textOf(await recall.execute({ query: "challenge" }, ctx));
+		expect(queue).not.toMatch(/Nothing unchallenged/);
+		expect(queue).toContain("SQLi in search");
+		expect(queue).toContain("examined, unsettled:");
+	});
+
+	const BARE: Array<[string, Record<string, unknown>]> = [
+		["a refutation with no basis", { status: "refuted", live: true }],
+		["a confirmation with no control case", { status: "confirmed" }],
+	];
+
+	for (const [what, call] of BARE) {
+		it(`keeps it there after ${what}, unexamined and ranked by severity`, async () => {
+			const { ws, ctx, record, recall, id } = await withSuspect();
+			await record.execute({ kind: "finding", title: "Verbose errors", severity: "low", target: "app.py:3", class: "misconfig" }, ctx);
+			const out = textOf(await record.execute({ kind: "finding", id, ...call }, ctx));
+			const f = (await ws.read("findings")).find((x) => x.id === id);
+			expect(f?.status).toBe("suspected");
+			expect(f?.verification).toBeUndefined();
+			// The reply still says what was missing, and that no look was written.
+			expect(out).toMatch(/Not recorded as (refuted|confirmed)/);
+			expect(out).toContain("Nothing was written as a look on it either: the call named no basis or control.");
+			const queue = textOf(await recall.execute({ query: "challenge" }, ctx));
+			expect(queue).toContain("SQLi in search");
+			expect(queue).not.toContain("examined, unsettled");
+			expect(queue).not.toMatch(/examined but unsettled come after/);
+			expect(queue.indexOf("SQLi in search")).toBeLessThan(queue.indexOf("Verbose errors"));
+		});
+	}
+
+	it("leaves an earlier look in place, and says its grounds were not added, when a bare verdict follows it", async () => {
+		const { ws, ctx, record, id } = await withSuspect();
+		await record.execute({ kind: "finding", id, status: "suspected", basis: ["search.py:9"] }, ctx);
+		const look = (await ws.read("findings")).find((x) => x.id === id)?.verification;
+		await record.execute({ kind: "finding", id, status: "refuted" }, ctx);
+		expect((await ws.read("findings")).find((x) => x.id === id)?.verification).toEqual(look);
+	});
+
+	it("does not claim a bare verdict's grounds were added to the verdict that stands", async () => {
+		const { ws, ctx, record, id } = await withSuspect();
+		await record.execute({ kind: "finding", id, status: "confirmed", control: "the false payload returned the empty result set" }, ctx);
+		const earned = (await ws.read("findings")).find((x) => x.id === id)?.verification;
+		const out = textOf(await record.execute({ kind: "finding", id, status: "refuted", reason: "looks parameterised" }, ctx));
+		const f = (await ws.read("findings")).find((x) => x.id === id);
+		expect(f?.status).toBe("confirmed");
+		expect(f?.verification).toEqual(earned);
+		expect(out).toMatch(/Its earlier stands verification .* met its bar and stands/);
+		expect(out).not.toContain("your grounds were added");
+	});
+});
+
+describe("the briefs name the fields the gate reads", () => {
+	it("puts a finding's refutation grounds in basis, not reason", async () => {
+		// The tail used to say "a refutation needs the grounds in 'reason'", which
+		// the gate does not read as a basis: a verifier that did as told was
+		// recorded unresolved.
+		const { ctx, record, recall } = await setup();
+		const made = await record.execute({ kind: "finding", title: "SQLi in search", severity: "high", target: "search.py:9", class: "sqli" }, ctx);
+		const id = (made.details as { id: string }).id;
+		const out = textOf(await recall.execute({ query: "challenge", id }, ctx));
+		expect(out).toContain(`record kind=finding id=${id}`);
+		expect(out).toMatch(/refuted: basis=/);
+		expect(out).not.toMatch(/grounds in 'reason'/);
+	});
+
+	it("puts a hypothesis's grounds in basis, on its id", async () => {
+		const { ctx, record, recall } = await setup();
+		const made = await record.execute({
+			kind: "hypothesis", target: "e1", class: "sqli", outcome: "refuted",
+			statement: "every query on this route is parameterised through bound parameters",
+		}, ctx);
+		const id = (made.details as { id: string }).id;
+		const out = textOf(await recall.execute({ query: "challenge", id }, ctx));
+		expect(out).toContain(`record kind=hypothesis id=${id}`);
+		expect(out).toContain(`hypothesisId=${id}`);
+		expect(out).not.toMatch(/grounds go in 'reason'/);
+	});
+
+	it("names the hypothesis id a confirmed cell's finding should link to", async () => {
+		const { ctx, record } = await setup();
+		const res = await record.execute({ kind: "hypothesis", statement: "dag_id is not scoped", target: "e1", class: "authz", outcome: "confirmed" }, ctx);
+		const id = (res.details as { id: string }).id;
+		expect(textOf(res)).toContain(`hypothesisId=${id}`);
+		expect(textOf(res)).toMatch(/status=confirmed with the control case/);
+		// The two fields a new finding is refused without.
+		expect(textOf(res)).toContain('title="..." and severity=... (both required)');
+		expect(textOf(res)).toMatch(/lands suspected unless it carries status=confirmed/);
+	});
+});
+
+describe("a bulk hypothesis reply names what it wrote", () => {
+	// Batch replies said how many and not which: on the 2026-09-24 grid 566 of 787
+	// ids workers wrote were never visible to the worker that wrote them, so
+	// nothing it recorded in bulk could be addressed by id afterwards.
+	const WHY = "no template rendering and no SQL string building anywhere on these routes";
+
+	it("lists the ids it created", async () => {
+		const { ctx, record } = await setup();
+		const res = await record.execute({ kind: "hypothesis", target: "e1", class: ["sqli", "ssti", "xxe"], outcome: "refuted", statement: WHY }, ctx);
+		const { created } = res.details as { created: string[] };
+		expect(created).toHaveLength(3);
+		expect(textOf(res)).toContain(`Ids written: new ${created.join(", ")}.`);
+	});
+
+	it("tells an update from a repeat that changed nothing", async () => {
+		const { ctx, record } = await setup();
+		const first = await record.execute({ kind: "hypothesis", target: "e1", class: ["sqli", "ssti"], outcome: "proposed", statement: WHY }, ctx);
+		const [sqli, ssti] = (first.details as { created: string[] }).created;
+		// sqli moves to refuted; ssti is re-proposed with nothing new; xxe is new.
+		await record.execute({ kind: "hypothesis", target: "e1", class: "sqli", outcome: "refuted", statement: WHY }, ctx);
+		const res = await record.execute({ kind: "hypothesis", target: "e1", class: ["sqli", "ssti", "xxe"], outcome: "proposed", statement: WHY }, ctx);
+		const out = textOf(res);
+		const [xxe] = (res.details as { created: string[] }).created;
+		expect(out).toContain(`Ids written: new ${xxe}.`);
+		expect(out).toContain("2 cell(s) were already recorded and were left as they were (nothing new)");
+		expect(out).not.toContain(`updated ${sqli}`);
+		expect(out).not.toContain(`updated ${ssti}`);
+
+		const moved = textOf(await record.execute({ kind: "hypothesis", target: "e1", class: ["ssti", "xxe"], outcome: "refuted", statement: WHY }, ctx));
+		expect(moved).toContain(`Ids written: updated ${ssti}, ${xxe}.`);
+		expect(moved).toContain("were updated in place, not duplicated");
+	});
+
+	it("names the first twenty and sends the rest to recall", async () => {
+		const { ctx, record } = await setup();
+		const targets = Array.from({ length: 25 }, (_, i) => `e${i + 1}`);
+		const res = await record.execute({ kind: "hypothesis", target: targets, class: "sqli", outcome: "refuted", statement: WHY }, ctx);
+		const { created } = res.details as { created: string[] };
+		const out = textOf(res);
+		expect(out).toContain(created[19] as string);
+		expect(out).not.toContain(`${created[20]},`);
+		expect(out).toContain("…and 5 more — recall hypotheses");
 	});
 });
 

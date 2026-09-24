@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { EngagementScope } from "./ontology.ts";
 import type { GateDecision } from "./ports.ts";
-import { checkCommandScope, createScopeGate, DEFAULT_MAX_AGENTS, extractTargets, isHostInScope, isUrlInScope, isWithinDir, pickTargetType, scopeGuidance, summarizeScope } from "./scope.ts";
+import { checkCommandScope, createScopeGate, DEFAULT_MAX_AGENTS, extractTargets, isHostInScope, isSourceOnly, isUrlInScope, isWithinDir, pickTargetType, scopeGuidance, summarizeScope } from "./scope.ts";
 
 const scope: EngagementScope = {
 	v: 1,
@@ -359,6 +359,55 @@ describe("the subagent budget", () => {
 	it("ignores a nonsense budget rather than locking delegation out", () => {
 		expect(decide(createScopeGate(eng({ maxAgents: -3 })), spawn).allow).toBe(true);
 	});
+
+	it("tells a parent past the cap how to finish, the same way whichever tool hit it", () => {
+		const spawned = createScopeGate(eng({ maxAgents: 1 }));
+		decide(spawned, spawn);
+		const launched = createScopeGate(eng({ maxAgents: 1 }), { cwd: "/work" });
+		decide(launched, { name: "subagent", args: { agent: "pired-scout", task: "map" } });
+		launched.settle({ name: "subagent", isError: false, result: { details: { results: [{}] } } });
+		const viaSpawn = decide(spawned, spawn).reason;
+		const viaSubagent = decide(launched, { name: "subagent", args: { agent: "pired-verify", task: "check" } }).reason;
+		expect(viaSpawn).toBe(viaSubagent);
+	});
+});
+
+/**
+ * The refusal at the worker cap is where the parent learns the rest of the
+ * session is its own. It used to say "record what the existing workers returned
+ * and do the rest here": in the 2026-09-24 v4 grid 43.5% of gpt-6-luna
+ * candidate parent tokens were spent after the last worker, one run 65 requests
+ * and 11.7M tokens with no true positive. One post-cap phase did find a true
+ * positive, so the refusal guides the wrap-up rather than ending it.
+ */
+describe("the refusal at the worker cap", () => {
+	const eng = (over: Partial<EngagementScope> = {}): EngagementScope => ({
+		v: 1, engagement: "e", authorized: true, mode: "off", targets: {}, ...over,
+	});
+	const capped = (): string => {
+		const gate = createScopeGate(eng({ maxAgents: 1 }), { cwd: "/work" });
+		expect((gate({ id: "a", name: "subagent", args: { agent: "pired-scout", task: "map" } }) as GateDecision).allow).toBe(true);
+		gate.settle({ id: "a", name: "subagent", isError: false, result: { details: { results: [{}] } } });
+		const refused = gate({ name: "subagent", args: { agent: "pired-verify", task: "check" } }) as GateDecision;
+		expect(refused.allow).toBe(false);
+		return refused.reason ?? "";
+	};
+
+	it("says the rest of the work is the parent's, and points it at the ledger's open items first", () => {
+		const reason = capped();
+		expect(reason).toMatch(/what is left is yours to finish here/);
+		expect(reason).toMatch(/First settle what the ledger already holds/);
+		for (const item of [/findings nobody has challenged/, /inconclusive leads/, /worker verdicts you have not acted on/]) expect(reason).toMatch(item);
+		expect(reason).toMatch(/then carry on with the rest of the method/);
+		expect(reason).toMatch(/Closing an open item usually settles more than opening new surface/);
+		expect(reason).toMatch(/raise maxAgents in the scope file/);
+	});
+
+	it("never reads as a stop, because a post-cap phase can still find what the workers missed", () => {
+		const reason = capped();
+		expect(reason).not.toMatch(/\bstop\b|wrap up now|finish early|hand back/i);
+		expect(reason).not.toMatch(/Record what the existing workers returned and do the rest here/);
+	});
 });
 
 /**
@@ -633,6 +682,58 @@ describe("isWithinDir", () => {
 		expect(isWithinDir("C:\\eng", "c:\\eng\\src")).toBe(true);
 		expect(isWithinDir("C:\\eng", "src\\x")).toBe(true);
 		expect(isWithinDir("C:\\eng", "D:\\eng")).toBe(false);
+	});
+});
+
+/**
+ * A source-only engagement has no live target, so a live-target bar on a
+ * refutation is one only a false `live=true` clears: in the 2026-09-24 v4 grid
+ * 17 of 18 baseline verification records did exactly that on scopes with no
+ * target, and an honest `live=false` refutation was downgraded to unresolved.
+ */
+describe("isSourceOnly", () => {
+	const eng = (over: Partial<EngagementScope> = {}): EngagementScope => ({
+		v: 1, engagement: "e", authorized: true, mode: "enforce", targets: {}, ...over,
+	});
+
+	it("is true with no scope loaded at all", () => {
+		expect(isSourceOnly(undefined)).toBe(true);
+	});
+
+	it("is true when the gate is off and the file lists no target", () => {
+		expect(isSourceOnly(eng({ mode: "off" }))).toBe(true);
+		expect(isSourceOnly(eng({ mode: "off", authorized: false, targets: {} }))).toBe(true);
+	});
+
+	it("is false when the gate is off but the file lists targets, so the live bar still holds on a live engagement", () => {
+		// Keying on mode would let a worker refute with live=false on a scope whose
+		// prompt (scopeGuidance) lists running targets it could have tested.
+		expect(isSourceOnly(eng({ mode: "off", targets: { urls: ["https://app.e.test/api"] } }))).toBe(false);
+		expect(isSourceOnly(eng({ mode: "off", targets: { domains: ["app.e.test"] } }))).toBe(false);
+	});
+
+	it("agrees with scopeGuidance: whenever the prompt names targets, the engagement is not source-only", () => {
+		for (const mode of ["off", "warn", "enforce"] as const) {
+			for (const targets of [{}, { urls: ["https://app.e.test/"] }]) {
+				const scope = eng({ mode, targets });
+				const namesTargets = /^(domains|ips|cidrs|urls): /m.test(scopeGuidance(scope));
+				expect(isSourceOnly(scope), `${mode} ${JSON.stringify(targets)}`).toBe(!namesTargets);
+			}
+		}
+	});
+
+	it("is true for an armed scope that names no target, empty lists included", () => {
+		expect(isSourceOnly(eng())).toBe(true);
+		expect(isSourceOnly(eng({ targets: { domains: [], ips: [], cidrs: [], urls: [] } }))).toBe(true);
+		expect(isSourceOnly({ v: 1, engagement: "e", authorized: true, mode: "warn" } as EngagementScope)).toBe(true);
+	});
+
+	it("is false once any kind of target is named, whatever the mode", () => {
+		for (const targets of [{ domains: ["app.e.test"] }, { ips: ["10.0.0.5"] }, { cidrs: ["10.0.0.0/24"] }, { urls: ["https://app.e.test/api"] }]) {
+			expect(isSourceOnly(eng({ targets })), JSON.stringify(targets)).toBe(false);
+			expect(isSourceOnly(eng({ mode: "warn", targets })), JSON.stringify(targets)).toBe(false);
+			expect(isSourceOnly(eng({ mode: "off", targets })), JSON.stringify(targets)).toBe(false);
+		}
 	});
 });
 

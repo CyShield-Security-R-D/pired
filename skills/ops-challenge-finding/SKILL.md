@@ -12,11 +12,11 @@ Goal: try to **break** a finding before a client reads it, without ever losing a
 ## 0. Do it in a fresh context
 A verifier that has already read the reasoning behind a claim agrees with it. Measured: the scribe pass, which re-read the agent's own review buffer, cost 2.5x the wall clock and moved precision from 0.059 to 0.038.
 
-If the `subagent` tool is available (`ops-delegation`), hand the finding to the `pired-verify` worker. It starts in a fresh context and works from the record and the target alone. Tell it to leave the finding's status alone, because §6 needs the operator's agreement first:
+If the `subagent` tool is available (`ops-delegation`), hand the finding — or two or three — to the `pired-verify` worker. It starts in a fresh context, works from the record and the target alone, and takes several one at a time. It records each verdict on the finding by id, held to the same two bars as yours (§1): short of either, the finding stays `suspected` with what it checked. A verdict that lives only in its handoff is lost, so there is no need to tell it to leave the status alone:
 ```json
-{"agent":"pired-verify","task":"Challenge finding <id>: read recall challenge id=<id>, run the control case (re-run reads only, never a write), and try to refute it. Do not change the finding's status. Hand back the verdict, what you ran, what came back, and the evidence path."}
+{"agent":"pired-verify","task":"Challenge findings <id> and <id2>, one at a time: read recall challenge id=<id> for each, run the control case (re-run reads only, never a write), try to refute it, and record the verdict on the finding by id. Hand back the verdicts, what you ran, what came back, and the evidence paths."}
 ```
-Then bring its verdict to the operator as §6 describes. If the tool is not available, work from `recall challenge id=<id>` and the code/target **without** re-reading your own notes about it.
+Then bring its verdicts to the operator as §6 describes. If the tool is not available, work from `recall challenge id=<id>` and the code/target **without** re-reading your own notes about it.
 
 ## 1. The two bars, and why missing either is safe
 - **To confirm:** run the control case and say what it returned.
@@ -68,9 +68,11 @@ Write the answer into the model (`record kind=model section=actors`) rather than
 ## 6. Report the verdict; let the operator agree before you write
 Say what you ran, what came back, and what it means. Then update:
 ```
-record id=<id> status=confirmed  source=reproduced   # control ran, entitlement settled
-record id=<id> status=refuted    reason="<the grounds — cite the file:line or evidence path>"
+record id=<id> status=confirmed control="<the control case you ran and what it returned>" source=reproduced
+record id=<id> status=refuted   basis=["<file:line or evidence path>"] reason="<optional commentary>"
 ```
+Add `entitlement="..."` to a confirmation where access is the question (§4). Add `live=true` to a refutation only when you tested a running target; leave it out when your basis is the source. The record tool reads `control` to confirm and `basis` to refute; `reason` is commentary and settles nothing on its own.
+
 Set `source=` on every finding you touch — `scanner` (nobody re-issued it), `inferred` (no request behind it), `observed` (a response somebody saw), `reproduced` (observed twice with the control run). A consultant signing the report needs to know which is which.
 
-**Ask before changing a finding's status**, especially one already `reported` — that is a claim the client has read, and withdrawing it is a conversation, not an edit. The most useful outcome is usually neither confirm nor refute: a corrected severity, a corrected location, or the proof it was always missing.
+**Ask before changing a finding's status** yourself, and before acting on a verifier's verdict against one already `reported` — that is a claim the client has read, and withdrawing it is a conversation, not an edit. A verifier cannot change a `reported` finding's status (pired refuses it), so its verdict on one reaches you in the handoff. The most useful outcome is usually neither confirm nor refute: a corrected severity, a corrected location, or the proof it was always missing.

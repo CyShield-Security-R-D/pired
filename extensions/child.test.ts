@@ -4,12 +4,15 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { CHILD_EXTENSION_ID, EXTENSION_ACK_EVENT, HANDOFF_GRACE_TURNS, publishParentScope } from "../core/child.ts";
-import type { EngagementScope } from "../core/ontology.ts";
+import {
+	CHILD_EXTENSION_ID, EXTENSION_ACK_EVENT, HANDOFF_GRACE_TURNS, publishParentScope, RECORD_RESERVE_TURNS,
+	SUPERVISOR_SECTION_END, SUPERVISOR_SECTION_START,
+} from "../core/child.ts";
+import type { EngagementScope, FindingRecord, HypothesisRecord } from "../core/ontology.ts";
 import { createScopeGate } from "../core/scope.ts";
 import { agentMarker, PIRED_AGENTS } from "../core/subagents.ts";
 import { Workspace } from "../core/workspace.ts";
-import piredChild from "./child.ts";
+import piredChild, { SETTLE_REMINDER_TYPE } from "./child.ts";
 import { makeHostServices } from "./lib/host.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -99,6 +102,23 @@ describe("pired child extension wiring", () => {
 		return { ws, scopeBytes: readFileSync(join(ws, "scope.json"), "utf8") };
 	}
 
+	/** Rows the parent's investigator left on the ledger, written the way the record tool stores them. */
+	async function seedLedger(ws: string, findings: FindingRecord[], hypotheses: HypothesisRecord[] = []): Promise<void> {
+		const workspace = new Workspace(ws, makeHostServices());
+		await workspace.upsert("findings", () => findings);
+		if (hypotheses.length) await workspace.upsert("hypotheses", () => hypotheses);
+	}
+
+	const AT = "2026-09-24T00:00:00.000Z";
+	const finding = (over: Partial<FindingRecord> = {}): FindingRecord => ({
+		v: 1, id: "f-1", kind: "finding", createdAt: AT, title: "Missing owner check on invoice export", severity: "medium",
+		target: "src/export.ts:40", description: "No owner check.", status: "suspected", ...over,
+	});
+	const hypothesis: HypothesisRecord = {
+		v: 1, id: "h-7", kind: "hypothesis", createdAt: AT, statement: "the router's owner check runs before the export handler",
+		target: "e-1", class: "idor", outcome: "refuted",
+	};
+
 	it("refuses to start without the parent's workspace, creates none, and blocks every tool", async () => {
 		delete process.env.PIRED_WORKSPACE;
 		const { tools, emitted, fire } = fakePi();
@@ -182,34 +202,196 @@ describe("pired child extension wiring", () => {
 		}
 	});
 
-	it("tells a worker to hand back at its role's turn budget, then ends the run", async () => {
-		await parentSession();
-		const { fire } = fakePi();
+	it("tells a worker to hand back at its role's turn budget, keeps the ledger open for the grace turns, then ends the run", async () => {
+		const { ws } = await parentSession();
+		const { fire, tools } = fakePi();
 		const scout = PIRED_AGENTS.find((a) => a.name === "pired-scout");
 		const ctx = ctxFor(root, agentMarker("pired-scout"));
 		await fire("session_start", {}, ctx);
+		// Something on the ledger, so the recording reserve stays out of this.
+		await tools.find((t) => t.name === "record")?.execute("r1", { kind: "host", value: "app.child-test.test" }, undefined, undefined, { cwd: root });
 		for (let i = 0; i < (scout?.maxTurns ?? 0); i++) await fire("turn_start", { type: "turn_start" }, ctx);
 		expect(await toolCall(fire, ctx, "read", { path: "a.ts" })).toBeUndefined();
 
 		await fire("turn_start", { type: "turn_start" }, ctx);
 		const handBack = await toolCall(fire, ctx, "read", { path: "a.ts" });
 		expect(handBack?.reason).toContain("pired-scout has used its 20-turn budget");
+		expect(handBack?.reason).toContain("The ledger is still open");
 		expect(handBack?.terminate).toBeUndefined();
+		// The grace turns are the ledger's: a record there is written, not refused.
+		const late = { kind: "endpoint", method: "GET", path: "/late", file: "src/app.ts" };
+		expect(await toolCall(fire, ctx, "record", late)).toBeUndefined();
+		await tools.find((t) => t.name === "record")?.execute("r2", late, undefined, undefined, { cwd: root });
+		expect(readFileSync(join(ws, "inventory.jsonl"), "utf8")).toContain('"path":"/late"');
 
 		for (let i = 0; i < HANDOFF_GRACE_TURNS; i++) await fire("turn_start", { type: "turn_start" }, ctx);
 		expect(await toolCall(fire, ctx, "read", { path: "a.ts" })).toMatchObject({ block: true, terminate: true });
+		expect(await toolCall(fire, ctx, "record", late)).toMatchObject({ block: true, terminate: true });
+	});
+
+	it("keeps the recording reserve in force after a record that throws, and lifts it after one that resolves", async () => {
+		// A write that threw put nothing on the ledger; counting it would release
+		// the reserve for a worker whose work is still nowhere durable.
+		await parentSession();
+		const { fire, tools } = fakePi();
+		const scout = PIRED_AGENTS.find((a) => a.name === "pired-scout");
+		const ctx = ctxFor(root, agentMarker("pired-scout"));
+		await fire("session_start", {}, ctx);
+		for (let i = 0; i < (scout?.maxTurns ?? 0) - RECORD_RESERVE_TURNS + 1; i++) await fire("turn_start", { type: "turn_start" }, ctx);
+		expect(await toolCall(fire, ctx, "bash", { command: "ls" })).toMatchObject({ block: true, reason: expect.stringContaining("has recorded nothing to the shared ledger") });
+
+		const record = tools.find((t) => t.name === "record");
+		await expect(record?.execute("r1", { kind: "evidence" }, undefined, undefined, { cwd: root })).rejects.toThrow(/'name' is required/);
+		expect(await toolCall(fire, ctx, "bash", { command: "ls" })).toMatchObject({ block: true, reason: expect.stringContaining("has recorded nothing") });
+
+		await record?.execute("r2", { kind: "host", value: "app.child-test.test" }, undefined, undefined, { cwd: root });
+		expect(await toolCall(fire, ctx, "bash", { command: "ls" })).toBeUndefined();
+	});
+
+	/**
+	 * Every record call that resolved used to count, so a verifier that saved an
+	 * evidence file — a file, not a ledger row — was let out of the reserve and
+	 * past the settle reminder with its verdict still only in its handoff.
+	 */
+	it("keeps a verifier's reserve and settle reminder after an evidence file or a note, and lifts both with its verdict", async () => {
+		const { ws } = await parentSession();
+		await seedLedger(ws, [finding()]);
+		const verify = PIRED_AGENTS.find((a) => a.name === "pired-verify");
+		const ctx = ctxFor(root, agentMarker("pired-verify"));
+		const evidence = { kind: "evidence", name: "f-1-refute.txt", content: "router.ts:12 requireOwner(invoice)" };
+		const note = { kind: "note", text: "The router checks the owner before the export handler runs." };
+		const verdict = { kind: "finding", id: "f-1", status: "refuted", basis: ["src/router.ts:12", "evidence/f-1-refute.txt"], reason: "the owner check runs first" };
+		// Fresh args per call, as pi sends them: the record tool writes its verdict onto the object it is given.
+		const run = async (pi: ReturnType<typeof fakePi>, id: string, args: Record<string, unknown>) => {
+			expect(await toolCall(pi.fire, ctx, "record", { ...args })).toBeUndefined();
+			await pi.tools.find((t) => t.name === "record")?.execute(id, { ...args }, undefined, undefined, { cwd: root });
+		};
+
+		const reserve = fakePi();
+		await reserve.fire("session_start", {}, ctx);
+		for (let i = 0; i < (verify?.maxTurns ?? 0) - RECORD_RESERVE_TURNS + 1; i++) await reserve.fire("turn_start", { type: "turn_start" }, ctx);
+		await run(reserve, "e1", evidence);
+		await run(reserve, "n1", note);
+		expect(await toolCall(reserve.fire, ctx, "bash", { command: "ls" })).toMatchObject({ block: true, reason: expect.stringContaining("has recorded no verdict") });
+		await run(reserve, "v1", verdict);
+		expect(await toolCall(reserve.fire, ctx, "bash", { command: "ls" })).toBeUndefined();
+
+		const settle = { type: "agent_before_settle", outcome: "completed", entries: [], continue: false };
+		const early = fakePi();
+		await early.fire("session_start", {}, ctx);
+		for (let i = 0; i < 7; i++) await early.fire("turn_start", { type: "turn_start" }, ctx);
+		await run(early, "e2", evidence);
+		const [reminded] = await early.fire("agent_before_settle", settle, ctx) as Array<{ continue?: boolean } | undefined>;
+		expect(reminded?.continue).toBe(true);
+
+		const settled = fakePi();
+		await settled.fire("session_start", {}, ctx);
+		for (let i = 0; i < 7; i++) await settled.fire("turn_start", { type: "turn_start" }, ctx);
+		await run(settled, "e3", evidence);
+		await run(settled, "v3", verdict);
+		expect(await settled.fire("agent_before_settle", settle, ctx)).toEqual([undefined]);
+	});
+
+	/**
+	 * The review probe: the finding under check sent back as a new one with
+	 * hypothesisId 'h-any' passed the gate, and the record tool merged it into
+	 * the existing finding. The gate needs the parent's ledger to see either.
+	 */
+	it("checks a verifier's finding writes against the parent's ledger", async () => {
+		const { ws } = await parentSession();
+		await seedLedger(ws, [finding(), finding({ id: "f-2", title: "Verbose stack traces", target: "src/errors.ts:3", status: "reported" })], [hypothesis]);
+		const { fire, tools } = fakePi();
+		const ctx = ctxFor(root, agentMarker("pired-verify"));
+		await fire("session_start", {}, ctx);
+		await fire("turn_start", { type: "turn_start" }, ctx);
+
+		const probe = { kind: "finding", hypothesisId: "h-any", title: "Missing owner check on invoice export", severity: "critical", target: "src/export.ts:40", description: "A longer description that would win the merge." };
+		expect(await toolCall(fire, ctx, "record", probe)).toMatchObject({ block: true, reason: expect.stringContaining("no hypothesis 'h-any'") });
+		expect(await toolCall(fire, ctx, "record", { ...probe, hypothesisId: "h-7" })).toMatchObject({ block: true, reason: expect.stringContaining("record id=f-1 status=") });
+		// h-7 is on the ledger refuted: the hypothesis is confirmed first, through the real record tool, then the finding.
+		const fresh = { kind: "finding", hypothesisId: "h-7", title: "Export CSV includes other tenants' totals", severity: "high", target: "src/export.ts:88" };
+		expect(await toolCall(fire, ctx, "record", fresh)).toMatchObject({ block: true, reason: expect.stringContaining("hypothesis h-7 is recorded refuted, not confirmed") });
+		const confirm = { kind: "hypothesis", id: "h-7", outcome: "confirmed", basis: ["src/export.ts:88"] };
+		expect(await toolCall(fire, ctx, "record", { ...confirm })).toBeUndefined();
+		await tools.find((t) => t.name === "record")?.execute("h1", { ...confirm }, undefined, undefined, { cwd: root });
+		expect(await toolCall(fire, ctx, "record", fresh)).toBeUndefined();
+
+		expect(await toolCall(fire, ctx, "record", { kind: "finding", id: "f-2", status: "refuted", basis: ["src/errors.ts:1"] })).toMatchObject({ block: true, reason: expect.stringContaining("finding f-2 is already reported") });
+		expect(await toolCall(fire, ctx, "record", { kind: "finding", id: "f-2", status: "suspected", basis: ["src/errors.ts:1"] })).toBeUndefined();
 	});
 
 	it("learns its role from before_agent_start when the session_start prompt has no marker", async () => {
 		await parentSession();
 		const { fire } = fakePi();
+		const verify = PIRED_AGENTS.find((a) => a.name === "pired-verify");
 		const noPrompt = ctxFor(root, () => {
 			throw new Error("no prompt yet");
 		});
 		await fire("session_start", {}, noPrompt);
 		await fire("before_agent_start", { type: "before_agent_start", systemPrompt: agentMarker("pired-verify") }, noPrompt);
-		for (let i = 0; i < 17; i++) await fire("turn_start", { type: "turn_start" }, noPrompt);
-		expect((await toolCall(fire, noPrompt, "read", {}))?.reason).toContain("pired-verify has used its 16-turn budget");
+		for (let i = 0; i <= (verify?.maxTurns ?? 0); i++) await fire("turn_start", { type: "turn_start" }, noPrompt);
+		expect((await toolCall(fire, noPrompt, "read", {}))?.reason).toContain(`pired-verify has used its ${verify?.maxTurns}-turn budget`);
+	});
+
+	/**
+	 * pi-subagents 0.71 appends a section telling every worker to "Use
+	 * contact_supervisor first", a tool the gate refuses; 31 such calls were
+	 * refused in the 2026-09-24 grid.
+	 */
+	it("replaces a worker prompt carrying pi-subagents' supervisor section with one without it, and still knows its role", async () => {
+		await parentSession();
+		const { fire } = fakePi();
+		const ctx = ctxFor(root, "");
+		await fire("session_start", {}, ctx);
+		const body = `<active_agent name="pired-verify"/>\n\n${agentMarker("pired-verify")}\n\nYou are pired-verify.`;
+		const section = `${SUPERVISOR_SECTION_START}\nUse contact_supervisor first.\n- Need a decision: contact_supervisor({ reason: "need_decision" })\n\n${SUPERVISOR_SECTION_END}`;
+		const [result] = await fire("before_agent_start", { type: "before_agent_start", systemPrompt: `${body}\n\n${section}\n\n<cwd>\n/t\n</cwd>` }, ctx);
+		expect(result).toEqual({ systemPrompt: `${body}\n\n<cwd>\n/t\n</cwd>` });
+		const verify = PIRED_AGENTS.find((a) => a.name === "pired-verify");
+		for (let i = 0; i <= (verify?.maxTurns ?? 0); i++) await fire("turn_start", { type: "turn_start" }, ctx);
+		expect((await toolCall(fire, ctx, "read", {}))?.reason).toContain("pired-verify has used its");
+
+		// No section, no replacement: pi keeps its structured prompt.
+		const [plain] = await fire("before_agent_start", { type: "before_agent_start", systemPrompt: body }, ctx);
+		expect(plain).toBeUndefined();
+	});
+
+	/**
+	 * 4 of the 6 gpt-6-luna pired-verify children that recorded nothing in the
+	 * 2026-09-24 grid handed back early with a verdict stated and never written.
+	 */
+	it("asks pi for one more request, with a reminder after any earlier handler's entries, when a worker settles with nothing recorded", async () => {
+		await parentSession();
+		const { fire } = fakePi();
+		const ctx = ctxFor(root, agentMarker("pired-verify"));
+		await fire("session_start", {}, ctx);
+		for (let i = 0; i < 7; i++) await fire("turn_start", { type: "turn_start" }, ctx);
+		const earlier = { type: "custom", customType: "someone-else", data: {} };
+		const settle = { type: "agent_before_settle", outcome: "completed", entries: [earlier], continue: false };
+
+		const [first] = await fire("agent_before_settle", settle, ctx) as Array<{ entries: Array<Record<string, unknown>>; continue: boolean } | undefined>;
+		expect(first?.continue).toBe(true);
+		expect(first?.entries).toHaveLength(2);
+		expect(first?.entries[0]).toBe(earlier);
+		expect(first?.entries[1]).toMatchObject({ type: "custom_message", customType: SETTLE_REMINDER_TYPE, display: true });
+		expect(String(first?.entries[1]?.content)).toContain("your verdict on the record named in your task");
+
+		// Never twice: the worker's next hand-back settles.
+		expect(await fire("agent_before_settle", settle, ctx)).toEqual([undefined]);
+	});
+
+	it("lets a worker that recorded something, or a run that was aborted, settle without a reminder", async () => {
+		await parentSession();
+		const recorded = fakePi();
+		const ctx = ctxFor(root, agentMarker("pired-scout"));
+		await recorded.fire("session_start", {}, ctx);
+		await recorded.tools.find((t) => t.name === "record")?.execute("r1", { kind: "host", value: "app.child-test.test" }, undefined, undefined, { cwd: root });
+		const settle = { type: "agent_before_settle", outcome: "completed", entries: [], continue: false };
+		expect(await recorded.fire("agent_before_settle", settle, ctx)).toEqual([undefined]);
+
+		const aborted = fakePi();
+		await aborted.fire("session_start", {}, ctx);
+		expect(await aborted.fire("agent_before_settle", { ...settle, outcome: "aborted" }, ctx)).toEqual([undefined]);
 	});
 });
 

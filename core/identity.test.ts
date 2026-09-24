@@ -3,10 +3,15 @@ import {
 	findDuplicate,
 	findingLocation,
 	findNearDuplicate,
+	clearanceRechecked,
+	holdsLeadOpen,
 	isNoOp,
+	leadMeetsClearance,
 	mergeRecord,
+	reopensLead,
 	titleOverlap,
 	type Fields,
+	updateById,
 } from "./identity.ts";
 
 /**
@@ -286,6 +291,223 @@ describe("folding a second recording into the first", () => {
 
 	it("does let a proposed cell advance to confirmed", () => {
 		expect(mergeRecord("hypothesis", { outcome: "proposed" }, { outcome: "confirmed" }).outcome).toBe("confirmed");
+	});
+
+	/**
+	 * By rank alone refuted(3) beat inconclusive(2), so any later refutation in the
+	 * cell closed the lead whatever it was about. Measured on the 2026-09-24 grid:
+	 * a lead recorded inconclusive ("cannot verify offline") was overwritten by a
+	 * refutation of a different mechanism in the same cell, and the baseline run
+	 * confirmed the issue the lead was about.
+	 */
+	it("leaves an inconclusive lead open when a refutation that never named it lands on its cell", () => {
+		const merged = mergeRecord(
+			"hypothesis",
+			{ outcome: "inconclusive", statement: "stored script via the upload path; cannot verify offline" },
+			{ outcome: "refuted", statement: "the comment renderer escapes every field before output" },
+		);
+		expect(merged.outcome).toBe("inconclusive");
+		// The statement stays with the outcome it explains, or the open lead reads
+		// as the refutation's sentence.
+		expect(merged.statement).toBe("stored script via the upload path; cannot verify offline");
+	});
+
+	it("still lets a refutation settle a cell that was only proposed or being tested", () => {
+		for (const outcome of ["proposed", "testing"]) {
+			const merged = mergeRecord("hypothesis", { outcome, statement: "worth checking" }, { outcome: "refuted", statement: "every query is parameterised" });
+			expect(merged.outcome).toBe("refuted");
+			expect(merged.statement).toBe("every query is parameterised");
+		}
+	});
+
+	it("names exactly the case it holds back: a refutation arriving on an inconclusive cell", () => {
+		expect(holdsLeadOpen({ outcome: "inconclusive" }, { outcome: "refuted" })).toBe(true);
+		expect(holdsLeadOpen({ outcome: "Inconclusive" }, { outcome: " refuted " })).toBe(true);
+		// Everything else is the rank rule's business, and saying "held" for it
+		// would tell the agent a lead is open when none is.
+		expect(holdsLeadOpen({ outcome: "confirmed" }, { outcome: "refuted" })).toBe(false);
+		expect(holdsLeadOpen({ outcome: "testing" }, { outcome: "refuted" })).toBe(false);
+		expect(holdsLeadOpen({ outcome: "inconclusive" }, { outcome: "confirmed" })).toBe(false);
+		expect(holdsLeadOpen({ outcome: "inconclusive" }, { outcome: "inconclusive" })).toBe(false);
+	});
+});
+
+describe("an open lead, whichever order it and a clearance arrive in, on a write of that one cell", () => {
+	// Round one held the lead only when it was recorded first. Recorded second,
+	// rank kept the refutation — which was written before the lead existed and so
+	// cannot have examined it. Two workers on one cell finish in whichever order
+	// they finish, so for a write that names the cell by itself the answer does
+	// not depend on it. `reopen` is how the caller says it is that write.
+	const ONE = { reopen: true };
+	const LEAD = { outcome: "inconclusive", statement: "the export path writes a caller-named file; cannot verify offline" };
+	const CLEARANCE = {
+		outcome: "refuted", statement: "the upload handler resolves the path and checks it stays under the root",
+		method: "read the upload handler", evidence: "evidence/upload-root-check.txt",
+	};
+
+	it("ends inconclusive, on the lead's own sentence, in both orders", () => {
+		const leadFirst = mergeRecord("hypothesis", LEAD, CLEARANCE, ONE);
+		const clearanceFirst = mergeRecord("hypothesis", CLEARANCE, LEAD, ONE);
+		for (const merged of [leadFirst, clearanceFirst]) {
+			expect(merged.outcome).toBe("inconclusive");
+			expect(merged.statement).toBe(LEAD.statement);
+		}
+	});
+
+	it("does not carry the clearance's method or evidence onto the lead, in either order", () => {
+		// Left on the row they read as the grounds for a lead they never examined.
+		for (const merged of [mergeRecord("hypothesis", LEAD, CLEARANCE, ONE), mergeRecord("hypothesis", CLEARANCE, LEAD, ONE)]) {
+			expect(merged.method).toBeUndefined();
+			expect(merged.evidence).toBeUndefined();
+		}
+	});
+
+	it("keeps the lead's own method and evidence when it has them", () => {
+		const lead = { ...LEAD, method: "traced the export route", evidence: "evidence/export-trace.txt" };
+		for (const merged of [mergeRecord("hypothesis", lead, CLEARANCE, ONE), mergeRecord("hypothesis", CLEARANCE, lead, ONE)]) {
+			expect(merged).toMatchObject({ method: "traced the export route", evidence: "evidence/export-trace.txt" });
+		}
+	});
+
+	it("does not reopen a clearance for the same claim offered again", () => {
+		// A lead that says what the refutation already said is a re-offer, not new
+		// information; reopening on it would un-clear cells every time the
+		// extractor re-read its buffer.
+		const merged = mergeRecord("hypothesis", CLEARANCE, { outcome: "inconclusive", statement: `  ${CLEARANCE.statement.toUpperCase()} ` }, ONE);
+		expect(merged).toMatchObject({ outcome: "refuted", statement: CLEARANCE.statement, method: CLEARANCE.method });
+	});
+
+	/**
+	 * Reopening on every lead in other words was too eager: different wording is
+	 * not a different mechanism, and a clearance is a check of its own cell. A
+	 * merge that does not say it is a one-cell write — a cross product, the
+	 * extractor's planner, a dedupe fold — keeps the clearance, whole.
+	 */
+	it("keeps the clearance whole when the merge does not say it is a write of that one cell", () => {
+		const merged = mergeRecord("hypothesis", CLEARANCE, LEAD);
+		expect(merged).toMatchObject({ outcome: "refuted", statement: CLEARANCE.statement, method: CLEARANCE.method, evidence: CLEARANCE.evidence });
+		expect(isNoOp(CLEARANCE, merged)).toBe(true);
+	});
+
+	it("keeps a clearance that was re-checked by id with a basis, even on a one-cell write", () => {
+		const rechecked = { ...CLEARANCE, verification: { verdict: "stands", at: "t1", basis: ["upload.go:31"] } };
+		const merged = mergeRecord("hypothesis", rechecked, LEAD, ONE);
+		expect(merged).toMatchObject({ outcome: "refuted", statement: CLEARANCE.statement, method: CLEARANCE.method });
+		expect(merged.verification).toEqual(rechecked.verification);
+	});
+
+	it("drops the stale verification with the method and evidence when it does reopen", () => {
+		// A look that settled nothing does not protect the clearance, and left on
+		// the reopened row it would read as a second look at the lead.
+		const unsettled = { ...CLEARANCE, verification: { verdict: "unresolved", at: "t1", notes: "could not reach the export route" } };
+		const merged = mergeRecord("hypothesis", unsettled, LEAD, ONE);
+		expect(merged).toMatchObject({ outcome: "inconclusive", statement: LEAD.statement });
+		expect(merged.verification).toBeUndefined();
+		expect(merged.method).toBeUndefined();
+		expect(merged.evidence).toBeUndefined();
+	});
+
+	it("names exactly the case it reopens: a different lead arriving on a refuted cell nobody re-checked", () => {
+		expect(reopensLead(CLEARANCE, LEAD)).toBe(true);
+		expect(leadMeetsClearance(CLEARANCE, LEAD)).toBe(true);
+		// Re-checked by id with a basis: the lead still met it, and is still named,
+		// but it does not reopen it.
+		const rechecked = { ...CLEARANCE, verification: { verdict: "amended", at: "t1", basis: ["upload.go:31"] } };
+		expect(leadMeetsClearance(rechecked, LEAD)).toBe(true);
+		expect(reopensLead(rechecked, LEAD)).toBe(false);
+		expect(reopensLead(CLEARANCE, { ...LEAD, statement: CLEARANCE.statement })).toBe(false);
+		// A lead with nothing to say cannot be told apart from a re-offer.
+		expect(reopensLead(CLEARANCE, { outcome: "inconclusive" })).toBe(false);
+		// Proposals and confirmations are the rank rule's business.
+		expect(reopensLead(CLEARANCE, { ...LEAD, outcome: "proposed" })).toBe(false);
+		expect(reopensLead({ ...CLEARANCE, outcome: "confirmed" }, LEAD)).toBe(false);
+		expect(reopensLead(LEAD, CLEARANCE)).toBe(false);
+	});
+
+	it("counts a clearance as re-checked only when a grounded look that settled something is on it", () => {
+		expect(clearanceRechecked({ verification: { verdict: "stands", at: "t", basis: ["a.go:1"] } })).toBe(true);
+		expect(clearanceRechecked({ verification: { verdict: "unresolved", at: "t", basis: ["a.go:1"] } })).toBe(false);
+		expect(clearanceRechecked({ verification: { verdict: "stands", at: "t", basis: ["  "] } })).toBe(false);
+		expect(clearanceRechecked({ verification: { verdict: "stands", at: "t" } })).toBe(false);
+		expect(clearanceRechecked({})).toBe(false);
+	});
+});
+
+describe("a kept claim keeps its method and evidence", () => {
+	it("writes nothing when a held refutation adds nothing but its own claim", () => {
+		// The refutation's method used to ride onto the lead, so the held call
+		// differed from the stored row and wrote a line that said the lead was
+		// grounded in the check that did not settle it.
+		const lead = { kind: "hypothesis", target: "e1", class: "xss", outcome: "inconclusive", statement: "cannot verify offline" };
+		const merged = mergeRecord("hypothesis", lead, {
+			target: "e1", class: "xss", outcome: "refuted", statement: "every field is escaped before output",
+			method: "read the renderer", evidence: "evidence/renderer.txt",
+		});
+		expect(merged.method).toBeUndefined();
+		expect(merged.evidence).toBeUndefined();
+		expect(isNoOp(lead, merged)).toBe(true);
+	});
+
+	it("keeps a confirmed cell's method over a lower claim's", () => {
+		const merged = mergeRecord(
+			"hypothesis",
+			{ outcome: "confirmed", statement: "landed a payload", method: "boolean differential", evidence: "evidence/diff.txt" },
+			{ outcome: "proposed", statement: "worth another look", method: "fuzz it", evidence: "evidence/fuzz.txt" },
+		);
+		expect(merged).toMatchObject({ outcome: "confirmed", method: "boolean differential", evidence: "evidence/diff.txt" });
+	});
+
+	it("lets a repeat of the same claim fill what the stored one left out", () => {
+		// Same sentence, so it is the same claim: adding its evidence is the
+		// "fields you add are kept" promise, not one claim borrowing another's grounds.
+		const merged = mergeRecord(
+			"hypothesis",
+			{ outcome: "refuted", statement: "every query is parameterised" },
+			{ outcome: "proposed", statement: "every query is parameterised", evidence: "evidence/queries.txt" },
+		);
+		expect(merged).toMatchObject({ outcome: "refuted", evidence: "evidence/queries.txt" });
+	});
+});
+
+describe("an update by id", () => {
+	// Last-write-wins, as documented, except where the spread keeps what no
+	// longer describes the row. A deliberate reopen by id kept the clearance's
+	// verification, so the open lead read as one that had already had its
+	// second look.
+	const CLEARANCE = {
+		kind: "hypothesis", target: "e1", class: "traversal", outcome: "refuted",
+		statement: "the upload handler resolves the path and checks it stays under the root",
+		method: "read the upload handler", evidence: "evidence/upload-root-check.txt",
+		verification: { verdict: "stands", at: "t1", basis: ["upload.go:31"] },
+	};
+
+	it("drops the stored verification, method and evidence when it moves a hypothesis's outcome without a basis", () => {
+		const reopened = updateById("hypothesis", CLEARANCE, { outcome: "inconclusive" });
+		expect(reopened).toMatchObject({ outcome: "inconclusive", statement: CLEARANCE.statement, target: "e1", class: "traversal" });
+		expect(reopened.verification).toBeUndefined();
+		expect(reopened.method).toBeUndefined();
+		expect(reopened.evidence).toBeUndefined();
+	});
+
+	it("keeps the method and evidence the reopening call sent", () => {
+		const reopened = updateById("hypothesis", CLEARANCE, { outcome: "inconclusive", method: "traced the export route", evidence: "evidence/export.txt" });
+		expect(reopened).toMatchObject({ method: "traced the export route", evidence: "evidence/export.txt" });
+		expect(reopened.verification).toBeUndefined();
+	});
+
+	it("takes the verification a re-check with a basis wrote, rather than dropping it", () => {
+		const amended = { verdict: "amended", at: "t2", basis: ["export.go:12"] };
+		const out = updateById("hypothesis", CLEARANCE, { outcome: "confirmed", verification: amended });
+		expect(out.verification).toEqual(amended);
+		// The clearance's method explained "refuted"; it must not ride onto "confirmed".
+		expect(out.method).toBeUndefined();
+	});
+
+	it("is a plain overwrite when the outcome does not move, or the record is not a hypothesis", () => {
+		expect(updateById("hypothesis", CLEARANCE, { outcome: " Refuted ", statement: "reworded" })).toEqual({ ...CLEARANCE, outcome: " Refuted ", statement: "reworded" });
+		expect(updateById("hypothesis", CLEARANCE, {})).toEqual(CLEARANCE);
+		const finding = { kind: "finding", title: "x", status: "confirmed", verification: { verdict: "stands", at: "t1" } };
+		expect(updateById("finding", finding, { status: "suspected" })).toEqual({ ...finding, status: "suspected" });
 	});
 });
 

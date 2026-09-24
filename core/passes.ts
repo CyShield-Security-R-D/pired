@@ -606,7 +606,7 @@ export function passCommand(input: PassCommandInput): PassCommandView {
 	// settle them: opening `adversarial` IS draining the queue.
 	const owed = (lens: PassLens): string =>
 		input.unchallenged && input.unchallenged > 0 && lens !== "adversarial"
-			? `\n${input.unchallenged} finding(s) still carry no verdict. A further pass adds to that pile as readily as it adds findings — /challenge, or a pass under \`adversarial\`, is what empties it.`
+			? `\n${input.unchallenged} finding(s) have no settled verdict (examined-but-unsettled included). A further pass adds to that pile as readily as it adds findings — /challenge, or a pass under \`adversarial\`, is what empties it.`
 			: "";
 
 	if (arg === "next") {
