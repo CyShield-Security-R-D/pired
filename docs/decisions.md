@@ -1923,10 +1923,16 @@ to weigh.
 
 **Status:** provisional · 2026-09-23 · supersedes ADR-025 · supersedes ADR-013 · reframes ADR-021
 
-> The design is settled, but whether the change is kept is not. Under ADR-026 it is taken only if
-> the matched comparison (`eval/delegation-compare.md`) approves on both priority models: similar
-> quality with fewer total tokens. That comparison has not run, and no candidate snapshot is frozen
-> yet. A rejection means this change is not taken as it stands.
+> The design is settled, but whether the change is kept is not. Under ADR-026 it is kept only if
+> the matched comparison (`eval/delegation-compare.md`) approves on both priority models, GPT-6 Luna
+> and GLM-5.3 Flash, and the held-out guard vetoes neither. The candidate under test is frozen
+> snapshot v4 (`826bd8d0…`), which carries ADR-028's fixes. A rejection means this change is not
+> kept as it stands.
+>
+> On 2026-09-24 the operator merged this work to `main` while the grids were still running and
+> before their verdict. The merge does not change what the grids measure, because they run the
+> frozen snapshot, not `main`. Delegation ships on by default (`maxAgents` 8); `maxAgents: 0` turns
+> it off (see `docs/delegation.md`).
 
 ### Context
 
