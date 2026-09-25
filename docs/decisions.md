@@ -1977,6 +1977,12 @@ pairs ran on each.
 If the voucher runs out, the balance error stops the grid as a quota stop. The remaining pairs then
 run on the Coding Plan endpoint after its reset.
 
+**Outcome, the same day:** the general endpoint refused the key with `1113 Insufficient balance or no
+resource package`, because the voucher was not on that account's balance. Every GLM run there failed
+within seconds as infrastructure, and no GLM pair completed on it. The provider was switched back to
+the Coding Plan endpoint at 15:3x UTC on 2026-09-25. This amendment applies only if the voucher is
+later credited to that key.
+
 ---
 
 ## ADR-027 — Delegation is pi-subagents' in-process children, not a native worker
