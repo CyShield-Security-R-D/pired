@@ -1951,6 +1951,32 @@ numbers.
 GLM's v5 grids keep the harness they started with, because a resume refuses changed pins. If the same
 message blocks a GLM pair, it will be reported as this gap, not re-classified after the fact.
 
+### Amendment — GLM's remaining runs use z.ai's general API endpoint (2026-09-25, before they run)
+
+pi's `zai` provider pointed at z.ai's Coding Plan endpoint (`https://api.z.ai/api/coding/paas/v4`).
+Its quota was spent on 2026-09-24 and resets on 2026-09-28 at 09:15 UTC. The operator provided a z.ai
+Start Plan voucher of 300M tokens, which bills through the general API endpoint
+(`https://api.z.ai/api/paas/v4`).
+
+From 2026-09-25 the provider points there. GLM's remaining official pairs and the held-out GLM grid
+run on it until the voucher runs out or the grids end.
+
+Nothing else changes:
+- host `api.z.ai` and the same key;
+- model `glm-5.3-flash`, with the same 200,000-token context window and 16,000-token output cap;
+- thinking at medium;
+- the same harness, candidate and baseline.
+
+The harness pins only the endpoint's origin, which is unchanged, so the grid resumes under its
+original pins.
+
+Both arms of every pair run on the same endpoint, so each pair stays matched. The 7 official pairs
+completed before the switch ran on the Coding Plan endpoint. The GLM summary will report how many
+pairs ran on each.
+
+If the voucher runs out, the balance error stops the grid as a quota stop. The remaining pairs then
+run on the Coding Plan endpoint after its reset.
+
 ---
 
 ## ADR-027 — Delegation is pi-subagents' in-process children, not a native worker
