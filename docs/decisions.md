@@ -1983,6 +1983,34 @@ within seconds as infrastructure, and no GLM pair completed on it. The provider 
 the Coding Plan endpoint at 15:3x UTC on 2026-09-25. This amendment applies only if the voucher is
 later credited to that key.
 
+The voucher turned out to be ZCode's "Weekend Build" Start Plan. It is 300M tokens of `glm-5.3-flash`,
+served at `zcode.z.ai/api/v1/zcode-plan/anthropic`. That endpoint accepted the credential but answered
+`3007 captcha verify failed`: it is gated to the ZCode app. It was not used.
+
+### Amendment — held-out GLM runs on commandcode.ai (2026-09-25, before it runs)
+
+GLM cannot run on z.ai until 2026-09-28 09:15 UTC:
+- the Coding Plan quota is spent until then;
+- the general API has no balance on the key;
+- the ZCode voucher is limited to the ZCode app.
+
+commandcode.ai serves the same model as `z-ai/glm-5.3-flash`. One test call stopped normally with
+thinking engaged. The larger `zai-org/GLM-5.3` and the `glm-5.3-flashx` variant it also lists are
+different models and are not used.
+
+The held-out GLM grid runs fresh on it now:
+- the four held-out applications, three passes each;
+- candidate snapshot v4 against baseline 496b190, at medium effort;
+- the same harness as GLM's official grid, with its 2-hour per-run limit;
+- the same 200,000-token context window and 16,000-token output cap as the `zai` entry.
+
+The earlier held-out GLM grid, `heldout-2026-09-24-v5/glm`, never completed a pair and is superseded.
+
+GLM's official grid stays on z.ai's Coding Plan, keeps its 7 pairs, and resumes after the reset. The
+two GLM grids therefore run on different serving paths: z.ai directly, and a reseller whose upstream
+is not known. The guard remains sound, because it compares candidate and baseline within its own
+grid, and both arms share the endpoint. The two grids' absolute numbers are not pooled or compared.
+
 ---
 
 ## ADR-027 — Delegation is pi-subagents' in-process children, not a native worker
