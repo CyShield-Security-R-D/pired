@@ -2011,6 +2011,24 @@ two GLM grids therefore run on different serving paths: z.ai directly, and a res
 is not known. The guard remains sound, because it compares candidate and baseline within its own
 grid, and both arms share the endpoint. The two grids' absolute numbers are not pooled or compared.
 
+### Amendment — GLM's official grid also moves to commandcode.ai (2026-09-25, before it runs)
+
+The operator judged commandcode.ai a sufficient stand-in for z.ai. GLM's official, gating grid
+therefore also runs fresh there. It uses the same provider, model, harness and 2-hour limit as the
+held-out GLM grid, so GLM's two grids now share one serving path.
+
+The grid itself is unchanged from the official protocol:
+- the five research targets, three passes each;
+- candidate snapshot v4 against baseline 496b190, at medium effort;
+- this ADR's gate.
+
+The 7 official pairs already run on z.ai (`compare-2026-09-24-v5/glm`) become indicative only and are
+not pooled. They are reported as GLM's z.ai reference, as luna's v5 and v5b pairs are for luna.
+
+This moves GLM's verdict onto a reseller whose upstream serving is not known. One matched grid decides
+GLM, with both arms on that endpoint, so the comparison stays fair within it. It is not comparable with
+GLM's research history or with the earlier z.ai grids.
+
 ---
 
 ## ADR-027 — Delegation is pi-subagents' in-process children, not a native worker
