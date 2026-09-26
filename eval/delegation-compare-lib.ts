@@ -11,16 +11,22 @@
  *   observationsFromChildSession(text, child.childKey)       each child's calls
  *   reconcileChildSession(child, session, expect)            whether that child may be scored
  *   accountUsage([...parent.observations, ...each session.observations])
+ *   summarizeRetries([...parent.retries, ...each session.retries], policy, meteredCallCount(all))  under a retry policy only
  *
  * Signatures (stable; the runner codes against them):
  *
- *   observationsFromPiEvents(events: Row[], options?: { delegationTools?: readonly string[] }): PiUsageExtraction
- *   observationsFromChildSession(sessionJsonl: string | undefined, childKey: string): ChildSessionExtraction
+ *   observationsFromPiEvents(events: Row[], options?: { delegationTools?: readonly string[]; retry?: boolean }): PiUsageExtraction
+ *   observationsFromChildSession(sessionJsonl: string | undefined, childKey: string, options?: { retry?: boolean }): ChildSessionExtraction
+ *   summarizeRetries(attempts: readonly RetriedAttempt[], policy: { maxFailedAttempts; maxFailedAttemptRate }, meteredRequests: number): RetrySummary
  *   reconcileSubagentCalls(parentEvents: Row[], childSessionFiles: string[], options?: { sessionDir?: string; toolName?: string }): SubagentReconciliation
  *   reconcileChildSession(child: SubagentChild, session: ChildSessionExtraction | undefined, expect?: { model?: string; thinking?: string }): ChildVerdict
  *   childOutcome(child: Pick<SubagentChild, "status" | "error">, session: ChildSessionExtraction): { outcome: ChildOutcome; why?: string }
  *   childRecordIds(call: ChildToolCall): string[]
  */
+
+// pi's own rules for which failed reply it retries and which it recovers by
+// compaction, so a worker's session is read the way pi decided, not guessed.
+import { isContextOverflow, isRetryableAssistantError, type AssistantMessage } from "@earendil-works/pi-ai";
 
 export interface UsageTotals {
 	inputTokens: number;
@@ -62,6 +68,122 @@ export interface PiUsageExtraction {
 	/** Delegation tool results whose usage was left to the children's own sessions. */
 	delegatedResults: number;
 	finalStop: boolean;
+	/** Failed attempts pi retried, recovered or not; present only with the `retry` option. */
+	retries?: RetriedAttempt[];
+}
+
+/**
+ * One failed provider attempt pi's agent retry replaced (ADR draft 2.1). Its
+ * reply stays among the observations with whatever usage it reported, which is
+ * usually none: codex sets usage only on `response.completed` and completions
+ * on the last chunk, so a dropped stream reports zero.
+ */
+export interface RetriedAttempt {
+	/** The observation ID of the failed reply, or `summary-retry:<n>` for a compaction attempt, which has no observation. */
+	id: string;
+	origin: "parent" | "worker";
+	errorMessage?: string;
+	/**
+	 * Whether a completed reply (or, for a summary attempt, a completed
+	 * compaction) followed the streak this attempt belongs to. An attempt in a
+	 * streak that ran out or was cancelled is still listed, so the count of
+	 * failed attempts does not shrink when the run fails.
+	 */
+	recovered: boolean;
+	/** Tokens the attempt itself reported; already inside the metered totals. */
+	meteredTokens: number;
+	/**
+	 * For an attempt that reported nothing, a lower bound on its spend (see
+	 * `estimateBasis`); 0 when it reported usage or nothing sizes it.
+	 */
+	estimatedTokens: number;
+	/**
+	 * Where the estimate comes from.
+	 * - `recovering-prompt`: the prompt (fresh, cached and cache-written input) of
+	 *   the call that recovered the streak. pi omits the failed reply and resends
+	 *   the same context, so that prompt is the failed attempt's, not a guess. For
+	 *   a summary call it is the compaction that succeeded, since pi-ai resends
+	 *   the same summary request. Not used when a compaction came in between,
+	 *   which changes the context, nor for a split-turn compaction, whose usage
+	 *   sums two summary calls.
+	 * - `previous-reply`: no call recovered the streak, so the previous
+	 *   completed reply's prompt plus output stands in. Measured on v4 and v5
+	 *   parent streams it exceeded the next prompt in 1–3% of consecutive pairs
+	 *   (median by 28–58 tokens), so it is close to, not strictly, a lower bound.
+	 *   After a compaction it falls to the summary's output.
+	 * - `none`: the attempt reported usage, or nothing sizes it (a first request
+	 *   no reply followed, a summary call whose compaction failed).
+	 */
+	estimateBasis: "recovering-prompt" | "previous-reply" | "none";
+}
+
+/**
+ * One run's failed provider attempts, parent and workers together, as the run
+ * record reports them (ADR draft 2.1). `totalTokens` stays metered; the
+ * estimate is carried beside it so neither number hides the other.
+ */
+export interface RetrySummary {
+	/** Failed attempts pi retried. An unretried final failure is the run's error, not a count here. */
+	attempts: number;
+	recovered: number;
+	unrecovered: number;
+	bySource: Record<"parent" | "worker", { attempts: number; recovered: number; unrecovered: number }>;
+	/** Usage the failed attempts reported themselves (already in totalTokens). */
+	meteredTokens: number;
+	/** Attempts that reported no usage. */
+	unmeteredAttempts: number;
+	/** The lower-bound estimate summed over the unmetered attempts (see RetriedAttempt.estimatedTokens). */
+	estimatedTokens: number;
+	/** Unmetered attempts with no estimate (see RetriedAttempt.estimateBasis). */
+	unestimatedAttempts: number;
+	/** The run-wide cap: max(floor, floor(rate x meteredRequests)), from the grid's retry policy. */
+	cap: { floor: number; rate: number; meteredRequests: number; allowed: number };
+	/** More failed attempts than the cap allows: the run is invalid, for infrastructure. */
+	capExceeded: boolean;
+}
+
+/**
+ * Sum one run's retried attempts against the policy's run-wide cap. pi's own
+ * `maxRetries` resets on every good reply, so without this a provider that
+ * drops every third request would be retried for the whole run and the run
+ * would read as valid while a third of its requests went unmetered. The cap
+ * grows with the run's metered requests, the same rule in both arms, so the arm
+ * that makes more calls is not the one a fixed cap throws out more often.
+ */
+export function summarizeRetries(attempts: readonly RetriedAttempt[], policy: { maxFailedAttempts: number; maxFailedAttemptRate: number }, meteredRequests: number): RetrySummary {
+	const bySource: RetrySummary["bySource"] = { parent: { attempts: 0, recovered: 0, unrecovered: 0 }, worker: { attempts: 0, recovered: 0, unrecovered: 0 } };
+	let meteredTokens = 0;
+	let unmeteredAttempts = 0;
+	let estimatedTokens = 0;
+	let unestimatedAttempts = 0;
+	const allowed = Math.max(policy.maxFailedAttempts, Math.floor(policy.maxFailedAttemptRate * meteredRequests));
+	for (const attempt of attempts) {
+		const source = bySource[attempt.origin];
+		source.attempts++;
+		if (attempt.recovered) source.recovered++;
+		else source.unrecovered++;
+		meteredTokens += attempt.meteredTokens;
+		if (attempt.meteredTokens > 0) continue;
+		unmeteredAttempts++;
+		estimatedTokens += attempt.estimatedTokens;
+		if (attempt.estimatedTokens === 0) unestimatedAttempts++;
+	}
+	return {
+		attempts: attempts.length, recovered: bySource.parent.recovered + bySource.worker.recovered,
+		unrecovered: bySource.parent.unrecovered + bySource.worker.unrecovered, bySource,
+		meteredTokens, unmeteredAttempts, estimatedTokens, unestimatedAttempts,
+		cap: { floor: policy.maxFailedAttempts, rate: policy.maxFailedAttemptRate, meteredRequests, allowed },
+		capExceeded: attempts.length > allowed,
+	};
+}
+
+/**
+ * Observations that reported spend: the metered provider calls. Beside the
+ * entry's request log, the difference is the number of calls no usage covers,
+ * including the ones no stream shows (a worker's failed compaction attempt).
+ */
+export function meteredCallCount(observations: readonly UsageObservation[]): number {
+	return observations.filter((o) => o.usage !== undefined && reportsSpend(o.usage)).length;
 }
 
 export interface UsageAccounting {
@@ -150,6 +272,8 @@ export interface ChildSessionExtraction {
 	missingResponseIds: number;
 	/** `context_edit` entries: retry and overflow omissions, which pi-subagents' own usage sum leaves out. */
 	contextEdits: number;
+	/** Failed attempts pi retried and recovered from; present only with the `retry` option. */
+	retries?: RetriedAttempt[];
 	/** The last assistant reply's stopReason; undefined when the session holds no reply. */
 	finalStop?: string;
 	/** How the session ended (see ChildEnding). */
@@ -370,7 +494,63 @@ export interface PiEventsOptions {
 	 * counted once, from the child's own session.
 	 */
 	delegationTools?: readonly string[];
+	/**
+	 * The grid runs under a retry policy: a failed reply followed by
+	 * `auto_retry_start` is a retried attempt, not a failure. Off, a retry event
+	 * is a failure as before and the output is unchanged.
+	 */
+	retry?: boolean;
 }
+
+/** A call's whole prompt: fresh, cached and cache-written input. */
+function promptOf(usage: Partial<UsageTotals> | undefined): number {
+	return usage ? num(usage.inputTokens) + num(usage.cacheReadTokens) + num(usage.cacheWriteTokens) : 0;
+}
+
+/** A reply's whole prompt plus its output. */
+function promptPlusOutput(usage: Partial<UsageTotals>): number {
+	return promptOf(usage) + num(usage.outputTokens);
+}
+
+/**
+ * Whether pi 0.87.1 retries this failed reply: agent-session.js
+ * `_isRetryableError`, which never retries a context overflow (those go to
+ * compaction) and otherwise defers to pi-ai's retryable list.
+ */
+function piRetries(reply: { errorMessage?: string; provider?: string }): boolean {
+	const message = { role: "assistant", stopReason: "error", errorMessage: reply.errorMessage ?? "", provider: reply.provider } as unknown as AssistantMessage;
+	return !isContextOverflow(message) && isRetryableAssistantError(message);
+}
+
+/** One retried attempt awaiting the call that ends its streak. */
+type StreakEntry = { attempt: RetriedAttempt; sameContext: boolean };
+
+/**
+ * Close a streak on the call that recovered it. Each unmetered attempt whose
+ * context no compaction changed since takes that call's prompt: pi resent the
+ * same request. The others keep their fallback.
+ */
+function recoverStreak(streak: StreakEntry[], prompt: number): void {
+	for (const { attempt, sameContext } of streak) {
+		attempt.recovered = true;
+		if (sameContext && attempt.meteredTokens === 0 && prompt > 0) {
+			attempt.estimatedTokens = prompt;
+			attempt.estimateBasis = "recovering-prompt";
+		}
+	}
+}
+
+/** The fields a new attempt's estimate starts from: the fallback, or nothing. */
+function fallbackEstimate(meteredTokens: number, fallback: number): Pick<RetriedAttempt, "estimatedTokens" | "estimateBasis"> {
+	return meteredTokens > 0 || fallback <= 0 ? { estimatedTokens: 0, estimateBasis: "none" } : { estimatedTokens: fallback, estimateBasis: "previous-reply" };
+}
+
+/**
+ * A compaction that cut a turn in half summarizes the history and the turn's
+ * prefix in two calls and reports their usage summed (compaction.js `compact`,
+ * the "Turn Context (split turn)" marker), so its prompt overstates either one.
+ */
+const SPLIT_TURN_MARKER = "**Turn Context (split turn):**";
 
 /**
  * Extract only terminal provider responses from pi's JSON session-event stream.
@@ -411,7 +591,11 @@ export interface PiEventsOptions {
  * - The benchmark disables retries, so `retryAssistantCall` makes one attempt
  *   per call. Any `auto_retry_*` or `summarization_retry_*` event means an
  *   attempt failed and was replaced, and pi reports no usage for the attempt it
- *   discarded.
+ *   discarded. Under a retry policy (the `retry` option, ADR draft 2.1) those
+ *   events are read instead: each failed attempt goes into `retries` with the
+ *   usage it reported and a lower-bound estimate, and only a streak pi gave up
+ *   on (`auto_retry_end` success: false, or a final error with no retry after
+ *   it) fails the run.
  *
  * What pi 0.87.1 added:
  *
@@ -450,6 +634,30 @@ export function observationsFromPiEvents(events: Array<Record<string, unknown>>,
 	const timestamps = new Map<string, unknown>();
 	let summaries = 0;
 	let echoes = 0;
+	const retry = options.retry === true;
+	if (retry) out.retries = [];
+	// The last reply that reported spend, and the failed reply awaiting its retry
+	// event: pi emits auto_retry_start after the failed reply's message_end.
+	let lastPromptPlusOutput = 0;
+	let lastReply: { id: string; usage?: Partial<UsageTotals> } | undefined;
+	// Attempts whose streak has not yet ended in a completed reply (or, for
+	// summary calls, a completed compaction). A streak that runs out leaves them
+	// unrecovered, with their fallback estimate.
+	let streak: StreakEntry[] = [];
+	let summaryStreak: StreakEntry[] = [];
+	let summaryRetries = 0;
+	// Set by auto_retry_start, cleared by the next reply: a streak cancelled in
+	// between has no reply of its own to fail.
+	let awaitingRetry = false;
+	const retried = (id: string, usage: Partial<UsageTotals> | undefined, errorMessage: string | undefined, fallback: number): StreakEntry => {
+		const meteredTokens = usage && reportsSpend(usage) ? num(usage.totalTokens) : 0;
+		const attempt: RetriedAttempt = {
+			id, origin: "parent", ...(errorMessage === undefined ? {} : { errorMessage }), recovered: false,
+			meteredTokens, ...fallbackEstimate(meteredTokens, fallback),
+		};
+		out.retries!.push(attempt);
+		return { attempt, sameContext: true };
+	};
 	for (const event of events) {
 		switch (event.type) {
 			case "message_end": {
@@ -471,6 +679,7 @@ export function observationsFromPiEvents(events: Array<Record<string, unknown>>,
 				if (message.role !== "assistant") break;
 				settle();
 				assistants++;
+				awaitingRetry = false;
 				const stopReason = typeof message.stopReason === "string" ? message.stopReason : "missing";
 				let id: string;
 				if (isName(message.responseId)) {
@@ -494,6 +703,10 @@ export function observationsFromPiEvents(events: Array<Record<string, unknown>>,
 				const usage = normalizePiUsage(message.usage);
 				const costUsd = piCostUsd(message.usage);
 				out.observations.push({ id, origin: "parent", ...(usage ? { usage } : {}), ...(costUsd === undefined ? {} : { costUsd }) });
+				if (retry) {
+					// Read before this reply updates it: a retried attempt is estimated from the reply before it.
+					lastReply = { id, ...(usage ? { usage } : {}) };
+				}
 				if (!usage) out.errors.push(`assistant reply ${id} carries no usage`);
 				else if (hasCompleteUsage(usage)) {
 					const defect = usageDefect(usage, COMPLETED_STOPS.has(stopReason));
@@ -504,6 +717,14 @@ export function observationsFromPiEvents(events: Array<Record<string, unknown>>,
 					pending = { id, stopReason, ...(typeof message.errorMessage === "string" ? { errorMessage: message.errorMessage } : {}) };
 				} else if (!COMPLETED_STOPS.has(stopReason)) out.errors.push(`assistant reply ${id} ended with unexpected stopReason ${stopReason}`);
 				lastStop = stopReason;
+				if (retry && stopReason !== "error" && usage && reportsSpend(usage)) lastPromptPlusOutput = promptPlusOutput(usage);
+				// pi closes a streak on the next reply that is not an error
+				// (agent-session.js, auto_retry_end success: true). An aborted reply
+				// is not a recovery here: it fails the run above.
+				if (retry && COMPLETED_STOPS.has(stopReason)) {
+					recoverStreak(streak, promptOf(usage));
+					streak = [];
+				}
 				break;
 			}
 			case "compaction_end": {
@@ -513,12 +734,25 @@ export function observationsFromPiEvents(events: Array<Record<string, unknown>>,
 				if (event.aborted === true || !isRow(result) || event.errorMessage !== undefined) {
 					const why = event.aborted === true ? "was aborted" : typeof event.errorMessage === "string" ? `failed: ${event.errorMessage}` : "returned no result";
 					fail(`compaction ${n} (${reason}) ${why}`, `compaction:${n}`);
+					summaryStreak = [];
 					break;
 				}
 				summaries++;
 				const usage = normalizePiUsage(result.usage);
 				const costUsd = piCostUsd(result.usage);
 				out.observations.push({ id: `compaction:${n}`, origin: "parent", ...(usage ? { usage } : {}), ...(costUsd === undefined ? {} : { costUsd }) });
+				if (retry) {
+					const split = typeof result.summary === "string" && result.summary.includes(SPLIT_TURN_MARKER);
+					recoverStreak(summaryStreak, split ? 0 : promptOf(usage));
+					summaryStreak = [];
+					// A reply retried across this compaction is resent with the summary
+					// in place of the history, so the recovering reply's prompt is no
+					// longer the failed attempt's.
+					for (const entry of streak) entry.sameContext = false;
+					// The next prompt carries the summary, not the history it replaced,
+					// so the previous reply no longer bounds a failed attempt from below.
+					lastPromptPlusOutput = num(usage?.outputTokens);
+				}
 				if (!usage) out.errors.push(`compaction ${n} (${reason}) reports no usage`);
 				else if (hasCompleteUsage(usage)) {
 					const defect = usageDefect(usage, true);
@@ -573,10 +807,48 @@ export function observationsFromPiEvents(events: Array<Record<string, unknown>>,
 				break;
 			}
 			case "auto_retry_start":
+				if (!retry) {
+					fail(`${event.type}: retries are disabled, so a retry means a failed attempt whose usage pi does not report`);
+					break;
+				}
+				// pi retries only a reply that ended in error (agent-session.js
+				// _prepareRetry); anything else before this event is a stream this
+				// reader does not understand.
+				if (pending?.stopReason === "error" && lastReply?.id === pending.id) {
+					streak.push(retried(pending.id, lastReply.usage, pending.errorMessage, lastPromptPlusOutput));
+					awaitingRetry = true;
+					out.notes.push(`assistant reply ${pending.id} failed (${pending.errorMessage || "provider error"}); pi retried it (attempt ${String(event.attempt)})`);
+					pending = undefined;
+				} else out.errors.push(`auto_retry_start (attempt ${String(event.attempt)}) with no failed reply before it`);
+				break;
 			case "auto_retry_end":
+				if (!retry) {
+					fail(`${event.type}: retries are disabled, so a retry means a failed attempt whose usage pi does not report`);
+					break;
+				}
+				// success: false ends a streak that did not recover. When the retries
+				// ran out, the last failed reply is still pending and fails the run
+				// once, below. Only a streak cancelled during its backoff, with no
+				// reply after the retry, has nothing else to fail.
+				if (event.success !== true && awaitingRetry && !pending) {
+					fail(`auto_retry_end: retry streak ended without success: ${typeof event.finalError === "string" ? event.finalError : "unknown"}`, `retry-end:${out.providerErrors.length + 1}`);
+				}
+				awaitingRetry = false;
+				break;
 			case "summarization_retry_scheduled":
+				if (!retry) {
+					fail(`${event.type}: retries are disabled, so a retry means a failed attempt whose usage pi does not report`);
+					break;
+				}
+				// A failed summary call: pi discards its usage. Its prompt is the part
+				// of the history being summarized, so no reply sizes it; the
+				// compaction that succeeds does (recoverStreak). A streak that runs
+				// out ends in a compaction_end with an errorMessage, a failure above.
+				summaryStreak.push(retried(`summary-retry:${++summaryRetries}`, undefined, typeof event.errorMessage === "string" ? event.errorMessage : undefined, 0));
+				break;
 			case "summarization_retry_attempt_start":
 			case "summarization_retry_finished":
+				if (retry) break;
 				fail(`${event.type}: retries are disabled, so a retry means a failed attempt whose usage pi does not report`);
 				break;
 		}
@@ -624,7 +896,10 @@ const INERT_ENTRY_TYPES = new Set(["model_change", "session_info", "custom", "cu
  *   `_omitRecoveryAttempt`, `_runAutoCompaction`). The compaction entry does
  *   not record its reason, so an errored reply counts as recovered only when a
  *   compaction entry follows it and another reply follows that. An auto-retry
- *   leaves the same shape without the compaction and stays a failure.
+ *   leaves the same shape without the compaction and stays a failure, unless
+ *   the `retry` option says the grid ran under a retry policy: then an `error`
+ *   reply a context edit omits, followed by another reply, is a retried
+ *   attempt listed in `retries`, its reported usage still counted.
  * - The last reply must be `stop` or `length`, or the session must end on one
  *   of the two bounded stops whose spend is fully in the file (ChildEnding).
  *   Anything else is a child cut off mid-loop, and an `error` or `aborted` reply
@@ -647,7 +922,7 @@ const INERT_ENTRY_TYPES = new Set(["model_change", "session_info", "custom", "cu
  * parent's history, replies and usage included, and counting it would book the
  * parent's calls a second time.
  */
-export function observationsFromChildSession(sessionJsonl: string | undefined, childKey: string): ChildSessionExtraction {
+export function observationsFromChildSession(sessionJsonl: string | undefined, childKey: string, options: { retry?: boolean } = {}): ChildSessionExtraction {
 	const out: ChildSessionExtraction = {
 		childKey, observations: [], errors: [], providerErrors: [], notes: [],
 		turns: 0, compactions: 0, cacheWarmings: 0, recoveredOverflows: 0, missingResponseIds: 0, contextEdits: 0,
@@ -655,6 +930,13 @@ export function observationsFromChildSession(sessionJsonl: string | undefined, c
 		replyUsage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 	};
 	const who = `child ${childKey}`;
+	const retry = options.retry === true;
+	if (retry) out.retries = [];
+	// The last good reply's prompt plus output: the fallback estimate for an
+	// attempt no completed reply followed.
+	let lastPromptPlusOutput = 0;
+	// Retried attempts not yet followed by a completed reply.
+	let streak: StreakEntry[] = [];
 	const error = (message: string) => out.errors.push(`${who}: ${message}`);
 	const note = (message: string) => out.notes.push(`${who}: ${message}`);
 	const fail = (reason: string) => {
@@ -702,11 +984,41 @@ export function observationsFromChildSession(sessionJsonl: string | undefined, c
 	// a request, and which tool calls it made, decide how the session ended.
 	let last: { id: string; observation: number; empty: boolean; calls: ChildToolCall[] } | undefined;
 	// A failed or truncated reply whose meaning depends on what follows it.
-	let pending: { id: string; stopReason: string; errorMessage?: string } | undefined;
+	let pending: {
+		id: string; stopReason: string; errorMessage?: string; entryId: string; usage?: Partial<UsageTotals>; provider?: string;
+		/** The fallback estimate as it stood when this reply failed. */
+		fallback: number;
+	} | undefined;
 	let compactedSincePending = false;
+	// Whether a context_edit omitted the pending reply's entry outright. The file
+	// has no auto_retry events, so this omission is the only mark pi's retry
+	// leaves (agent-session.js _omitRecoveryAttempt). An edit that replaces the
+	// entry (an extension's boundary draft) is not one.
+	let omittedPending = false;
 	const settle = (retried: boolean) => {
 		if (!pending) return;
-		if (retried && compactedSincePending) {
+		// pi's retry and its overflow recovery leave the same omission, and pi
+		// picks one by the failed reply's text. Read that way, a threshold
+		// compaction pi runs before the retried request (agent-session.js
+		// _compactBeforeNextAssistantResponse) does not turn a retry into an
+		// overflow recovery.
+		const piRetried = retry && omittedPending && pending.stopReason === "error" && piRetries(pending);
+		if (piRetried) {
+			const meteredTokens = pending.usage && reportsSpend(pending.usage) ? num(pending.usage.totalTokens) : 0;
+			const attempt: RetriedAttempt = {
+				id: `${childKey}/${pending.id}`, origin: "worker", ...(pending.errorMessage === undefined ? {} : { errorMessage: pending.errorMessage }),
+				recovered: false, meteredTokens, ...fallbackEstimate(meteredTokens, pending.fallback),
+			};
+			out.retries!.push(attempt);
+			if (retried) {
+				streak.push({ attempt, sameContext: !compactedSincePending });
+				note(`assistant reply ${pending.id} failed (${pending.errorMessage || "provider error"}); pi omitted it and retried the turn`);
+			} else {
+				// The session ended during the backoff: listed and counted, as the
+				// parent's cancelled attempt is, and the worker failed.
+				fail(`assistant reply ${pending.id} failed: ${pending.errorMessage || "provider error"}; pi's retry of it never ran`);
+			}
+		} else if (retried && compactedSincePending) {
 			out.recoveredOverflows++;
 			note(`assistant reply ${pending.id} (${pending.stopReason}) overflowed the context; a compaction recovered it and the turn was retried`);
 		} else if (pending.stopReason === "error") fail(`assistant reply ${pending.id} failed: ${pending.errorMessage || "provider error"}`);
@@ -784,16 +1096,34 @@ export function observationsFromChildSession(sessionJsonl: string | undefined, c
 				out.finalStop = stopReason;
 				if (stopReason === "aborted") fail(`assistant reply ${id} was aborted`);
 				else if (stopReason === "error" || stopReason === "length") {
-					pending = { id, stopReason, ...(typeof message.errorMessage === "string" ? { errorMessage: message.errorMessage } : {}) };
+					pending = {
+						id, stopReason, entryId: row.id, fallback: lastPromptPlusOutput, ...(usage ? { usage } : {}),
+						...(typeof message.errorMessage === "string" ? { errorMessage: message.errorMessage } : {}),
+						...(typeof message.provider === "string" ? { provider: message.provider } : {}),
+					};
 					compactedSincePending = false;
+					omittedPending = false;
 				} else if (!COMPLETED_STOPS.has(stopReason)) error(`assistant reply ${id} ended with unexpected stopReason ${stopReason}`);
+				if (retry && stopReason !== "error" && usage && reportsSpend(usage)) lastPromptPlusOutput = promptPlusOutput(usage);
+				if (retry && COMPLETED_STOPS.has(stopReason)) {
+					recoverStreak(streak, promptOf(usage));
+					streak = [];
+				}
 				break;
 			}
-			case "compaction":
+			case "compaction": {
 				out.compactions++;
 				compactedSincePending = pending !== undefined;
-				meter(`compaction:${row.id}`, row.usage, `compaction ${row.id}`, true);
+				const usage = meter(`compaction:${row.id}`, row.usage, `compaction ${row.id}`, true);
+				if (retry) {
+					// The next prompt carries the summary, not the history it replaced:
+					// neither the previous reply nor the recovering one sizes an
+					// attempt made before this point.
+					lastPromptPlusOutput = num(usage?.outputTokens);
+					for (const entry of streak) entry.sameContext = false;
+				}
 				break;
+			}
 			case "branch_summary":
 				meter(`branch-summary:${row.id}`, row.usage, `branch summary ${row.id}`, true);
 				note(`branch summary ${row.id} counted; a foreground child is not expected to branch`);
@@ -805,6 +1135,7 @@ export function observationsFromChildSession(sessionJsonl: string | undefined, c
 				break;
 			case "context_edit":
 				out.contextEdits++;
+				if (pending && row.targetId === pending.entryId && row.replacement === null) omittedPending = true;
 				break;
 			case "thinking_level_change":
 				if (typeof row.thinkingLevel === "string") out.thinkingLevels.push(row.thinkingLevel);

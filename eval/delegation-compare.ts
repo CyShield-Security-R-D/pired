@@ -25,13 +25,17 @@ import { isRetryableAssistantError } from "@earendil-works/pi-ai/compat";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { DVBANK, dedupe, engagementTelemetry, fromLedger, scoreFindings, type Finding } from "./dvbank/score.ts";
 import { scopeClause, stripLeakage } from "./corpus/lib.ts";
-import { BENCHMARK_SETTINGS, PROBE_FAUX_MODEL, PROBE_FAUX_PROVIDER, type CompareEntryConfig, type ProbeConfig } from "./delegation-compare-entry.ts";
 import {
-	accountUsage, APPROVAL_DECISION, compareMatchedRuns, createBreaker, DEFAULT_BREAKER, findLeaks, isOfficialGrid, leakTermsFor, nextPairAction,
-	observationsFromChildSession, observationsFromPiEvents, OFFICIAL_PASSES, OFFICIAL_TARGET_IDS, parseBreakerPolicy, planSchedule,
-	contentText, reconcileChildSession, reconcileSubagentCalls, SUBAGENT_TOOL,
-	type Arm, type BreakerPolicy, type BreakerVerdict, type ChildSessionExtraction, type ChildVerdict, type ExpectedCell, type PiUsageExtraction, type RunMetric,
-	type ScheduledPair, type SubagentChild, type SubagentReconciliation, type UsageAccounting, type UsageObservation,
+	benchmarkSettings, DEFAULT_RETRY_POLICY, PROBE_FAUX_MODEL, PROBE_FAUX_PROVIDER, validateRetryPolicy,
+	type CompareEntryConfig, type ProbeConfig, type RetryPolicy,
+} from "./delegation-compare-entry.ts";
+import {
+	accountUsage, APPROVAL_DECISION, compareMatchedRuns, contentText, createBreaker, DEFAULT_BREAKER, findLeaks, isOfficialGrid, leakTermsFor,
+	meteredCallCount, nextPairAction, observationsFromChildSession, observationsFromPiEvents, OFFICIAL_PASSES, OFFICIAL_TARGET_IDS,
+	parseBreakerPolicy, planSchedule, reconcileChildSession, reconcileSubagentCalls, SUBAGENT_TOOL, summarizeRetries,
+	type Arm, type BreakerPolicy, type BreakerVerdict, type ChildSessionExtraction, type ChildVerdict, type ExpectedCell, type PiUsageExtraction,
+	type RetriedAttempt, type RetrySummary, type RunMetric, type ScheduledPair, type SubagentChild, type SubagentReconciliation,
+	type UsageAccounting, type UsageObservation,
 } from "./delegation-compare-lib.ts";
 // The staging, target-copy and tree-hash helpers moved to their own module so
 // the same digest rule draws the panel here, in the preflight and in tests.
@@ -249,6 +253,11 @@ type Options = {
 	 * every grid before the option ran.
 	 */
 	breaker?: BreakerPolicy;
+	/**
+	 * --retry: pi's agent retry on, under DEFAULT_RETRY_POLICY (ADR-033).
+	 * Absent, retries stay off and every output is the v5 one.
+	 */
+	retryPolicy?: RetryPolicy;
 };
 
 type JsonRecord = Record<string, unknown>;
@@ -339,13 +348,19 @@ Options:
                         OAuth check sizes (see --auth-horizon-hours)
   --out <dir>           New or empty directory; must not contain an advisory ID
   --resume <out-dir>    Continue a stopped grid in place; takes no other option
+  --retry               Retry transient provider errors inside a run: pi's agent
+                        retry, ${DEFAULT_RETRY_POLICY.maxRetries} per streak; a run may fail at most
+                        max(${DEFAULT_RETRY_POLICY.maxFailedAttempts}, ${DEFAULT_RETRY_POLICY.maxFailedAttemptRate * 100}% of its metered requests) attempts,
+                        parent and workers; recorded in the manifest
+                        (default: off, as in every v5 grid)
   --dry-run             Run the preflight only, with no model calls
   --help, -h            Show this help without starting a model
 
 Arms: both run pired's pired.ts from their own staged snapshot through pi's SDK
-with the same settings (packages [], retries off, compaction on, cache warming
-off). The candidate also loads the pinned pi-subagents extension, so the arms
-differ only in the change under test; the baseline loads nothing else.
+with the same settings (packages [], retries off unless --retry, compaction on,
+cache warming off). The candidate also loads the pinned pi-subagents extension,
+so the arms differ only in the change under test; the baseline loads nothing
+else.
   pi-subagents: ${sub}
 Workers run as pi-subagents foreground children inside the arm's process, and
 their sessions are written to <cell>/child-sessions, where the accounting reads
@@ -463,9 +478,11 @@ export function parseOptions(argv: string[]): Parsed {
 	]);
 	const values = new Map<string, string>();
 	let dryRun = false;
+	let retry = false;
 	for (let i = 0; i < argv.length; i++) {
 		const flag = argv[i]!;
 		if (flag === "--dry-run") { dryRun = true; continue; }
+		if (flag === "--retry") { retry = true; continue; }
 		if (!valueFlags.has(flag)) throw new Error(`Unknown option: ${flag}`);
 		const value = argv[++i];
 		if (!value || value.startsWith("--")) throw new Error(`Missing value for ${flag}`);
@@ -506,6 +523,7 @@ export function parseOptions(argv: string[]): Parsed {
 			...(authHorizonHours === undefined ? {} : { authHorizonHours }),
 			candidateMaxAgents,
 			...(breaker === undefined ? {} : { breaker }),
+			...(retry ? { retryPolicy: { ...DEFAULT_RETRY_POLICY } } : {}),
 		},
 	};
 }
@@ -532,6 +550,18 @@ export function parseBreakerSpec(spec: string): BreakerPolicy {
 	} catch (error) {
 		throw new Error(`--breaker: ${message(error)}`);
 	}
+}
+
+/**
+ * The retry policy a grid recorded, or undefined for a manifest without one:
+ * every v5 manifest, which ran with retries off and must resume that way. A
+ * policy that is present but malformed refuses the resume rather than
+ * silently running the rest of the grid without retries.
+ */
+export function retryPolicyFromManifest(manifest: JsonRecord): RetryPolicy | undefined {
+	if (manifest.retryPolicy === undefined || manifest.retryPolicy === null) return undefined;
+	try { return validateRetryPolicy(manifest.retryPolicy); }
+	catch (error) { throw new Error(`--resume manifest has an invalid retryPolicy: ${message(error)}`); }
 }
 
 /**
@@ -574,6 +604,7 @@ export function optionsFromManifest(dir: string, manifest: JsonRecord): Options 
 	if (manifest.breaker !== undefined) {
 		try { breaker = parseBreakerPolicy(manifest.breaker); } catch (error) { throw new Error(`--resume manifest has an invalid breaker: ${message(error)}`); }
 	}
+	const retryPolicy = retryPolicyFromManifest(manifest);
 	return {
 		baseline: need(baseline.path, "the baseline snapshot path"), candidate: need(candidate.path, "the candidate snapshot path"),
 		corpus: need(inputs.corpus, "the corpus path"), truth: need(inputs.truth, "the truth path"), out: dir,
@@ -584,6 +615,7 @@ export function optionsFromManifest(dir: string, manifest: JsonRecord): Options 
 		...(authHorizonHours === undefined ? {} : { authHorizonHours }),
 		...(candidateMaxAgents === undefined ? {} : { candidateMaxAgents }),
 		...(breaker === undefined ? {} : { breaker }),
+		...(retryPolicy === undefined ? {} : { retryPolicy }),
 	};
 }
 
@@ -1804,7 +1836,7 @@ async function prepareCell(ctx: Context, target: Target, pass: number, arm: Arm,
 	// link would lock <agentDir>/auth.json.lock, not the shared lock, so the
 	// preflight's auth stage refuses a grid whose token could expire before it
 	// ends (checkAuthHorizon) and no refresh is due while cells run.
-	const settingsText = `${JSON.stringify(BENCHMARK_SETTINGS, null, 2)}\n`;
+	const settingsText = `${JSON.stringify(benchmarkSettings(options.retryPolicy), null, 2)}\n`;
 	const subagentConfigText = `${JSON.stringify(subagentConfigFor(paths.childSessionDir), null, 2)}\n`;
 	await writeFile(paths.agentSettingsPath, settingsText);
 	await writeFile(paths.subagentConfigPath, subagentConfigText);
@@ -1818,6 +1850,7 @@ async function prepareCell(ctx: Context, target: Target, pass: number, arm: Arm,
 		cwd: paths.targetDir, agentDir: paths.agentDir, authPath: join(AGENT_BASE, "auth.json"),
 		modelsPath: join(AGENT_BASE, "models.json"), modelsStorePath, prompt,
 		extensionPaths: [BASH_TIMEOUT_EXTENSION, ...(arm === "candidate" ? [ctx.piSubagents.entry] : [])],
+		...(options.retryPolicy ? { retryPolicy: options.retryPolicy } : {}),
 		...(probe ? { probe } : {}),
 	};
 	const configText = `${JSON.stringify(config, null, 2)}\n`;
@@ -1920,6 +1953,10 @@ type CellUsage = {
 	/** Every file under the cell's childSessionDir, relative to it. */
 	childSessionFiles: string[];
 	usage: UsageAccounting;
+	/** Under a retry policy only: the run's failed attempts, parent and workers, against the policy's cap. */
+	retry?: RetrySummary;
+	/** Under a retry policy only: observations that reported spend, for the request-log cross-check. */
+	meteredCalls?: number;
 };
 
 const isJsonRecord = (value: unknown): value is JsonRecord => typeof value === "object" && value !== null && !Array.isArray(value);
@@ -1980,13 +2017,18 @@ export function childProviderFailure(child: Pick<SubagentChild, "childKey" | "st
  * extension is not loaded, so any subagent call or child session means the
  * wrong snapshot ran and its tokens would land in the wrong arm.
  */
-export async function accountCellUsage(events: JsonRecord[], cell: { arm: Arm; childSessionDir: string }, expect: { provider: string; model: string; thinking: string }, stream: Pick<StreamObservation, "subagentCalls">): Promise<CellUsage> {
+export async function accountCellUsage(events: JsonRecord[], cell: { arm: Arm; childSessionDir: string }, expect: { provider: string; model: string; thinking: string }, stream: Pick<StreamObservation, "subagentCalls">, retryPolicy?: RetryPolicy): Promise<CellUsage> {
 	const errors: string[] = [];
 	const notes: string[] = [];
 	const observations: UsageObservation[] = [];
+	// Without a policy the extractors get no retry option at all, so a v5 cell is
+	// read exactly as before: any retry is a failure whose spend is unknown.
+	const retry = retryPolicy ? { retry: true } : {};
+	const retried: RetriedAttempt[] = [];
 	let parent: PiUsageExtraction | undefined;
 	try {
-		parent = observationsFromPiEvents(events, { delegationTools: [SUBAGENT_TOOL] });
+		parent = observationsFromPiEvents(events, { delegationTools: [SUBAGENT_TOOL], ...retry });
+		retried.push(...parent.retries ?? []);
 		observations.push(...parent.observations);
 		errors.push(...parent.errors, ...parent.providerErrors);
 		notes.push(...parent.notes);
@@ -2015,7 +2057,8 @@ export async function accountCellUsage(events: JsonRecord[], cell: { arm: Arm; c
 		for (const child of reconciliation?.children ?? []) {
 			if (!child.sessionFound) { children.push({ child }); continue; }
 			try {
-				const session = observationsFromChildSession(await readOptional(join(cell.childSessionDir, child.sessionPath)), child.childKey);
+				const session = observationsFromChildSession(await readOptional(join(cell.childSessionDir, child.sessionPath)), child.childKey, retry);
+				retried.push(...session.retries ?? []);
 				observations.push(...session.observations);
 				errors.push(...session.errors, ...session.providerErrors);
 				notes.push(...session.notes);
@@ -2037,7 +2080,16 @@ export async function accountCellUsage(events: JsonRecord[], cell: { arm: Arm; c
 	const usage = accountUsage(observations);
 	errors.push(...usage.errors);
 	if (!usage.valid) errors.push("provider usage attribution is incomplete");
-	return { errors: [...new Set(errors)], notes, parent, reconciliation, children, childProviderErrors, childSessionFiles, usage };
+	if (!retryPolicy) return { errors: [...new Set(errors)], notes, parent, reconciliation, children, childProviderErrors, childSessionFiles, usage };
+	const meteredCalls = meteredCallCount(observations);
+	const summary = summarizeRetries(retried, retryPolicy, meteredCalls);
+	if (summary.capExceeded) {
+		errors.push(`${summary.attempts} failed provider attempts (parent ${summary.bySource.parent.attempts}, workers ${summary.bySource.worker.attempts}) exceed the retry policy's cap of ${summary.cap.allowed} for a run of ${meteredCalls} metered requests`);
+	}
+	return {
+		errors: [...new Set(errors)], notes, parent, reconciliation, children, childProviderErrors, childSessionFiles, usage,
+		retry: summary, meteredCalls,
+	};
 }
 
 /**
@@ -2125,22 +2177,41 @@ export type InfraClass = {
  * willRetry right after it, the pattern observationsFromPiEvents accepts), plus
  * every failed compaction's errorMessage. Tool results are never read, so a
  * model's bash output that says "rate limit" cannot make a run infrastructure.
+ *
+ * Under a retry policy (`retry`), a reply pi retried is dropped once a later
+ * reply arrives: without that, a run invalid for its own reason (a fast empty
+ * run, a grader error) that had one dropped stream pi recovered from would be
+ * classed as infrastructure and re-run. A retry still in progress when the
+ * stream ends, or one pi cancelled (`auto_retry_end` success: false), keeps its
+ * text: that run did not recover. Without the option the reading is the v5 one.
  */
-export function providerFailureTexts(events: JsonRecord[]): string[] {
+export function providerFailureTexts(events: JsonRecord[], options: { retry?: boolean } = {}): string[] {
 	const texts: string[] = [];
 	let pending: string | undefined;
+	// The text of a failed reply pi is retrying; settled by the next reply.
+	let retrying: string | undefined;
 	for (const event of events) {
 		if (event.type === "message_end") {
 			const reply = event.message;
 			if (!isJsonRecord(reply) || reply.role !== "assistant") continue;
 			if (pending !== undefined) texts.push(pending);
+			// The retried request produced this reply: either it recovered, or it
+			// failed in turn and its own error is now the one that counts.
+			retrying = undefined;
 			pending = reply.stopReason === "error" ? (typeof reply.errorMessage === "string" ? reply.errorMessage : "") : undefined;
 		} else if (event.type === "compaction_end") {
 			if (typeof event.errorMessage === "string") texts.push(event.errorMessage);
 			else if (event.reason === "overflow" && event.willRetry === true) pending = undefined;
+		} else if (options.retry === true && event.type === "auto_retry_start") {
+			if (pending !== undefined) retrying = pending;
+			pending = undefined;
+		} else if (options.retry === true && event.type === "auto_retry_end" && event.success !== true) {
+			if (retrying !== undefined) texts.push(retrying);
+			retrying = undefined;
 		}
 	}
 	if (pending !== undefined) texts.push(pending);
+	if (retrying !== undefined) texts.push(retrying);
 	return texts.filter((text) => text.trim() !== "");
 }
 
@@ -2163,6 +2234,27 @@ export function fetchErrorsFromStderr(stderrText: string, providerHosts?: string
 		});
 	}
 	return out;
+}
+
+/**
+ * The entry's request log for the provider's own hosts. The entry prints a
+ * `benchmark_request` line per fetch only under a retry policy; parent and
+ * in-process workers share that fetch, so the count covers attempts no stream
+ * shows, such as a worker's failed compaction call. Any other stderr text is
+ * ignored, as in fetchErrorsFromStderr.
+ */
+export function requestLogFromStderr(stderrText: string, providerHosts: string[]): { logged: number; byStatus: Record<string, number> } {
+	const hosts = providerHosts.map((h) => h.toLowerCase());
+	const byStatus: Record<string, number> = {};
+	let logged = 0;
+	for (const line of stderrText.split("\n")) {
+		const row = line.trim().startsWith("{") ? parseJsonObject(line.trim()) : undefined;
+		if (row?.type !== "benchmark_request" || typeof row.host !== "string" || !hosts.includes(row.host.toLowerCase().replace(/:\d+$/, ""))) continue;
+		logged++;
+		const status = typeof row.status === "number" ? String(row.status) : "none";
+		byStatus[status] = (byStatus[status] ?? 0) + 1;
+	}
+	return { logged, byStatus };
 }
 
 /** zai's structured error codes, anchored to the JSON key so a bare number elsewhere never matches. */
@@ -2235,11 +2327,22 @@ export function classifyInfra(failures: ProviderFailures, timedOut: boolean): In
  * wins, since it keeps the quota flag; otherwise an arm this runner's own signal
  * handling stopped (or never launched because of it) is a runner interruption.
  * A timeout never is, even when a signal also arrived.
+ *
+ * Under a retry policy, a run past the policy's cap on failed attempts is
+ * infrastructure too: pi recovered each drop, so no failure text is left for
+ * the classifier, yet the provider, not the arm, failed the run.
  */
-export function decideInfra(run: { valid: boolean; timedOut: boolean; stoppedByRunner: boolean; notLaunchedInterrupted: boolean; failures: ProviderFailures }): InfraClass {
+export function decideInfra(run: {
+	valid: boolean; timedOut: boolean; stoppedByRunner: boolean; notLaunchedInterrupted: boolean; failures: ProviderFailures;
+	retry?: Pick<RetrySummary, "attempts" | "cap" | "capExceeded">;
+}): InfraClass {
 	if (run.valid || run.timedOut) return { infra: false };
 	const provider = classifyInfra(run.failures, false);
 	if (provider.infra) return provider;
+	if (run.retry?.capExceeded) {
+		const { cap } = run.retry;
+		return { infra: true, reason: "retry cap exceeded", evidence: `${run.retry.attempts} failed provider attempts; the policy allows ${cap.allowed} (max of ${cap.floor} and ${cap.rate} x ${cap.meteredRequests} metered requests)` };
+	}
 	if (run.stoppedByRunner || run.notLaunchedInterrupted) return { infra: true, reason: "runner interruption" };
 	return { infra: false };
 }
@@ -2283,7 +2386,7 @@ async function inspectRun(ctx: Context, cell: PreparedCell, launched: Launch, at
 		}
 		if (events.some((e) => e.type === "benchmark_probe" || e.type === "benchmark_probe_delegation")) errors.push("a scored run emitted a probe report");
 		if (assistantReplies(events).some((m) => m.provider === PROBE_FAUX_PROVIDER)) errors.push("a scored run was answered by the probe's scripted model");
-		accounting = await accountCellUsage(events, cell, options, launched.stream);
+		accounting = await accountCellUsage(events, cell, options, launched.stream, options.retryPolicy);
 		errors.push(...accounting.errors);
 		errors.push(...await cellConfigErrors(cell));
 		try {
@@ -2306,7 +2409,7 @@ async function inspectRun(ctx: Context, cell: PreparedCell, launched: Launch, at
 	// provider-originated text is classified (see ProviderFailures).
 	const stderrText = result ? await readFile(cell.stderrPath, "utf8").catch(() => "") : "";
 	const failures: ProviderFailures = {
-		parent: providerFailureTexts(events),
+		parent: providerFailureTexts(events, options.retryPolicy ? { retry: true } : {}),
 		workers: (accounting?.childProviderErrors ?? []).map((w) => w.text),
 		fetchErrors: fetchErrorsFromStderr(stderrText, ctx.provider.allowedHosts.filter((h) => h !== "localhost" && h !== "127.0.0.1")),
 	};
@@ -2322,6 +2425,7 @@ async function inspectRun(ctx: Context, cell: PreparedCell, launched: Launch, at
 	const classified = decideInfra({
 		valid, timedOut: result?.timedOut === true, stoppedByRunner,
 		notLaunchedInterrupted: launched.launchError === "not launched: interrupted", failures,
+		...(accounting?.retry ? { retry: accounting.retry } : {}),
 	});
 	const infraFailure = !valid && classified.infra;
 	const infraReason = infraFailure ? classified.reason : undefined;
@@ -2332,6 +2436,12 @@ async function inspectRun(ctx: Context, cell: PreparedCell, launched: Launch, at
 	// Only a valid run carries a token count. JSON has no NaN, so an invalid row
 	// serializes as null — never as a zero that reads like a free run.
 	const totalTokens = valid && usage?.valid ? usage.total.totalTokens : Number.NaN;
+	// What the comparison gates on: metered tokens plus the lower-bound estimate
+	// for failed attempts that reported nothing. The arm that makes more calls
+	// meets more drops, so metered tokens alone would flatter it; without a
+	// policy there are no retried attempts and this is totalTokens.
+	const totalTokensWithRetryEstimate = totalTokens + (accounting?.retry?.estimatedTokens ?? 0);
+	const requestLog = options.retryPolicy && result ? requestLogFromStderr(stderrText, [ctx.provider.baseHost]) : undefined;
 	const stream = launched.stream;
 	const since = (at: number | undefined): number | null => at === undefined || !result ? null : (at - result.startedAt) / 1000;
 	const record: JsonRecord = {
@@ -2346,6 +2456,20 @@ async function inspectRun(ctx: Context, cell: PreparedCell, launched: Launch, at
 		precisionLowerBound: precision, submittedFindings: findings.length,
 		score: graded?.ok ? graded.summary : null, telemetry: telemetry ?? null,
 		totalTokens: Number.isFinite(totalTokens) ? totalTokens : null,
+		// Only a grid under a retry policy writes these, so a v5 record keeps its shape.
+		...(options.retryPolicy ? {
+			totalTokensWithRetryEstimate: Number.isFinite(totalTokensWithRetryEstimate) ? totalTokensWithRetryEstimate : null,
+			retry: accounting?.retry ? {
+				...accounting.retry,
+				// Logged requests minus metered calls: an upper bound on the calls no
+				// usage covers, since a compaction that summarized a split turn made
+				// two requests under one observation.
+				requests: requestLog ? {
+					...requestLog, metered: accounting.meteredCalls ?? 0,
+					unmetered: Math.max(0, requestLog.logged - (accounting.meteredCalls ?? 0)),
+				} : null,
+			} : null,
+		} : {}),
 		usage: usage ? {
 			valid: usage.valid, parent: usage.parent, worker: usage.worker, total: usage.total,
 			parentRequests: usage.parentRequests, workerRequests: usage.workerRequests,
@@ -2363,6 +2487,10 @@ async function inspectRun(ctx: Context, cell: PreparedCell, launched: Launch, at
 				childKey: child.childKey, agent: child.agent, status: child.status, exitCode: child.exitCode ?? null,
 				error: child.error ?? null, model: child.model ?? null, thinking: child.thinking ?? null,
 				sessionFound: child.sessionFound, turns: session?.turns ?? null, compactions: session?.compactions ?? null,
+				// Each retried attempt used one of the worker's turns (core/child.ts
+				// counts turn_start); the baseline has no turn budget. Measured here,
+				// not corrected, since the product is frozen.
+				...(options.retryPolicy ? { retriedAttempts: session?.retries?.length ?? null } : {}),
 				models: session?.models ?? [], thinkingLevels: session?.thinkingLevels ?? [], finalStop: session?.finalStop ?? null,
 				ending: session?.ending ?? null, outcome: verdict?.outcome ?? null,
 				handoffChars: session ? session.finalText.length : null,
@@ -2409,7 +2537,7 @@ async function inspectRun(ctx: Context, cell: PreparedCell, launched: Launch, at
 	// Written only now, after the process is gone, and outside every granted path.
 	await writeJson(join(cell.cellDir, "run.json"), record);
 	return {
-		metric: { key: cell.key, target: cell.target.id, pass: cell.pass, valid, truePositives, precision, totalClaims, totalTokens },
+		metric: { key: cell.key, target: cell.target.id, pass: cell.pass, valid, truePositives, precision, totalClaims, totalTokens: totalTokensWithRetryEstimate },
 		arm: cell.arm, cellId: cell.cellId, seconds, record, infraFailure, quotaExhausted: infraFailure && classified.exhausted === true,
 	};
 }
@@ -2630,7 +2758,7 @@ async function inspectDelegationProbe(ctx: Context, cell: PreparedCell, launched
 	// The accounting a scored candidate run gets, on the probe's faux spend: each
 	// worker's session must be where the config says, and must reconcile.
 	const stream = { ...trackStream().stream, subagentCalls: launches.length };
-	const accounting = await accountCellUsage(events, cell, { provider: PROBE_FAUX_PROVIDER, model: PROBE_FAUX_MODEL, thinking: ctx.options.thinking }, stream);
+	const accounting = await accountCellUsage(events, cell, { provider: PROBE_FAUX_PROVIDER, model: PROBE_FAUX_MODEL, thinking: ctx.options.thinking }, stream, ctx.options.retryPolicy);
 	errors.push(...accounting.errors.map((e) => `accounting: ${e}`));
 	errors.push(...await cellConfigErrors(cell));
 	if (accounting.childSessionFiles.length === 0) errors.push(`no worker session was written under ${cell.childSessionDir}`);
@@ -2988,15 +3116,22 @@ async function runPreflight(options: Options, manifest: JsonRecord, saveManifest
 	return { ctx, targets: inputs.targets, expectedCells: inputs.expectedCells, official, exploratoryReasons };
 }
 
-/** The RunMetric a comparison reads, reconstructed from a persisted run record (for resumed pairs). */
-export function metricFromRecord(record: JsonRecord): RunMetric {
+/**
+ * The RunMetric a comparison reads, reconstructed from a persisted run record
+ * (for resumed pairs). Its tokens are what the gate reads: under a retry policy
+ * the metered count plus the estimate for unmetered attempts, otherwise the
+ * metered count. `metered` reads the metered count alone, for the comparison
+ * reported beside the gate.
+ */
+export function metricFromRecord(record: JsonRecord, tokens: "gate" | "metered" = "gate"): RunMetric {
 	const num = (v: unknown): number => typeof v === "number" && Number.isFinite(v) ? v : Number.NaN;
+	const count = tokens === "gate" && record.totalTokensWithRetryEstimate !== undefined ? record.totalTokensWithRetryEstimate : record.totalTokens;
 	return {
 		key: String(record.key ?? ""), target: String(record.target ?? ""), pass: Number(record.pass ?? 0),
 		valid: record.valid === true,
 		truePositives: num(record.truePositives), precision: num(record.precisionLowerBound),
 		totalClaims: num(record.findings),
-		totalTokens: record.totalTokens === null || record.totalTokens === undefined ? Number.NaN : num(record.totalTokens),
+		totalTokens: count === null || count === undefined ? Number.NaN : num(count),
 	};
 }
 
@@ -3095,6 +3230,9 @@ export function resumeMismatches(prior: JsonRecord, fresh: JsonRecord): string[]
 	// A grid that re-queued and stopped under one policy, then resumed under
 	// another, would be one grid run under two stopping rules.
 	eq("breaker", prior.breaker, fresh.breaker);
+	// A retried attempt is a failure without a policy and a count with one; half
+	// a grid read one way and half the other would not compare.
+	eq("retryPolicy", prior.retryPolicy, fresh.retryPolicy);
 	const pr = (prior.requested ?? {}) as JsonRecord;
 	const fr = (fresh.requested ?? {}) as JsonRecord;
 	for (const k of ["provider", "model", "thinking", "passes", "only"]) eq(`requested.${k}`, pr[k], fr[k]);
@@ -3284,10 +3422,13 @@ export function newManifest(options: Options, mode: string): JsonRecord {
 		thinking: options.thinking, passes: options.passes, concurrency: options.concurrency, timeoutMs: options.timeoutMs,
 		...(options.candidateMaxAgents === undefined ? {} : { candidateMaxAgents: options.candidateMaxAgents }),
 		...(options.breaker === undefined ? {} : { breaker: options.breaker }),
+		// Only a grid that asked for retries records a policy, so a grid without
+		// one writes the v5 manifest, and a v5 manifest resumes with retries off.
+		...(options.retryPolicy ? { retryPolicy: options.retryPolicy } : {}),
 		prompt: REVIEW_PROMPT, resumePolicy: RESUME_POLICY,
 		runtimeConfiguration: {
 			globalExtensions: false, globalSkills: false, promptTemplates: false, contextFiles: false, theme: false, forcedDelegation: false, scribe: "off",
-			settings: BENCHMARK_SETTINGS, candidateExtensions: ["pi-subagents (pinned; see pins.piSubagents*)"],
+			settings: benchmarkSettings(options.retryPolicy), candidateExtensions: ["pi-subagents (pinned; see pins.piSubagents*)"],
 			subagentConfig: subagentConfigFor("<cell>/child-sessions"),
 		},
 	};
@@ -3802,6 +3943,14 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 		compared.filter((o) => o.arm === "candidate").map((o) => o.metric),
 		expectedCells,
 	);
+	// Under a retry policy the gate reads metered tokens plus the estimate for
+	// unmetered attempts; the same comparison on metered tokens alone is reported
+	// beside it, so a verdict that rests on the estimate shows as one.
+	const meteredOnlyComparison = options.retryPolicy ? compareMatchedRuns(
+		outcomes.filter((o) => o.arm === "baseline").map((o) => metricFromRecord(o.record, "metered")),
+		outcomes.filter((o) => o.arm === "candidate").map((o) => metricFromRecord(o.record, "metered")),
+		expectedCells,
+	) : undefined;
 	// Each cell loads node_modules afresh, and hashing it (~25k files) per launch
 	// is too slow, so it is re-hashed once at the end: a runtime that moved during
 	// the grid means the arms may not have run the same pi, and nothing is approved.
@@ -3851,11 +4000,13 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 		},
 		runtimeSha256: ctx.pins.piRuntimeSha256, runtimeAfterSha256: runtimeAfter,
 		comparison,
+		...(options.retryPolicy ? { retryPolicy: options.retryPolicy, meteredOnlyComparison } : {}),
 		interpretation: {
 			precision: "lower bound against patch-localized keys; unmatched claims are unadjudicated and are not confirmed false positives",
 			passes: "ranges are across complete five-target pooled passes; three passes are coarse and are not a significance test",
 			approval: "one grid is one model; approvedForThisModel requires the official five-target, three-pass grid with matched pins and every run valid; candidate pass-mean pooled TP and grid-pooled precision each at least 85% of baseline (ADR-026); no target whose candidate TP range lies wholly below its baseline range; and lower mean total parent+worker+compaction tokens. Corpus acceptance additionally requires the same for the second priority model.",
 			tokens: "an invalid run carries no token count; it is excluded from the comparison and the grid is then incomplete",
+			...(options.retryPolicy ? { retryTokens: "the comparison's tokens are metered tokens plus a lower-bound estimate for failed attempts pi retried that reported no usage (the previous reply's prompt plus output); meteredOnlyComparison reads metered tokens alone" } : {}),
 		},
 		delegationAudit: summarizeAudits(outcomes.flatMap((o) => {
 			const audit = (o.record as JsonRecord).delegationAudit as DelegationAudit | { error: string } | null | undefined;
