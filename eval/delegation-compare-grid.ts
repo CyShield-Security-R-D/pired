@@ -412,6 +412,14 @@ export function summarizeTwins(arms: readonly PairArm[], twins: ReadonlyArray<{ 
 }
 
 /**
+ * A snapshot a kind pins: its input digest and, optionally, its staged
+ * (redacted) digest, the tree the model reads. `sameAs` names the kind and arm
+ * whose pin this one is, resolved at parse time: stage 2's S and D are the
+ * snapshot stage 1 ran as S, so they are pinned once, not three times by hand.
+ */
+export interface SnapshotPin { digest: string | null; stagedDigest?: string | null; sameAs?: string }
+
+/**
  * A named grid kind (plan item 2.8), as the pins file's `gridKinds` fixes it:
  * the corpus, the snapshots, every arm's configuration, and whether the grid
  * runs with retries and the breaker. The fields mirror the command line, so a
@@ -420,8 +428,8 @@ export function summarizeTwins(arms: readonly PairArm[], twins: ReadonlyArray<{ 
 export interface GridKind {
 	corpus: string;
 	/** The baseline: a git commit (checked file by file, as the v5 baseline was) or a snapshot digest; null until frozen. */
-	baseline: { commit: string | null } | { digest: string | null };
-	candidate: { digest: string | null };
+	baseline: { commit: string | null } | SnapshotPin;
+	candidate: SnapshotPin;
 	/** --baseline-max-agents; null: the baseline's scope states none. */
 	baselineMaxAgents: number | null;
 	/** --candidate-max-agents (ADR-032). */
@@ -470,13 +478,11 @@ export function parseGridKinds(value: unknown, corpora: Record<string, PinnedCor
 		if (!isRecord(raw)) throw new Error(`${where} must be an object`);
 		if (typeof raw.corpus !== "string" || !corpora[raw.corpus]) throw new Error(`${where}.corpus must name a corpus of the pins file`);
 		const baseline = raw.baseline;
-		if (!isRecord(baseline) || Object.keys(baseline).length !== 1 || !("commit" in baseline || "digest" in baseline)) throw new Error(`${where}.baseline must be {commit} or {digest}`);
-		if ("commit" in baseline && baseline.commit !== null && !hexCommit(baseline.commit)) throw new Error(`${where}.baseline.commit must be null or a full git commit id`);
-		if ("digest" in baseline && baseline.digest !== null && !hex64(baseline.digest)) throw new Error(`${where}.baseline.digest must be null or a sha256 hex digest`);
+		if (isRecord(baseline) && Object.keys(baseline).length === 1 && "commit" in baseline) {
+			if (baseline.commit !== null && !hexCommit(baseline.commit)) throw new Error(`${where}.baseline.commit must be null or a full git commit id`);
+		} else if (!snapshotPinShape(baseline)) throw new Error(`${where}.baseline must be {commit}, {digest, stagedDigest?} or {sameAs}`);
 		const candidate = raw.candidate;
-		if (!isRecord(candidate) || Object.keys(candidate).length !== 1 || !("digest" in candidate) || (candidate.digest !== null && !hex64(candidate.digest))) {
-			throw new Error(`${where}.candidate must be {digest: null or a sha256 hex digest}`);
-		}
+		if (!snapshotPinShape(candidate)) throw new Error(`${where}.candidate must be {digest: null or a sha256 hex digest, stagedDigest?} or {sameAs}`);
 		if (raw.baselineMaxAgents !== null && !isCap(raw.baselineMaxAgents)) throw new Error(`${where}.baselineMaxAgents must be null or a non-negative integer`);
 		if (!isCap(raw.candidateMaxAgents)) throw new Error(`${where}.candidateMaxAgents must be a non-negative integer`);
 		const verifiers = raw.maxVerifiers;
@@ -501,14 +507,34 @@ export function parseGridKinds(value: unknown, corpora: Record<string, PinnedCor
 		if (raw.extendablePasses !== undefined && typeof raw.extendablePasses !== "boolean") throw new Error(`${where}.extendablePasses must be a boolean`);
 		if (raw.thinking !== null && !(typeof raw.thinking === "string" && ["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(raw.thinking))) throw new Error(`${where}.thinking must be null or a thinking level`);
 		out[name] = {
-			corpus: raw.corpus, baseline: { ...baseline } as GridKind["baseline"], candidate: { digest: candidate.digest as string | null },
+			corpus: raw.corpus, baseline: { ...(baseline as Record<string, unknown>) } as GridKind["baseline"], candidate: { ...(candidate as Record<string, unknown>) } as unknown as SnapshotPin,
 			baselineMaxAgents: raw.baselineMaxAgents as number | null, candidateMaxAgents: raw.candidateMaxAgents,
 			maxVerifiers: { ...verifiers } as Partial<Record<PairArm, number>>, budgetArms: arms("budgetArms", ARM_ORDER), subagentsArms: arms("subagentsArms", ARM_ORDER),
 			twinArms: arms("twinArms", ["baseline", "candidate"]) as PairArm[],
 			matched, retry: raw.retry, breaker, timeoutMs: raw.timeoutMs as number | null, thinking: raw.thinking as string | null, extendablePasses: raw.extendablePasses === true,
 		};
 	}
+	// Resolve `sameAs` once every kind is read: a pin names "<kind>.<baseline|candidate>",
+	// which must itself be a digest pin, never another reference.
+	for (const [name, kind] of Object.entries(out)) {
+		for (const arm of ["baseline", "candidate"] as const) {
+			const pin = kind[arm] as SnapshotPin & { commit?: unknown };
+			if (pin.sameAs === undefined) continue;
+			const [other, otherArm] = pin.sameAs.split(".");
+			const ref = other && (otherArm === "baseline" || otherArm === "candidate") ? out[other]?.[otherArm] as (SnapshotPin & { commit?: unknown }) | undefined : undefined;
+			if (!ref || "commit" in ref || ref.sameAs !== undefined) throw new Error(`pins: gridKinds.${name}.${arm}.sameAs must name another kind's digest pin as <kind>.<baseline|candidate>`);
+			kind[arm] = { digest: ref.digest, ...(ref.stagedDigest === undefined ? {} : { stagedDigest: ref.stagedDigest }), sameAs: pin.sameAs };
+		}
+	}
 	return out;
+}
+
+function snapshotPinShape(value: unknown): boolean {
+	if (!isRecord(value)) return false;
+	const keys = Object.keys(value);
+	if (keys.length === 1 && typeof value.sameAs === "string" && value.sameAs) return true;
+	if (!keys.every((k) => k === "digest" || k === "stagedDigest") || !("digest" in value)) return false;
+	return (value.digest === null || hex64(value.digest)) && (value.stagedDigest === undefined || value.stagedDigest === null || hex64(value.stagedDigest));
 }
 
 /** What a grid was launched with, as its kind is checked against it. */
@@ -567,18 +593,32 @@ export function gridKindReasons(name: string, kind: GridKind, grid: GridOptions)
  * file-by-file rule, or a snapshot digest: stage 2's baseline is the
  * candidate snapshot S, which has no commit.
  */
-export function kindSnapshotReasons(name: string, kind: GridKind, measured: { baselineDigest: string; candidateDigest: string; commitReason: (commit: string) => string | undefined }): string[] {
+export function kindSnapshotReasons(name: string, kind: GridKind, measured: {
+	baselineDigest: string; candidateDigest: string; baselineStagedDigest?: string; candidateStagedDigest?: string; commitReason: (commit: string) => string | undefined;
+}): string[] {
 	const reasons: string[] = [];
+	const of = (pin: SnapshotPin): string => pin.sameAs ? ` (that of ${pin.sameAs})` : "";
+	// The staged digest is the redacted tree the model reads: stage 2's S must be
+	// the bytes stage 1's S was, not only the same input (plan item 2.8 review).
+	const staged = (arm: "baseline" | "candidate", pin: SnapshotPin, actual: string | undefined): void => {
+		if (pin.stagedDigest === undefined) return;
+		if (pin.stagedDigest === null) reasons.push(`grid kind ${name}: no ${arm} staged digest is frozen${of(pin)}`);
+		else if (actual !== pin.stagedDigest) reasons.push(`grid kind ${name}: ${arm} staged digest ${String(actual).slice(0, 12)} is not the pinned ${pin.stagedDigest.slice(0, 12)}${of(pin)}`);
+	};
 	if ("commit" in kind.baseline) {
 		if (kind.baseline.commit === null) reasons.push(`grid kind ${name}: no baseline is frozen (its baseline.commit is null)`);
 		else {
 			const why = measured.commitReason(kind.baseline.commit);
 			if (why) reasons.push(`grid kind ${name}: ${why}`);
 		}
-	} else if (kind.baseline.digest === null) reasons.push(`grid kind ${name}: no baseline is frozen (its baseline.digest is null)`);
-	else if (measured.baselineDigest !== kind.baseline.digest) reasons.push(`grid kind ${name}: baseline input digest ${measured.baselineDigest.slice(0, 12)} is not the pinned ${kind.baseline.digest.slice(0, 12)}`);
-	if (kind.candidate.digest === null) reasons.push(`grid kind ${name}: no candidate is frozen (its candidate.digest is null)`);
-	else if (measured.candidateDigest !== kind.candidate.digest) reasons.push(`grid kind ${name}: candidate input digest ${measured.candidateDigest.slice(0, 12)} is not the pinned ${kind.candidate.digest.slice(0, 12)}`);
+	} else {
+		if (kind.baseline.digest === null) reasons.push(`grid kind ${name}: no baseline is frozen (its baseline.digest is null${of(kind.baseline)})`);
+		else if (measured.baselineDigest !== kind.baseline.digest) reasons.push(`grid kind ${name}: baseline input digest ${measured.baselineDigest.slice(0, 12)} is not the pinned ${kind.baseline.digest.slice(0, 12)}${of(kind.baseline)}`);
+		staged("baseline", kind.baseline, measured.baselineStagedDigest);
+	}
+	if (kind.candidate.digest === null) reasons.push(`grid kind ${name}: no candidate is frozen (its candidate.digest is null${of(kind.candidate)})`);
+	else if (measured.candidateDigest !== kind.candidate.digest) reasons.push(`grid kind ${name}: candidate input digest ${measured.candidateDigest.slice(0, 12)} is not the pinned ${kind.candidate.digest.slice(0, 12)}${of(kind.candidate)}`);
+	staged("candidate", kind.candidate, measured.candidateStagedDigest);
 	return reasons;
 }
 

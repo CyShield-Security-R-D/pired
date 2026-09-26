@@ -1581,7 +1581,7 @@ async function checkNetwork(options: Options, provider: Provider, nodePath: stri
 	return { ok: true, origin, status: typeof report.status === "number" ? report.status : null, note: "unauthenticated GET; any status proves reachability and spends no tokens" };
 }
 
-export async function loadTargets(options: Pick<Options, "manifestPath" | "truth" | "corpus" | "selected" | "twinsPath">): Promise<{ manifestHash: string; twinsHash?: string; targets: Target[]; truthHashes: Record<string, string>; sourceHashes: Record<string, string> }> {
+export async function loadTargets(options: Pick<Options, "manifestPath" | "truth" | "corpus" | "selected" | "twinsPath">): Promise<{ manifestHash: string; twinsHash?: string; targets: Target[]; corpusTargets: Target[]; truthHashes: Record<string, string>; sourceHashes: Record<string, string> }> {
 	const raw = await readFile(options.manifestPath, "utf8");
 	const manifest = JSON.parse(raw.replaceAll("PLACEHOLDER", dirname(options.truth))) as Target[];
 	// Any number of targets (plan item 2.8): the fresh v6 corpus has twelve. What
@@ -1632,7 +1632,9 @@ export async function loadTargets(options: Pick<Options, "manifestPath" | "truth
 			if (!Array.isArray(truth) || truth.length) throw new Error(`Patched twin ${target.id}'s answer key must be an empty list: ${target.truth}`);
 		}
 	}
-	return { manifestHash: sha256(raw), ...(twinsHash === undefined ? {} : { twinsHash }), targets: selected, truthHashes, sourceHashes };
+	// Every gate target of the manifest, whatever --only selected: a kind's
+	// redaction set is drawn from these alone (plan item 2.8 review).
+	return { manifestHash: sha256(raw), ...(twinsHash === undefined ? {} : { twinsHash }), targets: selected, corpusTargets: manifest, truthHashes, sourceHashes };
 }
 
 function promptFor(target: Target): string { return REVIEW_PROMPT + scopeClause(target.scope); }
@@ -1661,7 +1663,7 @@ export function manifestTargetEntry(t: Target): JsonRecord {
  * differ only in the change under test: advisory IDs and aliases of every target,
  * each project's owner/repo/name parts, and every distinct truth-file path.
  */
-async function redactTermsFor(targets: Target[], truthDir: string): Promise<string[]> {
+export async function redactTermsFor(targets: Target[], truthDir: string): Promise<string[]> {
 	const terms = new Set<string>();
 	for (const target of targets) {
 		for (const term of leakTermsFor(target)) terms.add(term);
@@ -2120,14 +2122,16 @@ function gridSchedule(pre: Pick<Preflight, "targets">, options: Pick<Options, "p
  * and the scope's deadline are the only per-cell differences, and they are
  * random or clock-bound for every arm alike.
  */
-export function cellModelInputs(options: Options, arm: Arm, target: Target, cell: { engagement: string; workspaceDir: string; childSessionDir: string }, piSubagentsEntry: string, nowMs: number = Date.now()): {
-	snapshot: string; scope: Record<string, unknown>; settings: ReturnType<typeof benchmarkSettings>; subagentConfig: Record<string, unknown>;
+export function cellModelInputs(options: Options, arm: Arm, target: Target, cell: { engagement: string; workspaceDir: string; childSessionDir: string }, piSubagentsEntry: string, stagedDigest: string, nowMs: number = Date.now()): {
+	snapshot: string; stagedDigest: string; scope: Record<string, unknown>; settings: ReturnType<typeof benchmarkSettings>; subagentConfig: Record<string, unknown>;
 	loadsSubagents: boolean; extensionPaths: string[]; prompt: string; provider: string; model: string; thinking: CompareEntryConfig["thinking"]; retryPolicy?: RetryPolicy;
 } {
 	const loads = loadsSubagents(options, arm);
 	const snapshot = arm === "baseline" ? options.baseline : arm === "matched" ? options.matched?.snapshot ?? options.candidate : options.candidate;
 	return {
 		snapshot,
+		// The redacted tree the model reads, as the preflight measured it; each cell must reproduce it.
+		stagedDigest,
 		scope: scopeFor(cell.engagement, cell.workspaceDir, armSettings(options, arm), options.timeoutMs, nowMs),
 		settings: benchmarkSettings(options.retryPolicy),
 		subagentConfig: subagentConfigFor(cell.childSessionDir),
@@ -2213,7 +2217,7 @@ async function prepareCell(ctx: Context, target: Target, pass: number, arm: Arm,
 	const engagement = `review-${opaqueToken()}`;
 	let probe: ProbeConfig | undefined;
 	if (probeFor) probe = await probeFor(paths);
-	const inputs = cellModelInputs(options, arm, target, { engagement, workspaceDir: paths.workspaceDir, childSessionDir: paths.childSessionDir }, ctx.piSubagents.entry);
+	const inputs = cellModelInputs(options, arm, target, { engagement, workspaceDir: paths.workspaceDir, childSessionDir: paths.childSessionDir }, ctx.piSubagents.entry, ctx.stagedDigests[arm]);
 	const scope = probe?.mode === "delegation" ? probeDelegationScope(engagement, paths.workspaceDir) : inputs.scope;
 	const scopeText = `${JSON.stringify(scope, null, 2)}\n`;
 	await writeFile(join(paths.targetDir, "pired.scope.json"), scopeText);
@@ -3488,7 +3492,13 @@ async function runPreflight(options: Options, manifest: JsonRecord, saveManifest
 		const sameSnapshot = source.baseline.digest === source.candidate.digest;
 		const configsDiffer = JSON.stringify(armSettings(options, "baseline")) !== JSON.stringify(armSettings(options, "candidate"));
 		if (sameSnapshot && !configsDiffer) throw new Error("Baseline and candidate snapshots are identical.");
-		const redactTerms = await redactTermsFor(inputs.targets, options.truth);
+		// A kind's redaction set depends only on its corpus's full target list, so
+		// the staged snapshot, the tree the model reads, is the same bytes in every
+		// grid of the corpus: S's in stage 1 (with twins) and in stage 2 (without).
+		// Redaction matches substrings, so each twin, named <target>-patched and
+		// carrying its target's ids, is covered by its target's terms. A grid
+		// without a kind redacts what it runs, as before.
+		const redactTerms = await redactTermsFor(inputs.kind ? inputs.corpusTargets : inputs.targets, options.truth);
 		// One staged copy per arm at preflight, under opaque names, only to compute
 		// and record the redacted digest and the redaction list. Each cell later
 		// stages its own fresh copy and must reproduce these digests exactly.
@@ -3516,6 +3526,7 @@ async function runPreflight(options: Options, manifest: JsonRecord, saveManifest
 			baselineCommitPin = "commit" in kind.baseline ? kind.baseline.commit : null;
 			exploratoryReasons.push(...kindSnapshotReasons(options.gridKind!, kind, {
 				baselineDigest: source.baseline.digest, candidateDigest: source.candidate.digest,
+				baselineStagedDigest: staged.baseline.stagedDigest, candidateStagedDigest: staged.candidate.stagedDigest,
 				commitReason: (commit) => (baselineReason = baselineMismatchReason(source.baseline.rows, commit)),
 			}));
 		} else {

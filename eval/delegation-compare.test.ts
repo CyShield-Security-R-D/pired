@@ -6,7 +6,7 @@ import {
 	accountCellUsage, atHighestAttempt, attemptReport, AUTH_HORIZON_CAP_MS, AUTH_MARGIN_MS, benchmarkRuntimeOf, checkAuthHorizon, childProviderFailure, classifyInfra,
 	credentialExpiry, decideInfra, DEFAULT_CANDIDATE_MAX_AGENTS, fetchErrorsFromStderr, gridWorstCaseMs, isBrokerEnvVar, loadTargets, metricFromRecord, notLaunchedOutcome, ownerIsLive,
 	newManifest, optionsFromManifest, parseBreakerSpec, parseComparePins, parseOptions, parseOwnerRecord, planResume, providerFailureTexts, requestLogFromStderr,
-	armOptionsFromManifest, cellModelInputs, V6_DECISION, verdictFields, manifestTargetEntry, probeDelegationScope, resumeMismatches, splitTwinRuns, twinOptionsFromManifest, retryPolicyFromManifest, reviewScope, runPairs, runStop, runtimeMismatch, scopedSealCommand, startTimeFromStat, subagentConfigFor,
+	armOptionsFromManifest, cellModelInputs, redactTermsFor, V6_DECISION, verdictFields, manifestTargetEntry, probeDelegationScope, resumeMismatches, splitTwinRuns, twinOptionsFromManifest, retryPolicyFromManifest, reviewScope, runPairs, runStop, runtimeMismatch, scopedSealCommand, startTimeFromStat, subagentConfigFor,
 	toolSurfaceErrors, trackStream, workerCapReason,
 	ceilingOf, ceilingProbeErrors, latestMatchedSessions, planMatchedResume, sessionRunOf, verifyCeiling,
 	type GridStopState, type MatchedSessionSpec, type ProviderFailures, type RunOutcome,
@@ -2039,6 +2039,21 @@ describe("patched twins (plan 2.8)", () => {
 		expect(loaded.targets[2]!.aliases).toContain("CVE-2031-0001");
 	});
 
+	// A kind redacts from its corpus's full target list, so the staged snapshot is
+	// the same bytes whether a grid runs the twins (stage 1) or not (stage 2).
+	it("draws the same redaction set for a corpus with and without its twins, and covers every twin by its target's terms", async () => {
+		const files = await corpusWithTwins();
+		const withTwins = await loadTargets({ ...files, selected: [] });
+		const { twinsPath: _twins, ...plain } = files;
+		const without = await loadTargets({ ...plain, selected: [] });
+		const terms = await redactTermsFor(withTwins.corpusTargets, files.truth);
+		expect(await redactTermsFor(without.corpusTargets, files.truth)).toEqual(terms);
+		for (const twin of withTwins.targets.filter((t) => t.twinOf)) {
+			expect(terms.some((term) => twin.name.toLowerCase().includes(term.toLowerCase()))).toBe(true);
+			for (const id of twin.aliases ?? []) if (id !== twin.id) expect(terms.map((t) => t.toLowerCase())).toContain(id.toLowerCase());
+		}
+	});
+
 	it("refuses a twin whose answer key has labels, and an --only that leaves the gate empty", async () => {
 		await expect(loadTargets({ ...await corpusWithTwins(`${JSON.stringify([{ file: "app.py", line: 3 }])}\n`), selected: [] })).rejects.toThrow(/must be an empty list/);
 		await expect(loadTargets({ ...await corpusWithTwins(), selected: ["acme_shop-aaaaaa-patched"] })).rejects.toThrow(/only patched twins/);
@@ -2232,24 +2247,30 @@ describe("S is the same arm in both stages (plan 2.8)", () => {
 	// Every input the harness writes or passes that could reach the model: the
 	// snapshot, scope bytes, pi's settings, the pi-subagents config, whether
 	// pi-subagents is loaded and the extension list, the prompt, model, effort
-	// and retry policy. If any differed, stage 2's baseline would not be the S
-	// that stage 1 measured.
+	// and retry policy, and the staged (redacted) tree it reads. If any differed,
+	// stage 2's baseline would not be the S that stage 1 measured.
 	it("gives S the same model-facing inputs as stage 1's candidate and stage 2's baseline", () => {
-		const asCandidate = cellModelInputs(stage1, "candidate", target, cell, "/pinned/pi-subagents/index.js", now);
-		const asBaseline = cellModelInputs(stage2, "baseline", target, cell, "/pinned/pi-subagents/index.js", now);
+		const stagedS = "5".repeat(64);
+		const asCandidate = cellModelInputs(stage1, "candidate", target, cell, "/pinned/pi-subagents/index.js", stagedS, now);
+		const asBaseline = cellModelInputs(stage2, "baseline", target, cell, "/pinned/pi-subagents/index.js", stagedS, now);
 		expect(asBaseline).toEqual(asCandidate);
 		expect(JSON.stringify(asBaseline.scope)).toBe(JSON.stringify(asCandidate.scope));
-		expect(asBaseline).toMatchObject({ snapshot: "/snap/S", loadsSubagents: true, scope: { maxAgents: 0, maxVerifiers: 0, budget: { minutes: 240 } } });
+		expect(asBaseline).toMatchObject({ snapshot: "/snap/S", stagedDigest: stagedS, loadsSubagents: true, scope: { maxAgents: 0, maxVerifiers: 0, budget: { minutes: 240 } } });
+		// The staged digest each stage measures is held to one pin: stage 2's S and D are stage 1's S.
+		const kinds = SHIPPED_PINS.gridKinds;
+		expect(kinds["v6-stage2"]!.baseline).toEqual({ ...kinds["v6-stage1"]!.candidate, sameAs: "v6-stage1.candidate" });
+		expect(kinds["v6-stage2"]!.candidate).toEqual({ ...kinds["v6-stage1"]!.candidate, sameAs: "v6-stage1.candidate" });
+		expect(kinds["v6-stage1"]!.candidate).toHaveProperty("stagedDigest");
 		expect(asBaseline.extensionPaths).toHaveLength(2);
 		// D, the stage-2 candidate, differs from S only in its caps.
-		const d = cellModelInputs(stage2, "candidate", target, cell, "/pinned/pi-subagents/index.js", now);
+		const d = cellModelInputs(stage2, "candidate", target, cell, "/pinned/pi-subagents/index.js", stagedS, now);
 		expect({ ...d, scope: undefined }).toEqual({ ...asBaseline, scope: undefined });
 		expect(d.scope).toMatchObject({ maxAgents: 8, maxVerifiers: 2 });
 	});
 
 	// Unset, the baseline loads nothing but pired and the bash default, as in every earlier grid.
 	it("keeps the default baseline without pi-subagents", () => {
-		const plain = cellModelInputs(options(), "baseline", target, cell, "/pinned/pi-subagents/index.js", now);
+		const plain = cellModelInputs(options(), "baseline", target, cell, "/pinned/pi-subagents/index.js", "6".repeat(64), now);
 		expect(plain.loadsSubagents).toBe(false);
 		expect(plain.extensionPaths).toHaveLength(1);
 		expect(options()).not.toHaveProperty("subagentsArms");

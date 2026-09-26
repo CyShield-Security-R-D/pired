@@ -51,7 +51,8 @@
 				"commit": null
 			},
 			"candidate": {
-				"digest": null
+				"digest": null,
+				"stagedDigest": null
 			},
 			"baselineMaxAgents": null,
 			"candidateMaxAgents": 0,
@@ -85,13 +86,13 @@
 			"extendablePasses": true
 		},
 		"v6-stage2": {
-			"_comment": "To be frozen. Arm S as the baseline (the candidate snapshot, with exactly the scope it had as stage 1's candidate, and loading pi-subagents as it did there) against arm D (the same snapshot, maxAgents 8, maxVerifiers 2, budget line on), with the matched arm M (follow, k 3). No twins. Retry and breaker required; run limit 4 h. baseline.digest and candidate.digest are both the candidate snapshot's digest. Extendable passes, to be decided at the freeze: stage 2 may run at the pilot's count from the start.",
+			"_comment": "To be frozen. Arm S as the baseline (the candidate snapshot, with exactly the scope it had as stage 1's candidate, and loading pi-subagents as it did there) against arm D (the same snapshot, maxAgents 8, maxVerifiers 2, budget line on), with the matched arm M (follow, k 3). No twins. Retry and breaker required; run limit 4 h. Its baseline (S) and candidate (D) are pinned as v6-stage1's candidate, input and staged digest alike, so S is the same bytes in both stages. Extendable passes, to be decided at the freeze: stage 2 may run at the pilot's count from the start.",
 			"corpus": "v6-fresh",
 			"baseline": {
-				"digest": null
+				"sameAs": "v6-stage1.candidate"
 			},
 			"candidate": {
-				"digest": null
+				"sameAs": "v6-stage1.candidate"
 			},
 			"baselineMaxAgents": 0,
 			"candidateMaxAgents": 8,

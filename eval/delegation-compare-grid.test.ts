@@ -377,6 +377,26 @@ describe("grid kinds", () => {
 		]);
 	});
 
+	// Stage 2's S and D are stage 1's S: one pin, input and staged digest, not three copies by hand.
+	it("resolves a snapshot pin named by sameAs, and refuses a reference to nothing or to another reference", () => {
+		const corpora = { c: corpus() };
+		const one = { ...kind(), candidate: { digest: sha("c"), stagedDigest: sha("d") } };
+		const kinds = parseGridKinds({ one, two: { ...kind(), baseline: { sameAs: "one.candidate" }, candidate: { sameAs: "one.candidate" } } }, corpora);
+		expect(kinds.two!.baseline).toEqual({ digest: sha("c"), stagedDigest: sha("d"), sameAs: "one.candidate" });
+		expect(() => parseGridKinds({ two: { ...kind(), baseline: { sameAs: "nobody.candidate" } } }, corpora)).toThrow(/sameAs/);
+		expect(() => parseGridKinds({ one: { ...kind(), candidate: { sameAs: "two.candidate" } }, two: { ...kind(), candidate: { sameAs: "one.candidate" } } }, corpora)).toThrow(/sameAs/);
+		expect(() => parseGridKinds({ one: { ...kind(), candidate: { digest: null, extra: 1 } } }, corpora)).toThrow(/candidate must be/);
+	});
+
+	it("holds a pinned staged digest, so a stage whose redaction differs is not the same S", () => {
+		const k = kind({ baseline: { digest: sha("b"), stagedDigest: sha("e"), sameAs: "s1.candidate" }, candidate: { digest: sha("c"), stagedDigest: null } });
+		const reasons = kindSnapshotReasons("k", k, { baselineDigest: sha("b"), candidateDigest: sha("c"), baselineStagedDigest: sha("f"), candidateStagedDigest: sha("g"), commitReason: () => "" });
+		expect(reasons).toEqual([
+			`grid kind k: baseline staged digest ${"f".repeat(12)} is not the pinned ${"e".repeat(12)} (that of s1.candidate)`,
+			"grid kind k: no candidate staged digest is frozen",
+		]);
+	});
+
 	it("refuses a malformed kind rather than letting every grid under it read as exploratory", () => {
 		const corpora = { c: corpus() };
 		const raw = (over: Record<string, unknown>) => ({ k: { ...kind(), ...over } });
@@ -385,6 +405,7 @@ describe("grid kinds", () => {
 		expect(() => parseGridKinds(raw({ corpus: "nope" }), corpora)).toThrow(/corpus/);
 		expect(() => parseGridKinds(raw({ baseline: { commit: "abc" } }), corpora)).toThrow(/baseline.commit/);
 		expect(() => parseGridKinds(raw({ baseline: { tag: "v1" } }), corpora)).toThrow(/baseline must be/);
+		expect(() => parseGridKinds(raw({ baseline: { digest: null, stagedDigest: "x" } }), corpora)).toThrow(/baseline must be/);
 		expect(() => parseGridKinds(raw({ candidate: {} }), corpora)).toThrow(/candidate must be/);
 		expect(() => parseGridKinds(raw({ candidateMaxAgents: null }), corpora)).toThrow(/candidateMaxAgents/);
 		expect(() => parseGridKinds(raw({ maxVerifiers: { matched: 1 } }), corpora)).toThrow(/maxVerifiers/);
