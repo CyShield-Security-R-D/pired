@@ -40,12 +40,27 @@ as much per pair.
 
 ## Corpus
 
-- `eval/corpus/fresh/`: 12 targets and 2 clean-code controls, drawn with seed 20260926 from the
-  OSV pool. The procedure is in `eval/corpus/fresh.md`, and it is frozen by the hashes of
-  `pool.json`, `exclusions.json`, `selection.json` and `truth/`.
-  - **Pending:** the independent review of the draw, including whether frameworks and SDKs are
-    eligible. A rule fixed after the review is logged as variant 2, with the reason, and the draw is
-    re-run with the same seed before any model call.
+- `eval/corpus/fresh/`: 12 targets drawn with seed 20260926 from the OSV pool. The procedure is in
+  `eval/corpus/fresh.md`, and it is frozen by the hashes of `pool.json`, `exclusions.json`,
+  `selection.json` and `truth/`.
+- **Eligibility rule v2 (variant 2).** An independent review of variant 1, before any model call,
+  found three non-applications: an SDK whose "routes" were HTTP client calls, a framework whose
+  route was a generator template, and a desktop app whose server entry was archived. The rule now
+  requires:
+  - server-side route shapes outside tests, examples, fixtures and archives;
+  - a deployable-service marker;
+  - no README self-description as a framework, library, SDK or toolkit;
+  - vendored files excluded from size and language measurement.
+
+  The same seed is re-walked, and both variants stay on record.
+- **Truth is location-only for the official score.** OSV sorts CWE ids as text, so a "first" CWE
+  is not the primary one, and the v5 trial showed the class rule refusing location-correct claims.
+  Labels carry every CWE of their advisory for the re-scorer's class level, matched any-of.
+  - Import-only hunks are dropped.
+  - Every label names its advisory.
+  - Regions of known advisories without labels are **neutral**: a claim there counts as neither a
+    true nor a false positive.
+- **Controls are patched twins:** each target's fix-commit tree, with its fixed regions recorded.
 - None of the 9 apps of the v5 trial (official or held-out), and no repository named in pired's
   research, appears.
 - The v5 official grid is **not** used for the decision. It is run only if the operator wants
@@ -80,16 +95,25 @@ as much per pair.
     72 × 2 runs ≈ 780M tokens. D and M together add about 1.3B.
   - Fewer pairs are possible, but then the trial can detect only larger effects. The table above is
     the trade-off.
-- The fresh apps' variance is unknown. It is re-estimated from the first 24 valid pairs. N is **not**
-  changed from that estimate unless this document pre-registers the rule for changing it. Proposed:
-  no change; report the achieved power.
+- **The fresh apps' variance is unknown**, and label skew will raise it. At an SD of 1.2, +0.3 needs
+  about 11 passes per target. The count is therefore fixed by an **internal pilot**:
+  - 2 passes of arms A and S on all 12 targets.
+  - The pooled paired SD of advisories found is computed blind to the direction of the difference.
+    Only the SD is read; the arm means are not inspected.
+  - Passes per target = ⌈(1.96 + 0.84)² · SD² / 0.3² / 12⌉, capped at 10.
+  - The pilot pairs count toward the final analysis.
+  - The rule is fixed here, before the pilot.
+- **With only 12 apps,** the app-clustered interval stays wide whatever the pass count. This is
+  reported as a limitation, not fixed by adding passes.
 
 ## Metrics
 
 **Primary**
-- **Labelled true positives per pair:** unique labelled locations matched at the official rule, and
-  at every `eval/rescore.ts` level (file, point ±3, range ±3, ±10, capped overlap), with and without
-  the class rule.
+- **Advisories found per pair (primary):** an advisory is found when any of its labels is matched
+  at the official rule, which is location-only on this corpus. Five targets hold most of the
+  labels, so counting labels would let one app carry the result.
+  - Also reported: unique labelled locations, at every `eval/rescore.ts` level (file, point ±3,
+    range ±3, ±10, capped overlap), and at the class level, matched any-of.
 - **Adjudicated precision, per claim tier:** all rows, presented (not refuted or disposed) and
   confirmed. Adjudication follows `eval/adjudication.md`, and the judge is not an OpenAI model
   **[operator: judge model]**.
@@ -102,7 +126,11 @@ as much per pair.
 - **Stop reasons** per arm (ADR-030): the offered-to-continue rate is the metric 3.2 should move.
 - **Verifier:** confirmed-tier against suspected-tier precision; rejected true positives, as a
   share of labelled true positives among refuted rows; quote-downgrade rate.
-- **Clean controls:** valid claims per control run; the false-accept rate.
+- **Patched twins:** claims within ±3 lines of each fixed region, per arm. This is re-flagging
+  patched code, and it measures whether an arm tells the bug from its fix. Findings per KLOC are
+  reported but never folded into precision.
+  - **[operator]** Which arms run the twins. All four doubles the run count; A and S only is the
+    cheaper choice.
 - **Per-issue find rates and McNemar** (`eval/paired.ts`).
 
 ## Decision rule
@@ -153,7 +181,7 @@ gain.]**
 
 ## Before the freeze
 
-- [ ] Fresh-corpus review settled; draw final.
+- [ ] Variant 2 drawn and truth re-derived (review fixes in progress); draw final.
 - [ ] Harness accepts N targets plus controls (it takes exactly 5 today).
 - [ ] 2.5 matched arm merged and reviewed.
 - [ ] 3.1 and 3.2 merged into `p3/candidate-v5` and reviewed; candidate snapshot built and hashed.
