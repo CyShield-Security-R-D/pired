@@ -47,10 +47,10 @@
  *   node --experimental-strip-types eval/corpus/select-fresh.ts materialise --work DIR --out CORPUS
  */
 
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { cp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { cp, lstat, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
@@ -665,6 +665,56 @@ export function labelsFromHunks(
 }
 
 /**
+ * The regions of a fix for a NEUTRAL record: where a claim is neither a true
+ * nor a false positive because it points at an open advisory the key could
+ * not label. The same file and hunk rules as labels (scorer files, code, not
+ * import-only), merged at MERGE_GAP, but never capped or split: a neutral
+ * region only forgives, so the fix's whole extent is the honest width.
+ */
+export function neutralRegions(advisory: string, hunks: readonly Hunk[], sides?: ImportSides): Label[] {
+	const byFile = new Map<string, Array<[number, number]>>();
+	for (const h of hunks) {
+		if (!h.oldFile || !isLabelFile(h.oldFile) || ![...h.removed, ...h.added].some(isCodeLine)) continue;
+		if (sides && importOnly(h, sides.pre.get(h.oldFile), h.newFile ? sides.post.get(h.newFile) : undefined)) continue;
+		byFile.set(h.oldFile, [...(byFile.get(h.oldFile) ?? []), hunkRange(h, "pre")]);
+	}
+	const out: Label[] = [];
+	for (const [file, ranges] of [...byFile].sort(([a], [b]) => a.localeCompare(b))) {
+		ranges.sort((a, b) => a[0] - b[0]);
+		let cur: [number, number] | undefined;
+		for (const r of ranges) {
+			if (cur && r[0] - cur[1] - 1 <= MERGE_GAP) cur = [cur[0], Math.max(cur[1], r[1])];
+			else {
+				if (cur) out.push({ advisory, file, range: cur, raw: cur, capped: false, hunks: 1 });
+				cur = [r[0], r[1]];
+			}
+		}
+		if (cur) out.push({ advisory, file, range: cur, raw: cur, capped: false, hunks: 1 });
+	}
+	return out;
+}
+
+/**
+ * The id an OSV record is known by here: its own if it is a CVE, else the
+ * first CVE among its aliases, else its own. GSD and UVI mirror CVEs, and one
+ * vulnerability must not be recorded twice.
+ */
+export function canonicalId(rec: { id: string; aliases?: string[] }): string {
+	if (/^CVE-/.test(rec.id)) return rec.id;
+	return (rec.aliases ?? []).filter((a) => /^CVE-/.test(a)).sort()[0] ?? rec.id;
+}
+
+/** A record's FIX-typed commits in one repository, as shas. */
+export function fixCommitsIn(rec: OsvRecord, repo: string): string[] {
+	const shas = (rec.references ?? [])
+		.filter((r) => r.type === "FIX" && r.url)
+		.map((r) => COMMIT_RE.exec(r.url as string))
+		.filter((m): m is RegExpExecArray => !!m && repoKey(`${m[1]}/${(m[2] as string).replace(/\.git$/i, "")}`) === repoKey(repo))
+		.map((m) => (m[3] as string).toLowerCase());
+	return [...new Set(shas)];
+}
+
+/**
  * Would lib.ts stripLeakage delete this file when the target is built? It
  * deletes files named like release notes and any file that mentions the
  * advisory. A label on a deleted file is a guaranteed miss that says nothing
@@ -1230,7 +1280,7 @@ export class GitError extends Error {
 }
 
 /** git's stderr lines that mean the network failed, not the repository. */
-const TRANSIENT_STDERR = /Could not resolve host|Connection (?:timed out|reset|refused)|Operation timed out|timed out after|early EOF|RPC failed|HTTP\/2 stream|The requested URL returned error: (?:5\d\d|429)|remote end hung up unexpectedly|unexpected disconnect|gnutls_handshake|SSL_ERROR|TLS connection/i;
+const TRANSIENT_STDERR = /Could not resolve host|Connection (?:timed out|reset|refused)|Failed to connect|Couldn't connect to server|Operation (?:timed out|too slow)|timed out after|Empty reply from server|Recv failure|early EOF|RPC failed|HTTP\/2 stream|The requested URL returned error: (?:5\d\d|429)|remote end hung up unexpectedly|unexpected disconnect|gnutls_handshake|SSL_ERROR|SSL connect error|TLS connection|could not fetch [0-9a-f]+ from promisor remote/i;
 
 export function isTransientGitFailure(err: unknown): boolean {
 	if (err instanceof GitError) return err.timedOut || TRANSIENT_STDERR.test(err.stderrTail);
@@ -1468,9 +1518,9 @@ async function cmdExclusions(argv: string[]): Promise<void> {
 
 interface ExclusionsFile { sha256: string; repos: Array<{ repo: string }> }
 
-function workPaths(work: string, repo: string): { git: string; verdict: string } {
+function workPaths(work: string, repo: string): { git: string; verdict: string; tree: string } {
 	const slug = repoKey(repo).replace("/", "__");
-	return { git: join(work, "git", slug), verdict: join(work, "verdicts", `${slug}.json`) };
+	return { git: join(work, "git", slug), verdict: join(work, "verdicts", `${slug}.json`), tree: join(work, "tree", slug) };
 }
 
 async function ensureRepo(dir: string, repo: string): Promise<void> {
@@ -1509,23 +1559,93 @@ async function fullCheckout(dir: string, commit: string): Promise<void> {
 	await git(dir, ["checkout", "--quiet", "--force", "--detach", commit], 1_800_000);
 }
 
+/** A codeload tarball larger than this is abandoned for the git path, which fetches code blobs only. */
+const TARBALL_MAX_BYTES = 300 * 1024 * 1024;
+
+/** How long codeload may take to start a tarball, or pause inside one, before the git path is used instead. */
+const TARBALL_STALL_MS = 60_000;
+
 /**
- * Check out `commit` and measure it the way the corpus measures a target.
+ * The tree at `commit` from codeload.github.com, extracted into `dest`, or
+ * false whenever codeload does not deliver it promptly and whole: an error
+ * status, a response that does not start or stalls for TARBALL_STALL_MS, a
+ * tarball over TARBALL_MAX_BYTES, a tar failure. False never decides a verdict:
+ * the caller then takes the git path, which is the reference. So a codeload
+ * problem only costs time, and is never mistaken for a fact about the
+ * candidate or for a network failure.
  *
- * Paths come from the tree's listing and only code and the root README are
- * checked out: every rule reads a path, a code file or the README. Each code
- * file is read once, for its line count and for whether it is vendored
+ * Why: partway through the second walk GitHub's partial-clone blob fetches
+ * slowed from seconds to minutes per checkout (29.6 s for one tree whose
+ * tarball took 4 s), which would have stretched the walk over hours. The
+ * tarball is the same tree; treeFacts checks that it is, path by path.
+ */
+async function extractTarball(repo: string, commit: string, dest: string): Promise<boolean> {
+	await rm(dest, { recursive: true, force: true });
+	await mkdir(dest, { recursive: true });
+	const abort = new AbortController();
+	let timer = setTimeout(() => abort.abort(), TARBALL_STALL_MS);
+	const touch = (): void => { clearTimeout(timer); timer = setTimeout(() => abort.abort(), TARBALL_STALL_MS); };
+	const tar = spawn("tar", ["-xzf", "-", "--strip-components=1", "-C", dest], { stdio: ["pipe", "ignore", "ignore"] });
+	tar.stdin.on("error", () => undefined);
+	const closed = new Promise<number>((done) => tar.on("close", (code) => done(code ?? 1)));
+	const give = async (): Promise<boolean> => { tar.kill(); await closed; return false; };
+	try {
+		const res = await fetch(`https://codeload.github.com/${repo}/tar.gz/${commit}`, { signal: abort.signal });
+		if (!res.ok || !res.body) return await give();
+		let bytes = 0;
+		for await (const chunk of res.body as unknown as AsyncIterable<Uint8Array>) {
+			touch();
+			bytes += chunk.length;
+			if (bytes > TARBALL_MAX_BYTES) return await give();
+			if (!tar.stdin.write(chunk)) await new Promise((r) => tar.stdin.once("drain", r));
+		}
+		tar.stdin.end();
+		return (await closed) === 0;
+	} catch {
+		return await give();
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
+/**
+ * Does the extracted tree hold every path the listing names? `git archive`,
+ * which codeload serves, leaves out paths marked `export-ignore`; such a tree
+ * is not the reviewed tree, and the git path is used instead.
+ */
+async function holdsListing(root: string, entries: readonly TreeEntry[]): Promise<boolean> {
+	for (const e of entries) {
+		if (e.mode === "160000") continue;
+		if (!(await lstat(join(root, e.path)).then(() => true, () => false))) return false;
+	}
+	return true;
+}
+
+/**
+ * Measure the tree at `commit` the way the corpus measures a target.
+ *
+ * Paths come from the tree's git listing. Contents come from the codeload
+ * tarball when `repo` and `treeDir` are given and the tarball holds the
+ * listing exactly; otherwise from a sparse git checkout of code and the root
+ * README. Every rule reads a path, a code file or the README, so both give the
+ * same facts; `recheck` compares verdicts across the two. Each code file is
+ * read once, for its line count and for whether it is vendored
  * (isVendoredFile); vendored files are left out of size, language and routes.
  */
-async function treeFacts(dir: string, commit: string): Promise<TreeFacts | { tooMany: number }> {
-	const w = walkFromListing(parseLsTree(await git(dir, ["ls-tree", "-r", "-z", "--full-tree", commit])));
+async function treeFacts(dir: string, commit: string, repo?: string, treeDir?: string): Promise<(TreeFacts & { root: string }) | { tooMany: number }> {
+	const entries = parseLsTree(await git(dir, ["ls-tree", "-r", "-z", "--full-tree", commit]));
+	const w = walkFromListing(entries);
 	if (w.source.length > MAX_SOURCE_FILES) return { tooMany: w.source.length };
-	await sparseOn(dir);
-	await git(dir, ["checkout", "--quiet", "--force", "--detach", commit], 1_800_000);
+	let root = dir;
+	if (repo && treeDir && await extractTarball(repo, commit, treeDir) && await holdsListing(treeDir, entries)) root = treeDir;
+	else {
+		await sparseOn(dir);
+		await git(dir, ["checkout", "--quiet", "--force", "--detach", commit], 1_800_000);
+	}
 	const lines = new Map<string, number>();
 	const vendored = new Set<string>();
 	for (const f of new Set([...w.source, ...w.all.filter((p) => languageOf(p) && !NON_SOURCE.test(p))])) {
-		const text = await readFile(join(dir, f), "utf8").catch(() => "");
+		const text = await readFile(join(root, f), "utf8").catch(() => "");
 		lines.set(f, text.length === 0 ? 0 : text.split("\n").length);
 		if (isVendoredFile(text)) vendored.add(f);
 	}
@@ -1536,16 +1656,28 @@ async function treeFacts(dir: string, commit: string): Promise<TreeFacts | { too
 		const lang = languageOf(f) as string;
 		byLanguage.set(lang, (byLanguage.get(lang) ?? 0) + n);
 	}
-	const cls = await classify(dir, w);
+	const cls = await classify(root, w);
 	const readme = readmePath(w.all);
-	const readmeText = readme ? await readFile(join(dir, readme), "utf8").catch(() => undefined) : undefined;
+	const readmeText = readme ? await readFile(join(root, readme), "utf8").catch(() => undefined) : undefined;
 	return {
 		scopeFiles: source.length,
 		scopeLoc: source.reduce((n, f) => n + (lines.get(f) ?? 0), 0),
 		language: dominantLanguage(byLanguage),
 		service: serviceFacts(w.all, w.source, cls.routeFiles, vendored, readmeText),
 		vendored: vendored.size,
+		root,
 	};
+}
+
+/** Import lines of every scorer-readable file a set of hunks touches, on both sides. */
+async function importSides(dir: string, hunks: readonly Hunk[], from: string, to: string): Promise<ImportSides> {
+	const pre = new Map<string, Set<number>>();
+	const post = new Map<string, Set<number>>();
+	for (const h of hunks) {
+		if (h.oldFile && isLabelFile(h.oldFile) && !pre.has(h.oldFile)) pre.set(h.oldFile, importLines(h.oldFile, await git(dir, ["show", `${from}:${h.oldFile}`]).catch(() => "")));
+		if (h.newFile && isLabelFile(h.newFile) && !post.has(h.newFile)) post.set(h.newFile, importLines(h.newFile, await git(dir, ["show", `${to}:${h.newFile}`]).catch(() => "")));
+	}
+	return { pre, post };
 }
 
 /**
@@ -1554,13 +1686,22 @@ async function treeFacts(dir: string, commit: string): Promise<TreeFacts | { too
  */
 async function fixLabels(dir: string, advisory: string, from: string, to: string, side: "pre" | "post" = "pre"): Promise<{ labels: Label[]; unscoreable: number; imports: number }> {
 	const hunks = parseZeroContextDiff(await git(dir, ["diff", "--unified=0", "--no-color", from, to]));
-	const pre = new Map<string, Set<number>>();
-	const post = new Map<string, Set<number>>();
-	for (const h of hunks) {
-		if (h.oldFile && isLabelFile(h.oldFile) && !pre.has(h.oldFile)) pre.set(h.oldFile, importLines(h.oldFile, await git(dir, ["show", `${from}:${h.oldFile}`]).catch(() => "")));
-		if (h.newFile && isLabelFile(h.newFile) && !post.has(h.newFile)) post.set(h.newFile, importLines(h.newFile, await git(dir, ["show", `${to}:${h.newFile}`]).catch(() => "")));
-	}
-	return labelsFromHunks(advisory, hunks, side, { pre, post });
+	return labelsFromHunks(advisory, hunks, side, await importSides(dir, hunks, from, to));
+}
+
+/**
+ * An open advisory's fix regions (neutralRegions), moved onto the reviewed
+ * tree by the multikey rule; regions whose code changed in between cannot be
+ * placed and are counted, not guessed.
+ */
+async function regionsOnReviewed(dir: string, advisory: string, fixParent: string, fix: string, reviewed: string): Promise<{ kept: Label[]; unplaced: number }> {
+	const hunks = parseZeroContextDiff(await git(dir, ["diff", "--unified=0", "--no-color", fixParent, fix]));
+	const regions = neutralRegions(advisory, hunks, await importSides(dir, hunks, fixParent, fix));
+	if (fixParent === reviewed) return { kept: regions, unplaced: 0 };
+	const diffs = new Map<string, string>();
+	for (const file of new Set(regions.map((r) => r.file))) diffs.set(file, await git(dir, ["diff", "--unified=0", "--no-color", reviewed, fixParent, "--", file]));
+	const { kept, dropped } = mapLabelsBack(regions, diffs);
+	return { kept, unplaced: dropped.length };
 }
 
 const inRange = (loc: number): boolean => loc >= SIZE_RANGE[0] && loc <= SIZE_RANGE[1];
@@ -1600,7 +1741,7 @@ async function evaluateCandidate(work: string, repo: string, c: Candidate, useCa
 		const fix = await fullSha(paths.git, c.repo, c.sha);
 		await fetchRetrying(paths.git, ["--depth", "2", "--filter=blob:none", "origin", fix], 900_000);
 		const parent = (await git(paths.git, ["rev-parse", "--verify", `${fix}^1`])).trim();
-		const facts = await treeFacts(paths.git, parent);
+		const facts = await treeFacts(paths.git, parent, c.repo, paths.tree);
 		if ("tooMany" in facts) return fail("size within the official range", `${facts.tooMany} source files`);
 		if (!inRange(facts.scopeLoc)) return fail("size within the official range", `${facts.scopeLoc} loc${facts.vendored > 0 ? `, ${facts.vendored} vendored file(s) left out` : ""}`);
 		const service = serviceVerdict(facts.service);
@@ -1614,7 +1755,7 @@ async function evaluateCandidate(work: string, repo: string, c: Candidate, useCa
 		if (labels.length > MAX_LABELS_PER_ADVISORY) return fail("fix not diffuse", `${labels.length} labels`);
 		const ids = [id, ...c.advisory.aliases];
 		for (const l of labels) {
-			const text = await readFile(join(paths.git, l.file), "utf8").catch(() => undefined);
+			const text = await readFile(join(facts.root, l.file), "utf8").catch(() => undefined);
 			if (text === undefined) return fail("labellable fix", `${l.file} absent from the parent tree`);
 			if (wouldStrip(l.file, text, ids)) return fail("labels survive leak stripping", l.file);
 		}
@@ -1698,8 +1839,8 @@ async function evaluateControlOnce(work: string, pool: readonly PoolAdvisory[], 
 			if (!(await isAncestor(dir, full, e.fix))) return fail("no other known advisory open in the fixed tree", `${a.id} fixed after or beside it`);
 		}
 	}
-	let facts: TreeFacts | { tooMany: number };
-	try { facts = await treeFacts(dir, e.fix); }
+	let facts: (TreeFacts & { root: string }) | { tooMany: number };
+	try { facts = await treeFacts(dir, e.fix, c.repo, workPaths(work, repo).tree); }
 	catch (err) {
 		if (isTransientGitFailure(err)) throw err;
 		return fail("fixed tree obtainable", errDetail(err));
@@ -1736,6 +1877,7 @@ async function runWalk(pool: PoolFile, excluded: Set<string>, since: string | un
 		evaluate: (repo, c) => evaluateCandidate(work, repo, c),
 		evaluateControl: (repo, c, e) => evaluateControl(work, pool.advisories, repo, c, e),
 		release: async (repo, kept) => {
+			await rm(workPaths(work, repo).tree, { recursive: true, force: true });
 			if (!kept) await rm(workPaths(work, repo).git, { recursive: true, force: true });
 		},
 		progress: (line) => process.stdout.write(`${line}\n`),
@@ -1843,23 +1985,67 @@ async function cmdDraw(argv: string[]): Promise<void> {
 
 interface LabelProvenance { advisory: string; file: string; range: [number, number]; raw: [number, number]; capped: boolean; hunks: number }
 
+/**
+ * The selection a command reads: 1 is the pre-registered draw, n > 1 the
+ * variant appended (n - 1)th. The default is the latest, which is the one in
+ * force; the manifests record which it was.
+ */
+function selectionVariant(sel: Selection, index?: number): { index: number; selection: Selection } {
+	const variants = (sel.variants ?? []) as Array<{ selection: Selection }>;
+	const n = index ?? variants.length + 1;
+	if (n === 1) return { index: 1, selection: sel };
+	const v = variants[n - 2];
+	if (!v) throw new Error(`selection.json has no variant ${n}; it has ${variants.length + 1}`);
+	return { index: n, selection: v.selection };
+}
+
+/**
+ * OSV's by-commit query: every record whose affected git ranges include
+ * `commit`. Read for ids, aliases and FIX references only.
+ */
+async function osvByCommit(commit: string): Promise<OsvRecord[]> {
+	const out: OsvRecord[] = [];
+	let token: string | undefined;
+	for (let page = 0; page < 50; page++) {
+		const res = await fetch("https://api.osv.dev/v1/query", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ commit, ...(token ? { page_token: token } : {}) }),
+		});
+		if (!res.ok) throw new Error(`OSV by-commit ${res.status} for ${commit.slice(0, 12)}`);
+		const body = (await res.json()) as { vulns?: OsvRecord[]; next_page_token?: string };
+		out.push(...(body.vulns ?? []));
+		token = body.next_page_token;
+		if (!token) break;
+	}
+	return out;
+}
+
+interface OpenWithoutLabels { why: string; regions: Label[]; aliases: string[] }
+
+const relabel = (regions: readonly Label[], advisory: string): Label[] => regions.map((r) => ({ ...r, advisory }));
+
 async function cmdTruth(argv: string[]): Promise<void> {
 	const selPath = argOf(argv, "selection", join(FRESH, "selection.json")) as string;
 	const poolPath = argOf(argv, "pool", join(FRESH, "pool.json")) as string;
 	const outDir = argOf(argv, "out", FRESH) as string;
 	const work = resolve(argOf(argv, "work", "/tmp/pired-fresh-work") as string);
-	const sel = await readJson<Selection>(selPath);
+	const whole = await readJson<Selection>(selPath);
+	const { index, selection: sel } = selectionVariant(whole, argOf(argv, "variant-index") ? Number(argOf(argv, "variant-index")) : undefined);
+	const useOsv = !argv.includes("--no-osv");
 	const pool = await readJson<PoolFile>(poolPath);
 	const byId = new Map(pool.advisories.map((a) => [a.id, a]));
 	await mkdir(join(outDir, "truth"), { recursive: true });
 
 	const manifest: Array<Record<string, unknown>> = [];
+	const twins: Array<Record<string, unknown>> = [];
 	const provenance: Array<Record<string, unknown>> = [];
 	for (const t of sel.targets) {
 		const repo = String(t.repo);
 		const id = String(t.id);
 		const fix = String(t.fix_commit);
 		const parent = String(t.parent_commit);
+		const name = String(t.name);
 		const dir = workPaths(work, String(t.key)).git;
 		process.stdout.write(`${id} ${repo}\n`);
 		await ensureHistory(dir, repo, [fix, parent]);
@@ -1867,18 +2053,22 @@ async function cmdTruth(argv: string[]): Promise<void> {
 			git(dir, ["diff", "--unified=0", "--no-color", a, b, ...(file ? ["--", file] : [])]);
 
 		const primary = (await fixLabels(dir, id, parent, fix)).labels;
+		const primaryRegions = (await regionsOnReviewed(dir, id, parent, fix, parent)).kept;
 		const collected: Label[] = [...primary];
 		const credited = [id];
 		const dropped: Array<Record<string, unknown>> = [];
+		const open = new Map<string, OpenWithoutLabels>();
 		const others = pool.advisories
 			.filter((a) => a.id !== id && a.fixes.some((f) => repoKey(repoOf(f)) === repoKey(repo)))
 			.sort((a, b) => (a.published ?? "").localeCompare(b.published ?? "") || a.id.localeCompare(b.id));
 		for (const a of others) {
 			const own: Label[] = [];
+			const regions: Label[] = [];
 			// The bound is on what the fix yields, as for a drawn advisory, not on
 			// what survives mapping: a diffuse fix is diffuse wherever it lands.
 			let yielded = 0;
 			let shares = false;
+			let isOpen = false;
 			for (const f of a.fixes.filter((x) => repoKey(repoOf(x)) === repoKey(repo))) {
 				const full = await resolveInHistory(dir, repo, shaOf(f));
 				if (!full) {
@@ -1888,6 +2078,7 @@ async function cmdTruth(argv: string[]): Promise<void> {
 				if (full === fix) { shares = true; continue; }
 				// Rule 1: fixed after the reviewed tree, so still open in it.
 				if (!(await isAncestor(dir, parent, `${full}^1`))) continue;
+				isOpen = true;
 				const fixParent = (await git(dir, ["rev-parse", `${full}^1`])).trim();
 				const { labels } = await fixLabels(dir, a.id, fixParent, full);
 				yielded += labels.length;
@@ -1897,15 +2088,61 @@ async function cmdTruth(argv: string[]): Promise<void> {
 				const { kept, dropped: gone } = mapLabelsBack(labels, diffs);
 				for (const g of gone) dropped.push({ advisory: a.id, file: g.file, range: g.range, why: "region changed between the reviewed tree and this fix" });
 				own.push(...kept);
+				regions.push(...(await regionsOnReviewed(dir, a.id, fixParent, full, parent)).kept);
 			}
-			if (shares) credited.push(a.id);
-			if (yielded > MAX_LABELS_PER_ADVISORY) { dropped.push({ advisory: a.id, why: `diffuse: its fix yields ${yielded} labels` }); continue; }
-			if (own.length > 0) { collected.push(...own); if (!credited.includes(a.id)) credited.push(a.id); }
+			if (shares) {
+				// Its fix is the drawn advisory's: the same regions, which carry the
+				// drawn advisory's id. Recorded as neutral under its own id too.
+				credited.push(a.id);
+				open.set(a.id, { why: "shares the drawn advisory's fix commit", regions: relabel(primaryRegions, a.id), aliases: a.aliases });
+				continue;
+			}
+			if (!isOpen) continue;
+			if (yielded > MAX_LABELS_PER_ADVISORY) {
+				dropped.push({ advisory: a.id, why: `diffuse: its fix yields ${yielded} labels` });
+				open.set(a.id, { why: `diffuse: its fix yields ${yielded} labels`, regions, aliases: a.aliases });
+			} else if (own.length === 0) {
+				open.set(a.id, { why: yielded === 0 ? "its fix changes no labellable code" : "every labelled region changed since the reviewed tree", regions, aliases: a.aliases });
+			} else {
+				collected.push(...own);
+				credited.push(a.id);
+			}
 		}
+
+		// Open by OSV's own account, whatever the pool made of the record.
+		const osvNotes: Array<Record<string, unknown>> = [];
+		if (useOsv) {
+			const labelled = new Set(collected.map((l) => l.advisory));
+			for (const rec of await osvByCommit(parent)) {
+				const cid = canonicalId(rec);
+				if (cid === id || labelled.has(cid) || open.has(cid)) continue;
+				const aliases = [...new Set([rec.id, ...(rec.aliases ?? [])].filter((x) => x !== cid))];
+				const shas = fixCommitsIn(rec, repo);
+				const regions: Label[] = [];
+				let placed = false;
+				let fixedBefore = false;
+				for (const sha of shas) {
+					const full = await resolveInHistory(dir, repo, sha);
+					if (!full) continue;
+					if (full === fix) { regions.push(...relabel(primaryRegions, cid)); placed = true; continue; }
+					if (!(await isAncestor(dir, parent, `${full}^1`))) { fixedBefore = true; continue; }
+					const fixParent = (await git(dir, ["rev-parse", `${full}^1`])).trim();
+					regions.push(...(await regionsOnReviewed(dir, cid, fixParent, full, parent)).kept);
+					placed = true;
+				}
+				if (placed) open.set(cid, { why: "reported open by OSV's by-commit query", regions, aliases });
+				else if (fixedBefore) osvNotes.push({ advisory: cid, why: "OSV by-commit reports it, but its FIX commit precedes the reviewed tree; not recorded" });
+				else open.set(cid, { why: shas.length === 0 ? "reported open by OSV's by-commit query; no FIX commit to place it" : "reported open by OSV's by-commit query; FIX commit not in the history", regions: [], aliases });
+			}
+		}
+
 		let labels = dedupeLabels(collected);
-		// Every advisory credited to this target is stripped when it is built, so
-		// every label is checked against all of their ids.
-		const ids = credited.flatMap((c) => [c, ...(byId.get(c)?.aliases ?? [])]);
+		// Every advisory credited or known open here is stripped when the tree is
+		// built, so every label is checked against all of their ids.
+		const ids = [...new Set([
+			...credited.flatMap((c) => [c, ...(byId.get(c)?.aliases ?? [])]),
+			...[...open].flatMap(([c, o]) => [c, ...o.aliases]),
+		])];
 		await fullCheckout(dir, parent);
 		const survivors: Label[] = [];
 		for (const l of labels) {
@@ -1914,77 +2151,114 @@ async function cmdTruth(argv: string[]): Promise<void> {
 			survivors.push(l);
 		}
 		labels = survivors;
-		const contributing = [...new Set(labels.map((l) => l.advisory))];
+		const labelledAdvisories = [...new Set(labels.map((l) => l.advisory))];
 		const truth = toTruth(labels, byId);
-		const classed = false;
-		const name = String(t.name);
+		const neutral = [...open].flatMap(([advisory, o]) => o.regions.map((r) => ({ advisory, file: r.file, line_range: r.range, why: o.why })));
 		await writeFile(join(outDir, "truth", `${name}.truth.json`), `${JSON.stringify(truth, null, 2)}\n`);
+		await writeFile(join(outDir, "truth", `${name}.neutral.json`), `${JSON.stringify(neutral, null, 2)}\n`);
+		const common = { package: repo, repo, scope: ["."], cwe: t.cwe, severity: t.severity ?? "", published: t.published, fix_commit: fix, variant: index };
 		manifest.push({
-			id, package: repo, repo, entries: truth.length, scope: ["."], cwe: t.cwe, severity: t.severity ?? "",
-			published: t.published, fix_commit: fix, scope_files: t.scope_files, scope_loc: t.scope_loc, name,
+			id, ...common, entries: truth.length, scope_files: t.scope_files, scope_loc: t.scope_loc, name,
 			target: `PLACEHOLDER/corpus/${name}`, truth: `PLACEHOLDER/corpus/truth/${name}.truth.json`,
-			reviewed_commit: parent, language: t.language, classed,
-			advisories: contributing, aliases: [...new Set(ids.filter((x) => x !== id))].sort(),
+			reviewed_commit: parent, language: t.language, advisories: labelledAdvisories,
+			neutral_advisories: open.size, neutral_regions: neutral.length, aliases: ids.filter((x) => x !== id).sort(),
 		});
+
+		// The patched twin: the same project at its fix commit.
+		const facts = await treeFacts(dir, fix, repo, workPaths(work, String(t.key)).tree);
+		const fixed = (await fixLabels(dir, id, parent, fix, "post")).labels;
+		const twinName = `${name}-patched`;
+		await writeFile(join(outDir, "truth", `${twinName}.truth.json`), "[]\n");
+		twins.push({
+			id, ...common, entries: 0, name: twinName, twin_of: name,
+			scope_files: "tooMany" in facts ? null : facts.scopeFiles, scope_loc: "tooMany" in facts ? null : facts.scopeLoc,
+			language: "tooMany" in facts ? null : facts.language,
+			target: `PLACEHOLDER/corpus/${twinName}`, truth: `PLACEHOLDER/corpus/truth/${twinName}.truth.json`,
+			reviewed_commit: fix, twin: true, aliases: ids.filter((x) => x !== id).sort(),
+			fixed_regions: fixed.map((r) => ({ advisory: r.advisory, file: r.file, line_range: r.range })),
+		});
+
 		provenance.push({
-			name, id, repo, classed, labels: labels.map((l): LabelProvenance => ({ advisory: l.advisory, file: l.file, range: l.range, raw: l.raw, capped: l.capped, hunks: l.hunks })),
+			name, id, repo,
+			labels: labels.map((l): LabelProvenance => ({ advisory: l.advisory, file: l.file, range: l.range, raw: l.raw, capped: l.capped, hunks: l.hunks })),
 			credited, dropped,
+			neutral: [...open].map(([advisory, o]) => ({ advisory, why: o.why, regions: o.regions.length })),
+			osv_notes: osvNotes,
+			twin: { name: twinName, fixed_regions: fixed.length },
 		});
-		process.stdout.write(`  ${truth.length} labels from ${contributing.length} advisor${contributing.length === 1 ? "y" : "ies"}${classed ? ", classed" : ", classless"} · ${dropped.length} dropped\n`);
+		process.stdout.write(`  ${truth.length} labels from ${labelledAdvisories.length} advisor${labelledAdvisories.length === 1 ? "y" : "ies"} · ${open.size} open without labels (${neutral.length} neutral regions) · twin ${fixed.length} fixed regions · ${dropped.length} dropped\n`);
 	}
 
+	// Separate controls from an earlier variant stay only if they pass the rules now in force.
 	const controls: Array<Record<string, unknown>> = [];
-	for (const c of sel.controls) {
-		const name = String(c.name);
-		await writeFile(join(outDir, "truth", `${name}.truth.json`), "[]\n");
-		const dir = workPaths(work, String(c.key)).git;
-		await ensureHistory(dir, String(c.repo), [String(c.fix_commit), String(c.parent_commit)]);
-		const diff = await git(dir, ["diff", "--unified=0", "--no-color", String(c.parent_commit), String(c.fix_commit)]);
-		const regions = labelsFromHunks(String(c.id), parseZeroContextDiff(diff), "post").labels;
-		controls.push({
-			id: c.id, package: c.repo, repo: c.repo, entries: 0, scope: ["."], cwe: c.cwe, severity: c.severity ?? "",
-			published: c.published, fix_commit: c.fix_commit, scope_files: c.scope_files, scope_loc: c.control_scope_loc, name,
-			target: `PLACEHOLDER/corpus/${name}`, truth: `PLACEHOLDER/corpus/truth/${name}.truth.json`,
-			reviewed_commit: c.control_commit, language: c.control_language, control: true, aliases: c.aliases,
-			fixed_regions: regions.map((r) => ({ file: r.file, line_range: r.range })),
-		});
+	const considered: Array<Record<string, unknown>> = [];
+	const carryFrom = argOf(argv, "carry-controls-from");
+	if (carryFrom) {
+		const drawn = new Set(sel.targets.map((t) => String(t.key)));
+		for (const c of selectionVariant(whole, Number(carryFrom)).selection.controls) {
+			const key = String(c.key);
+			const a = byId.get(String(c.id));
+			const f = a?.fixes.find((x) => repoKey(repoOf(x)) === key);
+			if (drawn.has(key)) { considered.push({ name: c.name, kept: false, why: "drawn as a target in this variant" }); continue; }
+			if (!a || !f) { considered.push({ name: c.name, kept: false, why: "advisory not in the pool" }); continue; }
+			const cand: Candidate = { advisory: a, repo: repoOf(f), sha: shaOf(f) };
+			const v = await evaluateCandidate(work, key, cand);
+			if (!v.ok) { considered.push({ name: c.name, kept: false, why: `rules v${RULES_VERSION}: ${v.filter}: ${v.detail}` }); continue; }
+			const cv = await evaluateControl(work, pool.advisories, key, cand, v);
+			if (!cv.ok) { considered.push({ name: c.name, kept: false, why: `rules v${RULES_VERSION} control: ${cv.filter}: ${cv.detail}` }); continue; }
+			considered.push({ name: c.name, kept: true, why: `passes rules v${RULES_VERSION}` });
+			const name = String(c.name);
+			await writeFile(join(outDir, "truth", `${name}.truth.json`), "[]\n");
+			controls.push({
+				id: a.id, package: cand.repo, repo: cand.repo, entries: 0, scope: ["."], cwe: a.cwe, severity: a.severity ?? "",
+				published: a.published, fix_commit: v.fix, scope_files: cv.scopeFiles, scope_loc: cv.scopeLoc, name,
+				target: `PLACEHOLDER/corpus/${name}`, truth: `PLACEHOLDER/corpus/truth/${name}.truth.json`,
+				reviewed_commit: cv.commit, language: cv.language, control: true, carried_from_variant: Number(carryFrom), aliases: a.aliases,
+				fixed_regions: cv.fixedRegions.map((r) => ({ advisory: r.advisory, file: r.file, line_range: r.range })),
+			});
+		}
 	}
 
 	const strip = (m: Record<string, unknown>) => Object.fromEntries(Object.entries(m).filter(([k]) => k !== "target" && k !== "truth"));
 	await writeFile(join(outDir, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
 	await writeFile(join(outDir, "targets.json"), `${JSON.stringify(manifest.map(strip), null, 2)}\n`);
+	await writeFile(join(outDir, "twins.json"), `${JSON.stringify(twins, null, 2)}\n`);
 	await writeFile(join(outDir, "controls.json"), `${JSON.stringify(controls, null, 2)}\n`);
-	await writeFile(join(outDir, "labels.json"), `${JSON.stringify({ rules_version: RULES_VERSION, selection_sha256: sha256(await readFile(selPath, "utf8")), targets: provenance }, null, 1)}\n`);
-	process.stdout.write(`truth: ${manifest.length} targets, ${controls.length} controls → ${outDir}\n`);
+	await writeFile(join(outDir, "labels.json"), `${JSON.stringify({
+		rules_version: RULES_VERSION, variant: index, selection_sha256: sha256(await readFile(selPath, "utf8")), osv_by_commit: useOsv,
+		targets: provenance, controls_considered: considered,
+	}, null, 1)}\n`);
+	process.stdout.write(`truth (variant ${index}): ${manifest.length} targets, ${twins.length} twins, ${controls.length} controls kept of ${considered.length} → ${outDir}\n`);
 }
 
 // --- materialise ---
 
 /**
- * Build `<out>/<name>.pristine` for every target and control: the reviewed
- * commit as a plain tree, history and release notes stripped with every
- * credited advisory's ids. The runner copies from `.pristine`.
+ * Build `<out>/<name>.pristine` for every target, twin and control: the
+ * reviewed commit as a plain tree, history and release notes stripped with
+ * every credited or known-open advisory's ids. The runner copies from
+ * `.pristine`.
  */
 async function cmdMaterialise(argv: string[]): Promise<void> {
 	const dirIn = argOf(argv, "fresh", FRESH) as string;
 	const out = resolve(argOf(argv, "out") ?? "");
 	const work = resolve(argOf(argv, "work", "/tmp/pired-fresh-work") as string);
 	if (!argOf(argv, "out")) throw new Error("usage: materialise --out <corpus dir> [--work DIR] [--fresh DIR]");
-	const sel = await readJson<Selection>(join(dirIn, "selection.json"));
-	const keyOf = new Map([...sel.targets, ...sel.controls].map((t) => [String(t.name), String(t.key)]));
-	const entries = [...await readJson<Array<Record<string, unknown>>>(join(dirIn, "manifest.json")), ...await readJson<Array<Record<string, unknown>>>(join(dirIn, "controls.json"))];
+	const read = async (f: string): Promise<Array<Record<string, unknown>>> => (existsSync(join(dirIn, f)) ? readJson(join(dirIn, f)) : []);
+	const entries = [...await read("manifest.json"), ...await read("twins.json"), ...await read("controls.json")];
 	await mkdir(out, { recursive: true });
 	for (const m of entries) {
 		const name = String(m.name);
-		const dir = workPaths(work, keyOf.get(name) ?? String(m.repo)).git;
+		const dir = workPaths(work, String(m.repo)).git;
 		await ensureHistory(dir, String(m.repo), [String(m.reviewed_commit)]);
 		await fullCheckout(dir, String(m.reviewed_commit));
 		const dest = join(out, `${name}.pristine`);
 		await rm(dest, { recursive: true, force: true });
 		await cp(dir, dest, { recursive: true, filter: (src) => !src.split("/").includes(".git") });
 		const removed = await stripLeakage(dest, { id: String(m.id), aliases: (m.aliases as string[] | undefined) ?? [] } as Advisory);
-		const truth = await readJson<TruthEntry[]>(join(dirIn, "truth", `${name}.truth.json`));
-		const missing = truth.filter((e) => !existsSync(join(dest, e.file))).map((e) => e.file);
+		const truth = await readJson<Array<{ file: string }>>(join(dirIn, "truth", `${name}.truth.json`));
+		const regions = (m.fixed_regions as Array<{ file: string }> | undefined) ?? [];
+		const missing = [...truth, ...regions].filter((e) => !existsSync(join(dest, e.file))).map((e) => e.file);
 		process.stdout.write(`${name}.pristine  ${removed} leak file(s) stripped${missing.length ? `  MISSING: ${missing.join(", ")}` : ""}\n`);
 	}
 }
@@ -2014,6 +2288,7 @@ async function cmdRecheck(argv: string[]): Promise<void> {
 		if (!a || !fix) { process.stdout.write(`?  ${f}: not in the pool\n`); mismatches += 1; continue; }
 		const again = await evaluateCandidate(scratch, repo, { advisory: a, repo: repoOf(fix), sha: shaOf(fix) }, false);
 		await rm(workPaths(scratch, repo).git, { recursive: true, force: true });
+		await rm(workPaths(scratch, repo).tree, { recursive: true, force: true });
 		const same = canonical(again) === canonical(v);
 		if (!same) mismatches += 1;
 		process.stdout.write(`${same ? "=" : "≠"}  ${repo} ${v.advisory} ${v.ok ? "eligible" : v.filter}${same ? "" : `  →  ${again.ok ? "eligible" : `${again.filter}: ${again.detail}`}`}\n`);

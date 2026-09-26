@@ -6,7 +6,7 @@ import {
 	LABEL_MAX_LINES, SCORER_EXT, advisoryOrder, canonical, cvss3Rating, cvss3Score, dateRuleHolds, dedupeLabels,
 	GitError, dominantLanguage, drawSequential, frameworkPhrase, importLines, importOnly, inNonServiceFolder, isCodeLine, isDeployMarker,
 	isLabelFile, isTransientGitFailure, isVendoredFile, labelsFromHunks, languageOf, libraryBanner, mapLabelsBack, mentionIndex, readmePath,
-	serviceFacts, serviceVerdict, stderrTail,
+	serviceFacts, serviceVerdict, stderrTail, neutralRegions, canonicalId, fixCommitsIn,
 	mentions, metadataFilter, mulberry32, namePhrases, parseLsTree, parseZeroContextDiff, poolAdvisory, poolHash, repoOrder,
 	seededShuffle, sparsePatterns, targetName, toTruth, walkFromListing, wilsonLower, wouldStrip, yearHistogram,
 } from "./select-fresh.ts";
@@ -519,12 +519,42 @@ describe("import-only hunks", () => {
 	});
 });
 
+describe("neutral regions and OSV records", () => {
+	it("records a fix's whole extent, merged but never capped, and skips import-only hunks", () => {
+		const removed = Array.from({ length: 60 }, (_, i) => `line${i}()`);
+		const wide = hunk({ oldFile: "a.py", newFile: "a.py", oldStart: 100, oldLen: 60, removed, added: [] });
+		const near = hunk({ oldFile: "a.py", newFile: "a.py", oldStart: 163 });
+		const imp: Hunk = { oldFile: "a.py", newFile: "a.py", oldStart: 1, oldLen: 1, newStart: 1, newLen: 1, removed: ["import os"], added: ["import os, re"] };
+		const sides = { pre: new Map([["a.py", new Set([1])]]), post: new Map([["a.py", new Set([1])]]) };
+		expect(neutralRegions("CVE-9", [imp, wide, near], sides).map((r) => [r.advisory, r.file, r.range])).toEqual([["CVE-9", "a.py", [100, 163]]]);
+	});
+
+	it("knows a mirrored record by its CVE, and a record without one by its own id", () => {
+		expect(canonicalId({ id: "GSD-2026-1", aliases: ["CVE-2026-5", "GHSA-x"] })).toBe("CVE-2026-5");
+		expect(canonicalId({ id: "CVE-2026-7" })).toBe("CVE-2026-7");
+		expect(canonicalId({ id: "PYSEC-2026-3", aliases: ["GHSA-y"] })).toBe("PYSEC-2026-3");
+	});
+
+	it("takes only FIX-typed commits in the target's own repository", () => {
+		const rec = osv({ references: [
+			{ type: "FIX", url: "https://github.com/Acme/Shop/commit/abcdef0123456789abcdef0123456789abcdef01" },
+			{ type: "FIX", url: "https://github.com/other/fork/commit/1111111111111111111111111111111111111111" },
+			{ type: "WEB", url: "https://github.com/acme/shop/commit/2222222222222222222222222222222222222222" },
+		] });
+		expect(fixCommitsIn(rec, "acme/shop")).toEqual(["abcdef0123456789abcdef0123456789abcdef01"]);
+	});
+});
+
 describe("git failures", () => {
 	it("calls a failure transient from git's stderr or a timeout, never from digits in a path", () => {
 		// Variant 1 matched 5\d\d against a message quoting the scratch path, whose digits read as an HTTP 5xx.
 		expect(isTransientGitFailure(new GitError("fatal: unable to access 'x': The requested URL returned error: 502", false))).toBe(true);
 		expect(isTransientGitFailure(new GitError("fatal: early EOF", false))).toBe(true);
 		expect(isTransientGitFailure(new GitError("", true))).toBe(true);
+		// The second walk cached this as "not obtainable" before the pattern knew it.
+		expect(isTransientGitFailure(new GitError("fatal: unable to access 'x': Failed to connect to github.com port 443 after 134944 ms: Couldn't connect to server", false))).toBe(true);
+		expect(isTransientGitFailure(new GitError("fatal: could not fetch b0ee339a213b from promisor remote", false))).toBe(true);
+		expect(isTransientGitFailure(new GitError("fatal: Needed a single revision", false))).toBe(false);
 		expect(isTransientGitFailure(new GitError("fatal: remote error: upload-pack: not our ref 53290abc", false))).toBe(false);
 		expect(isTransientGitFailure(new Error("Command failed: git -C /tmp/x-8d72fb41-b86b-4ced-8041-212fa3b53290 fetch"))).toBe(false);
 		expect(isTransientGitFailure(new Error("cannot expand short sha abc: GitHub 403"))).toBe(true);

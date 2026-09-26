@@ -77,6 +77,10 @@ export interface Truth {
 	/** Raw class fields; only the official mirror reads them. */
 	cwe?: string;
 	vulnClass?: string;
+	/** The advisory the label belongs to (fresh-corpus keys); older keys derive it from the id. */
+	advisory?: string;
+	/** Every class of the advisory (fresh-corpus keys), for an any-of class level. */
+	cwes?: string[];
 }
 
 export const LEVELS = ["file", "point±3", "line±3", "line±10", "range-overlap"] as const;
@@ -255,6 +259,84 @@ export function labelHygiene(truths: Truth[], cap = DEFAULT_WIDTH_CAP): Array<{ 
 	return truths.map((t) => ({ id: t.id, width: t.hi - t.lo + 1 })).filter((l) => l.width > cap + 1);
 }
 
+// --- Per advisory, neutral regions, patched twins ---------------------------
+//
+// Additive to the levels above and never read by the official mirror. The
+// fresh v6 corpus (eval/corpus/fresh.md) labels several locations per advisory,
+// records the regions of open advisories it could not label as neutral, and
+// pairs each target with its patched twin.
+
+/** The advisory a label belongs to: its own field, or the id without its `-n` suffix. */
+export function advisoryOf(t: Truth): string {
+	return t.advisory ?? t.id.replace(/-\d+$/, "");
+}
+
+/**
+ * Advisories found at a level: an advisory is found when any of its labels is.
+ * A fix that touched three places is one vulnerability; counting its labels
+ * would score a review that found it once at a third.
+ */
+export function advisoriesFound(findings: Citation[][], truths: Truth[], level: Level, cap = DEFAULT_WIDTH_CAP): Set<string> {
+	const matched = matchUnique(findings, truths, level, cap);
+	return new Set(truths.filter((t) => matched.has(t.id)).map(advisoryOf));
+}
+
+/** A region where a claim is neither a true nor a false positive: an open advisory without labels. */
+export interface Region { file: string; lo: number; hi: number; advisory?: string }
+
+/** `<name>.neutral.json`: [{ advisory, file, line_range: [lo, hi], why }]. Absent means none. */
+export function loadRegions(path: string): Region[] {
+	if (!existsSync(path)) return [];
+	const raw = JSON.parse(readFileSync(path, "utf8")) as Row[];
+	return raw.map((r) => {
+		const range = (r.line_range as unknown[] | undefined)?.map(Number) ?? [Number(r.line), Number(r.line)];
+		const [a, b] = [range[0]!, range[1] ?? range[0]!];
+		return { file: String(r.file), lo: Math.min(a, b), hi: Math.max(a, b), ...(r.advisory ? { advisory: String(r.advisory) } : {}) };
+	});
+}
+
+const nearRegion = (file: string, line: number, r: { file: string; lo: number; hi: number }): boolean =>
+	sameFile(file, r.file) && line >= r.lo - WINDOW && line <= r.hi + WINDOW;
+
+/**
+ * Each deduped claim (file:line, as score.ts dedupes) is a true positive when
+ * it lands within ±3 of a label's range, neutral when it lands only within ±3
+ * of a neutral region, and a false positive otherwise. Location only, like the
+ * levels. Precision over the claims that are not neutral is `tp / (tp + fp)`:
+ * a report of a real, known, open vulnerability the key could not label is
+ * not counted against the reviewer.
+ */
+export function claimOutcomes(claims: Array<{ file: string; line: number }>, truths: Truth[], neutral: Region[]): { tp: number; neutral: number; fp: number } {
+	const out = { tp: 0, neutral: 0, fp: 0 };
+	const seen = new Set<string>();
+	for (const c of claims) {
+		const key = `${c.file}:${c.line}`;
+		if (seen.has(key)) continue;
+		seen.add(key);
+		if (truths.some((t) => nearRegion(c.file, c.line, t))) out.tp += 1;
+		else if (neutral.some((r) => nearRegion(c.file, c.line, r))) out.neutral += 1;
+		else out.fp += 1;
+	}
+	return out;
+}
+
+export function precisionWithoutNeutral(o: { tp: number; fp: number }): number | null {
+	return o.tp + o.fp === 0 ? null : o.tp / (o.tp + o.fp);
+}
+
+/**
+ * A patched twin's control score: deduped claims within ±3 lines of the fixed
+ * regions — the reviewer re-reporting a vulnerability that is no longer there —
+ * with all claims per thousand lines of the twin's source beside it. Reported
+ * per arm and never folded into precision: a twin has no labels to be precise
+ * against.
+ */
+export function controlScore(claims: Array<{ file: string; line: number }>, fixedRegions: Region[], loc: number): { hits: number; claims: number; perKloc: number | null } {
+	const unique = [...new Map(claims.map((c) => [`${c.file}:${c.line}`, c])).values()];
+	const hits = unique.filter((c) => fixedRegions.some((r) => nearRegion(c.file, c.line, r))).length;
+	return { hits, claims: unique.length, perKloc: loc > 0 ? unique.length / (loc / 1000) : null };
+}
+
 // --- The official mirror -------------------------------------------------
 
 /** One graded claim, as score.ts hands it to the grader. */
@@ -391,6 +473,8 @@ export function loadTruth(path: string): Truth[] {
 		return {
 			id: String(v.id), file: String(v.file), line: Number.isFinite(line) ? line : lo, lo, hi,
 			...(v.cwe ? { cwe: String(v.cwe) } : {}), ...(v.vuln_class ? { vulnClass: String(v.vuln_class) } : {}),
+			...(typeof v.advisory === "string" ? { advisory: v.advisory } : {}),
+			...(Array.isArray(v.cwes) ? { cwes: (v.cwes as unknown[]).map(String) } : {}),
 		};
 	});
 }
@@ -421,6 +505,12 @@ export interface RescoreRow {
 	 */
 	claimsIdentical: boolean | null;
 	matched: Record<Level, string[]>;
+	/** Advisories with at least one label matched, per level (advisoriesFound). */
+	advisoriesMatched: Record<Level, string[]>;
+	/** Deduped claims as true, neutral and false positives (claimOutcomes). */
+	claimOutcomes: { tp: number; neutral: number; fp: number };
+	/** For a patched twin (a target carrying `fixed_regions`): its control score. */
+	control?: { hits: number; claims: number; perKloc: number | null };
 }
 
 /**
@@ -448,9 +538,20 @@ function scoredClaimKeys(dir: string): string[] | null {
 }
 
 export function rescoreGrid(gridDir: string, cap = DEFAULT_WIDTH_CAP): { rows: RescoreRow[]; truths: Map<string, Truth[]> } {
-	const manifest = JSON.parse(readFileSync(join(gridDir, "manifest.json"), "utf8")) as { targets: Array<{ id: string; name: string }>; inputs: { truth: string } };
+	const manifest = JSON.parse(readFileSync(join(gridDir, "manifest.json"), "utf8")) as {
+		targets: Array<{ id: string; name: string; fixed_regions?: Array<{ file: string; line_range: [number, number] }>; scope_loc?: number }>;
+		inputs: { truth: string };
+	};
 	const truths = new Map<string, Truth[]>();
-	for (const t of manifest.targets) truths.set(t.id, loadTruth(join(manifest.inputs.truth, `${t.name}.truth.json`)));
+	const neutral = new Map<string, Region[]>();
+	const twins = new Map<string, { regions: Region[]; loc: number }>();
+	for (const t of manifest.targets) {
+		truths.set(t.id, loadTruth(join(manifest.inputs.truth, `${t.name}.truth.json`)));
+		neutral.set(t.id, loadRegions(join(manifest.inputs.truth, `${t.name}.neutral.json`)));
+		if (Array.isArray(t.fixed_regions)) {
+			twins.set(t.id, { regions: t.fixed_regions.map((r) => ({ file: r.file, lo: r.line_range[0], hi: r.line_range[1] })), loc: Number(t.scope_loc ?? 0) });
+		}
+	}
 	const runsDir = join(gridDir, "runs");
 	const runs = readdirSync(runsDir).flatMap((cell) => {
 		const path = join(runsDir, cell, "run.json");
@@ -463,6 +564,8 @@ export function rescoreGrid(gridDir: string, cap = DEFAULT_WIDTH_CAP): { rows: R
 		const findings = findingsFromLedger(dir);
 		const claims = claimsFromLedger(dir);
 		const matched = Object.fromEntries(LEVELS.map((l) => [l, [...matchUnique(findings, truth, l, cap)].sort()])) as Record<Level, string[]>;
+		const advisoriesMatched = Object.fromEntries(LEVELS.map((l) => [l, [...advisoriesFound(findings, truth, l, cap)].sort()])) as Record<Level, string[]>;
+		const twin = twins.get(String(r.target));
 		return {
 			grid: gridDir, cell: r.__cell as string, target: String(r.target), pass: Number(r.pass), arm: String(r.arm), attempt: Number(r.attempt ?? 0),
 			officialTp: Number(r.truePositives), claims: Number(r.findings), tokens: Number(r.totalTokens),
@@ -472,6 +575,9 @@ export function rescoreGrid(gridDir: string, cap = DEFAULT_WIDTH_CAP): { rows: R
 			strictLocationTp: officialMatches(claims, truth, { classRule: false, fileRule: "segments" }).size,
 			claimsIdentical: ((scored) => scored === null ? null : scored.join("\n") === claimKeys(claims).join("\n"))(scoredClaimKeys(dir)),
 			matched,
+			advisoriesMatched,
+			claimOutcomes: claimOutcomes(claims, truth, neutral.get(String(r.target)) ?? []),
+			...(twin ? { control: controlScore(claims, twin.regions, twin.loc) } : {}),
 		};
 	});
 	return { rows, truths };
@@ -525,6 +631,28 @@ export function formatReport(rows: RescoreRow[], truths: Truth[], cap = DEFAULT_
 			const rs = paired.filter((r) => r.grid === g && r.arm === arm);
 			const sum = (f: (r: RescoreRow) => number) => rs.reduce((n, r) => n + f(r), 0);
 			lines.push([g, arm, rs.length, sum((r) => r.officialTp), ...LEVELS.map((l) => sum((r) => r.matched[l].length)), sum((r) => r.claims), sum((r) => r.tokens)].join("\t"));
+		}
+	}
+	// Additive: advisories found per level, and precision with neutral claims set aside.
+	lines.push(`grid\tarm\tpairs\tadvisories ${LEVELS.join("\t")}\tclaims tp/neutral/fp\tprecision without neutral`);
+	for (const g of grids) {
+		for (const arm of [...new Set(paired.filter((r) => r.grid === g).map((r) => r.arm))].sort()) {
+			const rs = paired.filter((r) => r.grid === g && r.arm === arm);
+			const sum = (f: (r: RescoreRow) => number) => rs.reduce((n, r) => n + f(r), 0);
+			const o = { tp: sum((r) => r.claimOutcomes.tp), neutral: sum((r) => r.claimOutcomes.neutral), fp: sum((r) => r.claimOutcomes.fp) };
+			const p = precisionWithoutNeutral(o);
+			lines.push([g, arm, rs.length, ...LEVELS.map((l) => sum((r) => r.advisoriesMatched[l].length)), `${o.tp}/${o.neutral}/${o.fp}`, p === null ? "—" : p.toFixed(3)].join("\t"));
+		}
+	}
+	const controls = rows.filter((r) => r.control);
+	if (controls.length) {
+		lines.push("patched twins (never in precision): grid\tarm\truns\tclaims near fixed regions\tclaims per KLOC (mean)");
+		for (const g of [...new Set(controls.map((r) => r.grid))]) {
+			for (const arm of [...new Set(controls.filter((r) => r.grid === g).map((r) => r.arm))].sort()) {
+				const rs = controls.filter((r) => r.grid === g && r.arm === arm);
+				const per = rs.map((r) => r.control!.perKloc).filter((x): x is number => x !== null);
+				lines.push([g, arm, rs.length, rs.reduce((n, r) => n + r.control!.hits, 0), per.length ? (per.reduce((a, b) => a + b, 0) / per.length).toFixed(2) : "—"].join("\t"));
+			}
 		}
 	}
 	const wide = labelHygiene(truths, cap);

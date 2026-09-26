@@ -212,6 +212,17 @@ Truth rules for variant 2, decided with the rules and applied by `truth`:
 The second walk runs with no separate controls (`--controls 0`), so the date rule's three-times test
 is against 12, i.e. 36.
 
+**Implementation change during the second walk.** After 64 repositories GitHub's partial-clone blob
+fetches slowed from seconds to minutes per checkout (29.6 s for a tree whose codeload tarball took
+4 s). The walk was stopped before writing anything. The reviewed tree is now read from the codeload
+tarball when it holds every path of the git listing, and from the git checkout otherwise, or when
+codeload does not start or stalls within 60 s, or is over 300 MB. The rules did not change and
+`RULES_VERSION` stayed 2. The recheck re-derived 40 cached v2 verdicts from scratch, both eligible
+ones included, and all 40 came back identical. The recheck also found one cached verdict ("source not
+obtainable") that recorded a connection failure the transient-failure pattern did not yet know
+("Failed to connect … Couldn't connect to server"). That verdict was a network failure, not a fact, so
+it was removed from the cache, and the pattern was widened. The walk then resumed from the cache.
+
 ## Results (variant 1)
 
 *Added after the draw (`63fe54a`) and the truth step. Nothing above this heading was changed by them.*
