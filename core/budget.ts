@@ -130,3 +130,78 @@ export function renderBudgetLine(reading: BudgetReading | undefined): string {
 	}
 	return head;
 }
+
+// ---------------------------------------------------------------------------
+// Spend: what the host counts against `tokens` and `minutes`
+// ---------------------------------------------------------------------------
+
+function tokenCount(v: unknown): number {
+	return typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0;
+}
+
+/**
+ * Tokens one model call cost, from a usage object: pi's `totalTokens` when it
+ * is there, else input + output + cache reads + cache writes (pi-subagents
+ * reports a child's usage without a total). Anything unreadable is 0 — a
+ * missing count must not become a guessed one.
+ */
+export function usageTokens(usage: unknown): number {
+	if (!usage || typeof usage !== "object") return 0;
+	const u = usage as Record<string, unknown>;
+	const total = tokenCount(u.totalTokens);
+	if (total > 0) return total;
+	return tokenCount(u.input) + tokenCount(u.output) + tokenCount(u.cacheRead) + tokenCount(u.cacheWrite);
+}
+
+/** Tokens the workers of one `subagent` call spent: the sum over pi-subagents' `details.results[].usage`. */
+export function subagentTokens(result: unknown): number {
+	const results = (result as { details?: { results?: unknown } } | null | undefined)?.details?.results;
+	if (!Array.isArray(results)) return 0;
+	return results.reduce<number>((n, r) => n + usageTokens((r as { usage?: unknown } | null)?.usage), 0);
+}
+
+/** Who spent it: the lead's own turns, its workers (and verifiers), or the scribe. */
+export type SpendSource = "parent" | "worker" | "scribe";
+
+/**
+ * A session's spend, counted by source from the moment it started. Tokens
+ * count every model call the session pays for, which is the scope's
+ * definition; minutes are wall clock from `startMs`.
+ *
+ * `once` takes a key so an event pi might deliver twice (a tool call's end) is
+ * counted once.
+ */
+export class SpendMeter {
+	private readonly bySource: Record<SpendSource, number> = { parent: 0, worker: 0, scribe: 0 };
+	private readonly seen = new Set<string>();
+	private readonly startMs: number;
+
+	constructor(startMs: number) {
+		this.startMs = startMs;
+	}
+
+	add(source: SpendSource, tokens: number): void {
+		this.bySource[source] += tokenCount(tokens);
+	}
+
+	/** Add once per key; a repeat of the key adds nothing. */
+	once(key: string, source: SpendSource, tokens: number): void {
+		if (this.seen.has(key)) return;
+		this.seen.add(key);
+		this.add(source, tokens);
+	}
+
+	tokens(source?: SpendSource): number {
+		return source ? this.bySource[source] : this.bySource.parent + this.bySource.worker + this.bySource.scribe;
+	}
+
+	minutes(nowMs: number): number {
+		return Math.max(0, nowMs - this.startMs) / 60_000;
+	}
+
+	/** The reading for `ToolDeps.budget` and the tail block, or undefined when there is no ceiling. */
+	reading(ceiling: ScopeBudget | undefined, nowMs: number): BudgetReading | undefined {
+		if (!ceiling) return undefined;
+		return { ceiling, spent: { tokens: this.tokens(), minutes: this.minutes(nowMs) } };
+	}
+}

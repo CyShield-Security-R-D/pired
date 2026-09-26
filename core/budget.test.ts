@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { budgetState, formatTokens, parseBudget, renderBudgetLine } from "./budget.ts";
+import { budgetState, formatTokens, parseBudget, renderBudgetLine, SpendMeter, subagentTokens, usageTokens } from "./budget.ts";
 import type { EngagementScope } from "./ontology.ts";
 
 function scope(budget?: unknown): EngagementScope {
@@ -91,5 +91,38 @@ describe("renderBudgetLine", () => {
 		const spent = renderBudgetLine(reading({ tokens: 1_000_000, minutes: 100 }, { tokens: 1_000_000, minutes: 5 }));
 		expect(spent).toContain("The ceiling is reached: settle (`record kind=settle`)");
 		expect(spent).not.toContain("record what is established");
+	});
+});
+
+describe("counting spend", () => {
+	it("reads a call's tokens from pi's total, or from the parts when a child reports no total", () => {
+		expect(usageTokens({ input: 10, output: 5, cacheRead: 100, cacheWrite: 1, totalTokens: 116 })).toBe(116);
+		// pi-subagents' child usage has no totalTokens.
+		expect(usageTokens({ input: 10, output: 5, cacheRead: 100, cacheWrite: 1, cost: 0.2, turns: 3 })).toBe(116);
+		for (const bad of [undefined, null, "12", { input: "10" }, { totalTokens: Number.NaN, output: -4 }]) expect(usageTokens(bad)).toBe(0);
+	});
+
+	it("sums the workers of one subagent call and reads nothing from a result that lists none", () => {
+		const result = { content: [], details: { results: [{ usage: { input: 1_000, output: 200, cacheRead: 0, cacheWrite: 0 } }, { usage: { totalTokens: 50 } }, {}, null] } };
+		expect(subagentTokens(result)).toBe(1_250);
+		expect(subagentTokens({ details: {} })).toBe(0);
+		expect(subagentTokens(undefined)).toBe(0);
+	});
+
+	it("counts parent, worker and scribe tokens, a repeated tool end once, and minutes from the session's start", () => {
+		const meter = new SpendMeter(1_000);
+		meter.add("parent", 4_000_000);
+		meter.once("call-1", "worker", 2_000_000);
+		meter.once("call-1", "worker", 2_000_000);
+		meter.add("scribe", 100_000);
+		meter.add("parent", -5);
+		expect(meter.tokens("parent")).toBe(4_000_000);
+		expect(meter.tokens("worker")).toBe(2_000_000);
+		expect(meter.tokens()).toBe(6_100_000);
+		expect(meter.minutes(1_000 + 52 * 60_000)).toBe(52);
+		expect(meter.minutes(0)).toBe(0);
+		expect(meter.reading(undefined, 5_000)).toBeUndefined();
+		const reading = meter.reading({ tokens: 20_000_000, minutes: 240 }, 1_000 + 52 * 60_000);
+		expect(renderBudgetLine(reading)).toBe("Budget: 6.1M of 20M tokens · 52 of 240 min — a ceiling, not a target.");
 	});
 });

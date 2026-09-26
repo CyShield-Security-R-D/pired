@@ -58,6 +58,9 @@ import { execFile } from "node:child_process";
 import { makeHostServices } from "./lib/host.ts";
 import { apiKeyForProvider, registerPiredProviders } from "./lib/providers.ts";
 import { toPiTool } from "./lib/tools.ts";
+import { listSourceDirs } from "./lib/source-dirs.ts";
+import { parseBudget, renderBudgetLine, SpendMeter, subagentTokens, usageTokens } from "../core/budget.ts";
+import { deriveAreas, renderAreasLine } from "../core/areas.ts";
 
 /** Package root (this file lives in extensions/). Bundled skills + checklists sit beside it. */
 const PIRED_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -325,6 +328,18 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	 * ways the file changes during a run.
 	 */
 	let targetModel = "";
+
+	/**
+	 * What this session has spent against the scope's budget (3.2), and the
+	 * directory-only listing of its source tree the areas view names unmapped
+	 * directories from. Both reset at session start. The spend counts the lead's
+	 * turns (turn_end), its workers and verifiers (the `subagent` tool's results)
+	 * and the scribe (its own complete() calls); the listing is taken once, in the
+	 * background, and read from this cache — undefined until it lands.
+	 */
+	let spend = new SpendMeter(Date.now());
+	let sourceDirs: { root: string; list: string[] } | undefined;
+	const budgetNow = () => spend.reading(parseBudget(scope), Date.now());
 
 	/**
 	 * The pass ladder this engagement runs, and where it has got to.
@@ -1456,7 +1471,14 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		// not hold a refutation to a live-target bar it cannot meet — see
 		// core/scope.ts `isSourceOnly`. Rows this session's model creates are the
 		// lead's; the scribe, writing through the same tool, says so on its call.
-		for (const tool of createCoreTools({ workspace, pass: passNow, sourceOnly: () => isSourceOnly(scope), author: () => LEAD_AUTHOR })) {
+		spend = new SpendMeter(Date.now());
+		sourceDirs = undefined;
+		// A listing that lands after the next session has started belongs to the
+		// last one: the meter is this session's identity, so it is checked.
+		const root = ctx.cwd;
+		const session = spend;
+		void listSourceDirs(root).then((list) => { if (spend === session) sourceDirs = { root, list }; }, () => {});
+		for (const tool of createCoreTools({ workspace, pass: passNow, sourceOnly: () => isSourceOnly(scope), author: () => LEAD_AUTHOR, budget: budgetNow, sourceDirs: () => sourceDirs?.list })) {
 			const presentation = tool.name === "record" ? { renderResult: renderRecordResult } : undefined;
 			// Held so phase two can write through the same tool the model would have
 			// called: same validation, same ids, same coverage effect. A second write
@@ -1612,6 +1634,18 @@ export default function piredExtension(pi: ExtensionAPI): void {
 				const brief = renderPassBrief(open, plan);
 				if (brief) text = text ? `${brief}\n\n${text}` : brief;
 			}
+			// Where the budget stands and which areas are open (3.2). Here, in the
+			// tail, and never in the system prompt: both move every request, and a
+			// moving line in the prefix would break the prompt cache it sits in.
+			const areas = renderAreasLine(deriveAreas({
+				inventory: await ws.read("inventory"),
+				surfaceKinds: ["endpoint", "host"],
+				cells: view?.matrix.cells ?? [],
+				findings: (await ws.read("findings")).filter((f) => !isDisposed(f.status)),
+				...(sourceDirs ? { dirs: sourceDirs.list, root: sourceDirs.root } : {}),
+			}));
+			const state = [renderBudgetLine(budgetNow()), areas].filter((line) => line.length > 0).join("\n");
+			if (state) text = text ? `${text}\n\n${state}` : state;
 		} catch { return undefined; }
 
 		const kept = event.messages.filter(
@@ -1885,6 +1919,9 @@ export default function piredExtension(pi: ExtensionAPI): void {
 					signal,
 				},
 			);
+			// The scribe's calls are the session's spend too: the budget counts
+			// every model call the session pays for, not only the conversation's.
+			spend.add("scribe", usageTokens(answer.usage));
 			// complete() does NOT throw on a failed call: it returns a message with
 			// stopReason "error" and an empty content array. Treating that as a reply
 			// turns "the provider rejected the request" into "no JSON object found in
@@ -2122,6 +2159,9 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		// the moment a launch that started no child gets its budget back.
 		if (event.toolName === "subagent") {
 			gate.settle({ id: event.toolCallId, name: event.toolName, isError: event.isError, result: event.result });
+			// What the workers spent, from pi-subagents' own per-child usage. Once
+			// per call id, so a repeated end cannot count a worker twice.
+			spend.once(event.toolCallId, "worker", subagentTokens(event.result));
 			// A worker writes to the ledger as it works, and parks its questions as
 			// blockers because contact_supervisor is refused — this is where the
 			// operator hears about them. pi-subagents' foreground-complete event
@@ -2150,6 +2190,8 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	 * costs a model call happens once the agent has settled, below.
 	 */
 	pi.on("turn_end", async (event, ctx) => {
+		// The lead's own spend for this turn: one assistant message, one usage.
+		spend.add("parent", usageTokens((event.message as { usage?: unknown } | undefined)?.usage));
 		const review = assistantText(event.message);
 		if (review.length > 0) {
 			reviewTurns.push(review);
