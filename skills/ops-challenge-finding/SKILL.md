@@ -12,18 +12,28 @@ Goal: try to **break** a finding before a client reads it, without ever losing a
 ## 0. Do it in a fresh context
 A verifier that has already read the reasoning behind a claim agrees with it. Measured: the scribe pass, which re-read the agent's own review buffer, cost 2.5x the wall clock and moved precision from 0.059 to 0.038.
 
-If the `subagent` tool is available (`ops-delegation`), hand the finding — or two or three — to the `pired-verify` worker. It starts in a fresh context, works from the record and the target alone, and takes several one at a time. It records each verdict on the finding by id, held to the same two bars as yours (§1): short of either, the finding stays `suspected` with what it checked. A verdict that lives only in its handoff is lost, so there is no need to tell it to leave the status alone:
+If the `subagent` tool is available (`ops-delegation`), hand the findings — a batch of up to about five — to the `pired-verify` worker. It starts in a fresh context, works from the record and the target alone, and takes them one at a time. It records each verdict on the finding by id, held to the same bars as yours (§1): short of them, the finding stays `suspected` with what it checked. A verdict that lives only in its handoff is lost, so there is no need to tell it to leave the status alone:
 ```json
 {"agent":"pired-verify","task":"Challenge findings <id> and <id2>, one at a time: read recall challenge id=<id> for each, run the control case (re-run reads only, never a write), try to refute it, and record the verdict on the finding by id. Hand back the verdicts, what you ran, what came back, and the evidence paths."}
 ```
 Then bring its verdicts to the operator as §6 describes. If the tool is not available, work from `recall challenge id=<id>` and the code/target **without** re-reading your own notes about it.
 
+Who settles a finding is recorded, not assumed. Every row carries `by` (who recorded it) and every verification its own `by`, so the report can say whether a confirmation was **independent** or made by the finder itself; a finder's own check is kept, and labelled as what it is. A finding a worker recorded is settled by a verifier or by you — the investigator that wrote it cannot confirm or refute it (pired refuses that), for the reason this section opens with.
+
 ## 1. The two bars, and why missing either is safe
 - **To confirm:** run the control case and say what it returned.
 - **To refute:** cite the grounds — a `file:line`, an evidence path, or the model section that settles it.
+- **On a review of source, the grounds are quoted** (§1a): a confirmation carries the `path` from where the input enters to where it is used, and a refutation quotes the guard that stops it. There is nothing running to test, so the lines you read are the whole proof.
 - **Miss either and the finding stays `suspected`.** It is not confirmed and it is not refuted. Nothing is deleted, ever. A refuted finding still appears in the report under its own heading with the grounds beside it, so a refutation that was itself wrong is visible rather than a bug that quietly left the document.
 
 "I could not reproduce it" is not a refutation. Say what you ran and what came back.
+
+## 1a. What a grounded quote is, and why it is asked for
+A grounded quote is a cited line and its text, copied from the file as it reads: `app/notes.py:13: if note.owner_id != current_user().id:`. pired opens the file and checks that the text is there, within 3 lines of the line you cite. Indentation and line wrapping do not matter; a paraphrase does, and so does a fragment too short to identify a line (under 12 non-space characters — a lone `return err` sits near almost any line of any file). A guard shorter than that is quoted with the line it guards; two lines quoted together still match.
+
+Why it is worth the extra field: a line number is a claim about the code, and a quote is evidence that the line was read. The failures it catches are the ones a re-read of the claim never does — a verdict resting on the guarded twin of the function it names, a sink remembered from a similar file, a line number counted from the wrong window. When a quote is not there, the verdict is recorded as unresolved, the status does not move, and the reply prints what the cited line actually says, so it costs one corrected call, not a lost finding.
+
+Each settled verification also carries a **tier**, which pired derives and you do not send: `static` when it rests on quoted source, `executed` when it was a live check against a running target or cites saved output from something that ran (a transcript, a tool's output). Both settle a finding; the report says which it was.
 
 ## 2. Prove the target is alive before you conclude anything failed
 Re-verifying a whole engagement on its last day, against a rotated credential or a target behind a new WAF rule, would refute every true finding it holds. **"The attack no longer works" and "I can no longer reach the target" are different verdicts.** Before any refutation:
@@ -70,6 +80,11 @@ Say what you ran, what came back, and what it means. Then update:
 ```
 record id=<id> status=confirmed control="<the control case you ran and what it returned>" source=reproduced
 record id=<id> status=refuted   basis=["<file:line or evidence path>"] reason="<optional commentary>"
+```
+On a review of source the same verdicts carry their quotes:
+```
+record id=<id> status=confirmed control="<why the guard does not stop it>" path=["<file:line: the source line>", "<file:line: the sink line>"]
+record id=<id> status=refuted   basis=["<file:line: the guard, as it reads>"] guards=["<file:line: any other check you examined>"]
 ```
 Add `entitlement="..."` to a confirmation where access is the question (§4). Add `live=true` to a refutation only when you tested a running target; leave it out when your basis is the source. The record tool reads `control` to confirm and `basis` to refute; `reason` is commentary and settles nothing on its own.
 

@@ -162,7 +162,8 @@ Single JSON object — the authorized engagement scope. Canonical copy of the
     "lenses": ["route", "file", "invariant", "adversarial"]
   },
   "budget": { "tokens": 20000000, "minutes": 240 },   // optional; see below
-  "maxVerifiers": 2                                   // optional; see below
+  "maxVerifiers": 2,                                  // optional; see below
+  "verifier": { "model": "provider/model-id" }        // optional; see below
 }
 ```
 
@@ -183,6 +184,18 @@ for, `minutes` of wall clock. `maxVerifiers` caps verifier launches separately
 from `maxAgents`. Both take non-negative integers. A `budget` value that is not
 one is dropped, and absent means no budget. A `maxVerifiers` that is not one
 reads as `0`, the rule `maxAgents` follows.
+
+Above `0`, `maxVerifiers` is the number of `pired-verify` launches a session may
+make, charged to it and not to `maxAgents`, so verification does not compete with
+work launches; once spent it does not fall back on `maxAgents`. At `0` (the
+default) a verifier is one more worker under `maxAgents`, as before. `maxAgents: 0`
+with `maxVerifiers` above it is the verify-only configuration: the lead does the
+work and may launch verifiers, nothing else.
+
+`verifier.model` (`provider/id`) registers `pired-verify` on that model instead
+of the parent's. It is set here by the operator only — a per-launch override is
+still refused — because it sends client code to that model's provider. A value
+not in `provider/id` form is ignored.
 
 Matching rules (documented for interoperability): `*.base` matches `base` and any
 subdomain; IPs match exactly; CIDRs use IPv4 containment; `exclude` wins over
@@ -316,6 +329,47 @@ later change (3.1):
 
 `path` is the hops from source to sink, and `guards` the checks examined. Each
 entry is a cited `file:line` and the text quoted from it.
+
+**The grounded contract (3.1).** The model sends `path`, `guards` and `basis` as
+string lists of `"file:line: verbatim text"` (`file:lo-hi: text` for a range);
+pired stores `path` and `guards` as `{at, quote}` and leaves `basis` as sent. On
+write, the record tool reads each cited file — under the engagement directory,
+by basename when the path was shortened, or from the workspace's `evidence/` —
+and a quote is *grounded* when, after whitespace is normalised, it appears within
+3 lines of the cited line and has at least 12 non-space characters. Both numbers
+were fixed before any v6 run and are not tuned on corpus runs. `at` is stored as
+the path the file resolved to.
+
+- Any ungrounded quote: the verdict is `unresolved` and the status does not move;
+  the reply prints the text actually at the cited line. `path` and `guards` are
+  kept only when every quote was grounded.
+- Confirming on an engagement with no live target (no targets in `scope.json`):
+  `control` plus a `path` of at least two grounded hops, the first the source and
+  the last the sink. With a live target the bar is unchanged: `control`, and
+  `entitlement` for the access-control classes.
+- Refuting with no live target: `basis` plus at least one grounded quote, in
+  `basis`, `guards` or `path` — the guard, or the line that makes it not a
+  finding. With a live target: `basis`, and a target that was reachable.
+- `tier` is `executed` when the verification was live against a running target,
+  or cites a workspace evidence file that is not a static excerpt (a transcript,
+  a tool's output); otherwise `static`. It is written on an earned verdict only,
+  and it is a label, not a gate.
+- `by` is who made the verification, stamped from where the call ran. A finding
+  whose `verification.by` differs from its own `by` was *independently verified*;
+  the same author means *verified by its finder*. The scribe counts as the lead,
+  whose buffer it transcribes.
+
+**Who may write what.** Enforced by the child gate and the record tool, by
+refusing with a reason rather than stripping (ADR-028):
+
+| writer | may do |
+|---|---|
+| lead (and its scribe) | Anything. Its confirm and refute are judged; a self-confirmation is kept and labelled "verified by its finder". |
+| `pired-scout` | No findings. |
+| `pired-investigate`, `pired-escalate` | Create findings, which land `suspected`. `status=confirmed` or `refuted` is refused, as are the operator's dispositions. By id, only findings it recorded; a create that merges into another author's finding is allowed, and keeps that finding's status. |
+| `pired-verify` | `confirmed`, `refuted` or `suspected` on a finding by id, with grounds (its keys: `status`, `basis`, `path`, `guards`, `control`, `entitlement`, `live`, `reason`). A finding it creates (for a hypothesis it confirmed) lands `suspected`: no confirming in the write that creates the row. |
+| every worker | No `kind=settle`. |
+| operator (`pired-ledger`) | Anything, as the lead. |
 
 `description`, `impact` and `remediation` are the three sections a client's report
 is read for — what it is, what it costs us, what we do about it — and the export
@@ -451,5 +505,10 @@ Login uses a legacy session cookie without SameSite. Worth an CSRF pass on state
   and `tier` (§8.3); the `sessions` store (§5, §8.6). All additive and optional, so
   no version bump: a workspace written before them reads unchanged, its rows with
   no author and no `sessions.jsonl`.
+- `formatVersion 1`, Phase 3 item 3.1 — the grounded verification contract and the
+  who-writes-what rules (§8.3), `maxVerifiers` enforced and the optional
+  `verifier.model` (§6). Additive: no field changes meaning for a row written
+  before it, and a verification with no `by`, `path`, `guards` or `tier` reads as
+  one whose author and tier are unknown.
 
 *(Future breaking changes append here with the old→new field mapping and reader behavior.)*
