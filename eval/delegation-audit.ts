@@ -487,8 +487,10 @@ export function auditCell(cellDir: string, options: { transcript?: string; works
 	for (const name of ["inventory", "hypotheses", "findings", "blockers", "loot"]) {
 		for (const row of readJsonl(join(workspace, `${name}.jsonl`))) if (typeof row.id === "string") ledgerIds.add(row.id);
 	}
-	// The engagement's own budget when its scope set one; the cells' review scope
-	// sets none, so the scope default applies.
+	// The engagement's own budget when its scope set one. A candidate cell's
+	// review scope states --candidate-max-agents; a baseline cell's, and a
+	// candidate cell's from a grid that predates the option, set none, so the
+	// scope default applies.
 	let maxAgents: number | undefined;
 	try {
 		const scope = JSON.parse(readFileSync(join(workspace, "scope.json"), "utf8")) as { maxAgents?: unknown };
