@@ -470,3 +470,31 @@ describe("runBreakdown and gridRuns", () => {
 		expect(gridRuns(dir)).toEqual([]);
 	});
 });
+
+describe("a grid with a matched arm (plan 2.5)", () => {
+	it("counts the matched arm's sessions apart and never pairs them against the baseline", () => {
+		const report = reportGrid("g", [
+			run({}, { requests: 4 }), run({ arm: "candidate" }, { requests: 6 }),
+			run({ arm: "matched", session: 1 }, { requests: 3 }), run({ arm: "matched", session: 2 }, { requests: 3 }), run({ arm: "matched", session: 3 }, { requests: 3 }),
+		]);
+		expect(report.runs).toEqual({ baseline: 1, candidate: 1, matched: 3 });
+		expect(report.pairs).toBe(1);
+		expect(report.ratios.requests).toBe(1.5);
+		expect(formatReport(report)).toContain("matched-arm sessions 3");
+	});
+
+	it("keeps each session's own highest attempt instead of collapsing a pair's sessions into one", () => {
+		// Session 2 failed and re-ran alone inside the pair's attempt 1.
+		const { latest } = selectRuns([
+			run({ arm: "matched", session: 1, sessionAttempt: 1 }), run({ arm: "matched", session: 2, sessionAttempt: 1, valid: false }),
+			run({ arm: "matched", session: 2, sessionAttempt: 2 }, { requests: 7 }),
+		]);
+		expect(latest.map((r) => [r.meta.session, r.meta.sessionAttempt, r.breakdown.requests])).toEqual([[1, 1, 0], [2, 2, 7]]);
+	});
+
+	it("reports a two-arm grid exactly as before", () => {
+		const report = reportGrid("g", [run({}), run({ arm: "candidate" })]);
+		expect(report.runs).toEqual({ baseline: 1, candidate: 1 });
+		expect(formatReport(report)).not.toContain("matched-arm");
+	});
+});
