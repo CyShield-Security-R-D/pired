@@ -2849,3 +2849,192 @@ it does. Leaving the field out keeps the baseline's cell exactly what earlier gr
   delegation against a single agent.
 - **A global setting outside the scope file.** ADR-018 keeps engagement policy in the scope, and
   `maxAgents` already lives there.
+
+## ADR-033 — A benchmark run retries transient provider errors, counts each failed attempt, and caps them
+
+**Status:** accepted for the v6 harness · 2026-09-26 · Phase 2 item 2.1 of `docs/delegation-v6-plan.md` · design in
+`docs/delegation-v6-phase2-design.md` §2.1
+
+### Context
+
+Every v5 grid ran with pi's agent retry off (`BENCHMARK_SETTINGS.retry.enabled: false`). The reason
+was accounting: pi reports no usage for an attempt it discards, so any `auto_retry_*` event made the
+run invalid rather than smaller. What that cost, from `research/12-delegation-trial-2026-09.md`:
+- **Tokens.** The 144 valid runs used 1,024M tokens. Runs that did not count burned 550M more, and
+  provider and network drops were 349M of that. One pair needed 14 attempts.
+- **Bias.** A run is valid only if none of its requests dropped. A longer run, or one that makes
+  more calls, is more likely to meet a drop. So the valid set leans toward short runs, and the
+  candidate, which makes more calls (parent plus workers), is hit harder. Retry-off kept usage
+  accountable, but it was not neutral between the arms.
+
+What pi 0.87.1 does:
+- **Agent level (`retry.enabled`, default on).** A reply that ends `error` with a retryable message
+  emits `auto_retry_start`, is dropped from context by a `context_edit`, and pi sleeps before it
+  continues. The next reply that is not an error emits `auto_retry_end success: true`.
+- **The cap is per streak.** `maxRetries` resets on every good reply, so on its own it does not
+  bound a run.
+- **Transport level (`retry.provider.maxRetries`, default 0).** These retries are silent: no event
+  and no usage.
+- **Where the trace lands.** A worker's `session.jsonl` keeps the failed reply and its context edit,
+  but no `auto_retry_*` events. A worker's failed compaction attempt leaves no trace at all.
+- **Usage.** A failed attempt usually reports none.
+
+### Decision
+
+- **Opt-in per grid, and recorded.**
+  - `--retry` sets `DEFAULT_RETRY_POLICY`: 4 retries per streak, 2 s base delay, 30 s delay
+    ceiling, and transport retries 0. A run may fail at most max(12, 10% of its metered requests)
+    attempts, parent and workers together (see *Fairness*).
+  - The policy goes into the manifest as `retryPolicy`, and a resume restores it.
+  - `resumeMismatches` refuses a resume whose policy differs.
+  - A manifest without a policy resumes with retries off. A malformed one refuses the resume.
+- **One policy for both arms and every worker.**
+  - `benchmarkSettings(policy)` is the parent's in-memory settings, and the same object is written
+    to the cell's `settings.json`, which workers read.
+  - Transport retries are pinned at 0, and `validateRetryPolicy` refuses any other value.
+- **A request log.** Under a policy, the entry's fetch wrapper prints
+  `benchmark_request {n, host, status, msToHeaders}` for every request: the host, never the path, a
+  header or a body. Parent and in-process workers share that fetch. The run record's
+  `retry.requests` compares logged provider requests with metered calls.
+- **Accounting.**
+  - **Parent.** An `error` reply followed by `auto_retry_start` is a retried attempt. Its reported
+    usage stays in the totals, and it is listed in `retries`.
+  - **Worker.** A worker's file has no retry events. A retried attempt is an `error` reply that a
+    later `context_edit` omits (`replacement: null`), where the reply's text is one pi retries.
+    - pi's own rule decides: `_isRetryableError` never retries a context overflow, and pi-ai's
+      `isRetryableAssistantError` names the rest.
+    - pi's overflow recovery leaves the same omission, and so can a threshold compaction pi runs
+      before the retried request. The error text keeps the two apart.
+    - An edit that replaces the entry (an extension's boundary draft) is not a retry.
+    - A session that ends after the omission lists the attempt as unrecovered and fails the worker,
+      as the parent does for a cancelled retry.
+  - **Still failures:**
+    - A streak that ran out fails once, for its last reply.
+    - A streak cancelled during its backoff fails at `auto_retry_end success: false`.
+  - Each attempt is marked recovered or not. A streak pi gave up on keeps its attempts in the count,
+    so a failed run does not lose them.
+  - With the flag absent, the extractors reproduce, byte for byte, the output of the extractor at
+    b8ba1e8 on 16 fixed parent streams and worker sessions (`eval/fixtures/delegation-compare-lib.v5-golden.json`).
+- **An estimate for attempts that reported nothing** (`estimateBasis` on each attempt).
+  - **`recovering-prompt`.** pi omits the failed reply and resends the same context, so the prompt
+    of the reply that recovered the streak is the failed attempt's prompt. For a summary call it is
+    the prompt of the compaction that succeeded, because pi-ai resends the same request. This also
+    sizes a failed first request. The review counted 75 first requests among 1,095 v5c luna worker
+    replies, median prompt 4.4k.
+  - **`previous-reply`, the fallback when nothing recovered the streak.** The previous completed
+    reply's prompt plus output. It is close to a lower bound but not strictly one. Across
+    consecutive parent reply pairs, it exceeded the next prompt in 35 of 2,568 (v4 luna), 63 of
+    2,263 (v4 GLM) and 49 of 5,604 (v5c luna), by a median of 28–58 tokens. After a compaction it
+    falls to the summary's output.
+  - **Not used across a compaction, nor for a split-turn compaction.** A compaction between the
+    retry and its reply changes what the reply sent, so that attempt keeps the fallback. A
+    split-turn compaction reports two summary calls' usage summed, so it sizes neither call.
+  - **`none`.** Some attempts are counted in `unestimatedAttempts` without an estimate: a first
+    request that nothing recovered, and a summary call whose compaction failed or was split.
+- **Classification.**
+  - `providerFailureTexts` drops a retried reply once a later reply arrives. A worker's recovered
+    drop never reaches its `providerErrors`, so `childProviderFailure` does not see it. Without this,
+    a run invalid for its own reason (a fast empty run, a grader error) that had one drop pi
+    recovered would be classed as infrastructure and re-run.
+  - A run with more retried attempts than its cap, max(`maxFailedAttempts`,
+    ⌊`maxFailedAttemptRate` × metered requests⌋) with parent and workers together, is invalid and
+    classed as infrastructure ("retry cap exceeded").
+  - A spent quota still takes precedence over the cap, and a timeout is still never infrastructure.
+- **The run record.**
+  - It gains a `retry` block with:
+    - attempts, recovered, unrecovered, and counts by source;
+    - metered and estimated tokens, and unmetered and unestimated attempts;
+    - the cap: its floor, its rate, the metered requests it was scaled by, and the number allowed;
+    - the request cross-check.
+  - It gains `totalTokensWithRetryEstimate`. `totalTokens` keeps its meaning: metered.
+  - Each worker row gains `retriedAttempts`.
+- **The gate.** Under a policy, the comparison's token figures are metered tokens plus the
+  estimate. `summary.json` carries `meteredOnlyComparison` beside them.
+- **Without the flag, nothing changes.**
+  - The settings object is `BENCHMARK_SETTINGS` itself.
+  - The manifest, entry config and run record carry no new key.
+  - The extractors, given no retry option, produce byte-identical v5 output (the golden fixture
+    above).
+
+### Fairness
+
+- **What retrying fixes.** It removes the survival bias toward short runs, and with it the extra
+  penalty on the arm that makes more calls.
+- **What it costs.** Failed attempts are mostly unmetered, so counting metered tokens alone
+  undercounts the arm with more drops.
+  - The gate reads metered tokens plus the estimate. That is still an undercount, only a smaller
+    one than metered tokens alone. It still favours the arm with more unmetered drops: the estimate
+    counts a failed attempt's prompt and none of the output it streamed before it dropped.
+  - The metered-only comparison is reported beside the gate, so a verdict that rests on the estimate
+    shows as one.
+- **Three asymmetries remain.**
+  - **(a) The cap.** A fixed cap would reject long runs first, and the arm that makes more calls
+    has more of them: on v5c luna the matched valid runs averaged 131 metered requests in the
+    candidate (90 parent, 42 worker) and 78 in the baseline (`eval/cost-breakdown.ts`,
+    reconciled with the run records on 30 of 30 runs). A run over the cap is re-run as infrastructure, which would re-create the survival
+    bias toward short runs that retrying removes. The cap therefore scales with the run's metered
+    requests, by the same rule in both arms.
+    - A floor of 12 keeps short runs from being rejected on two or three drops.
+    - Both numbers are the harness's choice, not a measurement. They are pre-registered in the
+      manifest, and a resume cannot change them.
+  - **(b) Workers' failed compaction calls.** They leave no trace in the session file, so they are
+    never listed and never count toward the cap. The parent's do (`summarization_retry_*`). They
+    appear only in the request log's excess over metered calls, and only in the candidate.
+  - **(c) Unestimated attempts.** A failed first request is now sized from the reply that recovered
+    it. A streak that nothing recovered still has no estimate, and those fall mostly in the
+    candidate, whose workers make most of the first requests.
+- **Turn budgets.** A retried turn uses up one of a worker's turns: `core/child.ts` counts
+  `turn_start`, and pi's retry continues the loop with a new turn.
+  - The baseline's single agent has no turn budget, so a drop costs it only time.
+  - This is measured per worker (`retriedAttempts`), not corrected, because the product under test
+    is frozen.
+- **Timeouts.** Retry sleeps count against the per-arm timeout, and the arm with more calls meets
+  more of them.
+  - pi sleeps `baseDelayMs · 2^(n−1)` before the n-th retry of a streak, capped at
+    `maxAgentDelayMs` (pi-ai `retryDelayMs`).
+  - With 4 retries per streak, a full streak sleeps 2 + 4 + 8 + 16 = 30 s, or 7.5 s per failed
+    attempt at most.
+  - A run at its cap therefore sleeps at most 90 s at the floor of 12, or 150 s for a run of 200
+    metered requests, out of a two-hour arm. These are bounds computed from the policy, not
+    measurements.
+
+### Consequences
+
+- **`valid` means something different in a v6 grid.** A v5 run with a retry was invalid; a v6 run
+  whose drops pi recovered is valid. The manifest's `retryPolicy` tells the two apart, and a
+  comparison across them is not like for like.
+- **Harness pin.** Every edited `HARNESS_FILES` module changes `harnessSha256`, so a v5 grid resumes
+  from a worktree at its own commit. `piRuntimeSha256` does not change: pi's retry list is not
+  extended.
+- **The request log is only a cross-check.** Its excess over metered calls is an upper bound on
+  unmetered calls, because a compaction that summarized a split turn makes two requests under one
+  observation.
+- **Follow-up, not in this item: workers' full event streams.** pi-subagents 0.71.0 can write each
+  child's full event stream (`artifactConfig.includeJsonl`, off by default; `src/shared/types.js`
+  line 49, `src/runs/foreground/execution.js` line 1694). With it on, a worker's attempts would be
+  paired from `auto_retry_*` events exactly as the parent's are, and its failed compaction calls
+  would show. That would remove asymmetry (b) and most of (c).
+- **Not yet done:** the design's faux preflight retry probe ("terminated", then success, in both
+  arms). Until it lands, nothing checks before a live grid that pi in the sealed entry emits the
+  events this reader expects.
+- **The manifest schema stays v2.** The design's v3 bump bundles the fields of 2.2 to 2.5. This
+  item adds `retryPolicy` alongside the existing fields, and an old manifest still loads.
+
+### Rejected
+
+- **Retry on by default for every grid.** Changing `BENCHMARK_SETTINGS` would silently change
+  `valid` for a resumed v5 grid. The flag makes the policy a recorded choice.
+- **Transport retries.** They emit no event and report no usage, so the stream would give no
+  sign that a failed attempt happened.
+- **Extending pi's retry list** (for example, to "please try again"). Patching pi changes the
+  runtime that every pin compares against. That text is still classed as infrastructure between
+  runs (`PROVIDER_SAYS_RETRY`).
+- **Metered tokens alone as the gate.** It undercounts the arm with more drops, and by more than
+  metered plus estimate does.
+- **A fixed cap per run.** See asymmetry (a).
+- **The previous reply's prompt plus output as the only estimate.** It is not strictly a lower
+  bound, it collapses after a compaction, and it gives nothing for a first request.
+- **pi's per-streak cap as the only bound.** It resets on every good reply. A provider that dropped
+  every third request would be retried for the whole run, and the run would read as valid.
+- **Not counting retried turns against a worker's budget.** That changes the frozen candidate. It
+  is measured instead.

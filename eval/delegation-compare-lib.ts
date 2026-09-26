@@ -73,7 +73,7 @@ export interface PiUsageExtraction {
 }
 
 /**
- * One failed provider attempt pi's agent retry replaced (ADR draft 2.1). Its
+ * One failed provider attempt pi's agent retry replaced (ADR-033). Its
  * reply stays among the observations with whatever usage it reported, which is
  * usually none: codex sets usage only on `response.completed` and completions
  * on the last chunk, so a dropped stream reports zero.
@@ -119,7 +119,7 @@ export interface RetriedAttempt {
 
 /**
  * One run's failed provider attempts, parent and workers together, as the run
- * record reports them (ADR draft 2.1). `totalTokens` stays metered; the
+ * record reports them (ADR-033). `totalTokens` stays metered; the
  * estimate is carried beside it so neither number hides the other.
  */
 export interface RetrySummary {
@@ -591,7 +591,7 @@ const SPLIT_TURN_MARKER = "**Turn Context (split turn):**";
  * - The benchmark disables retries, so `retryAssistantCall` makes one attempt
  *   per call. Any `auto_retry_*` or `summarization_retry_*` event means an
  *   attempt failed and was replaced, and pi reports no usage for the attempt it
- *   discarded. Under a retry policy (the `retry` option, ADR draft 2.1) those
+ *   discarded. Under a retry policy (the `retry` option, ADR-033) those
  *   events are read instead: each failed attempt goes into `retries` with the
  *   usage it reported and a lower-bound estimate, and only a streak pi gave up
  *   on (`auto_retry_end` success: false, or a final error with no retry after

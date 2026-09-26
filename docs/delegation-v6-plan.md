@@ -50,7 +50,7 @@ its ADR.
 
 | # | item | why | status |
 |---|---|---|---|
-| 2.1 | **Retry known-transient provider errors inside a run.** Capped, logged per request, failed partial tokens counted, identical in both arms, reported per arm. | 349M tokens were lost to drops. Having no retry also biases the valid set toward short runs, and hits the arm that makes more calls hardest. | building: retry review in progress |
+| 2.1 | **Retry known-transient provider errors inside a run.** Capped, logged per request, failed partial tokens counted, identical in both arms, reported per arm. | 349M tokens were lost to drops. Having no retry also biases the valid set toward short runs, and hits the arm that makes more calls hardest. | done: ADR-033 (opt-in `--retry`; failed-attempt cap max(12, 10% of requests)) |
 | 2.2 | **Run a pair's two arms concurrently, in random start order.** | Removes night-to-night drift within a pair. Makes the next item safe. | needs an operator decision: network isolation per cell |
 | 2.3 | **Circuit breaker** (consecutive failures, or failure rate within a window) instead of stopping on the first failed run. | Keeps the protection during outages without stalling the grid on single drops. | done: ADR-031 (breaker, attempt ceiling 16) |
 | 2.4 | **Reuse a valid arm** when only its partner failed for infrastructure, both started in the same window, and runs are concurrent. Results are reported with and without reuse. | 17 valid runs (135M tokens, 7.2 run-hours) were discarded. | after 2.2 |

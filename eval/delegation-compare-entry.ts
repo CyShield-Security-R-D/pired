@@ -82,7 +82,7 @@ export interface CompareEntryConfig {
 	 */
 	extensionPaths?: string[];
 	/**
-	 * The grid's retry policy (ADR draft 2.1). Absent, retries stay off and no
+	 * The grid's retry policy (ADR-033). Absent, retries stay off and no
 	 * request is logged: the v5 behaviour, byte for byte.
 	 */
 	retryPolicy?: RetryPolicy;
