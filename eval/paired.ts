@@ -56,6 +56,31 @@ export interface RunRecord {
 	valid?: boolean;
 	/** Truth ids matched at each matching level, e.g. `{ "line±3": ["T1"] }`. */
 	matched: Record<string, string[]>;
+	/** A patched twin's row (plan item 2.8) carries its target, or its control score: either marks it as a twin. */
+	twinOf?: string;
+	control?: unknown;
+}
+
+/**
+ * The patched twins' target ids named in grid manifests (plan item 2.8): an
+ * entry with `twinOf` or `fixed_regions`. A twin is its target's fix-commit
+ * tree with no labels, run as a control; its rows are not pairs of the
+ * comparison, and pairing them would add a zero-TP pair per pass and dilute
+ * every effect and find rate.
+ */
+export function twinIdsFromManifests(paths: readonly string[], readFile: (path: string) => string): Set<string> {
+	const out = new Set<string>();
+	for (const path of paths) {
+		const manifest = JSON.parse(readFile(path)) as { targets?: Array<{ id: string; twinOf?: unknown; fixed_regions?: unknown }> };
+		for (const t of manifest.targets ?? []) if (t.twinOf !== undefined || t.fixed_regions !== undefined) out.add(t.id);
+	}
+	return out;
+}
+
+/** Rows split into the comparison's and the patched twins': a twin is named by id, or marks itself. */
+export function dropTwins(records: readonly RunRecord[], twinIds: ReadonlySet<string> = new Set()): { kept: RunRecord[]; twins: RunRecord[] } {
+	const isTwin = (r: RunRecord): boolean => twinIds.has(r.target) || r.twinOf !== undefined || r.control !== undefined;
+	return { kept: records.filter((r) => !isTwin(r)), twins: records.filter(isTwin) };
 }
 
 /**
@@ -447,7 +472,8 @@ export function cli(argv: readonly string[], readFile: (path: string) => string)
 	const all = JSON.parse(readFile(file)) as RunRecord[];
 	const allGrids = [...new Set(all.map((r) => r.grid))].sort();
 	const chosen = grid ? new Set(selectGrids(allGrids, grid)) : new Set(allGrids);
-	const records = all.filter((r) => chosen.has(r.grid));
+	// Patched twins are controls, never pairs (plan item 2.8).
+	const { kept: records, twins } = dropTwins(all.filter((r) => chosen.has(r.grid)), manifests.length ? twinIdsFromManifests(manifests, readFile) : undefined);
 	if (!records.length) return { code: 2, out: `no records for --grid ${grid ?? ""}; grids in input:\n${allGrids.map((g) => `  ${g}`).join("\n")}\n` };
 	if (!records.some((r) => Array.isArray(r.matched?.[level]))) {
 		const levels = [...new Set(records.flatMap((r) => Object.keys(r.matched ?? {})))].sort();
@@ -455,7 +481,8 @@ export function cli(argv: readonly string[], readFile: (path: string) => string)
 	}
 	const truth = manifests.length ? truthIdsFromManifests(manifests, readFile) : undefined;
 	const reports = [...chosen].sort().map((g) => formatReport(analyze(records.filter((r) => r.grid === g), level, truth, arms)));
-	return { code: 0, out: `${reports.join("\n\n")}\n` };
+	const note = twins.length ? `dropped ${twins.length} patched-twin row(s): controls, not pairs of the comparison\n\n` : "";
+	return { code: 0, out: `${note}${reports.join("\n\n")}\n` };
 }
 
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
