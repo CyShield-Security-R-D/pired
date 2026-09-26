@@ -160,6 +160,12 @@ export interface ComparePins {
 	/** treeManifest(<candidate snapshot>, "snapshot").digest, or null until a candidate is frozen. */
 	candidateDigest: string | null;
 	candidateFrozenAt: string | null;
+	/**
+	 * The worker cap an official grid's candidate scope must state, or null when
+	 * none is pinned. The cap is half of what the candidate arm is, so a grid run
+	 * at another cap measures another candidate and is exploratory.
+	 */
+	candidateMaxAgents: number | null;
 	piSubagents: { dir: string; version: string; digest: string };
 }
 
@@ -168,6 +174,7 @@ export function parseComparePins(text: string): ComparePins {
 	const hex = (value: unknown): boolean => typeof value === "string" && /^[0-9a-f]{40,64}$/.test(value);
 	if (!hex(raw.baselineCommit)) throw new Error("pins: baselineCommit must be a full git commit id");
 	if (raw.candidateDigest !== null && !hex(raw.candidateDigest)) throw new Error("pins: candidateDigest must be a sha256 hex digest or null");
+	if (raw.candidateMaxAgents !== undefined && raw.candidateMaxAgents !== null && !isWorkerCap(raw.candidateMaxAgents)) throw new Error("pins: candidateMaxAgents must be a non-negative integer or null");
 	const sub = (raw.piSubagents ?? {}) as Record<string, unknown>;
 	if (typeof sub.dir !== "string" || !sub.dir || typeof sub.version !== "string" || !sub.version || !hex(sub.digest)) {
 		throw new Error("pins: piSubagents needs dir, version and a sha256 digest");
@@ -176,6 +183,7 @@ export function parseComparePins(text: string): ComparePins {
 		baselineCommit: raw.baselineCommit as string,
 		candidateDigest: (raw.candidateDigest as string | null) ?? null,
 		candidateFrozenAt: typeof raw.candidateFrozenAt === "string" ? raw.candidateFrozenAt : null,
+		candidateMaxAgents: isWorkerCap(raw.candidateMaxAgents) ? raw.candidateMaxAgents : null,
 		piSubagents: { dir: sub.dir, version: sub.version, digest: sub.digest as string },
 	};
 }
@@ -379,9 +387,10 @@ network check refuses if DNS or TLS to the provider fails.
 
 Official vs exploratory: only the five research targets x ${OFFICIAL_PASSES} passes is an
 acceptance decision, and only when the manifest, every truth key, the baseline,
-the candidate snapshot and the pi-subagents tree match their pins:
+the candidate snapshot, its worker cap and the pi-subagents tree match their pins:
   baseline:  git ${baseline}
   candidate: ${candidate}
+  cap:       ${pins ? (pins.candidateMaxAgents === null ? "NOT PINNED (every grid is exploratory)" : `--candidate-max-agents ${pins.candidateMaxAgents}`) : "(pins unreadable)"}
 --only, a different manifest, other --passes, or any pin mismatch produce an
 EXPLORATORY comparison that cannot approve the candidate.
 Acceptance also needs both priority models (each grid is one model), so approved
@@ -1689,6 +1698,18 @@ function isWorkerCap(value: unknown): value is number {
 }
 
 /**
+ * Why a grid's candidate cap keeps it exploratory, or undefined when it is the
+ * pinned one. Without this, --candidate-max-agents 3 on the official five
+ * targets would produce an acceptance decision for a candidate nobody froze:
+ * the snapshot digest was pinned, the cap it runs under was not.
+ */
+export function workerCapReason(pinned: number | null, requested: number | undefined): string | undefined {
+	if (pinned === null) return "no candidate worker cap is pinned: eval/delegation-compare.pins.json has candidateMaxAgents null";
+	if (requested !== pinned) return `candidate worker cap ${requested === undefined ? "unstated" : String(requested)} is not the pinned ${pinned}`;
+	return undefined;
+}
+
+/**
  * The scope a cell runs under: whole-application, unenforced, exactly the research setup.
  * The candidate's scope states its worker cap. Since ADR-029 pired's default is
  * 0, so a candidate cut from main under a scope naming no cap would run with
@@ -2737,6 +2758,8 @@ async function runPreflight(options: Options, manifest: JsonRecord, saveManifest
 		if (baselineReason) exploratoryReasons.push(baselineReason);
 		if (comparePins.candidateDigest === null) exploratoryReasons.push("no candidate is frozen: eval/delegation-compare.pins.json has candidateDigest null");
 		else if (source.candidate.digest !== comparePins.candidateDigest) exploratoryReasons.push(`candidate input digest ${source.candidate.digest.slice(0, 12)} is not the pinned ${comparePins.candidateDigest.slice(0, 12)}`);
+		const capReason = workerCapReason(comparePins.candidateMaxAgents, options.candidateMaxAgents);
+		if (capReason) exploratoryReasons.push(capReason);
 		const piSubagents = await measurePiSubagents(comparePins);
 		exploratoryReasons.push(...piSubagents.reasons);
 		const inputsRecord = manifest.inputs as JsonRecord;

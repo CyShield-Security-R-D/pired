@@ -2,6 +2,7 @@
 	"baselineCommit": "496b1900c2fae2d63ba8378b3c3f56a4b49f317c",
 	"candidateDigest": "826bd8d0c5aab758be93cb94dddd9107297f7c835b3f9d733d195552fd07b397",
 	"candidateFrozenAt": "2026-09-24",
+	"candidateMaxAgents": 8,
 	"piSubagents": {
 		"dir": "eval/artifacts/pi-subagents-0.71.0",
 		"version": "0.71.0",

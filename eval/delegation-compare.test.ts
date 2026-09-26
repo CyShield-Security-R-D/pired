@@ -6,7 +6,7 @@ import {
 	accountCellUsage, atHighestAttempt, AUTH_HORIZON_CAP_MS, AUTH_MARGIN_MS, benchmarkRuntimeOf, checkAuthHorizon, childProviderFailure, classifyInfra,
 	credentialExpiry, decideInfra, DEFAULT_CANDIDATE_MAX_AGENTS, fetchErrorsFromStderr, gridWorstCaseMs, isBrokerEnvVar, metricFromRecord, notLaunchedOutcome, ownerIsLive,
 	newManifest, optionsFromManifest, parseBreakerSpec, parseComparePins, parseOptions, parseOwnerRecord, planResume, providerFailureTexts, resumeMismatches, reviewScope,
-	runPairs, runtimeMismatch, scopedSealCommand, startTimeFromStat, subagentConfigFor, toolSurfaceErrors, trackStream,
+	runPairs, runtimeMismatch, scopedSealCommand, startTimeFromStat, subagentConfigFor, toolSurfaceErrors, trackStream, workerCapReason,
 	type GridStopState, type ProviderFailures, type RunOutcome,
 } from "./delegation-compare.ts";
 import { BENCHMARK_SETTINGS } from "./delegation-compare-entry.ts";
@@ -354,6 +354,20 @@ describe("comparison pins", () => {
 
 	it("refuses a pins file without a pi-subagents tree digest", () => {
 		expect(() => parseComparePins(JSON.stringify({ ...valid, piSubagents: { dir: "x", version: "0.71.0" } }))).toThrow(/piSubagents/);
+	});
+
+	// The snapshot digest was pinned and the cap it runs under was not, so
+	// --candidate-max-agents 3 on the official grid made an acceptance decision
+	// about a candidate nobody froze.
+	it("pins the candidate's worker cap at eight and makes any other cap exploratory", async () => {
+		const shipped = parseComparePins(await readFile(new URL("./delegation-compare.pins.json", import.meta.url), "utf8"));
+		expect(shipped.candidateMaxAgents).toBe(8);
+		expect(workerCapReason(8, 8)).toBeUndefined();
+		expect(workerCapReason(8, 3)).toBe("candidate worker cap 3 is not the pinned 8");
+		expect(workerCapReason(8, undefined)).toBe("candidate worker cap unstated is not the pinned 8");
+		expect(workerCapReason(null, 8)).toMatch(/no candidate worker cap is pinned/);
+		expect(parseComparePins(JSON.stringify(valid)).candidateMaxAgents).toBeNull();
+		expect(() => parseComparePins(JSON.stringify({ ...valid, candidateMaxAgents: -1 }))).toThrow(/candidateMaxAgents/);
 	});
 });
 
