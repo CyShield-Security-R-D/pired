@@ -406,7 +406,9 @@ native-worker snapshot from ADR-025, which the candidate probe refuses because i
   difference is listed as an exploratory reason. Both kinds are drafts until the pre-registration
   is frozen. Both declare `extendablePasses`: the pilot starts the grid at `--passes 2`, and
   `--resume <out> --extend-passes <n>` grows it to the count the pilot fixes, keeping the pilot's
-  pairs; each extension is an amendment in `<out>/amendments.jsonl`. The stage command lines, with the paths elided, are:
+  pairs; each extension is an amendment in `<out>/amendments.jsonl`. A kind grid is not approved
+  or refused by ADR-026's gate: its `summary.json` names the v6 pre-registration's rule and
+  `eval/v6-decision.ts`, which computes it, and says whether the grid is ready for it. The stage command lines, with the paths elided, are:
 
   ```sh
   # stage 1: A (main at the freeze) against S

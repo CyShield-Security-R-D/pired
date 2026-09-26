@@ -6,7 +6,7 @@ import {
 	accountCellUsage, atHighestAttempt, attemptReport, AUTH_HORIZON_CAP_MS, AUTH_MARGIN_MS, benchmarkRuntimeOf, checkAuthHorizon, childProviderFailure, classifyInfra,
 	credentialExpiry, decideInfra, DEFAULT_CANDIDATE_MAX_AGENTS, fetchErrorsFromStderr, gridWorstCaseMs, isBrokerEnvVar, loadTargets, metricFromRecord, notLaunchedOutcome, ownerIsLive,
 	newManifest, optionsFromManifest, parseBreakerSpec, parseComparePins, parseOptions, parseOwnerRecord, planResume, providerFailureTexts, requestLogFromStderr,
-	armOptionsFromManifest, cellModelInputs, manifestTargetEntry, probeDelegationScope, resumeMismatches, splitTwinRuns, twinOptionsFromManifest, retryPolicyFromManifest, reviewScope, runPairs, runStop, runtimeMismatch, scopedSealCommand, startTimeFromStat, subagentConfigFor,
+	armOptionsFromManifest, cellModelInputs, V6_DECISION, verdictFields, manifestTargetEntry, probeDelegationScope, resumeMismatches, splitTwinRuns, twinOptionsFromManifest, retryPolicyFromManifest, reviewScope, runPairs, runStop, runtimeMismatch, scopedSealCommand, startTimeFromStat, subagentConfigFor,
 	toolSurfaceErrors, trackStream, workerCapReason,
 	ceilingOf, ceilingProbeErrors, latestMatchedSessions, planMatchedResume, sessionRunOf, verifyCeiling,
 	type GridStopState, type MatchedSessionSpec, type ProviderFailures, type RunOutcome,
@@ -2317,5 +2317,36 @@ describe("extending a grid's passes on resume (plan 2.8)", () => {
 		expect(plan.keepKeys).toEqual(["A#1", "B#1", "A#2", "B#2"]);
 		expect(plan.rerunKeys).toEqual(["A#3", "B#3"]);
 		expect(plan.nextAttempt).toEqual({ "A#3": 1, "B#3": 1 });
+	});
+});
+
+describe("the verdict of a kind grid (plan 2.8)", () => {
+	const cells = [{ key: "A#1", target: "A", pass: 1 }];
+	const metric = (tokens: number) => ({ key: "A#1", target: "A", pass: 1, valid: true, truePositives: 1, precision: 0.5, totalClaims: 2, totalTokens: tokens });
+	const comparison = compareMatchedRuns([metric(1000)], [metric(700)], cells);
+
+	// A grid without a kind carries ADR-026's approval exactly as before.
+	it("keeps ADR-026's verdict fields as they were for a grid without a kind", () => {
+		const out = verdictFields(undefined, { approved: false, notApprovedReasons: ["exploratory: x"], comparison, meteredOnlyComparison: comparison });
+		expect(out.head).toEqual({ approvedForThisModel: false, approved: false, acceptanceRequiresBothModels: true, notApprovedReasons: ["exploratory: x"] });
+		expect(out.comparison).toBe(comparison);
+		expect(out.meteredOnlyComparison).toBe(comparison);
+		expect(verdictFields(undefined, { approved: true, notApprovedReasons: ["ignored"], comparison }).head.notApprovedReasons).toEqual([]);
+	});
+
+	// The v6 grids are decided by the pre-registration's rule, computed by a
+	// separate analysis; ADR-026's approval must not be read off them.
+	it("writes the v6 decision rule and no ADR-026 approval or gate for a grid of a kind", () => {
+		const out = verdictFields("v6-stage1", { approved: false, notApprovedReasons: [], comparison, meteredOnlyComparison: comparison });
+		expect(out.head).toEqual({ decision: { rule: "v6 pre-registration", computedBy: "eval/v6-decision.ts", ready: true, notReadyReasons: [] } });
+		expect(V6_DECISION).toEqual({ rule: "v6 pre-registration", computedBy: "eval/v6-decision.ts" });
+		for (const field of ["approvedForThisModel", "approved", "notApprovedReasons", "acceptanceRequiresBothModels"]) expect(out.head).not.toHaveProperty(field);
+		expect(out.comparison).not.toHaveProperty("gate");
+		expect(out.comparison).not.toHaveProperty("decision");
+		expect(out.meteredOnlyComparison).not.toHaveProperty("decision");
+		// The descriptive pass means stay.
+		expect(out.comparison).toMatchObject({ complete: true, pairedRuns: 1, baseline: { truePositives: { mean: 1 } } });
+		const stopped = verdictFields("v6-stage1", { approved: false, notApprovedReasons: ["interrupted before the grid finished"], comparison });
+		expect(stopped.head.decision).toMatchObject({ ready: false, notReadyReasons: ["interrupted before the grid finished"] });
 	});
 });

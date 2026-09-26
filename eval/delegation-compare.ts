@@ -34,7 +34,7 @@ import {
 	meteredCallCount, nextPairAction, observationsFromChildSession, observationsFromPiEvents,
 	armsOfPair, parseBreakerPolicy, planSchedule, reconcileChildSession, reconcileSubagentCalls, SUBAGENT_TOOL, summarizeRetries,
 	type Arm, type BreakerPolicy, type PairArm, type BreakerVerdict, type ChildSessionExtraction, type ChildVerdict, type ExpectedCell, type PiUsageExtraction,
-	type OfficialShape, type ScheduledTwins, type RetriedAttempt, type RetrySummary, type RunMetric, type ScheduledPair, type SubagentChild, type SubagentReconciliation,
+	type MatchedComparison, type OfficialShape, type ScheduledTwins, type RetriedAttempt, type RetrySummary, type RunMetric, type ScheduledPair, type SubagentChild, type SubagentReconciliation,
 	type UsageAccounting, type UsageObservation,
 } from "./delegation-compare-lib.ts";
 // The grid's shape and identity (plan item 2.8): the pinned official corpora.
@@ -97,6 +97,8 @@ const PROBE_AGENT = "pired-scout";
 const PINS_PATH = join(ROOT, "eval/delegation-compare.pins.json");
 /** The lib owns the acceptance rule and its decision strings; the runner only consumes this verdict. */
 const APPROVAL = APPROVAL_DECISION;
+/** How summary.json explains ADR-026's approval, for a grid without a kind; a kind grid is not approved here. */
+const APPROVAL_INTERPRETATION = "one grid is one model; approvedForThisModel requires the official five-target, three-pass grid with matched pins and every run valid; candidate pass-mean pooled TP and grid-pooled precision each at least 85% of baseline (ADR-026); no target whose candidate TP range lies wholly below its baseline range; and lower mean total parent+worker+compaction tokens. Corpus acceptance additionally requires the same for the second priority model.";
 /** The opaque per-cell env marker every bash descendant inherits, so strays are reaped by value, never by name. */
 const CELL_MARKER = "BENCH_CELL";
 /**
@@ -4910,6 +4912,39 @@ async function summarizeMatched(policy: MatchedPolicy, pairs: ScheduledPair[], c
 	};
 }
 
+/** Where the v6 pre-registration's decision rule is computed (plan item 2.8); the script lands separately. */
+export const V6_DECISION = { rule: "v6 pre-registration", computedBy: "eval/v6-decision.ts" } as const;
+
+/**
+ * The verdict fields of summary.json. A grid without a kind carries ADR-026's
+ * approval exactly as before. A grid of a kind (plan item 2.8) is decided by
+ * the v6 pre-registration's rule, which a separate analysis computes from its
+ * runs, so it carries no approvedForThisModel, and its comparisons lose
+ * ADR-026's gate and decision string: a reader must not take a v6 grid's
+ * outcome from a rule it was never judged by. It says only whether the grid
+ * is ready for that analysis, and why not.
+ */
+export function verdictFields(gridKind: string | undefined, v: { approved: boolean; notApprovedReasons: string[]; comparison: MatchedComparison; meteredOnlyComparison?: MatchedComparison }): { head: JsonRecord; comparison: JsonRecord; meteredOnlyComparison?: JsonRecord } {
+	if (gridKind === undefined) {
+		return {
+			// One grid measures one model; acceptance needs both priority models. This
+			// name and flag keep a single-model summary from reading as final acceptance.
+			head: { approvedForThisModel: v.approved, approved: v.approved, acceptanceRequiresBothModels: true, notApprovedReasons: v.approved ? [] : v.notApprovedReasons },
+			comparison: v.comparison as unknown as JsonRecord,
+			...(v.meteredOnlyComparison ? { meteredOnlyComparison: v.meteredOnlyComparison as unknown as JsonRecord } : {}),
+		};
+	}
+	const descriptive = (c: MatchedComparison): JsonRecord => {
+		const { gate: _gate, decision: _decision, ...rest } = c;
+		return rest as unknown as JsonRecord;
+	};
+	return {
+		head: { decision: { ...V6_DECISION, ready: v.notApprovedReasons.length === 0, notReadyReasons: v.notApprovedReasons } },
+		comparison: descriptive(v.comparison),
+		...(v.meteredOnlyComparison ? { meteredOnlyComparison: descriptive(v.meteredOnlyComparison) } : {}),
+	};
+}
+
 async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, plan: ResumePlan | undefined, priorRuns: JsonRecord[]): Promise<void> {
 	const { ctx, expectedCells, official } = pre;
 	const output = ctx.out;
@@ -5041,7 +5076,9 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 	// written; the gate's own completeness decides, as the arm never enters it.
 	// So does a stop a patched twin's run caused (plan item 2.8).
 	const stopWithholdsApproval = stoppedInvalid && runState.stoppedBy === undefined;
-	const approved = official && !interrupted && !stopWithholdsApproval && runtimeStable && comparison.complete && comparison.decision === APPROVAL;
+	// A grid of a kind (plan item 2.8) is decided by the v6 pre-registration's
+	// rule, computed elsewhere: ADR-026's approval is neither computed nor printed.
+	const approved = options.gridKind === undefined && official && !interrupted && !stopWithholdsApproval && runtimeStable && comparison.complete && comparison.decision === APPROVAL;
 	// A patched twin that gave up or was abandoned is no reason the gate did not
 	// approve; it is listed in the breaker block and the twins block instead.
 	const twinKeys = new Set(pairs.filter((p) => p.twin).map((p) => p.key));
@@ -5058,8 +5095,9 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 		...(gateAbandoned.length ? [`${gateAbandoned.length} pair(s) abandoned at the attempt ceiling (${gateAbandoned.join(", ")}); no resume re-runs them`] : []),
 		...(!runtimeStable ? ["the pi runtime changed during the grid"] : []),
 		...(!comparison.complete ? [`grid incomplete or invalid: ${comparison.missingOrInvalid.slice(0, 4).join("; ") || "missing pairs"}`] : []),
-		...(comparison.complete && comparison.decision !== APPROVAL ? [`comparison decision: ${comparison.decision}`] : []),
+		...(comparison.complete && comparison.decision !== APPROVAL && options.gridKind === undefined ? [`comparison decision: ${comparison.decision}`] : []),
 	];
+	const verdictOut = verdictFields(options.gridKind, { approved, notApprovedReasons, comparison, ...(meteredOnlyComparison ? { meteredOnlyComparison } : {}) });
 	const inputsRecord = (manifest.inputs ?? {}) as JsonRecord;
 	const baselineInput = (inputsRecord.baseline ?? {}) as JsonRecord;
 	const candidateInput = (inputsRecord.candidate ?? {}) as JsonRecord;
@@ -5082,16 +5120,14 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 			},
 		}),
 		completeRunGrid: comparison.complete,
-		// One grid measures one model; acceptance needs both priority models. This
-		// name and flag keep a single-model summary from reading as final acceptance.
-		approvedForThisModel: approved, approved, acceptanceRequiresBothModels: true, notApprovedReasons: approved ? [] : notApprovedReasons,
+		...verdictOut.head,
 		inputDigests: {
 			baseline: baselineInput.sha256 ?? null, candidate: candidateInput.sha256 ?? null,
 			baselineStaged: baselineInput.stagedDigest ?? null, candidateStaged: candidateInput.stagedDigest ?? null,
 		},
 		runtimeSha256: ctx.pins.piRuntimeSha256, runtimeAfterSha256: runtimeAfter,
-		comparison,
-		...(options.retryPolicy ? { retryPolicy: options.retryPolicy, meteredOnlyComparison } : {}),
+		comparison: verdictOut.comparison,
+		...(options.retryPolicy ? { retryPolicy: options.retryPolicy, meteredOnlyComparison: verdictOut.meteredOnlyComparison } : {}),
 		// Only a grid run with --matched has this block; the gate above never reads it.
 		...(matchedSummary ? { matched: matchedSummary } : {}),
 		// Only a grid run with --twin-arms has this block; the gate above never reads it.
@@ -5099,9 +5135,9 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 		interpretation: {
 			precision: "lower bound against patch-localized keys; unmatched claims are unadjudicated and are not confirmed false positives",
 			passes: "ranges are across complete five-target pooled passes; three passes are coarse and are not a significance test",
-			approval: "one grid is one model; approvedForThisModel requires the official five-target, three-pass grid with matched pins and every run valid; candidate pass-mean pooled TP and grid-pooled precision each at least 85% of baseline (ADR-026); no target whose candidate TP range lies wholly below its baseline range; and lower mean total parent+worker+compaction tokens. Corpus acceptance additionally requires the same for the second priority model.",
+			...(options.gridKind === undefined ? { approval: APPROVAL_INTERPRETATION } : {}),
 			tokens: "an invalid run carries no token count; it is excluded from the comparison and the grid is then incomplete",
-			...(options.gridKind === undefined ? {} : { gridKind: "official here means the grid ran as its pinned kind; approvedForThisModel is still ADR-026's rule, and the v6 pre-registration's decision rule is computed from these runs by eval/rescore.ts and eval/paired.ts" }),
+			...(options.gridKind === undefined ? {} : { gridKind: "official here means the grid ran as its pinned kind; the grid is decided by the v6 pre-registration's rule, computed from these runs by eval/v6-decision.ts, and ADR-026's approval is not computed; comparison carries the descriptive pass means without ADR-026's gate" }),
 			...(options.retryPolicy ? { retryTokens: "the comparison's tokens are metered tokens plus a lower-bound estimate for failed attempts pi retried that reported no usage (the previous reply's prompt plus output); meteredOnlyComparison reads metered tokens alone" } : {}),
 		},
 		// The gate targets' runs only: a patched twin's are in the twins block.
@@ -5126,7 +5162,8 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 	// A stopped or partial grid is not evaluated, which is not the same as failed:
 	// printing BELOW there read as a quality failure the candidate did not have.
 	const verdict = (within: boolean | null | undefined): string => !comparison.complete || within === null || within === undefined ? "n/a (grid incomplete)" : within ? "ok" : "BELOW";
-	console.log(`gate: TP ${comparison.candidate.truePositives.mean.toFixed(2)} vs floor ${comparison.gate.truePositiveFloor.toFixed(2)} (${verdict(comparison.gate.truePositivesWithinMargin)}); pooled precision ${fmt(comparison.baseline.pooledPrecision)} → ${fmt(comparison.candidate.pooledPrecision)} vs floor ${fmt(comparison.gate.precisionFloor)} (${verdict(comparison.gate.precisionWithinMargin)}); targets below baseline range: ${comparison.gate.targetsBelowBaselineRange.join(", ") || "none"}`);
+	// ADR-026's gate is not the rule a kind grid is decided by, so it is not printed there.
+	if (options.gridKind === undefined) console.log(`gate: TP ${comparison.candidate.truePositives.mean.toFixed(2)} vs floor ${comparison.gate.truePositiveFloor.toFixed(2)} (${verdict(comparison.gate.truePositivesWithinMargin)}); pooled precision ${fmt(comparison.baseline.pooledPrecision)} → ${fmt(comparison.candidate.pooledPrecision)} vs floor ${fmt(comparison.gate.precisionFloor)} (${verdict(comparison.gate.precisionWithinMargin)}); targets below baseline range: ${comparison.gate.targetsBelowBaselineRange.join(", ") || "none"}`);
 	for (const t of comparison.targets) {
 		console.log(`  ${t.target}: TP ${t.baseline.truePositives.min}–${t.baseline.truePositives.max} → ${t.candidate.truePositives.min}–${t.candidate.truePositives.max}; precision ${fmt(t.baseline.pooledPrecision)} → ${fmt(t.candidate.pooledPrecision)}; tokens ${t.baseline.totalTokens.mean.toFixed(0)} → ${t.candidate.totalTokens.mean.toFixed(0)}`);
 	}
@@ -5146,6 +5183,14 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 			return `${arm} ${a.valid}/${a.runs} valid, ${a.claims} claims`;
 		}).join(" · ");
 		console.log(`patched twins (${twinSummary.targets.length}, beside the gate): ${line} · control score: eval/rescore.ts`);
+	}
+	if (options.gridKind !== undefined) {
+		// No ADR-026 verdict for a kind grid: only whether it is ready for its own rule.
+		const decision = verdictOut.head.decision as { ready: boolean; notReadyReasons: string[] };
+		console.log(`decision: v6 pre-registration, computed by eval/v6-decision.ts · ${decision.ready ? "grid ready for it" : `NOT READY · ${decision.notReadyReasons.join(" · ")}`}`);
+		console.log(`summary ${join(output, "summary.json")}`);
+		process.exitCode = decision.ready ? 0 : 1;
+		return;
 	}
 	// When not approved, print the reason, never the bare approval decision string.
 	if (approved) console.log(`APPROVED (this model) · ${comparison.decision}`);
