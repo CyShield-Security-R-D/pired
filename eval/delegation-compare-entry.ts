@@ -96,7 +96,8 @@ export interface CompareEntryConfig {
  * warming is off because pi's default ("streaming") sends its own requests to
  * keep a prompt cache warm, which would be spend the transcript does not show as
  * a turn; retries are off so a provider failure stays visible; compaction is on
- * and counted.
+ * and counted. A grid under a retry policy runs benchmarkSettings(policy)
+ * instead, which differs only in `retry`.
  */
 export const BENCHMARK_SETTINGS = Object.freeze({
 	packages: [] as string[],

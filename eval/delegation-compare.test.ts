@@ -4,12 +4,13 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
 	accountCellUsage, AUTH_HORIZON_CAP_MS, AUTH_MARGIN_MS, benchmarkRuntimeOf, checkAuthHorizon, childProviderFailure, classifyInfra,
-	credentialExpiry, decideInfra, fetchErrorsFromStderr, gridWorstCaseMs, isBrokerEnvVar, metricFromRecord, notLaunchedOutcome, ownerIsLive,
-	parseComparePins, parseOwnerRecord, planResume, providerFailureTexts, resumeMismatches, runtimeMismatch, scopedSealCommand,
-	startTimeFromStat, subagentConfigFor, toolSurfaceErrors, trackStream, type ProviderFailures,
+	credentialExpiry, decideInfra, fetchErrorsFromStderr, gridWorstCaseMs, isBrokerEnvVar, metricFromRecord, newManifest, notLaunchedOutcome,
+	optionsFromManifest, ownerIsLive, parseComparePins, parseOwnerRecord, planResume, providerFailureTexts, requestLogFromStderr, resumeMismatches,
+	retryPolicyFromManifest, runtimeMismatch, scopedSealCommand, startTimeFromStat, subagentConfigFor, toolSurfaceErrors, trackStream,
+	type ProviderFailures,
 } from "./delegation-compare.ts";
-import { BENCHMARK_SETTINGS } from "./delegation-compare-entry.ts";
-import { planSchedule } from "./delegation-compare-lib.ts";
+import { BENCHMARK_SETTINGS, DEFAULT_RETRY_POLICY } from "./delegation-compare-entry.ts";
+import { observationsFromChildSession, planSchedule } from "./delegation-compare-lib.ts";
 
 // Per-file builders: a run record as the runner appends it to runs.jsonl, a
 // manifest fragment as resume reads it back, pi's transcript events, and the
@@ -264,6 +265,89 @@ describe("provider-originated text only", () => {
 		];
 		expect(providerFailureTexts(events)).toEqual([]);
 	});
+
+	// Design 2.1: with retries on, a run invalid for its own reason (here a fast
+	// empty run) that had one drop pi recovered from would otherwise be re-run as
+	// infrastructure, and a resume would spend a pair on a run that failed itself.
+	it("does not class a run as infrastructure from a drop pi recovered", () => {
+		const events = [
+			reply("toolUse"), reply("error", "terminated"),
+			{ type: "auto_retry_start", attempt: 1, maxAttempts: 4, delayMs: 2000, errorMessage: "terminated" },
+			reply("stop"), { type: "auto_retry_end", success: true, attempt: 1 },
+		];
+		const recovered = providerFailureTexts(events, { retry: true });
+		expect(recovered).toEqual([]);
+		const run = { valid: false, timedOut: false, stoppedByRunner: false, notLaunchedInterrupted: false };
+		expect(decideInfra({ ...run, failures: parentFails(...recovered) }).infra).toBe(false);
+		// Without a policy the same stream reads as v5 read it: a failure.
+		expect(providerFailureTexts(events)).toEqual(["terminated"]);
+		// A worker's recovered drop never reaches its provider errors, so the
+		// child's failure (here its own empty answer) has no provider text either.
+		const failed = { type: "message", id: "e3", parentId: "e2", timestamp: "t", message: { role: "assistant", provider: "zai", model: "glm-5.3-flash", stopReason: "error", errorMessage: "terminated", content: [], usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 } } };
+		const session = [
+			{ type: "session", version: 3, id: "child-1", timestamp: "t", cwd: "/target" },
+			{ type: "message", id: "e2", parentId: null, timestamp: "t", message: { role: "assistant", provider: "zai", model: "glm-5.3-flash", responseId: "c1", stopReason: "toolUse", content: [], usage: { input: 20, output: 2, cacheRead: 0, cacheWrite: 0, totalTokens: 22 } } },
+			failed,
+			{ type: "context_edit", id: "e4", parentId: "e3", timestamp: "t", targetId: "e3", replacement: null },
+			{ type: "message", id: "e5", parentId: "e4", timestamp: "t", message: { role: "assistant", provider: "zai", model: "glm-5.3-flash", responseId: "c2", stopReason: "stop", content: [], usage: { input: 25, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 26 } } },
+		].map((row) => JSON.stringify(row)).join("\n");
+		const child = { childKey: "run-a/run-0", status: "failed" as const, error: "Subagent returned an empty final answer\nterminated" };
+		const read = observationsFromChildSession(session, child.childKey, { retry: true });
+		expect(read.providerErrors).toEqual([]);
+		expect(childProviderFailure(child, read.providerErrors, child.error)).toEqual({});
+		expect(childProviderFailure(child, observationsFromChildSession(session, child.childKey).providerErrors, child.error)).toEqual({ text: "terminated" });
+	});
+
+	it("keeps the text of a retry pi cancelled, or of the last attempt when the retries ran out", () => {
+		const cancelled = [
+			reply("toolUse"), reply("error", "Connection error."),
+			{ type: "auto_retry_start", attempt: 1 },
+			{ type: "auto_retry_end", success: false, attempt: 1, finalError: "Retry cancelled" },
+		];
+		expect(providerFailureTexts(cancelled, { retry: true })).toEqual(["Connection error."]);
+		const exhausted = [
+			reply("error", "terminated"), { type: "auto_retry_start", attempt: 1 },
+			reply("error", "Request timed out."),
+			{ type: "auto_retry_end", success: false, attempt: 1, finalError: "Request timed out." },
+		];
+		expect(providerFailureTexts(exhausted, { retry: true })).toEqual(["Request timed out."]);
+		// A stream cut off during the backoff sleep did not recover either.
+		expect(providerFailureTexts([reply("error", "terminated"), { type: "auto_retry_start", attempt: 1 }], { retry: true })).toEqual(["terminated"]);
+	});
+});
+
+describe("retry cap and request log", () => {
+	const run = { valid: false, timedOut: false, stoppedByRunner: false, notLaunchedInterrupted: false, failures: parentFails() };
+
+	// pi recovers each drop, so a provider that kept dropping leaves no failure
+	// text; without the cap the run would be blocked as the arm's own fault.
+	it("classes a run past the retry cap as infrastructure though pi recovered every drop", () => {
+		const verdict = decideInfra({ ...run, retry: { attempts: 13, maxFailedAttempts: 12, capExceeded: true } });
+		expect(verdict).toMatchObject({ infra: true, reason: "retry cap exceeded" });
+		expect(verdict.evidence).toContain("13 failed provider attempts");
+		expect(decideInfra({ ...run, retry: { attempts: 12, maxFailedAttempts: 12, capExceeded: false } }).infra).toBe(false);
+	});
+
+	it("still never classes a timed-out run as infrastructure, past the cap or not", () => {
+		expect(decideInfra({ ...run, timedOut: true, retry: { attempts: 20, maxFailedAttempts: 12, capExceeded: true } }).infra).toBe(false);
+	});
+
+	it("keeps a spent quota ahead of the cap, so the grid still stops for the reset", () => {
+		const verdict = decideInfra({ ...run, failures: parentFails("insufficient_quota"), retry: { attempts: 20, maxFailedAttempts: 12, capExceeded: true } });
+		expect(verdict).toMatchObject({ infra: true, exhausted: true });
+	});
+
+	it("counts only the provider's own requests from the entry's log, by status", () => {
+		const stderr = [
+			'{"type":"benchmark_request","n":1,"host":"api.z.ai","status":200,"msToHeaders":900}',
+			'{"type":"benchmark_request","n":2,"host":"API.Z.AI:443","status":429,"msToHeaders":80}',
+			'{"type":"benchmark_request","n":3,"host":"api.z.ai","status":null,"msToHeaders":30000}',
+			'{"type":"benchmark_request","n":4,"host":"models.example.test","status":200,"msToHeaders":10}',
+			'{"type":"benchmark_request","n":5,"status":200}',
+			"benchmark_request api.z.ai 200",
+		].join("\n");
+		expect(requestLogFromStderr(stderr, ["api.z.ai"])).toEqual({ logged: 3, byStatus: { 200: 1, 429: 1, none: 1 } });
+	});
 });
 
 describe("childProviderFailure", () => {
@@ -461,6 +545,53 @@ describe("accountCellUsage", () => {
 		expect(account.errors).toContain("baseline arm made 1 subagent call(s)");
 	});
 
+	// One drop in the parent and one in a worker, each recovered by pi's retry.
+	const droppedParent = (): Record<string, unknown>[] => [
+		{ type: "message_end", message: { role: "assistant", content: [], provider: "zai", model: "glm-5.3-flash", responseId: "p0", usage: usage(0, 0), stopReason: "error", errorMessage: "terminated", timestamp: 1 } },
+		{ type: "auto_retry_start", attempt: 1, maxAttempts: 4, delayMs: 2000, errorMessage: "terminated" },
+	];
+	const droppedWorker = (): string => {
+		const rows = sessionText().split("\n");
+		const failed = { type: "message", id: "e5", parentId: "e3", timestamp: "t", message: { role: "assistant", provider: "zai", model: "glm-5.3-flash", stopReason: "error", errorMessage: "terminated", usage: usage(0, 0), content: [] } };
+		const edit = { type: "context_edit", id: "e6", parentId: "e5", timestamp: "t", targetId: "e5", replacement: null };
+		return [...rows.slice(0, 4), JSON.stringify(failed), JSON.stringify(edit), rows[4]].join("\n");
+	};
+
+	it("counts the parent's and a worker's recovered drops under a retry policy, with the estimate beside the metered total", async () => {
+		const dir = await cellWithSession(droppedWorker());
+		const events = [parentReply("p1", "toolUse"), ...droppedParent(), ...subagentCall("call-1", { mode: "single", runId: "run-a", results: [childRow("run-a", dir)] }), parentReply("p2", "stop")];
+		const account = await accountCellUsage(events, { arm: "candidate", childSessionDir: dir }, expectRun, { subagentCalls: 1 }, { ...DEFAULT_RETRY_POLICY });
+		expect(account.errors).toEqual([]);
+		expect(account.usage.total.totalTokens).toBe(220 + 55);
+		expect(account.retry).toMatchObject({
+			attempts: 2, recovered: 2, unrecovered: 0, unmeteredAttempts: 2, capExceeded: false,
+			bySource: { parent: { attempts: 1, recovered: 1, unrecovered: 0 }, worker: { attempts: 1, recovered: 1, unrecovered: 0 } },
+			// The parent's attempt resent at least p1's 110; the worker's at least c1's 28.
+			estimatedTokens: 110 + 28,
+		});
+		expect(account.meteredCalls).toBe(4);
+	});
+
+	it("fails a run whose failed attempts, parent and workers together, pass the policy's cap", async () => {
+		const dir = await cellWithSession(droppedWorker());
+		const events = [parentReply("p1", "toolUse"), ...droppedParent(), ...subagentCall("call-1", { mode: "single", runId: "run-a", results: [childRow("run-a", dir)] }), parentReply("p2", "stop")];
+		const account = await accountCellUsage(events, { arm: "candidate", childSessionDir: dir }, expectRun, { subagentCalls: 1 }, { ...DEFAULT_RETRY_POLICY, maxFailedAttempts: 1 });
+		expect(account.retry?.capExceeded).toBe(true);
+		expect(account.errors.join("\n")).toMatch(/2 failed provider attempts \(parent 1, workers 1\) exceed the retry policy's cap of 1 per run/);
+	});
+
+	// Absent a policy the cell reads as every v5 cell did: a retry is a failure
+	// whose spend is unknown, and the record carries no retry block.
+	it("reads a cell without a retry policy as v5 did, with no retry block", async () => {
+		const dir = await cellWithSession(droppedWorker());
+		const events = [parentReply("p1", "toolUse"), ...droppedParent(), ...subagentCall("call-1", { mode: "single", runId: "run-a", results: [childRow("run-a", dir)] }), parentReply("p2", "stop")];
+		const account = await accountCellUsage(events, { arm: "candidate", childSessionDir: dir }, expectRun, { subagentCalls: 1 });
+		expect("retry" in account).toBe(false);
+		expect("meteredCalls" in account).toBe(false);
+		expect(account.errors.join("\n")).toMatch(/auto_retry_start: retries are disabled/);
+		expect(account.errors.join("\n")).toMatch(/failed: terminated/);
+	});
+
 	it("accepts a baseline run with no child sessions directory at all", async () => {
 		const account = await accountCellUsage([parentReply("p1", "stop")], { arm: "baseline", childSessionDir: join(tmpdir(), `absent-${Date.now()}`) }, expectRun, { subagentCalls: 0 });
 		expect(account.errors).toEqual([]);
@@ -621,6 +752,19 @@ describe("metricFromRecord", () => {
 	// as a zero that the comparison would treat as a free run.
 	it("reads a null token count as NaN, not as a zero-cost run", () => {
 		expect(metricFromRecord({ key: "A#1", target: "A", pass: 1, valid: false, totalTokens: null }).totalTokens).toBeNaN();
+		expect(metricFromRecord({ key: "A#1", target: "A", pass: 1, valid: false, totalTokens: null, totalTokensWithRetryEstimate: null }).totalTokens).toBeNaN();
+	});
+
+	// The gate reads metered tokens plus the estimate for unmetered attempts, so a
+	// resumed pair compares on the same number a fresh one did; the metered-only
+	// comparison beside it reads the metered count.
+	it("gates a retried run's tokens on the estimate and reads the metered count only when asked", () => {
+		const record = { key: "A#1", target: "A", pass: 1, valid: true, truePositives: 2, precisionLowerBound: 0.5, findings: 4, totalTokens: 1000, totalTokensWithRetryEstimate: 1400 };
+		expect(metricFromRecord(record).totalTokens).toBe(1400);
+		expect(metricFromRecord(record, "metered").totalTokens).toBe(1000);
+		// A v5 record has no estimate; both readings are its metered count.
+		const { totalTokensWithRetryEstimate: _, ...v5 } = record;
+		expect(metricFromRecord(v5).totalTokens).toBe(1000);
 	});
 });
 
@@ -639,6 +783,13 @@ describe("resumeMismatches", () => {
 	// A resume that measured the same rules against the same inputs must proceed.
 	it("finds no mismatch between a manifest and an identical recomputation", () => {
 		expect(resumeMismatches(manifest(), manifest())).toEqual([]);
+	});
+
+	// Half a grid that read a retried attempt as a failure and half that read it
+	// as a count would not compare.
+	it("refuses a resume whose retry policy differs from the stopped grid's", () => {
+		expect(resumeMismatches(manifest(), { ...manifest(), retryPolicy: { ...DEFAULT_RETRY_POLICY } })).toEqual(["retryPolicy"]);
+		expect(resumeMismatches({ ...manifest(), retryPolicy: { ...DEFAULT_RETRY_POLICY } }, { ...manifest(), retryPolicy: { ...DEFAULT_RETRY_POLICY } })).toEqual([]);
 	});
 
 	// A snapshot, key, harness or grader that moved since the stopped grid must
@@ -743,5 +894,45 @@ describe("sealed environment", () => {
 		expect(scoped.args.slice(6)).toEqual(["/usr/bin/env", "-u", "DBUS_SESSION_BUS_ADDRESS", "-u", "XDG_RUNTIME_DIR", "-u", "INVOCATION_ID", "/tmp/seal", "--read", "/usr", "--", "node", "entry.ts"]);
 		expect(scoped.env).toEqual({ PATH: "/usr/bin", HOME: "/h", DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/1/bus", XDG_RUNTIME_DIR: "/run/user/1" });
 		expect(scoped.unit).toBe("pired-cell-abc");
+	});
+});
+
+describe("retry policy in the manifest", () => {
+	type GridOptions = Parameters<typeof newManifest>[0];
+	const options = (over: Partial<GridOptions> = {}): GridOptions => ({
+		baseline: "/snap/base", candidate: "/snap/cand", corpus: "/corpus", truth: "/truth", out: "/out", provider: "zai", model: "glm-5.3-flash",
+		thinking: "medium", passes: 3, concurrency: 2, timeoutMs: 7_200_000, selected: [], fsSeal: "/bin/seal", manifestPath: "/corpus/manifest.json",
+		dryRun: false, ...over,
+	});
+	// What the preflight adds before a manifest is ever resumed.
+	const preflighted = (manifest: Record<string, unknown>): Record<string, unknown> => JSON.parse(JSON.stringify({
+		...manifest,
+		inputs: { corpus: "/corpus", truth: "/truth", corpusManifest: { path: "/corpus/manifest.json" }, baseline: { path: "/snap/base" }, candidate: { path: "/snap/cand" } },
+		pins: { landlockWrapper: "/bin/seal" },
+	})) as Record<string, unknown>;
+
+	it("records the policy a grid ran with and restores it on resume", () => {
+		const manifest = newManifest(options({ retryPolicy: { ...DEFAULT_RETRY_POLICY } }), "live");
+		expect(manifest.retryPolicy).toEqual(DEFAULT_RETRY_POLICY);
+		expect((manifest.runtimeConfiguration as Record<string, unknown>).settings).toMatchObject({ retry: { enabled: true, maxRetries: 4, provider: { maxRetries: 0 } } });
+		expect(optionsFromManifest("/out", preflighted(manifest)).retryPolicy).toEqual(DEFAULT_RETRY_POLICY);
+	});
+
+	// Every v5 grid ran with retries off; its manifest has no policy and must
+	// resume with retries off, not under a default a later harness picked.
+	it("writes no policy and the v5 settings without one, and resumes an old manifest with retries off", () => {
+		const manifest = newManifest(options(), "live");
+		expect("retryPolicy" in manifest).toBe(false);
+		expect((manifest.runtimeConfiguration as Record<string, unknown>).settings).toBe(BENCHMARK_SETTINGS);
+		const restored = optionsFromManifest("/out", preflighted(manifest));
+		expect("retryPolicy" in restored).toBe(false);
+		expect(retryPolicyFromManifest({ retryPolicy: null })).toBeUndefined();
+	});
+
+	// A hand-edited manifest that turned transport retries on would hide failed
+	// attempts from every count; the resume refuses rather than drop the policy.
+	it("refuses to resume a manifest whose policy is malformed", () => {
+		expect(() => retryPolicyFromManifest({ retryPolicy: { ...DEFAULT_RETRY_POLICY, providerMaxRetries: 2 } })).toThrow(/invalid retryPolicy: .*transport retries/);
+		expect(() => optionsFromManifest("/out", preflighted({ ...newManifest(options(), "live"), retryPolicy: "on" }))).toThrow(/invalid retryPolicy/);
 	});
 });
