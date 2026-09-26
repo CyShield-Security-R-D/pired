@@ -63,9 +63,16 @@ The agents reach the right file in about 85% of cases. The losses come after tha
 "Right file, outside the window" is not a clean localisation rate. Files that hold several labelled
 locations inflate it, and a claim 10–80 lines away may be a different issue in the same file.
 
-One part of it is a pure measurement defect. One labelled location spans 265 lines. The pinned scorer
-compares claims only against its first line, so the 32 claims made inside the labelled range all
-scored as misses. That is about 3 points of recall, in both arms.
+One part of it is a scoring rule, not the agents. *(Corrected 2026-09-26 by the Phase 1 re-scorer;
+the first version of this note blamed the wrong mechanism.)*
+- A 266-line label carries no CWE. Its sibling label in the same target carries one.
+- The grader applies its class rule to every label in a target once any label in it has a class. A
+  claim that names a CWE can then never match the classless label.
+- That label was matched officially in 0 runs. 29 valid runs cited a line inside its range.
+- The range is 266 lines wide, so most of those 29 may not be the labelled issue. With the label
+  capped at 30 lines, only 1 still matches.
+- So the recall this hides lies somewhere between 1 and 29 run-matches, and the key alone cannot
+  say where. See *Scoring sensitivity* below.
 
 ### Luna stops early; the others do not
 
@@ -101,9 +108,35 @@ scored as misses. That is about 3 points of recall, in both arms.
 ### Where the extra cost sits
 
 - On Luna, workers used 7% of the candidate's tokens. The rest of the increase is in the parent
-  session: about 32% more context per request and 15% more requests.
-- It has not been decomposed into its possible sources: static delegation scaffolding in the prompt,
-  handoff payloads, or the parent re-reading what a worker already read.
+  session: 15% more requests, and 31% more context per request, weighted by request.
+- `eval/cost-breakdown.ts` splits the parent's extra 41.6M tokens (Luna v5c, 15 pairs). Parent
+  totals reconcile with the run records on 30 of 30 runs.
+
+| source of the extra parent tokens | share |
+|---|---:|
+| more turns, at the baseline's starting prompt and growth rate | 78% |
+| faster growth per turn, other than handoffs | 14% |
+| handoff payloads carried in context (estimated at 4 characters per token) | 4% |
+| larger starting prompt (the delegation block and the loader stub) | 3% |
+| output and compaction summaries | 1% |
+
+- The static scaffolding and the handoffs are small. The cost is **longer parent sessions**, and
+  a longer session costs more per turn because every turn re-sends everything before it.
+- The parent re-read a file a worker had already read at least 0.47 times per run. That counts the
+  `read` tool only; `bash` reads are not counted.
+- **Most of it is one pair.** One candidate run carries 85% of the pooled extra. The median pair's
+  candidate used slightly *fewer* parent tokens, 48k fewer. Luna's run lengths are heavy-tailed in
+  both arms, so pooled token sums swing on single runs, in both directions:
+
+| Luna grid | pooled token ratio | median pair ratio | candidate cheaper | pooled, without the largest pair |
+|---|---:|---:|---:|---:|
+| v5c (gating) | 1.62 | 1.18 | 6 of 15 | 1.18 |
+| v5b | 2.86 | 1.36 | 3 of 7 | 1.52 |
+| v5 | 0.58 | 0.85 | 6 of 10 | 0.97 |
+| v4 | 0.51 | 0.62 | 6 of 8 | 0.80 |
+
+  ADR-026's path 1 compared pooled sums. With tails this heavy, that test is decided by whichever
+  arm drew the longest run. The typical Luna v5c pair still cost about 18% more.
 
 ### Delegating runs vs solo runs
 
@@ -133,12 +166,51 @@ calls, is hit harder.
 
 ### How much the trial can detect
 
-- The paired true-positive difference has a standard deviation of about 0.85 per pair.
-- With 15 pairs, the smallest difference detectable at 80% power and α = 0.05 is about 0.6 true
-  positives per pair. That is more than the baseline's own mean.
-- Detecting +0.3 per pair needs about 63 pairs; +0.2 needs about 140.
+Measured with `eval/paired.ts` on Luna v5c, at the location level closest to the official rule
+(line ±3 over the label's range, without the class rule):
+- **Result:** the candidate found 0.27 more labelled locations per pair. The 95% confidence
+  interval, from a bootstrap that resamples apps, runs from −0.27 to +0.73.
+- **Per issue:** 7 issues were found only by the candidate and 3 only by the baseline, McNemar
+  p = 0.34.
+- **Spread:** the paired difference has a standard deviation of 0.88 per pair.
+- **Power:** with 15 pairs, the smallest difference detectable at 80% power and α = 0.05 is 0.64
+  true positives per pair, more than the baseline's own mean. Detecting +0.3 per pair needs 69
+  pairs; +0.2 needs 154.
+- **Tighter levels:** these have less spread but smaller effects too. At ±3 around the labelled line
+  the standard deviation is 0.46 and the smallest detectable difference is 0.33. The measured
+  difference there is +0.07, 95% interval −0.20 to +0.33.
+- **GLM (commandcode, 10 pairs):** standard deviation 1.75; the smallest detectable difference is
+  1.55.
 - Nights differ too. The same GLM baseline on the same provider matched 39% of labelled locations one
   night and 17% the next. The two nights' finished pair sets also differed.
+
+### Scoring sensitivity
+
+`eval/rescore.ts` re-scores every valid run of seven grids (160 runs) from the ledgers.
+- **Its controls:**
+  - a line-for-line mirror of the pinned adapter and grader reproduces the official true-positive
+    count on all 160 runs;
+  - the claims it parses equal the scorer's own claim list on all 160.
+- **Three grader rules move the official number.**
+  - **Class rule.** Once any label in a target carries a CWE, a claim at the right location but
+    with a different CWE, or with one where the label has none, is refused. Without this rule, total
+    true positives go from 145 to 194. The case above accounts for up to 29 of the 49.
+  - **Basename file matching.** A claim in `handlers/assets.go` counts against a label in
+    `services/assets.go`. This credits 4 true positives across the grids.
+  - **Label ranges.** The ±3 window applies to the label's whole range. 7 of the 24 labels span
+    more than 31 lines, and the widest spans 501. At ±3 around the labelled line itself, Luna v5c
+    scores 2 against 3 instead of 8 against 12.
+- **Summed over matched pairs, the verdict does not change:**
+
+| scoring | baseline | candidate |
+|---|---:|---:|
+| official | 73 | 63 |
+| without the class rule | 99 | 85 |
+| without the class rule, full-path file matching | 94 | 81 |
+
+On Luna v5c alone the class rule costs the candidate more: 7 → 12 against the baseline's 6 → 8.
+Whether those refused matches are the labelled issue is exactly what adjudication has to decide
+(`eval/adjudication.md`).
 
 ## What the literature says
 
@@ -192,7 +264,8 @@ calls, is hit harder.
 1. Delegation as designed in snapshot v4 **finds about the same issues at a higher cost**. On Luna it
    also lowers precision. It is not accepted.
 2. The largest problems are **measurement** and **benchmark operations**, not orchestration:
-   - the scorer understates recall;
+   - the grader's class rule and over-wide labels move the true-positive count by a third;
+   - pooled token sums on Luna are decided by single outlier runs;
    - precision cannot be read without adjudication;
    - the trial cannot detect differences below about 0.6 TP per pair;
    - about 43% of tokens went to runs that did not count.

@@ -3,7 +3,8 @@
 *Started 2026-09-26. Evidence and sources: [`research/12-delegation-trial-2026-09.md`](../research/12-delegation-trial-2026-09.md).*
 
 Snapshot v4 of delegation was not accepted under ADR-026. On GPT-6 Luna, the gating model, it found
-slightly more true positives, but at 59% of the baseline's precision and 62% more tokens. Across all
+slightly more true positives, but at 59% of the baseline's precision and 62% more tokens (pooled;
+one run carries most of that, and the median pair cost 18% more). Across all
 grids the candidate found 58 true positives against the baseline's 69.
 
 The trial's main lesson is that the largest problems are in **how we measure** and **how we run the
@@ -35,12 +36,12 @@ then the product. Each product change is judged by a pre-registered test on fres
 
 ## Phase 1 — Measurement instruments (no model calls)
 
-| # | item | acceptance |
-|---|---|---|
-| 1.1 | **Multi-level re-scorer** `eval/rescore.ts`. Reads ledgers directly and keeps `file:lo-hi` ranges. Scores unique labelled locations at several levels: same file; line ±3 (the official rule); line ±10; claim range overlapping the label range, with the label width capped. Adds a label-hygiene report that flags labels wider than the cap. | Reproduces the official true-positive count exactly at the ±3 point level on every valid v5 run (the control). Unit tests beside the module. |
-| 1.2 | **Paired per-issue analysis** `eval/paired.ts`. Per-issue find rate per arm; McNemar exact test on discordant pairs; mean difference per pair with an app-clustered bootstrap confidence interval (fixed seed); minimum detectable effect from the observed paired standard deviation. | Unit tests on synthetic data. A report for Luna v5c. |
-| 1.3 | **Cost breakdown** `eval/cost-breakdown.ts`. Splits parent tokens into first-request prompt size, handoff payload size, and files re-read by the parent after a worker read them. Uses existing transcripts only. | Explains the +32% context per request and +15% requests on Luna v5c, or says what it cannot explain. |
-| 1.4 | **Adjudication protocol (spec).** Blind to arm and provenance; claims merged into unique issues; fixed rubric; a judge from a different model family; agreement measured on a double-judged sample. Execution needs model calls, so it runs in Phase 4. | Spec reviewed, with an ADR if adopted. |
+| # | item | acceptance | status |
+|---|---|---|---|
+| 1.1 | **Multi-level re-scorer** `eval/rescore.ts`. Reads ledgers directly and keeps `file:lo-hi` ranges. Scores unique labelled locations at several levels: same file; line ±3 (the official rule); line ±10; claim range overlapping the label range, with the label width capped. Adds a label-hygiene report that flags labels wider than the cap. | Reproduces the official true-positive count exactly on every valid run (the control). Unit tests beside the module. *Amended:* the control is an exact mirror of the pinned adapter and grader, because the official count also applies a class rule, basename file matching and one-claim-per-label assignment, which a location level must not. The levels are location-only: file; ±3 around the labelled line; ±3 and ±10 over the label's range, as the grader windows it; capped range overlap. | done: mirror 160 of 160 runs over seven grids, claims parse identically 160 of 160; findings in research/12, *Scoring sensitivity* |
+| 1.2 | **Paired per-issue analysis** `eval/paired.ts`. Per-issue find rate per arm; McNemar exact test on discordant pairs; mean difference per pair with an app-clustered bootstrap confidence interval (fixed seed); minimum detectable effect from the observed paired standard deviation. | Unit tests on synthetic data. A report for Luna v5c. | done: research/12, *How much the trial can detect* |
+| 1.3 | **Cost breakdown** `eval/cost-breakdown.ts`. Splits parent tokens into first-request prompt size, handoff payload size, and files re-read by the parent after a worker read them. Uses existing transcripts only. | Explains the +32% context per request and +15% requests on Luna v5c, or says what it cannot explain. | done: 78% more turns, 4% handoffs, 3% starting prompt; one pair carries 85% (research/12) |
+| 1.4 | **Adjudication protocol (spec).** Blind to arm and provenance; claims merged into unique issues; fixed rubric; a judge from a different model family; agreement measured on a double-judged sample. Execution needs model calls, so it runs in Phase 4. | Spec reviewed, with an ADR if adopted. | spec written: `eval/adjudication.md` |
 
 ## Phase 2 — Benchmark operations (harness; both arms identical)
 
@@ -70,8 +71,8 @@ its ADR.
 
 | # | item |
 |---|---|
-| 4.1 | **Fresh applications** outside the graded corpus. Label hygiene: cap label width and split wide labels. Clean-code controls where nothing should be reported. |
-| 4.2 | **Pre-registration, written before any v6 run:** arms (baseline, candidate v5, single agent × k at matched compute); metrics (unique labelled locations at every scoring level, adjudicated precision, cost in tokens and dollars, stop reasons); sample size from 1.2's power analysis; ship rule (TP non-inferior within a stated margin at no higher cost, or TP superior); held-out guard. |
+| 4.1 | **Fresh applications** outside the graded corpus. Label hygiene: cap label width and split wide labels; within a target, either every label carries a class or none does (a classless label beside a classed one could not be matched by any claim that names a CWE — research/12). Clean-code controls where nothing should be reported. |
+| 4.2 | **Pre-registration, written before any v6 run:** arms (baseline, candidate v5, single agent × k at matched compute); metrics (unique labelled locations at every scoring level, with and without the class rule; adjudicated precision; cost in tokens and dollars, compared per pair with a statistic robust to single long runs, such as the median of per-pair log ratios with a bootstrap interval, because Luna's pooled sums swung from 0.51 to 2.86 on single runs; stop reasons); sample size from 1.2's power analysis; ship rule (TP non-inferior within a stated margin at no higher cost, or TP superior); held-out guard. |
 | 4.3 | **Run on Luna.** Then add GLM-5.3 Flash and DeepSeek V4.1 Flash under the same pre-registration. |
 
 ## Order of work
