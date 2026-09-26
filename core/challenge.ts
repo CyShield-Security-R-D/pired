@@ -1563,6 +1563,30 @@ export function unsettledLabel(finding: Pick<FindingRecord, "status" | "verifica
 /** How many of the queue to name before the rest becomes a count. */
 const BRIEF_NAMED = 3;
 
+/** How many worker-recorded ids the brief names before the rest becomes a count. */
+const BRIEF_WORKER_IDS = 6;
+
+/**
+ * Who recorded a finding and who judged it, as a suffix for a listing line:
+ * " · by pired-investigate · verified by pired-verify, static". Empty for a row
+ * written before `by` existed with no verification, so an old ledger lists as
+ * it did.
+ *
+ * The tier is said beside the verdict because a confirmation read from quoted
+ * source and one run against a target are different claims, and a list that
+ * prints both as "confirmed" hides the difference (3.1).
+ */
+export function provenanceLabel(finding: Pick<FindingRecord, "by" | "verification">): string {
+	const parts: string[] = [];
+	if (finding.by !== undefined) parts.push(`by ${finding.by}`);
+	const v = finding.verification;
+	if (v !== undefined && isEarned(v)) {
+		const who = v.by === undefined ? "" : isIndependent(finding) === false ? ` by ${v.by} (its finder)` : ` by ${v.by}`;
+		parts.push(`${v.verdict === "refuted" ? "refuted" : "verified"}${who}${v.tier ? `, ${v.tier}` : ""}`);
+	}
+	return parts.map((p) => ` · ${p}`).join("");
+}
+
 /**
  * The unchallenged findings, as a line for the standing brief.
  *
@@ -1592,7 +1616,17 @@ export function unchallengedBrief(findings: FindingRecord[]): string {
 	const restExamined = queue.slice(BRIEF_NAMED).filter(isExaminedUnsettled).length;
 	const more = rest > 0 ? `; +${rest} more${restExamined > 0 ? ` (${restExamined} examined, unsettled)` : ""}` : "";
 	const subject = queue.length === 1 ? "1 finding has" : `${queue.length} findings have`;
-	return `${subject} not been settled by a challenge: ${named.join("; ")}${more}. `
+	// Which of them a worker recorded. A worker's finding is a lead nobody but
+	// its finder has read, and the finder does not settle it (3.1), so the lead
+	// is told how many are waiting on an independent look — counted, and named
+	// up to a bound, never listed whole.
+	const byWorkers = queue.filter((f) => isWorkerAuthor(f.by));
+	const workerIds = byWorkers.slice(0, BRIEF_WORKER_IDS).map((f) => f.id).join(", ");
+	const workerMore = byWorkers.length > BRIEF_WORKER_IDS ? ` +${byWorkers.length - BRIEF_WORKER_IDS} more` : "";
+	const workers = byWorkers.length === 0 ? ""
+		: ` ${byWorkers.length === queue.length ? (queue.length === 1 ? "It was" : "All were") : `${byWorkers.length} of them were`} ` +
+			`recorded by ${byWorkers.length === 1 ? "a worker" : "workers"}: ${workerIds}${workerMore} — a worker's finding is settled by a verifier or by you, not by its finder.`;
+	return `${subject} not been settled by a challenge: ${named.join("; ")}${more}.${workers} `
 		+ "`recall challenge id=<id>` returns the brief for one — it is built from the record and the "
 		+ "class contract, never from the conversation, so it can be handed to a fresh agent that has "
 		+ "not seen the reasoning that produced the claim.";
@@ -1763,7 +1797,7 @@ export function challengeCommand(input: ChallengeCommandInput): ChallengeCommand
 		}
 		const list = queue.map((f) => {
 			const label = unsettledLabel(f);
-			return `· ${f.id} [${f.severity}] ${f.title}${label ? ` — ${label}` : ""}`;
+			return `· ${f.id} [${f.severity}] ${f.title}${provenanceLabel(f)}${label ? ` — ${label}` : ""}`;
 		}).join("\n");
 		return {
 			tone: "info",

@@ -4,7 +4,7 @@ import {
 	auditFinding, challengeBrief, type ChallengeReport, CLASS_ALIASES, CONTRACTS, contractFor,
 	challengeCommand, deriveTier, describeUngrounded, evidenceShape, GENERIC_CONTROL, type GroundedQuote, groundQuotes, hasGrounds,
 	hypothesisBrief, isEarned, isExaminedUnsettled, isIndependent, isUnchallenged, isWorkerAuthor, judge, MIN_QUOTE_CHARS,
-	modelAnswersEntitlement, parseQuote, QUOTE_WINDOW, type QuoteReader, unchallengedBrief, unchallengedQueue, unsettledLabel, verdictPatch,
+	modelAnswersEntitlement, parseQuote, provenanceLabel, QUOTE_WINDOW, type QuoteReader, unchallengedBrief, unchallengedQueue, unsettledLabel, verdictPatch,
 } from "./challenge.ts";
 import type { FindingRecord, HypothesisRecord } from "./ontology.ts";
 
@@ -1148,5 +1148,45 @@ describe("who wrote a finding, and who judged it", () => {
 		expect(isIndependent({ by: "scribe", verification: v("lead") })).toBe(false);
 		expect(isIndependent({ verification: v("lead") })).toBeUndefined();
 		expect(isIndependent({ by: "lead" })).toBeUndefined();
+	});
+});
+
+describe("what the lead is shown about who recorded and who judged (3.1)", () => {
+	it("counts the unverified findings workers recorded, and names a bounded few", () => {
+		const rows = [
+			finding({ id: "f1", by: "lead" }),
+			...Array.from({ length: 8 }, (_, i) => finding({ id: `w${i + 1}`, by: i % 2 === 0 ? "pired-investigate" : "pired-escalate" })),
+		];
+		const brief = unchallengedBrief(rows);
+		expect(brief).toContain("9 findings have not been settled by a challenge");
+		expect(brief).toContain("8 of them were recorded by workers: w1, w2, w3, w4, w5, w6 +2 more");
+		expect(brief).toContain("settled by a verifier or by you, not by its finder");
+	});
+
+	it("says so plainly when every waiting finding, or the only one, came from a worker", () => {
+		expect(unchallengedBrief([finding({ id: "w1", by: "pired-investigate" }), finding({ id: "w2", by: "worker" })])).toContain("All were recorded by workers: w1, w2");
+		expect(unchallengedBrief([finding({ id: "w1", by: "pired-investigate" })])).toContain("It was recorded by a worker: w1");
+	});
+
+	it("leaves the worker count out when the lead, the scribe or an old unstamped row recorded them", () => {
+		const brief = unchallengedBrief([finding({ id: "f1", by: "lead" }), finding({ id: "f2", by: "scribe" }), finding({ id: "f3" })]);
+		expect(brief).not.toContain("recorded by");
+	});
+
+	it("labels a listing line with its author, its judge and the tier", () => {
+		const judged = (by: string, tier: "static" | "executed", verdict: "stands" | "refuted" = "stands") => ({ verdict, at: NOW, by, tier });
+		expect(provenanceLabel({ by: "pired-investigate" })).toBe(" · by pired-investigate");
+		expect(provenanceLabel({ by: "pired-investigate", verification: judged("pired-verify", "static") })).toBe(" · by pired-investigate · verified by pired-verify, static");
+		expect(provenanceLabel({ by: "lead", verification: judged("lead", "executed") })).toBe(" · by lead · verified by lead (its finder), executed");
+		expect(provenanceLabel({ by: "lead", verification: judged("pired-verify", "static", "refuted") })).toBe(" · by lead · refuted by pired-verify, static");
+		// A look that settled nothing is not a verification to label, and an old row says nothing.
+		expect(provenanceLabel({ by: "lead", verification: { verdict: "unresolved", at: NOW, by: "pired-verify" } })).toBe(" · by lead");
+		expect(provenanceLabel({})).toBe("");
+		expect(provenanceLabel({ verification: { verdict: "stands", at: NOW } })).toBe(" · verified");
+	});
+
+	it("carries the author onto the /challenge list", () => {
+		const view = challengeCommand({ findings: [finding({ id: "w1", by: "pired-investigate" })] });
+		expect(view.text).toContain("· w1 [high] IDOR on GET /api/notes/{id} · by pired-investigate");
 	});
 });

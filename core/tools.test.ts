@@ -2540,3 +2540,21 @@ describe("a worker's finding lands suspected, and its merge moves no verdict (3.
 		expect(all[0]?.description).toBe("q is formatted into the WHERE clause");
 	});
 });
+
+describe("recall shows who recorded a finding and who judged it (3.1)", () => {
+	it("prints the author and the tier on recall findings and on the challenge queue", async () => {
+		const svc = makeFakeServices();
+		const ws = await Workspace.open("/ws/acme", "acme", svc);
+		const ctx: ToolContext = { cwd: "/target", services: svc };
+		const investigator = createRecordTool({ workspace: ws, author: () => "pired-investigate" });
+		const verifier = createRecordTool({ workspace: ws, author: () => "pired-verify" });
+		const recall = createRecallTool({ workspace: ws });
+		const a = (await investigator.execute({ kind: "finding", title: "SQLi in search", severity: "high", target: "app/search.py:21" }, ctx)).details as { id: string };
+		await investigator.execute({ kind: "finding", title: "Open redirect on login", severity: "low", target: "app/login.py:9" }, ctx);
+		await verifier.execute({ kind: "finding", id: a.id, status: "confirmed", control: "a quote returned a 500; a digit returned 200", live: true }, ctx);
+		const findings = textOf(await recall.execute({ query: "findings" }, ctx));
+		expect(findings).toContain("SQLi in search (app/search.py:21) · by pired-investigate · verified by pired-verify, executed");
+		const queue = textOf(await recall.execute({ query: "challenge" }, ctx));
+		expect(queue).toContain("Open redirect on login · by pired-investigate");
+	});
+});

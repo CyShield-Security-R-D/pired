@@ -12,7 +12,7 @@
 
 import { buildBrowserModel, recordLabel } from "./browser.ts";
 import { workerContext } from "./delegation.ts";
-import { auditFinding, challengeBrief, groundQuotes, hasGrounds, hypothesisBrief, isExaminedUnsettled, isWorkerAuthor, judge, parseQuote, type QuoteReader, SEVERITY_RANK, unchallengedQueue, unsettledLabel, verdictPatch } from "./challenge.ts";
+import { auditFinding, challengeBrief, groundQuotes, hasGrounds, hypothesisBrief, isExaminedUnsettled, isWorkerAuthor, judge, parseQuote, provenanceLabel, type QuoteReader, SEVERITY_RANK, unchallengedQueue, unsettledLabel, verdictPatch } from "./challenge.ts";
 import { computeCoverage, coveragePercent, findGaps, selectNext } from "./coverage.ts";
 import { CVSS_DEFAULT_VERSION, CVSS_EXAMPLE, cvssVersion, validateCvss } from "./cvss.ts";
 import { type Fields, findDuplicate, findNearDuplicate, holdsLeadOpen, type IdentityKind, isNoOp, leadMeetsClearance, mergeRecord, reopensLead, updateById } from "./identity.ts";
@@ -1988,7 +1988,7 @@ export function createRecallTool(deps: ToolDeps): ToolDefinition {
 					const fs = [...all.filter((f) => !isDisposed(f.status)), ...all.filter((f) => isDisposed(f.status))];
 					return text(fs.length
 						? fs.slice(0, limit).map((f) =>
-							`${f.id} [${f.severity}/${f.status}] ${f.title} (${f.target})${f.reason ? ` — ${f.reason}` : ""}`,
+							`${f.id} [${f.severity}/${f.status}] ${f.title} (${f.target})${provenanceLabel(f)}${f.reason ? ` — ${f.reason}` : ""}`,
 						).join("\n") + truncated(Math.min(limit, fs.length), fs.length, "findings", "open first")
 						: "(no findings)");
 				}
@@ -2015,7 +2015,7 @@ export function createRecallTool(deps: ToolDeps): ToolDefinition {
 						const lines = queue.slice(0, limit).map((f) => {
 							const gaps = auditFinding({ finding: f, targetModel: model }).filter((g) => g.blocking);
 							const label = unsettledLabel(f);
-							return `${f.id} [${f.severity}/${f.status}] ${f.title}` +
+							return `${f.id} [${f.severity}/${f.status}] ${f.title}${provenanceLabel(f)}` +
 								(label ? `\n    ${label}` : "") +
 								(gaps.length > 0 ? `\n    needs: ${gaps.map((g) => g.kind).join(", ")}` : "\n    needs: nothing visible without re-running it");
 						});
