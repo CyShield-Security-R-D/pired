@@ -86,6 +86,12 @@ export interface CompareEntryConfig {
 	 * request is logged: the v5 behaviour, byte for byte.
 	 */
 	retryPolicy?: RetryPolicy;
+	/**
+	 * A matched-arm session's token ceiling (plan item 2.5): the session aborts
+	 * between requests once its metered usage reaches this many tokens. Absent,
+	 * nothing is watched and the transcript is the one every earlier cell wrote.
+	 */
+	tokenCeiling?: number;
 	/** Present only for the sealing self-check; a real scored run leaves it unset. */
 	probe?: ProbeConfig;
 }
@@ -194,6 +200,92 @@ export function fetchHost(target: unknown): string | undefined {
 	try {
 		return new URL(typeof target === "string" ? target : target instanceof URL ? target.href : (target as Request).url).host.toLowerCase();
 	} catch { return undefined; }
+}
+
+/**
+ * What the token ceiling has counted so far (plan item 2.5). `metered` is the
+ * sum of `usage.totalTokens` over every assistant reply's `message_end` and
+ * every completed compaction's `compaction_end`: the two places pi reports a
+ * provider call's usage in a print-mode parent, and what the harness's
+ * accounting sums as the parent's tokens. `cut` is true when the reply that
+ * reached the ceiling did not already end the run (`stop`), so the abort
+ * actually stopped work the model would have done.
+ */
+export interface TokenCeilingState {
+	ceiling: number;
+	metered: number;
+	/** Replies and compactions counted, each one provider call. */
+	requests: number;
+	reached: boolean;
+	/** Requests counted when the ceiling was reached; null until it is. */
+	reachedAtRequest: number | null;
+	/** The stop reason of the reply that reached it, or "compaction"; null until it is reached. */
+	reachedOn: string | null;
+	cut: boolean;
+}
+
+/**
+ * The token ceiling's meter. `observe` takes one session event and answers true
+ * exactly once, on the event whose cumulative metered usage first reaches the
+ * ceiling. The ceiling is checked after a reply has ended and before the next
+ * one is requested, so the run overshoots by at most one reply and never stops a
+ * request in flight: an aborted in-flight request reports no usage, and a
+ * ceiling that made unmetered spend would undercount the very arm it budgets.
+ */
+export function tokenCeilingMeter(ceiling: number): { observe(event: unknown): boolean; readonly state: TokenCeilingState } {
+	const state: TokenCeilingState = { ceiling, metered: 0, requests: 0, reached: false, reachedAtRequest: null, reachedOn: null, cut: false };
+	const tokensOf = (usage: unknown): number | undefined => {
+		const total = (usage as { totalTokens?: unknown } | undefined)?.totalTokens;
+		return typeof total === "number" && Number.isFinite(total) && total >= 0 ? total : undefined;
+	};
+	return {
+		state,
+		observe(event: unknown): boolean {
+			const row = event as { type?: unknown; message?: { role?: unknown; usage?: unknown; stopReason?: unknown }; result?: { usage?: unknown } } | undefined;
+			let tokens: number | undefined;
+			let on: string;
+			if (row?.type === "message_end" && row.message?.role === "assistant") {
+				tokens = tokensOf(row.message.usage);
+				on = typeof row.message.stopReason === "string" ? row.message.stopReason : "unknown";
+			} else if (row?.type === "compaction_end") {
+				tokens = tokensOf(row.result?.usage);
+				on = "compaction";
+			} else return false;
+			if (tokens === undefined) return false;
+			state.metered += tokens;
+			state.requests++;
+			if (state.reached || state.metered < ceiling) return false;
+			state.reached = true;
+			state.reachedAtRequest = state.requests;
+			state.reachedOn = on;
+			state.cut = on !== "stop";
+			return true;
+		},
+	};
+}
+
+/** The part of pi's AgentSession the ceiling needs. */
+export interface CeilingSession {
+	subscribe(listener: (event: unknown) => void): () => void;
+	abort(): Promise<void>;
+}
+
+/**
+ * Watch a session and abort it once the ceiling is reached. pi calls a session
+ * listener synchronously while the agent loop awaits its own listeners
+ * (agent-session.js `_handleAgentEvent`, pi-agent-core agent.js), so the abort
+ * lands after the reaching reply's `message_end` and before its tool calls
+ * run: the tools see an aborted signal, and the next request is never sent (pi
+ * writes the empty "This operation was aborted" reply the accounting already
+ * recognises for workers). The abort is not awaited here, because it waits for
+ * the very run that is delivering this event.
+ */
+export function watchTokenCeiling(session: CeilingSession, ceiling: number): { readonly state: TokenCeilingState; stop(): void } {
+	const meter = tokenCeilingMeter(ceiling);
+	const unsubscribe = session.subscribe((event) => {
+		if (meter.observe(event)) void session.abort().catch(() => undefined);
+	});
+	return { state: meter.state, stop: unsubscribe };
 }
 
 /** The scripted model the delegation probe registers; its name cannot collide with a real provider. */
@@ -413,6 +505,10 @@ function validateConfig(config: CompareEntryConfig): void {
 		throw new Error("Invalid extensionPaths: expected an array of absolute path strings");
 	}
 	if (config.retryPolicy !== undefined) validateRetryPolicy(config.retryPolicy);
+	if (config.tokenCeiling !== undefined && (!Number.isSafeInteger(config.tokenCeiling) || config.tokenCeiling < 1)) {
+		throw new Error("Invalid tokenCeiling: expected a positive integer token count");
+	}
+	if (config.tokenCeiling !== undefined && config.probe !== undefined) throw new Error("tokenCeiling is for a scored run; a probe takes none");
 	if (config.probe !== undefined) {
 		const probe = config.probe as Partial<ProbeConfig>;
 		for (const key of ["readDenied", "readAllowed"] as const) {
@@ -547,7 +643,13 @@ async function main() {
 		return;
 	}
 	// The scored path: the configured model, the review prompt, nothing scripted.
+	const ceiling = config.tokenCeiling === undefined ? undefined : watchTokenCeiling(runtime.session as unknown as CeilingSession, config.tokenCeiling);
 	process.exitCode = await runPrintMode(runtime, { mode: "json", initialMessage: config.prompt });
+	if (ceiling) {
+		ceiling.stop();
+		// After print mode has flushed its own lines, so this is the transcript's last event.
+		console.log(JSON.stringify({ type: "benchmark_token_ceiling", ...ceiling.state }));
+	}
 }
 
 // Only when run as the entry: the runner and the tests import the types and

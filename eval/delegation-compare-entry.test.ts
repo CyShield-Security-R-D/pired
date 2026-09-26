@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BENCHMARK_SETTINGS, benchmarkSettings, DEFAULT_RETRY_POLICY, fetchHost, validateRetryPolicy } from "./delegation-compare-entry.ts";
+import { BENCHMARK_SETTINGS, benchmarkSettings, DEFAULT_RETRY_POLICY, fetchHost, tokenCeilingMeter, validateRetryPolicy, watchTokenCeiling } from "./delegation-compare-entry.ts";
 
 const policy = (over: Record<string, unknown> = {}): Record<string, unknown> => ({ ...DEFAULT_RETRY_POLICY, ...over });
 
@@ -47,5 +47,66 @@ describe("fetchHost", () => {
 		expect(fetchHost(new URL("https://api.example.com/x"))).toBe("api.example.com");
 		expect(fetchHost({ url: "https://api.example.com/y" })).toBe("api.example.com");
 		expect(fetchHost("not a url")).toBeUndefined();
+	});
+});
+
+const reply = (totalTokens: number, stopReason = "toolUse") => ({ type: "message_end", message: { role: "assistant", stopReason, usage: { totalTokens } } });
+
+describe("tokenCeilingMeter", () => {
+	it("answers true once, on the reply whose cumulative metered usage first reaches the ceiling", () => {
+		const meter = tokenCeilingMeter(1000);
+		expect(meter.observe(reply(400))).toBe(false);
+		expect(meter.observe(reply(599))).toBe(false);
+		expect(meter.observe(reply(1))).toBe(true);
+		// A reply already in flight when the abort landed is still metered, and never re-triggers.
+		expect(meter.observe(reply(250))).toBe(false);
+		expect(meter.state).toEqual({ ceiling: 1000, metered: 1250, requests: 4, reached: true, reachedAtRequest: 3, reachedOn: "toolUse", cut: true });
+	});
+
+	it("meters compactions and ignores user and tool messages, which cost nothing", () => {
+		const meter = tokenCeilingMeter(500);
+		expect(meter.observe({ type: "message_end", message: { role: "user", usage: { totalTokens: 9999 } } })).toBe(false);
+		expect(meter.observe({ type: "message_end", message: { role: "toolResult", usage: { totalTokens: 9999 } } })).toBe(false);
+		expect(meter.observe({ type: "compaction_end", result: { usage: { totalTokens: 300 } } })).toBe(false);
+		expect(meter.observe({ type: "compaction_end", aborted: true })).toBe(false);
+		expect(meter.observe({ type: "tool_execution_end" })).toBe(false);
+		expect(meter.observe(reply(200))).toBe(true);
+		expect(meter.state.requests).toBe(2);
+	});
+
+	it("says the ceiling did not cut a run whose reaching reply already ended it", () => {
+		const meter = tokenCeilingMeter(100);
+		expect(meter.observe(reply(150, "stop"))).toBe(true);
+		expect(meter.state).toMatchObject({ reached: true, reachedOn: "stop", cut: false });
+	});
+});
+
+describe("watchTokenCeiling", () => {
+	it("aborts between requests: once, right after the reaching reply ends, so no request is left unmetered", () => {
+		const listeners: Array<(event: unknown) => void> = [];
+		const log: string[] = [];
+		const session = {
+			subscribe(listener: (event: unknown) => void) { listeners.push(listener); return () => { listeners.length = 0; }; },
+			abort: async () => { log.push("abort"); },
+		};
+		const watch = watchTokenCeiling(session, 1000);
+		const emit = (event: unknown, label: string) => { log.push(label); for (const l of [...listeners]) l(event); };
+		emit(reply(600), "reply 1");
+		emit({ type: "tool_execution_end" }, "tool 1");
+		emit(reply(600), "reply 2");
+		emit({ type: "message_end", message: { role: "assistant", stopReason: "error", usage: { totalTokens: 0 } } }, "aborted before request");
+		expect(log).toEqual(["reply 1", "tool 1", "reply 2", "abort", "aborted before request"]);
+		expect(watch.state).toMatchObject({ metered: 1200, requests: 3, reachedAtRequest: 2, cut: true });
+		watch.stop();
+		expect(listeners).toHaveLength(0);
+	});
+
+	it("never aborts a session that stays under its ceiling", () => {
+		let aborted = 0;
+		let listener: ((event: unknown) => void) | undefined;
+		watchTokenCeiling({ subscribe: (l) => { listener = l; return () => undefined; }, abort: async () => { aborted++; } }, 10_000);
+		for (let i = 0; i < 5; i++) listener?.(reply(1000));
+		listener?.(reply(1000, "stop"));
+		expect(aborted).toBe(0);
 	});
 });
