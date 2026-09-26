@@ -73,24 +73,33 @@ describe("renderBudgetLine", () => {
 		expect(renderBudgetLine(reading({}, { tokens: 1 }))).toBe("");
 	});
 
-	it("states used and remaining against the ceiling and calls it a ceiling, not a target", () => {
-		const line = renderBudgetLine(reading({ tokens: 20_000_000, minutes: 240 }, { tokens: 6_100_000, minutes: 52.7 }));
-		expect(line).toBe("Budget: 6.1M of 20M tokens · 52 of 240 min — a ceiling, not a target.");
+	it("states used and remaining for each unit, minutes rounded so used and left sum to the ceiling", () => {
+		const line = renderBudgetLine(reading({ tokens: 20_000_000, minutes: 45 }, { tokens: 6_100_000, minutes: 11.2 }));
+		expect(line).toBe("Budget: 12 of 45 min used, 33 left · 6.1M of 20M tokens used, 13.9M left.");
 		// Either unit may be absent: the line names only what the scope stated.
-		expect(renderBudgetLine(reading({ minutes: 90 }, { tokens: 9_000_000, minutes: 10 }))).toBe("Budget: 10 of 90 min — a ceiling, not a target.");
-		expect(renderBudgetLine(reading({ tokens: 2_500_000 }, {}))).toBe("Budget: 0 of 2.5M tokens — a ceiling, not a target.");
+		expect(renderBudgetLine(reading({ minutes: 90 }, { tokens: 9_000_000, minutes: 10 }))).toBe("Budget: 10 of 90 min used, 80 left.");
+		expect(renderBudgetLine(reading({ tokens: 2_500_000 }, {}))).toBe("Budget: 0 of 2.5M tokens used, 2.5M left.");
 	});
 
 	it("switches wording at 80% to recording what is established, and at the ceiling to settling", () => {
 		const early = renderBudgetLine(reading({ minutes: 100 }, { minutes: 79 }));
-		expect(early).not.toMatch(/record what is established|settle/);
+		// Under 80% the numbers alone: "a ceiling, not a target" said on every
+		// request from the start would be the budget talked about, not stated.
+		expect(early).toBe("Budget: 79 of 100 min used, 21 left.");
 		const late = renderBudgetLine(reading({ minutes: 100 }, { minutes: 80 }));
 		expect(late).toContain("a ceiling, not a target.");
 		expect(late).toContain("80% is used: record what is established.");
 		expect(late).not.toContain("settle");
 		const spent = renderBudgetLine(reading({ tokens: 1_000_000, minutes: 100 }, { tokens: 1_000_000, minutes: 5 }));
-		expect(spent).toContain("The ceiling is reached: settle (`record kind=settle`)");
+		expect(spent).toContain("a ceiling, not a target. The ceiling is reached: settle (`record kind=settle`)");
 		expect(spent).not.toContain("record what is established");
+	});
+
+	it("says the session settled instead of asking it to settle again, once it has and has done no work since", () => {
+		const line = renderBudgetLine(reading({ minutes: 100 }, { minutes: 130 }), "paused");
+		expect(line).toBe("Budget: 100 of 100 min used, 0 left — a ceiling, not a target. The ceiling is reached; settled: paused.");
+		// Below the ceiling nothing asks for a settle, so there is nothing to replace.
+		expect(renderBudgetLine(reading({ minutes: 100 }, { minutes: 85 }), "paused")).toContain("85% is used: record what is established.");
 	});
 });
 
@@ -123,7 +132,7 @@ describe("counting spend", () => {
 		expect(meter.minutes(0)).toBe(0);
 		expect(meter.reading(undefined, 5_000)).toBeUndefined();
 		const reading = meter.reading({ tokens: 20_000_000, minutes: 240 }, 1_000 + 52 * 60_000);
-		expect(renderBudgetLine(reading)).toBe("Budget: 6.1M of 20M tokens · 52 of 240 min — a ceiling, not a target.");
+		expect(renderBudgetLine(reading)).toBe("Budget: 52 of 240 min used, 188 left · 6.1M of 20M tokens used, 13.9M left.");
 	});
 });
 

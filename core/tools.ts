@@ -45,8 +45,8 @@ import {
 } from "./ontology.ts";
 import { LEAD_AUTHOR, SETTLE_OUTCOMES, type SettleRecord } from "./ontology.ts";
 import { renderAreas } from "./areas.ts";
-import { renderBudgetLine } from "./budget.ts";
-import { lastSettle, readSettleLedger, renderLastSettle, renderSettleReply, settleAreas, settleRemainder } from "./settle.ts";
+import { budgetState, renderBudgetLine } from "./budget.ts";
+import { lastSettle, readSettleLedger, renderLastSettle, renderSettleReply, settleAreas, settleRemainder, standingSettle } from "./settle.ts";
 import type { JsonSchema, ToolContext, ToolDefinition, ToolResult } from "./ports.ts";
 import type { Workspace } from "./workspace.ts";
 
@@ -2103,7 +2103,7 @@ export function createRecallTool(deps: ToolDeps): ToolDefinition {
 					// The budget line and the last settle (3.2): the same line the tail
 					// block carries, and where the last session said it left things.
 					const reading = deps.budget?.();
-					const budget = renderBudgetLine(reading);
+					const budget = renderBudgetLine(reading, budgetState(reading)?.level === "spent" ? await standingSettle(deps.workspace) : undefined);
 					const areas = renderAreas(settleAreas(await readSettleLedger(deps.workspace, { surfaceKinds, ...sourceListing(deps, ctx) })), 20);
 					return text([
 						`surface    ${stats.surface} element(s)`,

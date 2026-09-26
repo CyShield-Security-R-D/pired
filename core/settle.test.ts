@@ -126,7 +126,7 @@ describe("recall status", () => {
 		const budget: BudgetReading = { ceiling: { minutes: 240 }, spent: { minutes: 200 } };
 		const s = await session({ budget: () => budget });
 		const before = textOf(await s.recall.execute({ query: "status" }, s.ctx));
-		expect(before).toContain("budget     200 of 240 min — a ceiling, not a target. 83% is used: record what is established.");
+		expect(before).toContain("budget     200 of 240 min used, 40 left — a ceiling, not a target. 83% is used: record what is established.");
 		expect(before).toContain("settled    never");
 		expect(before).not.toContain("areas");
 		await s.record().execute({ kind: "endpoint", path: "/a", file: "api/a.ts" }, s.ctx);
@@ -135,6 +135,16 @@ describe("recall status", () => {
 		const after = textOf(await s.recall.execute({ query: "status" }, s.ctx));
 		expect(after).toMatch(/settled {4}paused at \S+ — auth left \(left: 2 open cell\(s\)\)/);
 		expect(after).toContain("areas\n  api — untested");
+	});
+
+	it("at the ceiling, says the session settled while no work has followed, and asks again once it has", async () => {
+		const s = await session({ budget: () => ({ ceiling: { minutes: 60 }, spent: { minutes: 61 } }) });
+		expect(textOf(await s.recall.execute({ query: "status" }, s.ctx))).toContain("The ceiling is reached: settle (`record kind=settle`)");
+		await s.record().execute({ kind: "settle", outcome: "paused" }, s.ctx);
+		expect(textOf(await s.recall.execute({ query: "status" }, s.ctx))).toContain("The ceiling is reached; settled: paused.");
+		s.svc.clock.advance(1000);
+		await s.record().execute({ kind: "endpoint", path: "/later", file: "api/later.ts" }, s.ctx);
+		expect(textOf(await s.recall.execute({ query: "status" }, s.ctx))).toContain("The ceiling is reached: settle (`record kind=settle`)");
 	});
 
 	it("renders no budget line when the scope sets none", async () => {

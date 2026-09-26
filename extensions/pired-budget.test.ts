@@ -80,7 +80,8 @@ describe("the budget in a live session", () => {
 		h = host({ budget: { tokens: 20_000_000, minutes: 240 } });
 		await h.fire("session_start", { type: "session_start" });
 		expect(await h.systemPrompt()).not.toMatch(/Budget:|of 20M tokens|a ceiling, not a target/);
-		expect(await h.tail()).toContain("Budget: 0 of 20M tokens · 0 of 240 min — a ceiling, not a target.");
+		// Used minutes round up, so a session a second old has used one.
+		expect(await h.tail()).toMatch(/Budget: [01] of 240 min used, 2(40|39) left · 0 of 20M tokens used, 20M left\./);
 	});
 
 	it("renders no budget line when the scope sets none", async () => {
@@ -97,8 +98,17 @@ describe("the budget in a live session", () => {
 		for (let i = 0; i < 2; i++) {
 			await h.fire("tool_execution_end", { type: "tool_execution_end", toolCallId: "call-1", toolName: "subagent", isError: false, result: workers });
 		}
-		expect(await h.tail()).toContain("Budget: 8M of 10M tokens — a ceiling, not a target. 80% is used: record what is established.");
-		expect(await h.call("recall", { query: "status" })).toContain("budget     8M of 10M tokens");
+		expect(await h.tail()).toContain("Budget: 8M of 10M tokens used, 2M left — a ceiling, not a target. 80% is used: record what is established.");
+		expect(await h.call("recall", { query: "status" })).toContain("budget     8M of 10M tokens used, 2M left");
+	});
+
+	it("at the ceiling, says the session settled in the tail once it has, instead of asking again", async () => {
+		h = host({ budget: { tokens: 1_000 } });
+		await h.fire("session_start", { type: "session_start" });
+		await h.fire("turn_end", { type: "turn_end", message: { role: "assistant", content: [], usage: { totalTokens: 1_500 } }, toolResults: [] });
+		expect(await h.tail()).toContain("The ceiling is reached: settle (`record kind=settle`)");
+		await h.call("record", { kind: "settle", outcome: "paused", note: "out of tokens" });
+		expect(await h.tail()).toContain("The ceiling is reached; settled: paused.");
 	});
 
 	it("adds a bounded areas line once surface is recorded, naming an unlisted source directory as unmapped", async () => {

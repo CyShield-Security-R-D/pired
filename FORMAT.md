@@ -186,9 +186,11 @@ call the session pays for — the lead's turns, its workers and verifiers, and t
 `minutes` of wall clock from the session's start. Each takes a non-negative integer; a value that
 is not one is dropped, and either may be absent. Absent altogether means no budget and no budget
 line, which is the default. When one is set, pired states it on every request, in the tail block
-it refreshes after the cached prompt (never in the system prompt), as one line: "Budget: 6.1M of
-20M tokens · 52 of 240 min — a ceiling, not a target." From 80% of either ceiling the line says to
-record what is established; at a ceiling it says to settle (§8.6). pired enforces nothing: the
+it refreshes after the cached prompt (never in the system prompt), as one line stating used and
+left: "Budget: 12 of 45 min used, 33 left · 6.1M of 20M tokens used, 13.9M left." From 80% of
+either ceiling it adds that the budget is a ceiling, not a target, and to record what is
+established; at a ceiling it says to settle (§8.6), or, when the lead has settled and no work has
+been written since, which outcome it settled with. pired enforces nothing: the
 ceiling is stated, and whoever set it enforces it. An optional `deadline` (ISO 8601) is an
 absolute stop time: when present, minutes spent are read as the ceiling less the minutes left
 before it, so the count follows the clock that stops the session; with no `minutes`, the ceiling

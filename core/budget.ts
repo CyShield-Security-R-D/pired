@@ -106,31 +106,44 @@ export function formatTokens(n: number): string {
 
 /**
  * The budget line for the per-request tail block, or "" when the scope states
- * no budget. One line, about forty tokens, rebuilt every request — which is why
- * it never goes in the system prompt, where a number that moves every turn
- * would break the cached prefix.
+ * no budget. One line, rebuilt every request — which is why it never goes in
+ * the system prompt, where a number that moves every turn would break the
+ * cached prefix.
  *
- * "Budget: 6.1M of 20M tokens · 52 of 240 min — a ceiling, not a target."
+ * "Budget: 12 of 45 min used, 33 left · 6.1M of 20M tokens used, 13.9M left."
  *
- * It informs; it does not script. From 80% it says to record what is
+ * Used and left are both stated, because what a reader acts on is what is
+ * left. Minutes used are rounded up and left is the rest, so the two always sum
+ * to the ceiling and neither overstates the time there is.
+ *
+ * It informs; it does not script. Under 80% it is the numbers alone. From 80%
+ * it says the budget is a ceiling, not a target, and to record what is
  * established, because a session cut off at the ceiling keeps only what reached
  * the ledger. At the ceiling it says to settle, which writes down what remains
- * for the next session rather than ending anything.
+ * for the next session rather than ending anything — or, when the session has
+ * settled and done no work since (`settled`), says so instead of asking again.
  */
-export function renderBudgetLine(reading: BudgetReading | undefined): string {
+export function renderBudgetLine(reading: BudgetReading | undefined, settled?: string): string {
 	const state = budgetState(reading);
 	if (!state) return "";
 	const parts: string[] = [];
-	if (state.tokens) parts.push(`${formatTokens(state.tokens.spent)} of ${formatTokens(state.tokens.ceiling)} tokens`);
-	if (state.minutes) parts.push(`${Math.floor(state.minutes.spent)} of ${state.minutes.ceiling} min`);
-	const head = `Budget: ${parts.join(" · ")} — a ceiling, not a target.`;
+	if (state.minutes) {
+		const used = Math.min(state.minutes.ceiling, Math.ceil(state.minutes.spent));
+		parts.push(`${used} of ${state.minutes.ceiling} min used, ${state.minutes.ceiling - used} left`);
+	}
+	if (state.tokens) {
+		parts.push(`${formatTokens(state.tokens.spent)} of ${formatTokens(state.tokens.ceiling)} tokens used, ${formatTokens(state.tokens.remaining)} left`);
+	}
+	const head = `Budget: ${parts.join(" · ")}`;
 	if (state.level === "spent") {
-		return `${head} The ceiling is reached: settle (\`record kind=settle\`), which records what remains for the next session.`;
+		return settled
+			? `${head} — a ceiling, not a target. The ceiling is reached; settled: ${settled}.`
+			: `${head} — a ceiling, not a target. The ceiling is reached: settle (\`record kind=settle\`), which records what remains for the next session.`;
 	}
 	if (state.level === "late") {
-		return `${head} ${Math.floor(state.fraction * 100)}% is used: record what is established.`;
+		return `${head} — a ceiling, not a target. ${Math.floor(state.fraction * 100)}% is used: record what is established.`;
 	}
-	return head;
+	return `${head}.`;
 }
 
 // ---------------------------------------------------------------------------

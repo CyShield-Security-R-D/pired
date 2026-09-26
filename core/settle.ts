@@ -202,3 +202,18 @@ const NOT_WORK: ReadonlySet<string> = new Set([SCRIBE_AUTHOR, OPERATOR_AUTHOR]);
 export function writesAfter(at: string, rows: Array<{ createdAt?: string; updatedAt?: string; by?: string }>): number {
 	return rows.filter((r) => !NOT_WORK.has(r.by ?? "") && ((r.updatedAt ?? r.createdAt ?? "") > at)).length;
 }
+
+/**
+ * The outcome of the lead's last settle when no work has been written since,
+ * else undefined. The budget line reads it at the ceiling, so a session that
+ * has settled is told it has rather than asked again every request.
+ */
+export async function standingSettle(ws: Workspace): Promise<SettleRecord["outcome"] | undefined> {
+	const last = lastSettle(await ws.read("sessions"));
+	if (!last) return undefined;
+	const rows = [
+		...(await ws.read("inventory")), ...(await ws.read("hypotheses")), ...(await ws.read("findings")),
+		...(await ws.read("blockers")), ...(await ws.read("loot")),
+	];
+	return writesAfter(last.createdAt, rows) === 0 ? last.outcome : undefined;
+}

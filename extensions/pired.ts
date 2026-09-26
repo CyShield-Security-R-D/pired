@@ -59,7 +59,8 @@ import { makeHostServices } from "./lib/host.ts";
 import { apiKeyForProvider, registerPiredProviders } from "./lib/providers.ts";
 import { toPiTool } from "./lib/tools.ts";
 import { listSourceDirs } from "./lib/source-dirs.ts";
-import { parseBudget, renderBudgetLine, SpendMeter, subagentTokens, usageTokens } from "../core/budget.ts";
+import { budgetState, parseBudget, renderBudgetLine, SpendMeter, subagentTokens, usageTokens } from "../core/budget.ts";
+import { standingSettle } from "../core/settle.ts";
 import { deriveAreas, renderAreasLine } from "../core/areas.ts";
 
 /** Package root (this file lives in extensions/). Bundled skills + checklists sit beside it. */
@@ -1644,7 +1645,12 @@ export default function piredExtension(pi: ExtensionAPI): void {
 				findings: (await ws.read("findings")).filter((f) => !isDisposed(f.status)),
 				...(sourceDirs ? { dirs: sourceDirs.list, root: sourceDirs.root } : {}),
 			}));
-			const state = [renderBudgetLine(budgetNow()), areas].filter((line) => line.length > 0).join("\n");
+			// At the ceiling, a session that has settled and done nothing since is
+			// told so rather than asked to settle again; read only then, since it
+			// costs a pass over the ledger.
+			const reading = budgetNow();
+			const settled = budgetState(reading)?.level === "spent" ? await standingSettle(ws) : undefined;
+			const state = [renderBudgetLine(reading, settled), areas].filter((line) => line.length > 0).join("\n");
 			if (state) text = text ? `${text}\n\n${state}` : state;
 		} catch { return undefined; }
 
