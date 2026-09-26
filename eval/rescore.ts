@@ -59,14 +59,19 @@
  *
  * Beside the levels, each run is partitioned by status and by author
  * (`partitionClaims`, delegation-v6 Phase 3, 3.1): labels matched by all rows,
- * by the rows a report presents (not refuted or disposed of), by the confirmed
- * rows, by each `by`, and by every row ever recorded refuted. The official
- * scorer ignores status, so this is where a verifier's refutations — right or
- * wrong — become countable. It is additive: the mirror does not read it.
+ * by the rows a report presents (not refuted or disposed of), by the suspected
+ * and the confirmed rows, by the independently confirmed ones, by the confirmed
+ * rows' verification tier, by each `by`, and by every row ever recorded refuted
+ * (and by whom); and the verifications that missed their bar, on quotes or
+ * otherwise. The official scorer ignores status, so this is where a verifier's
+ * refutations — right or wrong — become countable. It is additive: the mirror
+ * does not read it.
  */
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { isIndependent } from "../core/challenge.ts";
+import type { FindingRecord } from "../core/ontology.ts";
 import { CLAIMED_LOCATION_CAP } from "./dvbank/score.ts";
 
 export interface Citation {
@@ -387,19 +392,27 @@ export function ledgerFindings(runDir: string): Array<{ citations: Citation[]; c
  * - `all`: every located row — what the official number grades;
  * - `presented`: not refuted and not disposed of by the operator — what a
  *   report presents as a finding or a lead;
- * - `confirmed`: confirmed, triaged or reported — the export's Confirmed section.
+ * - `suspected`: presented but not confirmed — the report's Suspected section;
+ * - `confirmed`: confirmed, triaged or reported — the export's Confirmed section;
+ * - `confirmed-independent`: confirmed by someone other than any of the row's
+ *   finders (`isIndependent`).
+ *
+ * Each is its own slice, matched from its own rows: labels matched by
+ * `suspected` are not `presented` minus `confirmed`, since one label can be hit
+ * by rows in both.
  */
-export const CLAIM_TIERS = ["all", "presented", "confirmed"] as const;
+export const CLAIM_TIERS = ["all", "presented", "suspected", "confirmed", "confirmed-independent"] as const;
 export type ClaimTier = (typeof CLAIM_TIERS)[number];
 
 const DISPOSED = new Set(["refuted", "false-positive", "accepted-risk", "ignored"]);
 const SETTLED = new Set(["confirmed", "triaged", "reported"]);
 
-/** Which tiers a row with this status belongs to. A row with no status is a lead: presented, not confirmed. */
-export function tiersOf(status: unknown): ClaimTier[] {
+/** Which status tiers a row with this status belongs to. A row with no status is a lead: presented, suspected. */
+export function tiersOf(status: unknown, independent?: boolean): ClaimTier[] {
 	const s = typeof status === "string" ? status : "";
 	if (DISPOSED.has(s)) return ["all"];
-	return SETTLED.has(s) ? ["all", "presented", "confirmed"] : ["all", "presented"];
+	if (!SETTLED.has(s)) return ["all", "presented", "suspected"];
+	return independent === true ? ["all", "presented", "confirmed", "confirmed-independent"] : ["all", "presented", "confirmed"];
 }
 
 /** Labels matched and rows counted, at every level, for one slice of a run's claims. */
@@ -418,12 +431,21 @@ export interface LedgerFinding {
 	status?: string;
 	/** Who created the row (`by`), or undefined on a ledger written before it existed. */
 	by?: string;
+	/** The live row's verification was made by none of its finders (`isIndependent` true). */
+	independent?: boolean;
+	/** The live row's verification tier, when it carries one. */
+	tier?: string;
 	/** Any line of the row's history, not only the live one, recorded it `refuted`. */
 	everRefuted: boolean;
+	/** Who refuted it, on each history line that did (`verification.by`; `unknown` when absent), once each. */
+	refutedBy?: string[];
 }
 
 /** The author key a row is counted under: its `by`, or `unknown` for a row written before `by` existed. */
 export const UNKNOWN_AUTHOR = "unknown";
+
+/** The verification tiers a confirmed row is split by; `none` is a confirmation with no tier recorded. */
+export const VERIFICATION_TIER_KEYS = ["static", "executed", "none"] as const;
 
 function slice(findings: LedgerFinding[], truths: Truth[], cap: number): ClaimSlice {
 	const cites = findings.map((f) => f.citations);
@@ -433,44 +455,103 @@ function slice(findings: LedgerFinding[], truths: Truth[], cap: number): ClaimSl
 	};
 }
 
+function sliceBy(findings: LedgerFinding[], truths: Truth[], cap: number, keys: (f: LedgerFinding) => string[]): Record<string, ClaimSlice> {
+	const all = [...new Set(findings.flatMap(keys))].sort();
+	return Object.fromEntries(all.map((k) => [k, slice(findings.filter((f) => keys(f).includes(k)), truths, cap)]));
+}
+
 /**
  * The status and provenance partition of one run: labels matched by each claim
- * tier, by each author, and by the rows that were ever refuted — the last so a
- * verifier rejecting a real bug is counted even when a later write re-confirmed
- * it. Additive: nothing here feeds the official mirror.
+ * tier, by each author, by the verification tier of the confirmed rows, and by
+ * the rows that were ever refuted (and by whom) — the last so a verifier
+ * rejecting a real bug is counted even when a later write re-confirmed it.
+ * Additive: nothing here feeds the official mirror.
  */
 export function partitionClaims(findings: LedgerFinding[], truths: Truth[], cap = DEFAULT_WIDTH_CAP): {
 	tiers: Record<ClaimTier, ClaimSlice>;
 	byAuthor: Record<string, ClaimSlice>;
+	confirmedByTier: Record<string, ClaimSlice>;
 	everRefuted: ClaimSlice;
+	everRefutedBy: Record<string, ClaimSlice>;
 } {
-	const tiers = Object.fromEntries(CLAIM_TIERS.map((t) => [t, slice(findings.filter((f) => tiersOf(f.status).includes(t)), truths, cap)])) as Record<ClaimTier, ClaimSlice>;
-	const authors = [...new Set(findings.map((f) => f.by ?? UNKNOWN_AUTHOR))].sort();
-	const byAuthor = Object.fromEntries(authors.map((a) => [a, slice(findings.filter((f) => (f.by ?? UNKNOWN_AUTHOR) === a), truths, cap)]));
-	return { tiers, byAuthor, everRefuted: slice(findings.filter((f) => f.everRefuted), truths, cap) };
+	const tiers = Object.fromEntries(CLAIM_TIERS.map((t) => [t, slice(findings.filter((f) => tiersOf(f.status, f.independent).includes(t)), truths, cap)])) as Record<ClaimTier, ClaimSlice>;
+	const confirmed = findings.filter((f) => tiersOf(f.status).includes("confirmed"));
+	const refuted = findings.filter((f) => f.everRefuted);
+	return {
+		tiers,
+		byAuthor: sliceBy(findings, truths, cap, (f) => [f.by ?? UNKNOWN_AUTHOR]),
+		confirmedByTier: Object.fromEntries(VERIFICATION_TIER_KEYS.map((k) => [k, slice(confirmed.filter((f) => (f.tier ?? "none") === k), truths, cap)])),
+		everRefuted: slice(refuted, truths, cap),
+		everRefutedBy: sliceBy(refuted, truths, cap, (f) => f.refutedBy?.length ? f.refutedBy : [UNKNOWN_AUTHOR]),
+	};
 }
 
 /**
- * Every located ledger finding with its status, author and refutation history.
- * The citations are read exactly as `ledgerFindings` reads them.
+ * Every located ledger finding with its status, author, independence, tier and
+ * refutation history. The citations are read exactly as `ledgerFindings` reads
+ * them.
  */
 export function ledgerFindingRows(runDir: string): LedgerFinding[] {
 	const ws = join(runDir, "workspace");
 	const inventory = inventoryIndex(liveRecords(readJsonl(join(ws, "inventory.jsonl"))));
 	const raw = readJsonl(join(ws, "findings.jsonl"));
-	const refutedIds = new Set(raw.filter((r) => r.status === "refuted" && typeof r.id === "string").map((r) => r.id as string));
+	const refuters = new Map<string, Set<string>>();
+	for (const r of raw) {
+		if (r.status !== "refuted" || typeof r.id !== "string") continue;
+		const by = (r.verification as Row | undefined)?.by;
+		const set = refuters.get(r.id) ?? new Set<string>();
+		set.add(typeof by === "string" ? by : UNKNOWN_AUTHOR);
+		refuters.set(r.id, set);
+	}
 	return liveRecords(raw).flatMap((f) => {
 		const citations = citationsForRecord(f, inventory);
 		if (!citations.length) return [];
+		const verification = f.verification as Row | undefined;
+		const independent = isIndependent(f as unknown as FindingRecord);
+		const refutedBy = refuters.get(f.id as string);
 		return [{
 			citations,
 			...(typeof f.cwe === "string" ? { cwe: f.cwe } : {}),
 			...(typeof f.class === "string" ? { vulnClass: f.class } : {}),
 			...(typeof f.status === "string" ? { status: f.status } : {}),
 			...(typeof f.by === "string" ? { by: f.by } : {}),
-			everRefuted: refutedIds.has(f.id as string),
+			...(independent !== undefined ? { independent } : {}),
+			...(typeof verification?.tier === "string" ? { tier: verification.tier } : {}),
+			everRefuted: refutedBy !== undefined,
+			...(refutedBy ? { refutedBy: [...refutedBy].sort() } : {}),
 		}];
 	});
+}
+
+/** What a run's verifications record about verdicts that missed their bar (3.1). */
+export interface VerdictCounts {
+	/** Distinct verifications written (one per finding id and verification time). */
+	verifications: number;
+	/** Of them, unresolved ones that asked for a verdict (`attempted`) — downgrades. */
+	downgraded: number;
+	/** Of them, ones with at least one quote not found where cited (`ungrounded`). */
+	onQuotes: number;
+}
+
+/**
+ * The quote-downgrade rate's parts, from every history line's verification,
+ * each counted once. Read from the `attempted` and `ungrounded` fields pired
+ * writes, never from the wording of the notes.
+ */
+export function verdictCounts(runDir: string): VerdictCounts {
+	const seen = new Set<string>();
+	const counts: VerdictCounts = { verifications: 0, downgraded: 0, onQuotes: 0 };
+	for (const r of readJsonl(join(runDir, "workspace", "findings.jsonl"))) {
+		const v = r.verification as Row | undefined;
+		if (!v || typeof r.id !== "string") continue;
+		const key = `${r.id}#${String(v.at)}#${String(v.verdict)}`;
+		if (seen.has(key)) continue;
+		seen.add(key);
+		counts.verifications += 1;
+		if (typeof v.attempted === "string") counts.downgraded += 1;
+		if (typeof v.ungrounded === "number" && v.ungrounded > 0) counts.onQuotes += 1;
+	}
+	return counts;
 }
 
 /** The citations of every located finding in a run's ledger. */
@@ -525,12 +606,18 @@ export interface RescoreRow {
 	 */
 	claimsIdentical: boolean | null;
 	matched: Record<Level, string[]>;
-	/** The claim tiers (all / presented / confirmed): labels matched and rows, per level. Additive (3.1). */
+	/** The claim tiers (CLAIM_TIERS): labels matched and rows, per level. Additive (3.1). */
 	tiers: Record<ClaimTier, ClaimSlice>;
 	/** The same, per author (`by`; `unknown` for rows written before it existed). */
 	byAuthor: Record<string, ClaimSlice>;
+	/** The confirmed rows, split by their verification tier (static / executed / none). */
+	confirmedByTier: Record<string, ClaimSlice>;
 	/** The rows any line of whose history says `refuted`, re-confirmed or not. */
 	everRefuted: ClaimSlice;
+	/** The same, per refuter (`verification.by` on the refuting line). */
+	everRefutedBy: Record<string, ClaimSlice>;
+	/** Verifications written, and how many missed their bar, on quotes or otherwise. */
+	verdicts: VerdictCounts;
 }
 
 /**
@@ -584,6 +671,7 @@ export function rescoreGrid(gridDir: string, cap = DEFAULT_WIDTH_CAP): { rows: R
 			claimsIdentical: ((scored) => scored === null ? null : scored.join("\n") === claimKeys(claims).join("\n"))(scoredClaimKeys(dir)),
 			matched,
 			...partition,
+			verdicts: verdictCounts(dir),
 		};
 	});
 	return { rows, truths };
@@ -654,9 +742,18 @@ export function formatReport(rows: RescoreRow[], truths: Truth[], cap = DEFAULT_
 				lines.push(["claim tiers", g, arm, label, t.claims, ...t.levels].join("\t"));
 			};
 			for (const tier of CLAIM_TIERS) tierLine(tier, (r) => r.tiers?.[tier]);
+			for (const t of VERIFICATION_TIER_KEYS) tierLine(`confirmed ${t}`, (r) => r.confirmedByTier?.[t]);
 			tierLine("ever-refuted", (r) => r.everRefuted);
+			const refuters = [...new Set(rs.flatMap((r) => Object.keys(r.everRefutedBy ?? {})))].sort();
+			for (const a of refuters) tierLine(`refuted by ${a}`, (r) => r.everRefutedBy?.[a]);
 			const authors = [...new Set(rs.flatMap((r) => Object.keys(r.byAuthor ?? {})))].sort();
 			for (const a of authors) tierLine(`by ${a}`, (r) => r.byAuthor?.[a]);
+			const v = rs.reduce((n, r) => ({
+				verifications: n.verifications + (r.verdicts?.verifications ?? 0),
+				downgraded: n.downgraded + (r.verdicts?.downgraded ?? 0),
+				onQuotes: n.onQuotes + (r.verdicts?.onQuotes ?? 0),
+			}), { verifications: 0, downgraded: 0, onQuotes: 0 });
+			lines.push(`verdicts\t${g}\t${arm}\tverifications ${v.verifications}\tdowngraded ${v.downgraded}\ton quotes ${v.onQuotes}`);
 		}
 	}
 	const wide = labelHygiene(truths, cap);

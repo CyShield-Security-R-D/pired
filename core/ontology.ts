@@ -616,6 +616,14 @@ export interface Verification {
 	guards?: QuotedLocation[];
 	/** `static` or `executed`, derived by pired and never taken from the caller. */
 	tier?: VerificationTier;
+	/**
+	 * On an `unresolved` verification that missed its bar: the verdict the caller
+	 * asked for (`stands`, `amended`, `refuted`). Absent on a look that asked for
+	 * nothing more. Written by pired (3.1), so the downgrade rate is a count.
+	 */
+	attempted?: ChallengeVerdict;
+	/** On an `unresolved` verification: how many of its quotes were not found where they were cited. */
+	ungrounded?: number;
 	/** When it was challenged. A proof reproduced on day 1 is not a proof on day 5. */
 	at: IsoTimestamp;
 	/**

@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
 	citationMatches, citationsForRecord, currentRuns, findingsFromLedger, formatReport, inventoryIndex, labelHygiene, LEVELS,
 	liveRecords, loadTruth, matchUnique, officialMatches, pairedRows, parseCitations, rescoreGrid, sameFile, type Citation, type Truth,
-	CLAIM_TIERS, ledgerFindingRows, type LedgerFinding, partitionClaims, tiersOf,
+	CLAIM_TIERS, ledgerFindingRows, type LedgerFinding, partitionClaims, tiersOf, verdictCounts,
 } from "./rescore.ts";
 
 type Row = Record<string, unknown>;
@@ -408,10 +408,12 @@ describe("the status and provenance partition (3.1)", () => {
 	const truths = [truth("T-1", "a.go", 10), truth("T-2", "b.go", 20), truth("T-3", "c.go", 30)];
 
 	it("places a status in the tiers a report would: refuted and disposed rows in all only, a lead presented, a settled row confirmed", () => {
-		expect(CLAIM_TIERS).toEqual(["all", "presented", "confirmed"]);
-		for (const s of ["refuted", "false-positive", "accepted-risk", "ignored"]) expect(tiersOf(s)).toEqual(["all"]);
-		for (const s of ["suspected", "open", undefined]) expect(tiersOf(s)).toEqual(["all", "presented"]);
+		expect(CLAIM_TIERS).toEqual(["all", "presented", "suspected", "confirmed", "confirmed-independent"]);
+		for (const s of ["refuted", "false-positive", "accepted-risk", "ignored"]) expect(tiersOf(s, true)).toEqual(["all"]);
+		for (const s of ["suspected", "open", undefined]) expect(tiersOf(s)).toEqual(["all", "presented", "suspected"]);
 		for (const s of ["confirmed", "triaged", "reported"]) expect(tiersOf(s)).toEqual(["all", "presented", "confirmed"]);
+		expect(tiersOf("confirmed", true)).toEqual(["all", "presented", "confirmed", "confirmed-independent"]);
+		expect(tiersOf("confirmed", false)).toEqual(["all", "presented", "confirmed"]);
 	});
 
 	it("counts labels matched and rows per tier, per author and among rows ever refuted", () => {
@@ -426,6 +428,7 @@ describe("the status and provenance partition (3.1)", () => {
 		expect(p.tiers.confirmed).toMatchObject({ claims: 1, matched: { "line±3": ["T-1"] } });
 		// A refutation of a labelled bug is what this partition exists to count.
 		expect(p.everRefuted).toMatchObject({ claims: 1, matched: { "line±3": ["T-2"] } });
+		expect(p.tiers.suspected).toMatchObject({ claims: 2, matched: { "line±3": ["T-3"] } });
 		expect(Object.keys(p.byAuthor)).toEqual(["lead", "pired-investigate", "unknown"]);
 		expect(p.byAuthor["pired-investigate"]).toMatchObject({ claims: 2, matched: { "line±3": ["T-1", "T-2"] } });
 		expect(p.byAuthor.unknown).toMatchObject({ claims: 1, matched: { "line±3": [] } });
@@ -434,18 +437,24 @@ describe("the status and provenance partition (3.1)", () => {
 	it("reads a row ever refuted from any line of its history, even one later re-confirmed", () => {
 		const run = tmp();
 		mkdirSync(join(run, "workspace"));
+		const refuted = { verdict: "refuted", at: "t1", by: "pired-verify", tier: "static" };
+		const confirmed = { verdict: "stands", at: "t2", by: "lead", tier: "executed" };
 		writeFileSync(join(run, "workspace", "findings.jsonl"), jsonl([
 			{ id: "a", kind: "finding", by: "pired-investigate", status: "suspected", target: "a.go:10" },
-			{ id: "a", kind: "finding", by: "pired-investigate", status: "refuted", target: "a.go:10" },
-			{ id: "a", kind: "finding", by: "pired-investigate", status: "confirmed", target: "a.go:10" },
+			{ id: "a", kind: "finding", by: "pired-investigate", status: "refuted", target: "a.go:10", verification: refuted },
+			{ id: "a", kind: "finding", by: "pired-investigate", status: "confirmed", target: "a.go:10", verification: confirmed },
 			{ id: "b", kind: "finding", status: "suspected", target: "b.go:20" },
+			{ id: "b", kind: "finding", status: "refuted", target: "b.go:20" },
+			{ id: "b", kind: "finding", status: "suspected", target: "b.go:20", verification: { verdict: "unresolved", at: "t3", attempted: "stands", ungrounded: 2 } },
 			{ id: "c", kind: "finding", status: "suspected", description: "no location" },
 		]));
 		const rows = ledgerFindingRows(run);
 		expect(rows).toEqual([
-			{ citations: [at("a.go", 10)], status: "confirmed", by: "pired-investigate", everRefuted: true },
-			{ citations: [at("b.go", 20)], status: "suspected", everRefuted: false },
+			{ citations: [at("a.go", 10)], status: "confirmed", by: "pired-investigate", independent: true, tier: "executed", everRefuted: true, refutedBy: ["pired-verify"] },
+			{ citations: [at("b.go", 20)], status: "suspected", everRefuted: true, refutedBy: ["unknown"] },
 		]);
+		// The downgrade rate's parts, counted from the fields, each verification once.
+		expect(verdictCounts(run)).toEqual({ verifications: 3, downgraded: 1, onQuotes: 1 });
 		// The citations are the ones the official path reads, row for row.
 		expect(rows.map((r) => r.citations)).toEqual(findingsFromLedger(run));
 	});
@@ -474,5 +483,58 @@ describe("the status and provenance partition (3.1)", () => {
 		expect(report).toMatch(/claim tiers\t\S+\tbaseline\tby lead\t1\t1/);
 		// A row written before the partition existed still prints, as zeros.
 		expect(() => formatReport(rows.map(({ tiers: _t, byAuthor: _b, everRefuted: _e, ...rest }) => rest as typeof rows[number]), [])).not.toThrow();
+	});
+});
+
+describe("the pre-registered tiers are their own slices (3.1 review)", () => {
+	const row = (over: Partial<LedgerFinding> & Pick<LedgerFinding, "citations">): LedgerFinding => ({ everRefuted: false, ...over });
+	const truths = [truth("T-1", "a.go", 10)];
+
+	it("matches suspected from its own rows, so a label hit by both a confirmed and a suspected row counts in both", () => {
+		const p = partitionClaims([
+			row({ citations: [at("a.go", 10)], status: "confirmed", independent: false, tier: "static" }),
+			row({ citations: [at("a.go", 11)], status: "suspected" }),
+		], truths);
+		expect(p.tiers.confirmed.matched["line±3"]).toEqual(["T-1"]);
+		expect(p.tiers.suspected.matched["line±3"]).toEqual(["T-1"]);
+		// Presented minus confirmed would have said the suspected tier found nothing.
+		expect(p.tiers.presented.matched["line±3"]).toEqual(["T-1"]);
+		expect(p.tiers["confirmed-independent"]).toMatchObject({ claims: 0 });
+	});
+
+	it("counts a confirmation independent only when none of the row's finders made it, and splits confirmed rows by tier", () => {
+		const p = partitionClaims([
+			row({ citations: [at("a.go", 10)], status: "confirmed", independent: true, tier: "executed" }),
+			row({ citations: [at("b.go", 5)], status: "confirmed", independent: false, tier: "static" }),
+			row({ citations: [at("c.go", 5)], status: "reported" }),
+			row({ citations: [at("d.go", 5)], status: "refuted", tier: "static", everRefuted: true, refutedBy: ["pired-verify", "lead"] }),
+		], truths);
+		expect(p.tiers["confirmed-independent"]).toMatchObject({ claims: 1, matched: { "line±3": ["T-1"] } });
+		expect(p.confirmedByTier.executed).toMatchObject({ claims: 1, matched: { "line±3": ["T-1"] } });
+		expect(p.confirmedByTier.static).toMatchObject({ claims: 1 });
+		expect(p.confirmedByTier.none).toMatchObject({ claims: 1 });
+		expect(Object.keys(p.everRefutedBy)).toEqual(["lead", "pired-verify"]);
+		expect(p.everRefutedBy.lead).toMatchObject({ claims: 1 });
+	});
+
+	it("prints the new slices and the downgrade counts for the paired runs", () => {
+		const g = tmp();
+		const keys = join(g, "keys");
+		mkdirSync(keys);
+		writeFileSync(join(keys, "app.truth.json"), JSON.stringify([{ id: "T-1", file: "a.go", line: 10 }]));
+		writeFileSync(join(g, "manifest.json"), JSON.stringify({ targets: [{ id: "t1", name: "app" }], inputs: { truth: keys } }));
+		for (const arm of ["baseline", "candidate"]) {
+			const dir = join(g, "runs", arm);
+			mkdirSync(join(dir, "workspace"), { recursive: true });
+			writeFileSync(join(dir, "run.json"), JSON.stringify({ target: "t1", pass: 1, attempt: 1, valid: true, totalTokens: 1, arm, truePositives: 1, findings: 1 }));
+			writeFileSync(join(dir, "workspace", "findings.jsonl"), jsonl([
+				{ id: "x", kind: "finding", status: "refuted", by: "lead", target: "a.go:10", verification: { verdict: "refuted", at: "t", by: "pired-verify", tier: "static" } },
+			]));
+		}
+		const report = formatReport(rescoreGrid(g).rows, []);
+		expect(report).toMatch(/claim tiers\t\S+\tcandidate\tconfirmed-independent\t0/);
+		expect(report).toMatch(/claim tiers\t\S+\tcandidate\tconfirmed none\t0/);
+		expect(report).toMatch(/claim tiers\t\S+\tcandidate\trefuted by pired-verify\t1\t1/);
+		expect(report).toMatch(/verdicts\t\S+\tcandidate\tverifications 1\tdowngraded 0\ton quotes 0/);
 	});
 });

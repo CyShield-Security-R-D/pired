@@ -60,7 +60,9 @@ So refuted rows are judged like every other claim:
 
 After judging, each issue is joined back to its rows' statuses to give, per arm:
 - **adjudicated precision per claim tier**: all rows, presented rows (not refuted or disposed of),
-  and confirmed rows, the same tiers `eval/rescore.ts` reports against the key;
+  suspected rows (presented, not confirmed), confirmed rows, and confirmed rows whose verifier was
+  none of their finders — the same tiers `eval/rescore.ts` reports against the key, each judged
+  from its own rows;
 - **rejected valid issues**: `valid` issues the arm claimed only in rows that were refuted, over
   `valid` issues the arm claimed. A row is counted as refuted if any line of its history says so,
   even after a later re-confirmation. Its ceiling is pre-registered in plan item 4.2.

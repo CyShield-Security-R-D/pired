@@ -1342,8 +1342,15 @@ export function judge(finding: FindingRecord, report: ChallengeReport, at: strin
 		...(wasReported ? { wasReported } : {}),
 	});
 
+	// What a downgraded look records about itself, so the rate at which verdicts
+	// miss their bar — and miss it on quotes — is counted from fields, not read
+	// out of the notes' wording (3.1 measurement).
+	const missed = {
+		...(report.verdict !== "unresolved" ? { attempted: report.verdict } : {}),
+		...(ungrounded.length > 0 ? { ungrounded: ungrounded.length } : {}),
+	};
 	const unresolved = (why: string, blocker?: ChallengeOutcome["blocker"]): ChallengeOutcome => ({
-		...settledNothing({ ...verification("unresolved"), notes: [report.notes, why].filter(Boolean).join(" — ") }, why),
+		...settledNothing({ ...verification("unresolved"), ...missed, notes: [report.notes, why].filter(Boolean).join(" — ") }, why),
 		...(blocker ? { blocker } : {}),
 	});
 

@@ -1269,3 +1269,20 @@ describe("co-finders (3.1 review)", () => {
 		expect(EARNED_LOCKED_FIELDS).toEqual(["status", "title", "description", "target", "severity"]);
 	});
 });
+
+describe("a downgraded look says what it asked for and how many quotes missed (3.1 review)", () => {
+	it("stores attempted and ungrounded on the unresolved verification, and nothing on a clean look", async () => {
+		const wrong = "app/notes.py:29: rows = db.execute(\"SELECT * FROM notes WHERE body LIKE '%\" + term + \"%'\")";
+		const quotes = await groundQuotes([SQLI_SOURCE, wrong], readDecoy);
+		const out = judge(decoyFinding(), { verdict: "stands", control: "c", sourceOnly: true, path: quotes }, NOW);
+		expect(out.verification).toMatchObject({ verdict: "unresolved", attempted: "stands", ungrounded: 1 });
+		const bare = judge(decoyFinding(), { verdict: "refuted", sourceOnly: true, basis: ["app/notes.py:13"] }, NOW);
+		expect(bare.verification).toMatchObject({ verdict: "unresolved", attempted: "refuted" });
+		expect(bare.verification).not.toHaveProperty("ungrounded");
+		const look = judge(decoyFinding(), { verdict: "unresolved", basis: ["app/notes.py:13"] }, NOW);
+		expect(look.verification).not.toHaveProperty("attempted");
+		const badLook = judge(decoyFinding(), { verdict: "unresolved", guards: quotes.slice(1) }, NOW);
+		expect(badLook.verification).toMatchObject({ ungrounded: 1 });
+		expect(badLook.verification).not.toHaveProperty("attempted");
+	});
+});
