@@ -272,7 +272,7 @@ September).
 
 Languages: Python 5, JavaScript/TypeScript 4, Go 2, Java 1. The language is the one with the most
 lines; `fireshare`'s label is in its Python server, but its frontend has more lines. Eight targets
-were also drawn in variant 1 ( tugtainer, Wooey, shiori, pygeoapi, multi-juicer,
+were also drawn in variant 1 (tugtainer, Wooey, shiori, pygeoapi, multi-juicer,
 ai-agent-automation, goploy, FileCodeBox); four are new. "loc" is `scope_loc` at the reviewed commit, vendored
 files left out.
 
