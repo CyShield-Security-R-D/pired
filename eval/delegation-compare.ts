@@ -29,7 +29,7 @@ import { BENCHMARK_SETTINGS, PROBE_FAUX_MODEL, PROBE_FAUX_PROVIDER, type Compare
 import {
 	accountUsage, APPROVAL_DECISION, compareMatchedRuns, findLeaks, isOfficialGrid, leakTermsFor, observationsFromChildSession,
 	observationsFromPiEvents, OFFICIAL_PASSES, OFFICIAL_TARGET_IDS, planSchedule, reconcileChildSession, reconcileSubagentCalls,
-	SUBAGENT_TOOL,
+	contentText, SUBAGENT_TOOL,
 	type Arm, type ChildSessionExtraction, type ChildVerdict, type ExpectedCell, type PiUsageExtraction, type RunMetric,
 	type ScheduledPair, type SubagentChild, type SubagentReconciliation, type UsageAccounting, type UsageObservation,
 } from "./delegation-compare-lib.ts";
@@ -41,6 +41,7 @@ import { auditCell, auditLimits, summarizeAudits, type AuditLimits, type Delegat
 // name: Landlock ABI 4 has no signal scoping, so a name match would reach other
 // cells and the operator's own processes.
 import { reapMarkedProcesses } from "./delegation-compare-proc.ts";
+import { classifyRunStop, summarizeStops, type RunStop } from "./delegation-compare-stop.ts";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const ENTRY = join(ROOT, "eval/delegation-compare-entry.ts");
@@ -125,7 +126,7 @@ const HEARTBEAT_MS = 60_000;
 const HARNESS_FILES = [
 	"eval/delegation-compare.ts", "eval/delegation-compare-lib.ts", "eval/delegation-compare-entry.ts",
 	"eval/delegation-compare-stage.ts", "eval/delegation-compare-proc.ts", "eval/delegation-audit.ts", "eval/corpus/fs-seal.c",
-	"eval/delegation-compare-bash-timeout.ts",
+	"eval/delegation-compare-bash-timeout.ts", "eval/delegation-compare-stop.ts",
 	"eval/delegation-compare.pins.json",
 ] as const;
 
@@ -2261,12 +2262,33 @@ async function inspectRun(ctx: Context, cell: PreparedCell, launched: Launch, at
 		catch (error) { delegationAudit = { error: error instanceof Error ? error.message : String(error) }; }
 	}
 	(record as JsonRecord).delegationAudit = delegationAudit;
+	(record as JsonRecord).stop = runStop(launched, stoppedByRunner, events, telemetry, accounting) as unknown as JsonRecord;
 	// Written only now, after the process is gone, and outside every granted path.
 	await writeJson(join(cell.cellDir, "run.json"), record);
 	return {
 		metric: { key: cell.key, target: cell.target.id, pass: cell.pass, valid, truePositives, precision, totalClaims, totalTokens },
 		arm: cell.arm, cellId: cell.cellId, seconds, record, infraFailure, quotaExhausted: infraFailure && classified.exhausted === true,
 	};
+}
+
+/**
+ * Why the run and each worker stopped (ADR draft 2.6). Attached after the record
+ * is built, like the delegation audit, and never read by validity: a run that
+ * offers to continue is still a valid run, it is the model's choice. Kept apart
+ * from `valid` so an old grid's rows, which lack it, still load and compare.
+ */
+function runStop(launched: Launch, stoppedByRunner: boolean, events: JsonRecord[], telemetry: JsonRecord | undefined, accounting: CellUsage | undefined): RunStop {
+	const last = assistantReplies(events).at(-1);
+	return classifyRunStop({
+		...(launched.launchError ? { launchError: launched.launchError } : {}),
+		process: launched.result ? { exitCode: launched.result.exitCode, signal: launched.result.signal, timedOut: launched.result.timedOut } : null,
+		stoppedByRunner,
+		...(last ? { lastReply: { stopReason: last.stopReason, text: contentText(last.content) } } : {}),
+	}, telemetry, (accounting?.children ?? []).map(({ child, session }) => ({
+		childKey: child.childKey, agent: child.agent, status: child.status,
+		...(session ? { ending: session.ending, finalText: session.finalText } : {}),
+		sessionErrors: session ? session.errors.length + session.providerErrors.length : 0,
+	})));
 }
 
 async function runOne(ctx: Context, target: Target, pass: number, arm: Arm, attempt: number): Promise<RunOutcome> {
@@ -3425,6 +3447,8 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 			const audit = (o.record as JsonRecord).delegationAudit as DelegationAudit | { error: string } | null | undefined;
 			return o.arm === "candidate" && audit && !("error" in audit) ? [{ label: `${String((o.record as JsonRecord).key ?? o.cellId)}`, audit }] : [];
 		})),
+		// Per arm, so an arm that hands the turn back early is visible next to its TP.
+		stops: summarizeStops(outcomes.map((o) => ({ arm: o.arm, stop: (o.record as JsonRecord).stop }))),
 		rows: outcomes.map((o) => o.record),
 	};
 	await serially(() => writeJson(join(output, "summary.json"), summary));
@@ -3446,6 +3470,7 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 	const d = summary.delegationAudit;
 	console.log(`delegation: ${d.runsThatDelegated}/${d.runs} candidate runs delegated · ${d.workers} workers ${JSON.stringify(d.workersByAgent)} ${JSON.stringify(d.workersByStatus)} outcomes ${JSON.stringify(d.workersByOutcome)} · worker share of candidate tokens ${d.workerTokenShare === null ? "n/a" : `${(100 * d.workerTokenShare).toFixed(1)}%`} · ${d.runsWithViolations} run(s) with contract violations`);
 	for (const v of d.violations.slice(0, 10)) console.log(`  delegation violation ${v}`);
+	for (const [arm, counts] of Object.entries(summary.stops.runs)) console.log(`stops ${arm}: ${JSON.stringify(counts)}`);
 	// When not approved, print the reason, never the bare approval decision string.
 	if (approved) console.log(`APPROVED (this model) · ${comparison.decision}`);
 	else console.log(`NOT APPROVED (this model) · ${notApprovedReasons.join(" · ")}`);
