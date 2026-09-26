@@ -442,6 +442,8 @@ export interface GridKind {
 	breaker: boolean | BreakerPolicy;
 	/** --timeout; null leaves the run limit open. */
 	timeoutMs: number | null;
+	/** --thinking, the effort both arms run at; null leaves it open. */
+	thinking: string | null;
 	/**
 	 * Whether the grid's passes may grow at a resume (--extend-passes). When true
 	 * the pass count is the grid's own, set by its pilot and its extensions, and
@@ -497,12 +499,13 @@ export function parseGridKinds(value: unknown, corpora: Record<string, PinnedCor
 		}
 		if (raw.timeoutMs !== null && !(typeof raw.timeoutMs === "number" && Number.isSafeInteger(raw.timeoutMs) && raw.timeoutMs > 0)) throw new Error(`${where}.timeoutMs must be null or a positive integer`);
 		if (raw.extendablePasses !== undefined && typeof raw.extendablePasses !== "boolean") throw new Error(`${where}.extendablePasses must be a boolean`);
+		if (raw.thinking !== null && !(typeof raw.thinking === "string" && ["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(raw.thinking))) throw new Error(`${where}.thinking must be null or a thinking level`);
 		out[name] = {
 			corpus: raw.corpus, baseline: { ...baseline } as GridKind["baseline"], candidate: { digest: candidate.digest as string | null },
 			baselineMaxAgents: raw.baselineMaxAgents as number | null, candidateMaxAgents: raw.candidateMaxAgents,
 			maxVerifiers: { ...verifiers } as Partial<Record<PairArm, number>>, budgetArms: arms("budgetArms", ARM_ORDER), subagentsArms: arms("subagentsArms", ARM_ORDER),
 			twinArms: arms("twinArms", ["baseline", "candidate"]) as PairArm[],
-			matched, retry: raw.retry, breaker, timeoutMs: raw.timeoutMs as number | null, extendablePasses: raw.extendablePasses === true,
+			matched, retry: raw.retry, breaker, timeoutMs: raw.timeoutMs as number | null, thinking: raw.thinking as string | null, extendablePasses: raw.extendablePasses === true,
 		};
 	}
 	return out;
@@ -510,6 +513,7 @@ export function parseGridKinds(value: unknown, corpora: Record<string, PinnedCor
 
 /** What a grid was launched with, as its kind is checked against it. */
 export interface GridOptions extends ArmOptions {
+	thinking?: string;
 	twinArms?: readonly PairArm[];
 	matched?: MatchedPolicy;
 	retry: boolean;
@@ -553,6 +557,7 @@ export function gridKindReasons(name: string, kind: GridKind, grid: GridOptions)
 		say(`the breaker policy is ${grid.breaker ? policyText(grid.breaker) : "off"}, not ${policyText(kind.breaker)}`);
 	}
 	if (kind.timeoutMs !== null && grid.timeoutMs !== kind.timeoutMs) say(`--timeout ${grid.timeoutMs} is not ${kind.timeoutMs}`);
+	if (kind.thinking !== null && grid.thinking !== kind.thinking) say(`--thinking ${grid.thinking ?? "unstated"} is not ${kind.thinking}`);
 	return reasons;
 }
 
@@ -635,4 +640,33 @@ export function extensionRefusal(grid: { passes: number; official: boolean; grid
  */
 export function scheduleExtends(prior: readonly unknown[], fresh: readonly unknown[]): boolean {
 	return fresh.length > prior.length && prior.every((pair, i) => JSON.stringify(pair) === JSON.stringify(fresh[i]));
+}
+
+/**
+ * The command-line options that make a grid its kind: every option the kind
+ * fixes, in the runner's own spelling. The operator's command line for a
+ * stage, and the tests that hold a stage's arms equal across roles, are built
+ * from this, so a kind and the flags that claim it cannot drift apart. The
+ * paths (snapshots, corpus, twins file, output) are the caller's.
+ */
+export function kindFlags(name: string, kind: GridKind, paths: { twins?: string } = {}): string[] {
+	const flags: string[] = [];
+	if (kind.thinking !== null) flags.push("--thinking", kind.thinking);
+	flags.push("--candidate-max-agents", String(kind.candidateMaxAgents));
+	if (kind.baselineMaxAgents !== null) flags.push("--baseline-max-agents", String(kind.baselineMaxAgents));
+	const verifiers = (["baseline", "candidate"] as const).flatMap((arm) => kind.maxVerifiers[arm] === undefined ? [] : [`${arm}=${kind.maxVerifiers[arm]}`]);
+	if (verifiers.length) flags.push("--max-verifiers", verifiers.join(","));
+	flags.push("--budget-arms", kind.budgetArms.join(",") || "none");
+	flags.push("--subagents-arms", kind.subagentsArms.join(",") || "none");
+	if (kind.twinArms.length) flags.push("--twins", paths.twins ?? "<twins.json>", "--twin-arms", kind.twinArms.join(","));
+	if (kind.matched) {
+		const m = kind.matched;
+		flags.push("--matched", [`mode=${m.mode}`, `k=${m.k}`, `kMax=${m.kMax}`, `floor=${m.floorShare}`, ...Object.entries(m.budgets ?? {}).map(([t, n]) => `budget.${t}=${n}`)].join(","));
+	}
+	if (kind.retry) flags.push("--retry");
+	if (kind.breaker === true) flags.push("--breaker", "default");
+	else if (kind.breaker) flags.push("--breaker", Object.entries(kind.breaker).map(([k, v]) => `${k}=${v}`).join(","));
+	if (kind.timeoutMs !== null) flags.push("--timeout", String(kind.timeoutMs));
+	flags.push("--grid-kind", name);
+	return flags;
 }

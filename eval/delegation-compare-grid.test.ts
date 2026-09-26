@@ -289,11 +289,11 @@ describe("grid kinds", () => {
 	const kind = (over: Partial<GridKind> = {}): GridKind => ({
 		corpus: "c", baseline: { digest: sha("b") }, candidate: { digest: sha("c") }, baselineMaxAgents: 0, candidateMaxAgents: 8,
 		maxVerifiers: { baseline: 0, candidate: 2 }, budgetArms: ["baseline", "candidate", "matched"], subagentsArms: ["baseline", "candidate", "matched"], twinArms: [],
-		matched: { mode: "follow", k: 3, kMax: 6, floorShare: 0.05 }, retry: true, breaker: { ...DEFAULT_BREAKER }, timeoutMs: 14_400_000, extendablePasses: false, ...over,
+		matched: { mode: "follow", k: 3, kMax: 6, floorShare: 0.05 }, retry: true, breaker: { ...DEFAULT_BREAKER }, timeoutMs: 14_400_000, thinking: "medium", extendablePasses: false, ...over,
 	});
 	const ran = (over: Partial<GridOptions> = {}): GridOptions => ({
 		candidateMaxAgents: 8, baselineMaxAgents: 0, maxVerifiers: { baseline: 0, candidate: 2 }, budgetArms: ["baseline", "candidate", "matched"],
-		subagentsArms: ["baseline", "candidate", "matched"], matched: { mode: "follow", k: 3, kMax: 6, floorShare: 0.05 }, retry: true, breaker: { ...DEFAULT_BREAKER }, timeoutMs: 14_400_000, ...over,
+		subagentsArms: ["baseline", "candidate", "matched"], matched: { mode: "follow", k: 3, kMax: 6, floorShare: 0.05 }, retry: true, breaker: { ...DEFAULT_BREAKER }, timeoutMs: 14_400_000, thinking: "medium", ...over,
 	});
 
 	// The pre-registration's draft: stage 1 is A against S, stage 2 is S against
@@ -309,6 +309,8 @@ describe("grid kinds", () => {
 			maxVerifiers: { baseline: 0, candidate: 2 }, budgetArms: ["baseline", "candidate", "matched"], subagentsArms: ["baseline", "candidate", "matched"], twinArms: [], matched: { mode: "follow", k: 3 }, retry: true,
 		});
 		expect(kinds["v6-stage1"]!.breaker).toEqual(DEFAULT_BREAKER);
+		expect(kinds["v6-stage1"]!.thinking).toBe("medium");
+		expect(kinds["v6-stage2"]!.thinking).toBe("medium");
 		expect(kinds["v6-stage2"]!.breaker).toEqual(DEFAULT_BREAKER);
 	});
 
@@ -340,7 +342,7 @@ describe("grid kinds", () => {
 	// way a candidate digest that is not the pinned one does.
 	it("lists every option that differs from the kind", () => {
 		const reasons = gridKindReasons("v6-stage2", kind(), {
-			candidateMaxAgents: 4, maxVerifiers: { candidate: 1 }, twinArms: ["baseline"], retry: false, timeoutMs: 7_200_000,
+			candidateMaxAgents: 4, maxVerifiers: { candidate: 1 }, twinArms: ["baseline"], retry: false, timeoutMs: 7_200_000, thinking: "high",
 		});
 		expect(reasons).toEqual([
 			"grid kind v6-stage2: the baseline's maxAgents is unstated, not 0",
@@ -354,6 +356,7 @@ describe("grid kinds", () => {
 			"grid kind v6-stage2: it requires --retry",
 			`grid kind v6-stage2: the breaker policy is off, not ${JSON.stringify(DEFAULT_BREAKER)}`,
 			"grid kind v6-stage2: --timeout 7200000 is not 14400000",
+			"grid kind v6-stage2: --thinking high is not medium",
 		]);
 		expect(gridKindReasons("k", kind({ breaker: false, retry: false }), ran())).toEqual(["grid kind k: it runs without --retry", "grid kind k: it runs without --breaker"]);
 		expect(gridKindReasons("k", kind(), ran({ matched: { mode: "follow", k: 2, kMax: 4, floorShare: 0.05 } }))[0]).toMatch(/the matched policy is \{"mode":"follow","k":2/);
@@ -391,6 +394,7 @@ describe("grid kinds", () => {
 		expect(() => parseGridKinds(raw({ breaker: { consecutive: 0 } }), corpora)).toThrow(/breaker/);
 		expect(() => parseGridKinds(raw({ retry: "yes" }), corpora)).toThrow(/retry/);
 		expect(() => parseGridKinds(raw({ timeoutMs: 0 }), corpora)).toThrow(/timeoutMs/);
+		expect(() => parseGridKinds(raw({ thinking: "loud" }), corpora)).toThrow(/thinking/);
 	});
 });
 

@@ -81,6 +81,7 @@
 				"attemptCeiling": 16
 			},
 			"timeoutMs": 14400000,
+			"thinking": "medium",
 			"extendablePasses": true
 		},
 		"v6-stage2": {
@@ -125,6 +126,7 @@
 				"attemptCeiling": 16
 			},
 			"timeoutMs": 14400000,
+			"thinking": "medium",
 			"extendablePasses": true
 		}
 	}

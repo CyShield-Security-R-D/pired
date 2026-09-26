@@ -12,9 +12,15 @@ import {
 	type GridStopState, type MatchedSessionSpec, type ProviderFailures, type RunOutcome,
 } from "./delegation-compare.ts";
 import { sessionBudget, type MatchedPolicy, type SessionState } from "./delegation-compare-matched.ts";
-import { gridKindReasons } from "./delegation-compare-grid.ts";
+import { readFileSync } from "node:fs";
+import { gridKindReasons, kindFlags } from "./delegation-compare-grid.ts";
 import { BENCHMARK_SETTINGS, DEFAULT_RETRY_POLICY } from "./delegation-compare-entry.ts";
 import { compareMatchedRuns, DEFAULT_BREAKER, observationsFromChildSession, planSchedule, type Arm, type BreakerPolicy, type ScheduledPair } from "./delegation-compare-lib.ts";
+
+/** The shipped pins, read once: every stage command line below is built from its kind (kindFlags). */
+const SHIPPED_PINS = parseComparePins(readFileSync(new URL("./delegation-compare.pins.json", import.meta.url), "utf8"));
+const STAGE1 = [...kindFlags("v6-stage1", SHIPPED_PINS.gridKinds["v6-stage1"]!, { twins: "/twins.json" }), "--passes", "6"];
+const STAGE2 = [...kindFlags("v6-stage2", SHIPPED_PINS.gridKinds["v6-stage2"]!), "--auth-horizon-hours", "200", "--passes", "6"];
 
 // Per-file builders: a run record as the runner appends it to runs.jsonl, a
 // manifest fragment as resume reads it back, pi's transcript events, and the
@@ -2176,13 +2182,9 @@ describe("grid kinds on the command line (plan 2.8)", () => {
 		return parsed.options;
 	};
 	const shippedPins = async () => parseComparePins(await readFile(new URL("./delegation-compare.pins.json", import.meta.url), "utf8"));
-	const STAGE1 = ["--candidate-max-agents", "0", "--max-verifiers", "candidate=0", "--twins", "/twins.json", "--twin-arms", "baseline,candidate",
-		"--retry", "--breaker", "default", "--timeout", "14400000", "--passes", "6", "--grid-kind", "v6-stage1"];
-	const STAGE2 = ["--baseline-max-agents", "0", "--max-verifiers", "baseline=0,candidate=2", "--budget-arms", "baseline,candidate,matched", "--subagents-arms", "baseline,candidate,matched",
-		"--matched", "follow", "--retry", "--breaker", "default", "--auth-horizon-hours", "200", "--timeout", "14400000", "--passes", "6", "--grid-kind", "v6-stage2"];
-
-	// The command lines the operator will type for the two stages must be the
-	// kinds' own, or both stages would run exploratory for a flag nobody noticed.
+	// The command lines the operator will type for the two stages are built
+	// from the kinds; they must read back as exactly their kinds, or both stages
+	// would run exploratory for a flag nobody noticed.
 	it("reads the stage command lines as exactly their kinds", async () => {
 		const pins = await shippedPins();
 		for (const [name, flags] of [["v6-stage1", STAGE1], ["v6-stage2", STAGE2]] as const) {
@@ -2211,7 +2213,7 @@ describe("grid kinds on the command line (plan 2.8)", () => {
 describe("S is the same arm in both stages (plan 2.8)", () => {
 	const argv = (...extra: string[]): string[] => [
 		"--baseline", "/snap/A", "--candidate", "/snap/S", "--corpus", "/corpus", "--truth", "/truth", "--out", "/out",
-		"--provider", "openai-codex", "--model", "gpt-6-luna", "--retry", "--timeout", "14400000", ...extra,
+		"--provider", "openai-codex", "--model", "gpt-6-luna", ...extra,
 	];
 	const options = (...extra: string[]) => {
 		const parsed = parseOptions(argv(...extra));
@@ -2221,9 +2223,11 @@ describe("S is the same arm in both stages (plan 2.8)", () => {
 	const target = { id: "CVE-2031-0001", name: "acme_shop-aaaaaa", package: "acme/shop", target: "/corpus/acme_shop-aaaaaa", truth: "/truth/acme_shop-aaaaaa.truth.json", scope: ["."] };
 	const cell = { engagement: "review-0123456789abcdef", workspaceDir: "/cell/ws", childSessionDir: "/cell/child-sessions" };
 	const now = Date.parse("2026-09-27T10:00:00.000Z");
-	const stage1 = options("--candidate-max-agents", "0", "--max-verifiers", "candidate=0");
+	// Both stages' options come from their kinds (STAGE1, STAGE2), not from
+	// flags written here, so the test follows the kinds when they are frozen.
+	const stage1 = options(...STAGE1);
 	// Stage 2 names the candidate snapshot as its baseline, so --baseline is S's path.
-	const stage2 = { ...options("--baseline-max-agents", "0", "--max-verifiers", "baseline=0,candidate=2", "--budget-arms", "baseline,candidate,matched", "--subagents-arms", "baseline,candidate,matched", "--matched", "follow"), baseline: "/snap/S" };
+	const stage2 = { ...options(...STAGE2), baseline: "/snap/S" };
 
 	// Every input the harness writes or passes that could reach the model: the
 	// snapshot, scope bytes, pi's settings, the pi-subagents config, whether
