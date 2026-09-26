@@ -36,7 +36,7 @@ import type {
 	SettleRecord,
 	SettleRemainder,
 } from "./ontology.ts";
-import { DISPOSED_STATUSES } from "./ontology.ts";
+import { DISPOSED_STATUSES, OPERATOR_AUTHOR, SCRIBE_AUTHOR } from "./ontology.ts";
 import { computeCoverageView } from "./stats.ts";
 import type { Workspace } from "./workspace.ts";
 
@@ -178,4 +178,21 @@ export function renderLastSettle(record: SettleRecord | undefined): string {
 	if (r.openBlockers?.length) open.push(`${r.openBlockers.length} open blocker(s)`);
 	if (r.unmappedAreas?.length) open.push(`${r.unmappedAreas.length} unmapped dir(s)`);
 	return `settled    ${record.outcome} at ${record.createdAt}${record.note ? ` — ${record.note}` : ""}${open.length > 0 ? ` (left: ${open.join(", ")})` : ""}`;
+}
+
+/**
+ * Writes that are not the session working on: the scribe transcribes review
+ * the lead already wrote, and the operator answers from outside it.
+ */
+const NOT_WORK: ReadonlySet<string> = new Set([SCRIBE_AUTHOR, OPERATOR_AUTHOR]);
+
+/**
+ * Ledger rows written after `at`, by anyone but the scribe or the operator: the
+ * work that supersedes a settle. A model that settles and then keeps going did
+ * not stop where it settled, so the settle does not describe its stop (the
+ * stop classifier, ADR-030 as amended by 3.2). A row's latest version is read,
+ * so an update after the settle counts as a write after it.
+ */
+export function writesAfter(at: string, rows: Array<{ createdAt?: string; updatedAt?: string; by?: string }>): number {
+	return rows.filter((r) => !NOT_WORK.has(r.by ?? "") && ((r.updatedAt ?? r.createdAt ?? "") > at)).length;
 }

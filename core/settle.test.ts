@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { BudgetReading, Checklist, FindingRecord, SettleRecord } from "./ontology.ts";
 import type { ToolContext, ToolDefinition } from "./ports.ts";
-import { lastSettle, remainderLines, renderLastSettle, renderSettleReply, renderSpent, settleAreas, settleRemainder, UNKNOWN_AUTHOR } from "./settle.ts";
+import { lastSettle, remainderLines, writesAfter, renderLastSettle, renderSettleReply, renderSpent, settleAreas, settleRemainder, UNKNOWN_AUTHOR } from "./settle.ts";
 import { makeFakeServices, type FakeServices } from "./testing/fakes.ts";
 import { createRecallTool, createRecordTool, type ToolDeps } from "./tools.ts";
 import { Workspace } from "./workspace.ts";
@@ -157,5 +157,21 @@ describe("the remainder, rendered", () => {
 		expect(renderLastSettle(newest)).toBe(
 			"settled    blocked at 2026-01-02T00:00:00.000Z (left: 3 open cell(s), 1 unchallenged finding(s), 1 inconclusive, 2 open blocker(s), 1 unmapped dir(s))",
 		);
+	});
+});
+
+describe("writesAfter", () => {
+	it("counts the work written after a settle, by its latest version, and not the scribe's or the operator's", () => {
+		const at = "2026-01-01T01:00:00.000Z";
+		expect(writesAfter(at, [
+			{ createdAt: "2026-01-01T00:00:00.000Z", by: "lead" },
+			{ createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T02:00:00.000Z", by: "lead" },
+			{ createdAt: "2026-01-01T02:00:00.000Z", by: "pired-investigate" },
+			{ createdAt: "2026-01-01T02:00:00.000Z" },
+			{ createdAt: "2026-01-01T02:00:00.000Z", by: "scribe" },
+			{ createdAt: "2026-01-01T02:00:00.000Z", by: "operator" },
+			{ createdAt: at, by: "lead" },
+			{},
+		])).toBe(3);
 	});
 });

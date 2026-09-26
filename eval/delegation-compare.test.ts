@@ -978,6 +978,18 @@ describe("the candidate's worker cap", () => {
 		expect(reviewScope("e", "/w", "candidate", undefined)).not.toHaveProperty("maxAgents");
 	});
 
+	// 3.2: the budget line states only a ceiling the harness enforces. The run
+	// limit is one, in both arms; no token ceiling is enforced yet, so none is written.
+	it("states the run limit as each arm's minutes ceiling, rounded down, and no token ceiling", () => {
+		const twoHours = 2 * 60 * 60 * 1000;
+		expect(reviewScope("e", "/w", "candidate", 8, twoHours).budget).toEqual({ minutes: 120 });
+		expect(reviewScope("e", "/w", "baseline", 8, twoHours)).toEqual({ engagement: "e", workspace: "/w", mode: "off", authorized: false, targets: {}, budget: { minutes: 120 } });
+		expect(reviewScope("e", "/w", "candidate", 8, 90_500).budget).toEqual({ minutes: 1 });
+		// Under a minute states nothing rather than a zero ceiling that reads as spent on the first request.
+		expect(reviewScope("e", "/w", "candidate", 8, 59_999)).not.toHaveProperty("budget");
+		expect(reviewScope("e", "/w", "candidate", 8, Number.NaN)).not.toHaveProperty("budget");
+	});
+
 	// Eight is what the v3/v4 snapshots defaulted to, so re-running one of them
 	// without the flag delegates as its own grids did.
 	it("defaults to the v3/v4 snapshots' own cap of eight and takes an explicit one", () => {

@@ -13,7 +13,17 @@
  *   2. budget — a time limit or token ceiling fired;
  *   3. turn-cap — a turn cap fired (pired's worker turn budget; a parent cap
  *      if a later harness adds one);
- *   4. the text test on the closing prose: offered-to-continue or finished.
+ *   4. settle — the run's last `record kind=settle` (3.2), when no ledger write
+ *      followed it: `finished` is finished, `paused` or `blocked` is
+ *      offered-to-continue (budget is left, or rule 2 would have fired). The
+ *      text test still runs and is kept as evidence and as `textTest`, because
+ *      it is the one instrument both arms share: the baseline cannot settle;
+ *   5. the text test on the closing prose: offered-to-continue or finished.
+ *
+ * A settle followed by more ledger writes is superseded: the session settled
+ * and then went on working, so the settle does not describe how it stopped. A
+ * model that settles as a ritual and keeps going is read by its text, as a
+ * model that never settles is.
  *
  * The text test is grammatical, not a phrase list: it asks whether the closing
  * sentence is a question, and whether a closing sentence offers the reader more
@@ -35,6 +45,40 @@ export interface StopClassification {
 	outcome: StopOutcome;
 	/** Why: the bound that fired, or which closing features fired. */
 	evidence: string[];
+	/**
+	 * The text test's own reading, kept whenever a settle was read (decisive or
+	 * superseded), so the offered-to-continue rate can be read by the same
+	 * instrument in an arm that settles and one that cannot.
+	 */
+	textTest?: { outcome: "offered-to-continue" | "finished"; evidence: string[] };
+}
+
+/**
+ * A run's last settle, as the engagement telemetry carries it (3.2). Only the
+ * lead settles: a worker is refused `kind=settle`.
+ */
+export interface SettleFacts {
+	outcome: string;
+	note?: string;
+	/** When it was written. */
+	at?: string;
+	/** Ledger writes after it, by anyone but the scribe or the operator. */
+	laterWrites: number;
+}
+
+/** The last settle from telemetry, or undefined when the run wrote none (every baseline run). */
+export function settleFacts(telemetry: unknown): SettleFacts | undefined {
+	const raw = (telemetry as { lastSettle?: unknown } | null | undefined)?.lastSettle;
+	if (!raw || typeof raw !== "object") return undefined;
+	const t = raw as Record<string, unknown>;
+	if (typeof t.outcome !== "string") return undefined;
+	const later = typeof t.laterWrites === "number" && Number.isFinite(t.laterWrites) && t.laterWrites > 0 ? t.laterWrites : 0;
+	return {
+		outcome: t.outcome,
+		...(typeof t.note === "string" ? { note: t.note } : {}),
+		...(typeof t.at === "string" ? { at: t.at } : {}),
+		laterWrites: later,
+	};
 }
 
 /** What the classifier needs; every field is optional except the closing text. */
@@ -47,6 +91,8 @@ export interface StopInput {
 	tokenCeiling?: boolean;
 	/** A turn cap fired; the string says which. */
 	turnCap?: string;
+	/** The run's last settle, when it wrote one. */
+	settle?: SettleFacts;
 	/** The prose of the last reply. */
 	finalText: string;
 }
@@ -163,7 +209,13 @@ export function classifyStop(input: StopInput): StopClassification {
 		return { outcome: "budget", evidence: [...(input.timedOut ? ["time limit"] : []), ...(input.tokenCeiling ? ["token ceiling"] : [])] };
 	}
 	if (input.turnCap) return { outcome: "turn-cap", evidence: [input.turnCap] };
-	const paragraph = closingParagraph(input.finalText);
+	const text = textTest(input.finalText);
+	return input.settle ? readSettle(input.settle, text) : text;
+}
+
+/** The text test alone: the closing's grammar says offered-to-continue or finished. */
+function textTest(finalText: string): { outcome: "offered-to-continue" | "finished"; evidence: string[] } {
+	const paragraph = closingParagraph(finalText);
 	if (!paragraph) return { outcome: "finished", evidence: ["no prose closing"] };
 	const features = closingFeatures(paragraph);
 	const fired = FEATURE_NAMES.filter(([key]) => features[key]).map(([, name]) => name);
@@ -172,6 +224,23 @@ export function classifyStop(input: StopInput): StopClassification {
 	// patch it") far more often than a hand-back.
 	const offered = features.question || features.offer;
 	return { outcome: offered ? "offered-to-continue" : "finished", evidence: fired };
+}
+
+/**
+ * Rule 4. The settle decides unless later work superseded it or its outcome is
+ * not one pired writes; either way the text test's result stays in `evidence`
+ * and in `textTest`.
+ */
+function readSettle(settle: SettleFacts, text: { outcome: "offered-to-continue" | "finished"; evidence: string[] }): StopClassification {
+	const said = `text test: ${text.outcome}${text.evidence.length > 0 ? ` (${text.evidence.join(", ")})` : ""}`;
+	if (settle.laterWrites > 0) {
+		return { ...text, evidence: [...text.evidence, `settle ${settle.outcome} superseded by ${settle.laterWrites} later ledger write(s)`], textTest: text };
+	}
+	if (settle.outcome === "finished") return { outcome: "finished", evidence: ["settle: finished", said], textTest: text };
+	if (settle.outcome === "paused" || settle.outcome === "blocked") {
+		return { outcome: "offered-to-continue", evidence: [`settle: ${settle.outcome}`, said], textTest: text };
+	}
+	return { ...text, evidence: [...text.evidence, `settle outcome ${JSON.stringify(settle.outcome)} not read`], textTest: text };
 }
 
 /**
@@ -285,13 +354,17 @@ export interface WorkerStop extends StopClassification {
 
 export interface RunStop extends StopClassification {
 	crossCheck: LedgerCrossCheck | null;
+	/** The run's last settle, whatever decided the outcome; absent when it wrote none. */
+	settle?: SettleFacts;
 	workers: WorkerStop[];
 }
 
 export function classifyRunStop(parent: ParentStopFacts, telemetry: unknown, workers: WorkerStopFacts[]): RunStop {
+	const settle = settleFacts(telemetry);
 	return {
-		...classifyStop(parentStopInput(parent)),
+		...classifyStop({ ...parentStopInput(parent), ...(settle ? { settle } : {}) }),
 		crossCheck: ledgerCrossCheck(telemetry),
+		...(settle ? { settle } : {}),
 		workers: workers.map((w) => ({ childKey: w.childKey, agent: w.agent, ...classifyStop(workerStopInput(w)), sessionErrors: w.sessionErrors })),
 	};
 }

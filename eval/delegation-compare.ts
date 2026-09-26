@@ -1757,10 +1757,19 @@ export function workerCapReason(pinned: number | null, requested: number | undef
  * The baseline's scope is left as it was: it names no cap, and whatever its
  * snapshot defaults to is what it measures. An undefined cap (a manifest that
  * predates the option) writes no field, as those grids' cells did.
+ *
+ * Both arms' scopes state the ceilings the harness enforces (3.2), as `budget`:
+ * `minutes` is the run's time limit, whole minutes, rounded down so the stated
+ * ceiling is never later than the kill. `tokens` is written only when a token
+ * ceiling is enforced, and none is yet: a ceiling the harness does not enforce
+ * is never stated. A snapshot that predates 3.2 ignores the field, so the
+ * baseline reads its scope as it always has.
  */
-export function reviewScope(engagement: string, workspace: string, arm: Arm, candidateMaxAgents: number | undefined): Record<string, unknown> {
+export function reviewScope(engagement: string, workspace: string, arm: Arm, candidateMaxAgents: number | undefined, timeoutMs?: number): Record<string, unknown> {
 	const scope: Record<string, unknown> = { engagement, workspace, mode: "off", authorized: false, targets: {} };
 	if (arm === "candidate" && candidateMaxAgents !== undefined) scope.maxAgents = candidateMaxAgents;
+	const minutes = timeoutMs !== undefined && Number.isFinite(timeoutMs) ? Math.floor(timeoutMs / 60_000) : 0;
+	if (minutes >= 1) scope.budget = { minutes };
 	return scope;
 }
 
@@ -1818,7 +1827,7 @@ async function prepareCell(ctx: Context, target: Target, pass: number, arm: Arm,
 	const engagement = `review-${opaqueToken()}`;
 	let probe: ProbeConfig | undefined;
 	if (probeFor) probe = await probeFor(paths);
-	const scope = probe?.mode === "delegation" ? probeDelegationScope(engagement, paths.workspaceDir) : reviewScope(engagement, paths.workspaceDir, arm, options.candidateMaxAgents);
+	const scope = probe?.mode === "delegation" ? probeDelegationScope(engagement, paths.workspaceDir) : reviewScope(engagement, paths.workspaceDir, arm, options.candidateMaxAgents, options.timeoutMs);
 	const scopeText = `${JSON.stringify(scope, null, 2)}\n`;
 	await writeFile(join(paths.targetDir, "pired.scope.json"), scopeText);
 	const prompt = probe?.mode === "delegation" ? "Map the attack surface of this codebase. Delegate the first area to a worker." : promptFor(target);
