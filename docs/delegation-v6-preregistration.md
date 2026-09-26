@@ -30,7 +30,7 @@ dated and logged, and it is written before the results it could affect are read.
 - D vs M (secondary).
 - D vs A (reported).
 
-A and S differ only in the Phase 3 changes. D and S differ only in delegation. D and M differ only
+A and S differ only in the Phase 3 changes. D and S differ only in delegation, which carries the verify worker's larger turn budget (about 40, up from 24; 3.1) as part of the delegating configuration. D and M differ only
 in how the same tokens are spent.
 
 **[operator] Staging, to control cost.** Run A and S first. D and M run only if S is not worse than
