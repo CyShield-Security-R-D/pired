@@ -559,15 +559,16 @@ describe("accountCellUsage", () => {
 
 	it("counts the parent's and a worker's recovered drops under a retry policy, with the estimate beside the metered total", async () => {
 		const dir = await cellWithSession(droppedWorker());
-		const events = [parentReply("p1", "toolUse"), ...droppedParent(), ...subagentCall("call-1", { mode: "single", runId: "run-a", results: [childRow("run-a", dir)] }), parentReply("p2", "stop")];
+		const events = [parentReply("p1", "toolUse"), ...subagentCall("call-1", { mode: "single", runId: "run-a", results: [childRow("run-a", dir)] }), ...droppedParent(), parentReply("p2", "stop")];
 		const account = await accountCellUsage(events, { arm: "candidate", childSessionDir: dir }, expectRun, { subagentCalls: 1 }, { ...DEFAULT_RETRY_POLICY });
 		expect(account.errors).toEqual([]);
 		expect(account.usage.total.totalTokens).toBe(220 + 55);
 		expect(account.retry).toMatchObject({
 			attempts: 2, recovered: 2, unrecovered: 0, unmeteredAttempts: 2, capExceeded: false,
 			bySource: { parent: { attempts: 1, recovered: 1, unrecovered: 0 }, worker: { attempts: 1, recovered: 1, unrecovered: 0 } },
-			// The parent's attempt resent at least p1's 110; the worker's at least c1's 28.
-			estimatedTokens: 110 + 28,
+			// Each attempt resent what the reply that recovered it sent: p2's prompt
+			// of 100 for the parent, c2's 25 for the worker.
+			estimatedTokens: 100 + 25,
 		});
 		expect(account.meteredCalls).toBe(4);
 	});
