@@ -940,6 +940,15 @@ describe("runStop", () => {
 		const stop = runStop({ launchError: "not launched: interrupted", stoppedByRunner: false, events: [], telemetry: undefined, children: [] });
 		expect(stop).toEqual({ outcome: "error", evidence: ["not launched: interrupted"], crossCheck: null, workers: [] });
 	});
+
+	it("records the share of the run limit used at the stop from the process's own start and end (3.2)", () => {
+		const stop = runStop({
+			result: { exitCode: 0, signal: null, timedOut: false, startedAt: 1_000, finishedAt: 1_000 + 30 * 60_000 }, stoppedByRunner: false,
+			events: [reply("stop", "The review is complete.")], telemetry: { surface: 2, hypotheses: 2, settled: 1 }, children: [], limitMs: 2 * 60 * 60_000,
+		});
+		expect(stop.timeShare).toBe(0.25);
+		expect(stop.leftWithOpenWork).toBe(true);
+	});
 });
 
 describe("the candidate's worker cap", () => {

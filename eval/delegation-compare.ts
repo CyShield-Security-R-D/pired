@@ -2538,7 +2538,7 @@ async function inspectRun(ctx: Context, cell: PreparedCell, launched: Launch, at
 		// engagementTelemetry reads a missing engagement as zeros; passed on, that
 		// would read as "nothing open" rather than "no ledger".
 		const ledger = telemetry && await exists(cell.workspaceDir) ? telemetry : undefined;
-		stop = runStop({ launchError: launched.launchError, result: launched.result, stoppedByRunner, events, telemetry: ledger, children: accounting?.children ?? [] });
+		stop = runStop({ launchError: launched.launchError, result: launched.result, stoppedByRunner, events, telemetry: ledger, children: accounting?.children ?? [], limitMs: ctx.options.timeoutMs });
 	} catch (error) {
 		stop = { error: error instanceof Error ? error.message : String(error) };
 	}
@@ -2559,13 +2559,18 @@ async function inspectRun(ctx: Context, cell: PreparedCell, launched: Launch, at
  */
 export function runStop(run: {
 	launchError?: string;
-	result?: Pick<OwnedResult, "exitCode" | "signal" | "timedOut">;
+	result?: Pick<OwnedResult, "exitCode" | "signal" | "timedOut"> & Partial<Pick<OwnedResult, "startedAt" | "finishedAt">>;
 	stoppedByRunner: boolean;
 	events: JsonRecord[];
 	telemetry: JsonRecord | undefined;
 	children: Array<Pick<ChildAccount, "child" | "session">>;
+	/** The run's time limit; with the process's start and end, the share of it used (3.2). */
+	limitMs?: number;
 }): RunStop {
 	const last = assistantReplies(run.events).at(-1);
+	const r = run.result;
+	const timing = r && typeof r.startedAt === "number" && typeof r.finishedAt === "number" && run.limitMs
+		? { seconds: (r.finishedAt - r.startedAt) / 1000, limitSeconds: run.limitMs / 1000 } : undefined;
 	return classifyRunStop({
 		...(run.launchError ? { launchError: run.launchError } : {}),
 		process: run.result ? { exitCode: run.result.exitCode, signal: run.result.signal, timedOut: run.result.timedOut } : null,
@@ -2575,7 +2580,7 @@ export function runStop(run: {
 		childKey: child.childKey, agent: child.agent, status: child.status,
 		...(session ? { ending: session.ending, finalText: session.finalText, ...(session.finalStop ? { finalStop: session.finalStop } : {}) } : {}),
 		sessionErrors: session ? session.errors.length + session.providerErrors.length : 0,
-	})));
+	})), timing);
 }
 
 async function runOne(ctx: Context, target: Target, pass: number, arm: Arm, attempt: number): Promise<RunOutcome> {

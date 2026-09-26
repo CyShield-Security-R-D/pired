@@ -261,6 +261,8 @@ export interface LedgerCrossCheck {
 	hypotheses: number;
 	settledHypotheses: number;
 	openHypotheses: number;
+	/** Coverage cells not settled (untested, in progress or blocked), when the telemetry carries them (3.2). */
+	openCells?: number;
 }
 
 export function ledgerCrossCheck(telemetry: unknown): LedgerCrossCheck | null {
@@ -269,7 +271,14 @@ export function ledgerCrossCheck(telemetry: unknown): LedgerCrossCheck | null {
 	const n = (v: unknown): number | null => typeof v === "number" && Number.isFinite(v) ? v : null;
 	const surface = n(t.surface), hypotheses = n(t.hypotheses), settled = n(t.settled);
 	if (surface === null || hypotheses === null || settled === null) return null;
-	return { surfaceCells: surface, hypotheses, settledHypotheses: settled, openHypotheses: Math.max(0, hypotheses - settled) };
+	const openCells = n(t.openCells);
+	return { surfaceCells: surface, hypotheses, settledHypotheses: settled, openHypotheses: Math.max(0, hypotheses - settled), ...(openCells !== null ? { openCells } : {}) };
+}
+
+/** How long the run took against its time limit, for the arm-neutral stopping measure. */
+export interface RunTiming {
+	seconds: number;
+	limitSeconds: number;
 }
 
 /** What the harness knows about the parent's end, gathered from the run. */
@@ -357,15 +366,34 @@ export interface RunStop extends StopClassification {
 	crossCheck: LedgerCrossCheck | null;
 	/** The run's last settle, whatever decided the outcome; absent when it wrote none. */
 	settle?: SettleFacts;
+	/**
+	 * The share of the time limit used when the run stopped (3.2): arm-neutral,
+	 * because it reads neither prose nor a settle, which only one arm can write.
+	 */
+	timeShare?: number;
+	/**
+	 * The run stopped on its own with time left while its ledger still held open
+	 * work (open hypotheses, or open cells when the telemetry carries them).
+	 * Absent when the timing or the ledger is unknown.
+	 */
+	leftWithOpenWork?: boolean;
 	workers: WorkerStop[];
 }
 
-export function classifyRunStop(parent: ParentStopFacts, telemetry: unknown, workers: WorkerStopFacts[]): RunStop {
+export function classifyRunStop(parent: ParentStopFacts, telemetry: unknown, workers: WorkerStopFacts[], timing?: RunTiming): RunStop {
 	const settle = settleFacts(telemetry);
+	const stop = classifyStop({ ...parentStopInput(parent), ...(settle ? { settle } : {}) });
+	const crossCheck = ledgerCrossCheck(telemetry);
+	const timeShare = timing && timing.limitSeconds > 0 && Number.isFinite(timing.seconds) ? Math.max(0, timing.seconds / timing.limitSeconds) : undefined;
+	const open = crossCheck ? crossCheck.openHypotheses > 0 || (crossCheck.openCells ?? 0) > 0 : undefined;
 	return {
-		...classifyStop({ ...parentStopInput(parent), ...(settle ? { settle } : {}) }),
-		crossCheck: ledgerCrossCheck(telemetry),
+		...stop,
+		crossCheck,
 		...(settle ? { settle } : {}),
+		...(timeShare !== undefined ? { timeShare } : {}),
+		...(timeShare !== undefined && open !== undefined
+			? { leftWithOpenWork: open && timeShare < 1 && stop.outcome !== "budget" && stop.outcome !== "error" }
+			: {}),
 		workers: workers.map((w) => ({ childKey: w.childKey, agent: w.agent, ...classifyStop(workerStopInput(w)), sessionErrors: w.sessionErrors })),
 	};
 }
@@ -373,10 +401,52 @@ export function classifyRunStop(parent: ParentStopFacts, telemetry: unknown, wor
 export type StopCounts = Record<StopOutcome, number>;
 
 export interface StopCountsByArm {
-	/** Runs per arm by stop outcome. Rows written before this field existed are counted under `unclassified`. */
+	/**
+	 * Runs per arm by stop outcome, with the text test's own reading counted
+	 * where a settle decided the outcome: the headline offered-to-continue rate
+	 * is one instrument in both arms, and only one arm can settle. Rows written
+	 * before this field existed are counted under `unclassified`.
+	 */
 	runs: Record<string, StopCounts & { unclassified: number }>;
+	/** Per arm, how its runs settled: the settle's own outcome, superseded, or none. Apart from `runs`. */
+	settles: Record<string, SettleCounts>;
+	/** Per arm, the arm-neutral stopping measure: time-limit share used, and early stops with open work. */
+	stopping: Record<string, StoppingSummary>;
 	/** Candidate workers by stop outcome. */
 	workers: StopCounts;
+}
+
+export interface SettleCounts {
+	finished: number;
+	paused: number;
+	blocked: number;
+	/** A settle followed by later ledger writes. */
+	superseded: number;
+	/** No settle, or a row that predates the field. */
+	none: number;
+}
+
+export interface StoppingSummary {
+	/** Runs with a known time share. */
+	timed: number;
+	/** The median share of the time limit used at the stop, or null with none timed. */
+	medianTimeShare: number | null;
+	/** Runs that stopped on their own with time left and open work in the ledger. */
+	leftWithOpenWork: number;
+	/** Runs for which that could be judged (timing and ledger both known). */
+	judged: number;
+}
+
+/** The outcome the headline counts: the text test's where a settle was read, else the outcome. */
+export function textOutcome(stop: RunStop): StopOutcome {
+	return stop.textTest?.outcome ?? stop.outcome;
+}
+
+function median(xs: number[]): number | null {
+	if (xs.length === 0) return null;
+	const sorted = [...xs].sort((a, b) => a - b);
+	const mid = Math.floor(sorted.length / 2);
+	return sorted.length % 2 === 1 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
 }
 
 /**
@@ -414,21 +484,41 @@ const isStop = (stop: unknown): stop is RunStop => !!stop && typeof stop === "ob
 
 function countStops(rows: StopRow[]): StopCountsByArm {
 	const runs: StopSummary["runs"] = {};
+	const settles: StopCountsByArm["settles"] = {};
+	const shares: Record<string, number[]> = {};
+	const stopping: StopCountsByArm["stopping"] = {};
 	const workers = zero();
 	for (const row of rows) {
 		const arm = (runs[row.arm] ??= { ...zero(), unclassified: 0 });
-		if (!isStop(row.stop)) { arm.unclassified++; continue; }
-		arm[row.stop.outcome]++;
+		const settled = (settles[row.arm] ??= { finished: 0, paused: 0, blocked: 0, superseded: 0, none: 0 });
+		const stops = (stopping[row.arm] ??= { timed: 0, medianTimeShare: null, leftWithOpenWork: 0, judged: 0 });
+		const armShares = (shares[row.arm] ??= []);
+		if (!isStop(row.stop)) { arm.unclassified++; settled.none++; continue; }
+		arm[textOutcome(row.stop)]++;
+		const s = row.stop.settle;
+		if (!s) settled.none++;
+		else if (s.laterWrites > 0) settled.superseded++;
+		else if (s.outcome === "finished" || s.outcome === "paused" || s.outcome === "blocked") settled[s.outcome]++;
+		else settled.none++;
+		if (typeof row.stop.timeShare === "number") armShares.push(row.stop.timeShare);
+		if (typeof row.stop.leftWithOpenWork === "boolean") {
+			stops.judged++;
+			if (row.stop.leftWithOpenWork) stops.leftWithOpenWork++;
+		}
 		for (const w of Array.isArray(row.stop.workers) ? row.stop.workers : []) if (w.outcome in workers) workers[w.outcome]++;
 	}
-	return { runs, workers };
+	for (const [arm, xs] of Object.entries(shares)) {
+		stopping[arm]!.timed = xs.length;
+		stopping[arm]!.medianTimeShare = median(xs);
+	}
+	return { runs, settles, stopping, workers };
 }
 
 export function summarizeStops(rows: StopRow[]): StopSummary {
 	return {
 		...countStops(rows),
 		valid: countStops(rows.filter((r) => r.valid)),
-		finishedWithOpenHypotheses: rows.flatMap((r) => isStop(r.stop) && r.stop.outcome === "finished" && (r.stop.crossCheck?.openHypotheses ?? 0) > 0
+		finishedWithOpenHypotheses: rows.flatMap((r) => isStop(r.stop) && textOutcome(r.stop) === "finished" && (r.stop.crossCheck?.openHypotheses ?? 0) > 0
 			? [{ arm: r.arm, key: r.key, openHypotheses: r.stop.crossCheck!.openHypotheses }] : []),
 	};
 }

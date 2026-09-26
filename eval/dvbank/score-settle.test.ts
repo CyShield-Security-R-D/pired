@@ -32,6 +32,16 @@ describe("engagementTelemetry and the last settle (3.2)", () => {
 		expect(t.lastSettle).toEqual({ outcome: "finished", at: "2026-01-01T02:00:00.000Z", by: "lead", laterWrites: 2, remainder: { openCells: 2 } });
 	});
 
+	it("counts the coverage cells left open when the engagement has a checklist, and none without one", async () => {
+		const dir = await engagement({
+			inventory: [{ id: "e1", kind: "endpoint", createdAt: "t", host: "", method: "GET", path: "/a" }],
+			hypotheses: [{ id: "y1", kind: "hypothesis", createdAt: "t", statement: "s", target: "e1", class: "sqli", outcome: "refuted" }],
+		});
+		expect(await engagementTelemetry(dir)).not.toHaveProperty("openCells");
+		await writeFile(join(dir, "checklist.json"), JSON.stringify({ v: 1, targetType: "web", classes: [{ id: "sqli" }, { id: "authz" }, { id: "xss" }] }));
+		expect((await engagementTelemetry(dir)).openCells).toBe(2);
+	});
+
 	it("carries no settle for a run that wrote none, which is every baseline run", async () => {
 		const t = await engagementTelemetry(await engagement({ findings: [] }));
 		expect(t).not.toHaveProperty("lastSettle");
