@@ -49,7 +49,7 @@ import { classifyRunStop, summarizeStops, type RunStop } from "./delegation-comp
 // The matched-compute arm (plan item 2.5): its policy, budget, union scorer and comparisons.
 import {
 	budgetRatios, matchedComparisons, metricOfUnion, parseMatchedPolicy, parseMatchedSpec, planSessions, scoreUnion, sessionBudget, targetsWithoutBudget,
-	type MatchedPolicy, type MatchedUnion, type SessionPlan, type SessionRun,
+	type MatchedPolicy, type MatchedUnion, type SessionBudget, type SessionPlan, type SessionRun,
 } from "./delegation-compare-matched.ts";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -1521,6 +1521,8 @@ const runState = {
 	abortedAtMs: undefined as number | undefined,
 	/** A provider quota or usage window is spent: nothing launched before it resets can succeed. */
 	quotaExhausted: undefined as string | undefined,
+	/** The stop came from a matched session (plan item 2.5); it does not by itself withhold the gate's approval. */
+	stoppedBy: undefined as "matched" | undefined,
 };
 
 async function runOwned(command: string, args: string[], config: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number; stdoutPath: string; stderrPath: string; onLine?: LineSink; scopeUnit?: string }): Promise<OwnedResult> {
@@ -3846,7 +3848,7 @@ function runnerFaultOutcome(pair: ScheduledPair, arm: Arm, attempt: number, erro
 }
 
 /** The part of runState the pair loop reads and sets; the signal handlers share the same object. */
-export type GridStopState = { aborted: boolean; stopInvalid: boolean; stopReason: string | undefined; quotaExhausted: string | undefined };
+export type GridStopState = { aborted: boolean; stopInvalid: boolean; stopReason: string | undefined; quotaExhausted: string | undefined; stoppedBy?: "matched" | undefined };
 
 /** What the pair loop needs from the grid around it. runGrid passes the real runner; the tests pass fakes and a fake clock. */
 export interface PairLoop {
@@ -3871,6 +3873,34 @@ export interface PairLoop {
 	warn: (line: string) => void;
 	/** The grid's directory, named in the resume command the messages print. */
 	out: string;
+	/** The matched arm (plan item 2.5). Absent, the loop is the one every earlier grid ran. */
+	matched?: MatchedLoop;
+}
+
+/**
+ * The matched arm's part of the pair loop. Its k sessions run in the pair's
+ * slot after both arms of the pair are valid at the same attempt, so that the
+ * pair's own two arms keep the timing they had before this arm existed; a pair
+ * that is re-run takes its matched sessions with it.
+ */
+export interface MatchedLoop {
+	k: number;
+	/** B and each session's ceiling, from the pair's candidate run (follow) or the policy (fixed). */
+	budget: (pair: ScheduledPair, candidate: RunOutcome) => SessionBudget;
+	/** Launch one session. A throw is a runner fault, recorded as a non-infrastructure invalid run. */
+	launch: (pair: ScheduledPair, attempt: number, session: MatchedSessionSpec) => Promise<RunOutcome>;
+	/** Kept pairs a resume found with sessions still to run, each with the candidate run that sets its budget. */
+	resume?: Array<{ pair: ScheduledPair; attempt: number; candidate: RunOutcome; sessions: SessionPlan["run"] }>;
+}
+
+/** What the matched arm's sessions did in one runner; session is `<pair key>/<index>`. */
+export interface MatchedLoopResult {
+	/** Pairs whose matched arm had no budget, so no session ran. */
+	skipped: Array<{ key: string; attempt: number; reason: string }>;
+	requeued: Array<{ session: string; sessionAttempt: number; notBefore: string; reason: string }>;
+	gaveUp: Array<{ session: string; sessionAttempt: number; reason: string }>;
+	blocked: Array<{ session: string; sessionAttempt: number; reason: string }>;
+	abandoned: Array<{ session: string; sessionAttempt: number; reason: string }>;
 }
 
 export interface PairLoopResult {
@@ -3882,6 +3912,8 @@ export interface PairLoopResult {
 	blocked: Array<{ key: string; attempt: number; reason: string }>;
 	/** Pairs that failed at the attempt ceiling. */
 	abandoned: Array<{ key: string; attempt: number; reason: string }>;
+	/** Present only when the loop ran a matched arm. */
+	matched?: MatchedLoopResult;
 }
 
 /** The longest an idle pair-worker sleeps before it looks again, so a signal or a trip is seen within a second while it waits out a cooldown. */
@@ -3908,11 +3940,17 @@ export async function runPairs(loop: PairLoop): Promise<PairLoopResult> {
 	const policy = loop.breaker;
 	const breaker = policy ? createBreaker(policy) : undefined;
 	const result: PairLoopResult = { breaker: null, requeued: [], gaveUp: [], blocked: [], abandoned: [] };
-	type Queued = { pair: ScheduledPair; attempt: number; firstAttempt: number; notBeforeMs: number };
+	const matchedResult: MatchedLoopResult | undefined = loop.matched ? { skipped: [], requeued: [], gaveUp: [], blocked: [], abandoned: [] } : undefined;
+	if (matchedResult) result.matched = matchedResult;
+	type MatchedOnly = { candidate: RunOutcome; sessions: SessionPlan["run"] };
+	type Queued = { pair: ScheduledPair; attempt: number; firstAttempt: number; notBeforeMs: number; matchedOnly?: MatchedOnly };
 	const queue: Queued[] = loop.pairs.map((pair) => {
 		const attempt = loop.firstAttempt(pair);
 		return { pair, attempt, firstAttempt: attempt, notBeforeMs: 0 };
 	});
+	for (const item of loop.matched?.resume ?? []) {
+		queue.push({ pair: item.pair, attempt: item.attempt, firstAttempt: item.attempt, notBeforeMs: 0, matchedOnly: { candidate: item.candidate, sessions: item.sessions } });
+	}
 	const takeReady = (): Queued | undefined => {
 		const now = loop.nowMs();
 		let pick = -1;
@@ -3921,7 +3959,50 @@ export async function runPairs(loop: PairLoop): Promise<PairLoopResult> {
 	};
 	const quotaStop = (arm: Arm, pair: ScheduledPair): string =>
 		`provider quota exhausted on the ${arm} run of ${pair.target} pass ${pair.pass} (${state.quotaExhausted ?? ""}); the quota must reset before --resume`;
-	const runPair = async ({ pair, attempt, firstAttempt }: Queued): Promise<void> => {
+	/**
+	 * Keep one arm's outcome and apply the stop rules to it: the quota stop, and
+	 * the fail-fast rule or the breaker. `gate` is false for a matched session:
+	 * a non-infrastructure failure there leaves the gate's decision open, so it
+	 * does not trip an official grid's breaker at once the way a pair's arm does;
+	 * it still counts as a failed launch. A throw is a bookkeeping failure.
+	 */
+	const keep = async (outcome: RunOutcome, pair: ScheduledPair, arm: Arm, attempt: number, launched: boolean, gate: boolean): Promise<void> => {
+		await loop.settle(outcome);
+		if (outcome.quotaExhausted && !state.quotaExhausted) {
+			state.quotaExhausted = `${String(outcome.record.infraReason ?? "provider quota exhausted")}: ${String(outcome.record.infraEvidence ?? "")}`;
+			loop.log(`QUOTA EXHAUSTED — ${state.quotaExhausted}. No further pair will launch; wait for the provider's quota or usage window to reset, then run --resume ${loop.out}.`);
+		}
+		if (!breaker) {
+			if (!outcome.metric.valid && !state.stopInvalid && !state.aborted) {
+				state.stopInvalid = true;
+				if (!gate) state.stoppedBy = "matched";
+				state.stopReason = outcome.quotaExhausted
+					? quotaStop(arm, pair)
+					: `stopped after an invalid ${arm} run of ${pair.target} pass ${pair.pass}${outcome.infraFailure ? ` (infra: ${String(outcome.record.infraReason ?? "")})` : ""}`;
+			}
+		} else if (launched) {
+			// A partner that was not launched reached no provider, so it is not
+			// evidence of an outage; counting it would trip on half the failures.
+			const verdict = breaker.record({
+				atMs: loop.nowMs(), valid: outcome.metric.valid, infra: outcome.infraFailure, exhausted: outcome.quotaExhausted === true,
+				blocked: gate && loop.official && !outcome.metric.valid && !outcome.infraFailure,
+			});
+			if (verdict.tripped && !state.stopInvalid && !state.aborted) {
+				state.stopInvalid = true;
+				if (!gate) state.stoppedBy = "matched";
+				state.stopReason = outcome.quotaExhausted
+					? quotaStop(arm, pair)
+					: `circuit breaker tripped on the ${arm} run of ${pair.target} pass ${pair.pass} attempt ${attempt}: ${verdict.reason ?? ""}`;
+				if (!outcome.quotaExhausted) loop.log(`BREAKER TRIPPED — ${state.stopReason}. No further pair will launch; pairs in flight finish, then --resume ${loop.out} re-runs what is left.`);
+			}
+		}
+		await loop.report(outcome, pair, arm, attempt);
+	};
+	const runPair = async ({ pair, attempt, firstAttempt, matchedOnly }: Queued): Promise<void> => {
+		if (matchedOnly) {
+			await runMatched(pair, attempt, matchedOnly.candidate, matchedOnly.sessions);
+			return;
+		}
 		let first: RunOutcome | undefined;
 		const byArm: Partial<Record<Arm, RunOutcome>> = {};
 		for (const arm of pair.order) {
@@ -3950,39 +4031,17 @@ export async function runPairs(loop: PairLoop): Promise<PairLoopResult> {
 				}
 				first ??= outcome;
 				byArm[arm] = outcome;
-				await loop.settle(outcome);
-				if (outcome.quotaExhausted && !state.quotaExhausted) {
-					state.quotaExhausted = `${String(outcome.record.infraReason ?? "provider quota exhausted")}: ${String(outcome.record.infraEvidence ?? "")}`;
-					loop.log(`QUOTA EXHAUSTED — ${state.quotaExhausted}. No further pair will launch; wait for the provider's quota or usage window to reset, then run --resume ${loop.out}.`);
-				}
-				if (!breaker) {
-					if (!outcome.metric.valid && !state.stopInvalid && !state.aborted) {
-						state.stopInvalid = true;
-						state.stopReason = outcome.quotaExhausted
-							? quotaStop(arm, pair)
-							: `stopped after an invalid ${arm} run of ${pair.target} pass ${pair.pass}${outcome.infraFailure ? ` (infra: ${String(outcome.record.infraReason ?? "")})` : ""}`;
-					}
-				} else if (launched) {
-					// A partner that was not launched reached no provider, so it is not
-					// evidence of an outage; counting it would trip on half the failures.
-					const verdict = breaker.record({
-						atMs: loop.nowMs(), valid: outcome.metric.valid, infra: outcome.infraFailure, exhausted: outcome.quotaExhausted === true,
-						blocked: loop.official && !outcome.metric.valid && !outcome.infraFailure,
-					});
-					if (verdict.tripped && !state.stopInvalid && !state.aborted) {
-						state.stopInvalid = true;
-						state.stopReason = outcome.quotaExhausted
-							? quotaStop(arm, pair)
-							: `circuit breaker tripped on the ${arm} run of ${pair.target} pass ${pair.pass} attempt ${attempt}: ${verdict.reason ?? ""}`;
-						if (!outcome.quotaExhausted) loop.log(`BREAKER TRIPPED — ${state.stopReason}. No further pair will launch; pairs in flight finish, then --resume ${loop.out} re-runs what is left.`);
-					}
-				}
-				await loop.report(outcome, pair, arm, attempt);
+				await keep(outcome, pair, arm, attempt, launched, true);
 			} catch (error) {
 				// The bookkeeping itself failed; stop launching and keep draining.
 				if (!state.stopInvalid) { state.stopInvalid = true; state.stopReason = `bookkeeping write failed: ${message(error)}`; }
 				loop.warn(`bookkeeping failure for ${pair.target} pass ${pair.pass} ${arm}: ${message(error)}`);
 			}
+		}
+		// The matched arm follows a pair whose two arms are valid at this attempt,
+		// the only pairs the comparison keeps. A grid already stopping launches none.
+		if (loop.matched && byArm.baseline?.metric.valid && byArm.candidate?.metric.valid) {
+			await runMatched(pair, attempt, byArm.candidate, Array.from({ length: loop.matched.k }, (_, i) => ({ index: i + 1, attempt: 1 })));
 		}
 		// A signal leaves the pair as it is; its resume decides from runs.jsonl.
 		if (!policy || state.aborted) return;
@@ -4010,6 +4069,76 @@ export async function runPairs(loop: PairLoop): Promise<PairLoopResult> {
 			loop.log(`RE-QUEUED ${pair.target} pass ${pair.pass} as attempt ${action.attempt} after a ${Math.round((action.notBeforeMs - now) / 1000)} s cooldown · ${action.reason}`);
 		}
 	};
+	/** Wait until `atMs` in slices, so a signal or a trip is seen within a second. */
+	const waitUntil = async (atMs: number): Promise<void> => {
+		for (let now = loop.nowMs(); now < atMs && !state.aborted && !state.stopInvalid; now = loop.nowMs()) {
+			await loop.sleep(Math.min(atMs - now, IDLE_SLICE_MS));
+		}
+	};
+	/**
+	 * A pair's matched sessions, one after the other. A failed session is re-run
+	 * on its own, by the rule a pair is re-run by (nextPairAction with the one
+	 * session as its arm), after the same cooldown and up to the same caps; the
+	 * other sessions keep their runs. A session that ends invalid for good stops
+	 * the pair's remaining sessions, since the arm can no longer be valid; a
+	 * resume picks up what is missing.
+	 */
+	const runMatched = async (pair: ScheduledPair, attempt: number, candidate: RunOutcome, sessions: SessionPlan["run"]): Promise<void> => {
+		const matched = loop.matched!;
+		const record = matchedResult!;
+		if (state.aborted || state.stopInvalid) return;
+		const budget = matched.budget(pair, candidate);
+		if (!budget.ok) {
+			record.skipped.push({ key: pair.key, attempt, reason: budget.reason });
+			loop.log(`MATCHED SKIPPED ${pair.target} pass ${pair.pass} · ${budget.reason}`);
+			return;
+		}
+		for (const planned of sessions) {
+			const name = `${pair.key}/${planned.index}`;
+			let sessionAttempt = planned.attempt;
+			for (;;) {
+				if (state.aborted || state.stopInvalid) return;
+				const spec: MatchedSessionSpec = {
+					index: planned.index, of: matched.k, sessionAttempt, budget: budget.budget, ceiling: budget.ceiling, budgetSource: budget.source,
+					candidateCellId: candidate.cellId || null,
+				};
+				let outcome: RunOutcome;
+				try {
+					outcome = await matched.launch(pair, attempt, spec);
+				} catch (error) {
+					outcome = runnerFaultOutcome(pair, "matched", attempt, error);
+					outcome.record.matchedSession = spec;
+				}
+				try {
+					await keep(outcome, pair, "matched", attempt, true, false);
+				} catch (error) {
+					if (!state.stopInvalid) { state.stopInvalid = true; state.stoppedBy = "matched"; state.stopReason = `bookkeeping write failed: ${message(error)}`; }
+					loop.warn(`bookkeeping failure for ${pair.target} pass ${pair.pass} matched session ${planned.index}: ${message(error)}`);
+					return;
+				}
+				if (outcome.metric.valid) break;
+				// Fail-fast has already stopped the grid; nothing is re-run without a breaker.
+				if (!policy || state.aborted) return;
+				const action = nextPairAction(sessionAttempt, [{ valid: false, infra: outcome.infraFailure }], {
+					attemptCeiling: policy.attemptCeiling,
+					requeue: { policy, atMs: loop.nowMs(), attemptsThisRun: sessionAttempt - planned.attempt + 1 },
+				});
+				const why = action.kind === "keep" ? "" : action.reason.replace("an arm", "the session").replace("the pair is", "the session is");
+				if (action.kind === "rerun" && !state.stopInvalid) {
+					record.requeued.push({ session: name, sessionAttempt: action.attempt, notBefore: new Date(action.notBeforeMs).toISOString(), reason: why });
+					loop.log(`RE-RUN matched session ${planned.index} of ${pair.target} pass ${pair.pass} as session attempt ${action.attempt} · ${why}`);
+					await waitUntil(action.notBeforeMs);
+					sessionAttempt = action.attempt;
+					continue;
+				}
+				if (action.kind === "blocked") record.blocked.push({ session: name, sessionAttempt, reason: why });
+				else if (action.kind === "abandoned") record.abandoned.push({ session: name, sessionAttempt, reason: why });
+				else if (action.kind === "give-up") record.gaveUp.push({ session: name, sessionAttempt, reason: why });
+				if (action.kind !== "rerun") loop.log(`MATCHED SESSION ${action.kind.toUpperCase()} ${pair.target} pass ${pair.pass} session ${planned.index} · ${why}`);
+				return;
+			}
+		}
+	};
 	const worker = async (): Promise<void> => {
 		for (;;) {
 			// Stop taking pairs once the grid is stopped or a signal arrived; a pair
@@ -4029,12 +4158,142 @@ export async function runPairs(loop: PairLoop): Promise<PairLoopResult> {
 	return result;
 }
 
+/** A persisted run record as the loop's outcome, the way a resume seeds the pairs it keeps. */
+function outcomeFromRecord(record: JsonRecord, arm: Arm): RunOutcome {
+	return { metric: metricFromRecord(record), arm, cellId: String(record.cellId ?? ""), seconds: Number(record.seconds ?? 0), record, infraFailure: record.infraFailure === true };
+}
+
+const sessionOf = (record: JsonRecord): { index: number; sessionAttempt: number } | undefined => {
+	const spec = record.matchedSession as JsonRecord | undefined;
+	return spec && typeof spec.index === "number" && typeof spec.sessionAttempt === "number" ? { index: spec.index, sessionAttempt: spec.sessionAttempt } : undefined;
+};
+
+/**
+ * Each matched session's latest record at one pair attempt, by index: the
+ * highest session attempt, and at one attempt the last row written, as
+ * planResume resolves two rows for one arm.
+ */
+export function latestMatchedSessions(rows: readonly JsonRecord[], key: string, attempt: number): JsonRecord[] {
+	const latest = new Map<number, { sessionAttempt: number; record: JsonRecord }>();
+	for (const record of rows) {
+		const session = sessionOf(record);
+		if (record.arm !== "matched" || record.key !== key || !session) continue;
+		if ((typeof record.attempt === "number" ? record.attempt : 1) !== attempt) continue;
+		const held = latest.get(session.index);
+		if (!held || session.sessionAttempt >= held.sessionAttempt) latest.set(session.index, { sessionAttempt: session.sessionAttempt, record });
+	}
+	return [...latest.entries()].sort(([a], [b]) => a - b).map(([, v]) => v.record);
+}
+
+/** What a resume does with the matched arm of the pairs it keeps. */
+export interface MatchedResumePlan {
+	resume: Array<{ key: string; attempt: number; candidate: JsonRecord; sessions: SessionPlan["run"] }>;
+	blocked: Array<{ session: string; reason: string }>;
+	abandoned: Array<{ session: string; reason: string }>;
+}
+
+/**
+ * For each pair the resume keeps (both arms valid at its highest attempt), the
+ * matched sessions still to run at that attempt, judged per session by
+ * planSessions. A pair the resume re-runs is not listed: its matched sessions
+ * follow its new attempt, whose candidate run sets a new budget.
+ */
+export function planMatchedResume(plan: Pick<ResumePlan, "keepKeys" | "latest">, runs: readonly JsonRecord[], k: number, attemptCeiling?: number): MatchedResumePlan {
+	const out: MatchedResumePlan = { resume: [], blocked: [], abandoned: [] };
+	for (const key of plan.keepKeys) {
+		const candidate = plan.latest[`${key}\u0000candidate`];
+		if (!candidate) continue;
+		const attempt = typeof candidate.attempt === "number" ? candidate.attempt : 1;
+		const rows = latestMatchedSessions(runs, key, attempt).map((r) => ({ index: sessionOf(r)!.index, attempt: sessionOf(r)!.sessionAttempt, valid: r.valid === true, infra: r.infraFailure === true }));
+		const sessions = planSessions(k, rows, attemptCeiling === undefined ? {} : { attemptCeiling });
+		if (sessions.run.length) out.resume.push({ key, attempt, candidate, sessions: sessions.run });
+		out.blocked.push(...sessions.blocked.map((b) => ({ session: `${key}/${b.index}`, reason: b.reason })));
+		out.abandoned.push(...sessions.abandoned.map((a) => ({ session: `${key}/${a.index}`, reason: a.reason })));
+	}
+	return out;
+}
+
+/** A matched session's record as the union reads it; its findings are read from its ledger only when it is valid. */
+export function sessionRunOf(record: JsonRecord, findings?: Finding[]): SessionRun {
+	const session = sessionOf(record);
+	const metric = metricFromRecord(record);
+	const stop = record.stop as JsonRecord | undefined;
+	return {
+		index: session?.index ?? 0, attempt: session?.sessionAttempt ?? 0, cellId: String(record.cellId ?? ""),
+		valid: metric.valid, totalTokens: metric.totalTokens, truePositives: Number.isFinite(metric.truePositives) ? metric.truePositives : 0,
+		claims: Number.isFinite(metric.totalClaims) ? metric.totalClaims : 0,
+		stop: stop && typeof stop.outcome === "string" ? stop.outcome : null,
+		...(findings ? { findings } : {}),
+	};
+}
+
+/**
+ * The matched arm's section of summary.json: each pair's union at the pair's
+ * compared attempt (graded now with the pinned scorer, so a resume's union is
+ * of the sessions the grid ended with), the two comparisons beside the gate,
+ * and the realised budget ratio.
+ */
+async function summarizeMatched(policy: MatchedPolicy, pairs: ScheduledPair[], compared: RunOutcome[], outcomes: RunOutcome[], expectedCells: ExpectedCell[], targetById: Map<string, Target>, output: string, loop: MatchedLoopResult | undefined, resume: MatchedResumePlan | undefined): Promise<JsonRecord & { policy: MatchedPolicy; unions: Array<MatchedUnion & { scorePath: string | null }>; comparisons: ReturnType<typeof matchedComparisons>; budgetRatio: ReturnType<typeof budgetRatios> }> {
+	const records = outcomes.filter((o) => o.arm === "matched").map((o) => o.record);
+	const unions: Array<MatchedUnion & { scorePath: string | null }> = [];
+	for (const pair of pairs) {
+		const candidate = compared.find((o) => o.arm === "candidate" && o.metric.key === pair.key);
+		const attempt = typeof candidate?.record.attempt === "number" ? candidate.record.attempt : 1;
+		const sessions = latestMatchedSessions(records, pair.key, attempt);
+		const spec = (sessions[0]?.matchedSession ?? {}) as JsonRecord;
+		const runs: SessionRun[] = [];
+		for (const record of sessions) {
+			const artifacts = (record.artifacts ?? {}) as JsonRecord;
+			// Read the way the pinned adapter read the session's own ledger (scoreWorkspace).
+			const findings = record.valid === true && typeof artifacts.workspaceDir === "string"
+				? await fromLedger(artifacts.workspaceDir).then(dedupe).catch(() => undefined)
+				: undefined;
+			runs.push(sessionRunOf(record, findings));
+		}
+		const target = targetById.get(pair.target);
+		let scorePath: string | null = null;
+		const union = await scoreUnion({
+			key: pair.key, target: pair.target, pass: pair.pass, attempt, k: policy.k,
+			budget: typeof spec.budget === "number" ? spec.budget : null, ceiling: typeof spec.ceiling === "number" ? spec.ceiling : null,
+			sessions: runs,
+			grade: async (findings) => {
+				if (!target) return { ok: false, error: `no target ${pair.target}` };
+				await mkdir(join(output, "matched"), { recursive: true });
+				scorePath = join(output, "matched", `${opaqueToken()}.score.json`);
+				const graded = await gradeWithPinnedScorer(findings, scorePath, target.truth);
+				return graded.ok ? { ok: true, truePositives: graded.truePositives, totalFindings: graded.totalFindings, precision: graded.precision } : { ok: false, error: graded.error };
+			},
+		});
+		unions.push({ ...union, scorePath });
+	}
+	const matchedMetrics = unions.map(metricOfUnion);
+	const baselineMetrics = compared.filter((o) => o.arm === "baseline").map((o) => o.metric);
+	const candidateMetrics = compared.filter((o) => o.arm === "candidate").map((o) => o.metric);
+	return {
+		policy,
+		unions,
+		comparisons: matchedComparisons(baselineMetrics, candidateMetrics, matchedMetrics, expectedCells),
+		budgetRatio: budgetRatios(matchedMetrics, candidateMetrics),
+		sessions: {
+			...(loop ?? { skipped: [], requeued: [], gaveUp: [], blocked: [], abandoned: [] }),
+			...(resume ? { resumeBlocked: resume.blocked, resumeAbandoned: resume.abandoned } : {}),
+		},
+		interpretation: {
+			arm: `the candidate snapshot with delegation off (scope maxAgents 0), run ${policy.k} times in fresh cells; each session stopped between requests at B/${policy.k} tokens; findings unioned, deduplicated by file+line as the pinned scorer does, and scored with the pinned scorer`,
+			budget: policy.mode === "follow" ? "B is each pair's candidate run's tokens (the gate's metric); the arm runs after the pair's two arms, so it adds within-pair time drift" : "B is the pre-registered per-target budget; the realised ratio shows how it compared with this grid's candidate",
+			precision: "the union raises claims as well as true positives; compare pooled precision after deduplication, not TP alone",
+			validity: "the arm is valid for a pair only when all k sessions are valid at the pair's compared attempt",
+			gate: "baseline vs candidate decides; matched vs candidate and matched vs baseline are reported beside it and approve nothing",
+		},
+	};
+}
+
 async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, plan: ResumePlan | undefined, priorRuns: JsonRecord[]): Promise<void> {
 	const { ctx, expectedCells, official } = pre;
 	const output = ctx.out;
 	const targetById = new Map(pre.targets.map((t) => [t.id, t]));
 	const pairs = planSchedule(pre.targets.map((t) => t.id), options.passes);
-	const expectedArms = pairs.length * 2;
+	const expectedArms = pairs.length * (2 + (options.matched?.k ?? 0));
 	// On a resume, seed the outcomes with the latest attempt of every pair not
 	// being re-run, so the comparison sees the whole grid. Only the re-run pairs
 	// are launched; a blocked pair carries its invalid record and keeps the grid
@@ -4045,8 +4304,21 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 			if (plan.rerunKeys.includes(pair.key)) continue;
 			for (const arm of ["baseline", "candidate"] as const) {
 				const record = plan.latest[`${pair.key}\u0000${arm}`];
-				if (record) outcomes.push({ metric: metricFromRecord(record), arm, cellId: String(record.cellId ?? ""), seconds: Number(record.seconds ?? 0), record, infraFailure: record.infraFailure === true });
+				if (record) outcomes.push(outcomeFromRecord(record, arm));
 			}
+		}
+	}
+	// The matched sessions of the pairs a resume keeps: their latest runs are
+	// carried, and the ones still missing or failed for infrastructure are queued.
+	const matchedResume = plan && options.matched ? planMatchedResume(plan, priorRuns, options.matched.k, options.breaker?.attemptCeiling) : undefined;
+	if (plan && options.matched) {
+		for (const key of plan.keepKeys) {
+			const candidate = plan.latest[`${key}\u0000candidate`];
+			const attempt = typeof candidate?.attempt === "number" ? candidate.attempt : 1;
+			for (const record of latestMatchedSessions(priorRuns, key, attempt)) outcomes.push(outcomeFromRecord(record, "matched"));
+		}
+		if (matchedResume) {
+			console.log(`resume: matched arm · ${matchedResume.resume.reduce((n, r) => n + r.sessions.length, 0)} session(s) to run on ${matchedResume.resume.length} kept pair(s), ${matchedResume.blocked.length} blocked, ${matchedResume.abandoned.length} abandoned`);
 		}
 	}
 	const launchPairs = plan ? pairs.filter((p) => plan.rerunKeys.includes(p.key)) : pairs;
@@ -4055,8 +4327,15 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 	// reportStatus keeps the last record, so the heartbeat rewrites this same state.
 	// completedRuns counts arms at their pair's highest attempt, so a grid that
 	// re-queued never reads as more than complete; attempts counts every row.
+	// A matched session re-run on its own leaves two rows at one pair attempt;
+	// each (pair, session) counts once.
+	const completedRuns = (): number => {
+		const top = atHighestAttempt(outcomes);
+		if (!options.matched) return top.length;
+		return top.filter((o) => o.arm !== "matched").length + new Set(top.filter((o) => o.arm === "matched").map((o) => `${o.metric.key}/${sessionOf(o.record)?.index ?? 0}`)).size;
+	};
 	const progress = (status: string, extra: JsonRecord = {}): Promise<void> => reportStatus({
-		status, official, expectedArms, completedRuns: atHighestAttempt(outcomes).length,
+		status, official, expectedArms, completedRuns: completedRuns(),
 		...(options.breaker ? { attempts: fresh.length } : {}), ...extra,
 	});
 	await progress("running");
@@ -4076,13 +4355,26 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 			await progress(runState.aborted ? "interrupted" : runState.stopInvalid ? "stopped-invalid" : "running", { lastCell: outcome.cellId, stopReason: runState.stopReason ?? null });
 			const tokens = Number.isFinite(outcome.metric.totalTokens) ? String(outcome.metric.totalTokens) : "n/a";
 			const state = outcome.metric.valid ? "valid" : outcome.record.notLaunched === true ? "NOT LAUNCHED" : "INVALID";
-			console.log(`${state} ${arm} ${pair.target} pass ${pair.pass} attempt ${attempt} · ${outcome.seconds.toFixed(0)}s · tokens ${tokens}${outcome.infraFailure ? ` · infra: ${String(outcome.record.infraReason ?? "")}` : ""}`);
+			const session = sessionOf(outcome.record);
+			const label = session && options.matched ? `${arm} session ${session.index}/${options.matched.k} (session attempt ${session.sessionAttempt})` : arm;
+			console.log(`${state} ${label} ${pair.target} pass ${pair.pass} attempt ${attempt} · ${outcome.seconds.toFixed(0)}s · tokens ${tokens}${outcome.infraFailure ? ` · infra: ${String(outcome.record.infraReason ?? "")}` : ""}`);
 		},
 		nowMs: () => Date.now(),
 		sleep: (ms) => new Promise((done) => { setTimeout(done, ms); }),
 		log: (line) => console.log(line),
 		warn: (line) => console.error(line),
 		out: output,
+		...(options.matched ? {
+			matched: {
+				k: options.matched.k,
+				budget: (pair: ScheduledPair, candidate: RunOutcome) => sessionBudget(options.matched!, pair.target, { valid: candidate.metric.valid, totalTokens: candidate.metric.totalTokens }),
+				launch: (pair: ScheduledPair, attempt: number, session: MatchedSessionSpec) => runOne(ctx, targetById.get(pair.target)!, pair.pass, "matched", attempt, session),
+				resume: (matchedResume?.resume ?? []).flatMap((r) => {
+					const pair = pairs.find((p) => p.key === r.key);
+					return pair ? [{ pair, attempt: r.attempt, candidate: outcomeFromRecord(r.candidate, "candidate"), sessions: r.sessions }] : [];
+				}),
+			},
+		} : {}),
 	});
 	const interrupted = runState.aborted;
 	const stoppedInvalid = runState.stopInvalid;
@@ -4101,6 +4393,7 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 		outcomes.filter((o) => o.arm === "candidate").map((o) => metricFromRecord(o.record, "metered")),
 		expectedCells,
 	) : undefined;
+	const matchedSummary = options.matched ? await summarizeMatched(options.matched, pairs, compared, outcomes, expectedCells, targetById, output, loop.matched, matchedResume) : undefined;
 	// Each cell loads node_modules afresh, and hashing it (~25k files) per launch
 	// is too slow, so it is re-hashed once at the end: a runtime that moved during
 	// the grid means the arms may not have run the same pi, and nothing is approved.
@@ -4109,7 +4402,10 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 	if (!runtimeStable) console.log("RUNTIME CHANGED during the grid — no decision");
 	// !stoppedInvalid too: a bookkeeping failure on a final arm sets it with every
 	// comparison row present, and the approval could count a row runs.jsonl never got.
-	const approved = official && !interrupted && !stoppedInvalid && runtimeStable && comparison.complete && comparison.decision === APPROVAL;
+	// A stop a matched session caused leaves every gate row it did not prevent
+	// written; the gate's own completeness decides, as the arm never enters it.
+	const stopWithholdsApproval = stoppedInvalid && runState.stoppedBy !== "matched";
+	const approved = official && !interrupted && !stopWithholdsApproval && runtimeStable && comparison.complete && comparison.decision === APPROVAL;
 	// Why a non-approval is a non-approval, so the console and summary never show
 	// the approval string alone when the candidate was not approved.
 	const notApprovedReasons = [
@@ -4151,6 +4447,8 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 		runtimeSha256: ctx.pins.piRuntimeSha256, runtimeAfterSha256: runtimeAfter,
 		comparison,
 		...(options.retryPolicy ? { retryPolicy: options.retryPolicy, meteredOnlyComparison } : {}),
+		// Only a grid run with --matched has this block; the gate above never reads it.
+		...(matchedSummary ? { matched: matchedSummary } : {}),
 		interpretation: {
 			precision: "lower bound against patch-localized keys; unmatched claims are unadjudicated and are not confirmed false positives",
 			passes: "ranges are across complete five-target pooled passes; three passes are coarse and are not a significance test",
@@ -4188,6 +4486,11 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 	console.log(`delegation: ${d.runsThatDelegated}/${d.runs} candidate runs delegated · ${d.workers} workers ${JSON.stringify(d.workersByAgent)} ${JSON.stringify(d.workersByStatus)} outcomes ${JSON.stringify(d.workersByOutcome)} · worker share of candidate tokens ${d.workerTokenShare === null ? "n/a" : `${(100 * d.workerTokenShare).toFixed(1)}%`} · ${d.runsWithViolations} run(s) with contract violations`);
 	for (const v of d.violations.slice(0, 10)) console.log(`  delegation violation ${v}`);
 	for (const [arm, counts] of Object.entries(summary.stops.runs)) console.log(`stops ${arm}: ${JSON.stringify(counts)}`);
+	if (matchedSummary) {
+		const mc = matchedSummary.comparisons.matchedVsCandidate;
+		const ratio = matchedSummary.budgetRatio.median;
+		console.log(`matched (${matchedSummary.policy.mode}, k=${matchedSummary.policy.k}): ${matchedSummary.unions.filter((u) => u.valid).length}/${matchedSummary.unions.length} pairs valid · pass-mean TP matched ${(mc.arms.matched?.truePositives.mean ?? 0).toFixed(2)} vs candidate ${(mc.arms.candidate?.truePositives.mean ?? 0).toFixed(2)} (${mc.complete ? "complete" : "incomplete"}) · pooled precision ${fmt(mc.arms.matched?.pooledPrecision ?? null)} vs ${fmt(mc.arms.candidate?.pooledPrecision ?? null)} · median budget ratio ${ratio === null ? "n/a" : ratio.toFixed(3)} over ${matchedSummary.budgetRatio.perPair.length} pair(s) · reported beside the gate, not in it`);
+	}
 	// When not approved, print the reason, never the bare approval decision string.
 	if (approved) console.log(`APPROVED (this model) · ${comparison.decision}`);
 	else console.log(`NOT APPROVED (this model) · ${notApprovedReasons.join(" · ")}`);
