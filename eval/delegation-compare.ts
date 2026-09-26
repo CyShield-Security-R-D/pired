@@ -33,7 +33,7 @@ import {
 	accountUsage, APPROVAL_DECISION, compareMatchedRuns, contentText, createBreaker, DEFAULT_BREAKER, findLeaks, isOfficialGrid, leakTermsFor,
 	meteredCallCount, nextPairAction, observationsFromChildSession, observationsFromPiEvents, OFFICIAL_PASSES, OFFICIAL_TARGET_IDS,
 	parseBreakerPolicy, planSchedule, reconcileChildSession, reconcileSubagentCalls, SUBAGENT_TOOL, summarizeRetries,
-	type Arm, type BreakerPolicy, type BreakerVerdict, type ChildSessionExtraction, type ChildVerdict, type ExpectedCell, type PiUsageExtraction,
+	type Arm, type BreakerPolicy, type PairArm, type BreakerVerdict, type ChildSessionExtraction, type ChildVerdict, type ExpectedCell, type PiUsageExtraction,
 	type RetriedAttempt, type RetrySummary, type RunMetric, type ScheduledPair, type SubagentChild, type SubagentReconciliation,
 	type UsageAccounting, type UsageObservation,
 } from "./delegation-compare-lib.ts";
@@ -2914,11 +2914,11 @@ async function runPreflight(options: Options, manifest: JsonRecord, saveManifest
 		// One staged copy per arm at preflight, under opaque names, only to compute
 		// and record the redacted digest and the redaction list. Each cell later
 		// stages its own fresh copy and must reproduce these digests exactly.
-		const stagePaths: Record<Arm, string> = {
+		const stagePaths: Record<PairArm, string> = {
 			baseline: join(preflightRoot, "stage", opaqueToken()),
 			candidate: join(preflightRoot, "stage", opaqueToken()),
 		};
-		const staged: Record<Arm, Awaited<ReturnType<typeof stageSnapshot>>> = {
+		const staged: Record<PairArm, Awaited<ReturnType<typeof stageSnapshot>>> = {
 			baseline: await stageSnapshot(options.baseline, stagePaths.baseline, { redactTerms, nodeModules: PI_NODE_MODULES }),
 			candidate: await stageSnapshot(options.candidate, stagePaths.candidate, { redactTerms, nodeModules: PI_NODE_MODULES }),
 		};
@@ -3639,7 +3639,7 @@ export interface AttemptReport {
 	/** Each pair's highest attempt over the grid's rows. */
 	attemptsByPair: Record<string, number>;
 	/** Launched runs invalid for infrastructure, per arm, by infraReason. A partner that was not launched is not counted. */
-	launchedInfraFailures: Record<Arm, Record<string, number>>;
+	launchedInfraFailures: Record<PairArm, Record<string, number>>;
 	/** Every attempt of each abandoned pair, per arm; null where the arm has no row at that attempt. */
 	abandoned: Array<{ key: string; attempts: Array<{ attempt: number; baseline: AttemptArm | null; candidate: AttemptArm | null }> }>;
 }
@@ -3654,7 +3654,7 @@ export interface AttemptReport {
  */
 export function attemptReport(rows: JsonRecord[], abandonedKeys: string[]): AttemptReport {
 	const attemptOf = (r: JsonRecord): number => typeof r.attempt === "number" ? r.attempt : 1;
-	const armOf = (r: JsonRecord): Arm | undefined => r.arm === "baseline" || r.arm === "candidate" ? r.arm : undefined;
+	const armOf = (r: JsonRecord): PairArm | undefined => r.arm === "baseline" || r.arm === "candidate" ? r.arm : undefined;
 	const report: AttemptReport = { attemptsByPair: {}, launchedInfraFailures: { baseline: {}, candidate: {} }, abandoned: [] };
 	for (const r of rows) {
 		if (typeof r.key !== "string") continue;

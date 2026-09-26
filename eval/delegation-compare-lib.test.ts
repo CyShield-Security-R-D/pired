@@ -1932,3 +1932,53 @@ describe("the v5 reading, without a retry policy", () => {
 		});
 	}
 });
+
+describe("observationsFromPiEvents under a token ceiling (plan 2.5)", () => {
+	// What pi writes when the ceiling's abort lands between a reply and the next request.
+	const abortedBeforeRequest = (): Event => reply({ stop: "error", usage: zeroUsage(), errorMessage: "This operation was aborted" });
+	const cut = (): Event[] => [
+		reply({ id: "r1", stop: "toolUse", usage: piUsage(600, 20) }),
+		{ type: "tool_execution_end", toolCallId: "t1", toolName: "bash", isError: true },
+		reply({ id: "r2", stop: "toolUse", usage: piUsage(700, 30) }),
+		abortedBeforeRequest(),
+	];
+
+	it("drops the empty reply of the request the ceiling kept from being sent and meters every request it did send", () => {
+		const parsed = observationsFromPiEvents(cut(), { ceilingStop: true });
+		expect(parsed.errors).toEqual([]);
+		expect(parsed.providerErrors).toEqual([]);
+		expect(parsed.observations.map((o) => o.id)).toEqual(["r1", "r2"]);
+		expect(parsed.finalStop).toBe(false);
+		expect(parsed.notes.join("\n")).toMatch(/token ceiling aborts a run before its next request/);
+		expect(accountUsage(parsed.observations)).toMatchObject({ valid: true, total: { totalTokens: 1350 } });
+	});
+
+	it("reads the same stream as a failed run without the option, so a cell without a ceiling is judged as before", () => {
+		const parsed = observationsFromPiEvents(cut());
+		expect(parsed.providerErrors.join("\n")).toMatch(/This operation was aborted/);
+		expect(parsed.errors.join("\n")).toMatch(/not stop/);
+	});
+
+	it("still fails a request aborted in flight, whose spend no reply reports", () => {
+		const parsed = observationsFromPiEvents([
+			reply({ id: "r1", stop: "toolUse", usage: piUsage(600, 20) }),
+			reply({ id: "r2", stop: "aborted", usage: zeroUsage() }),
+		], { ceilingStop: true });
+		expect(parsed.providerErrors.join("\n")).toMatch(/r2 was aborted/);
+		expect(accountUsage(parsed.observations).valid).toBe(false);
+	});
+
+	it("accepts a run the ceiling reached on its final reply, which ended the run itself", () => {
+		const parsed = observationsFromPiEvents([reply({ id: "r1", stop: "toolUse" }), reply({ id: "r2", stop: "stop" })], { ceilingStop: true });
+		expect(parsed.errors).toEqual([]);
+		expect(parsed.finalStop).toBe(true);
+	});
+
+	it("keeps an errored reply that is not the empty aborted one as a provider failure", () => {
+		const parsed = observationsFromPiEvents([
+			reply({ id: "r1", stop: "toolUse" }),
+			reply({ stop: "error", usage: zeroUsage(), errorMessage: "upstream connect error" }),
+		], { ceilingStop: true });
+		expect(parsed.providerErrors.join("\n")).toMatch(/upstream connect error/);
+	});
+});

@@ -500,6 +500,16 @@ export interface PiEventsOptions {
 	 * is a failure as before and the output is unchanged.
 	 */
 	retry?: boolean;
+	/**
+	 * The session's token ceiling cut it (plan item 2.5; the entry's
+	 * `benchmark_token_ceiling` line says so). pi then writes the empty
+	 * "This operation was aborted" reply for the request it never sent, and the
+	 * run's last counted reply is whatever reached the ceiling, usually a
+	 * `toolUse`. The empty reply is dropped as it is for a worker aborted between
+	 * requests, and the missing final `stop` is noted, not an error. An in-flight
+	 * abort still fails the run: its reply is `aborted`, with unknown spend.
+	 */
+	ceilingStop?: boolean;
 }
 
 /** A call's whole prompt: fresh, cached and cache-written input. */
@@ -627,6 +637,9 @@ export function observationsFromPiEvents(events: Array<Record<string, unknown>>,
 	// A failed or truncated reply whose meaning depends on what follows it: pi's
 	// overflow recovery turns it into a retried turn, anything else leaves it failed.
 	let pending: { id: string; stopReason: string; errorMessage?: string } | undefined;
+	// The last reply, and the stop of the one before it: read only under ceilingStop.
+	let lastReplyRow: { id: string; observation: number; empty: boolean } | undefined;
+	let stopBeforeLast: string | undefined;
 	const settle = () => {
 		if (pending?.stopReason === "error") fail(`assistant reply ${pending.id} failed: ${pending.errorMessage || "provider error"}`);
 		pending = undefined;
@@ -703,6 +716,14 @@ export function observationsFromPiEvents(events: Array<Record<string, unknown>>,
 				const usage = normalizePiUsage(message.usage);
 				const costUsd = piCostUsd(message.usage);
 				out.observations.push({ id, origin: "parent", ...(usage ? { usage } : {}), ...(costUsd === undefined ? {} : { costUsd }) });
+				if (options.ceilingStop) {
+					const content = Array.isArray(message.content) ? message.content : [];
+					stopBeforeLast = lastStop;
+					lastReplyRow = {
+						id, observation: out.observations.length - 1,
+						empty: content.every((part) => isRow(part) && part.type === "text" && !String(part.text ?? "").trim()) && !reportsSpend(message.usage) && Boolean(usage),
+					};
+				}
 				if (retry) {
 					// Read before this reply updates it: a retried attempt is estimated from the reply before it.
 					lastReply = { id, ...(usage ? { usage } : {}) };
@@ -853,11 +874,25 @@ export function observationsFromPiEvents(events: Array<Record<string, unknown>>,
 				break;
 		}
 	}
+	// The request the token ceiling kept from being sent: pi built no call for it,
+	// so it is neither a failure nor a provider call (the worker rule, below).
+	let cutByCeiling = false;
+	if (options.ceilingStop && lastReplyRow && pending?.id === lastReplyRow.id && pending.stopReason === "error" && lastReplyRow.empty &&
+		ABORTED_BEFORE_REQUEST.test(pending.errorMessage ?? "") && lastReplyRow.observation === out.observations.length - 1) {
+		out.observations.pop();
+		pending = undefined;
+		assistants--;
+		lastStop = stopBeforeLast;
+		cutByCeiling = true;
+		out.notes.push(`assistant reply ${lastReplyRow.id} is the empty reply pi writes when the token ceiling aborts a run before its next request; no provider call was made for it, so it is not counted`);
+	}
 	settle();
 	if (echoes > summaries) out.errors.push(`${echoes} compaction entries but only ${summaries} completed compaction_end events`);
 	out.finalStop = lastStop === "stop";
 	if (assistants === 0) out.errors.push("no assistant reply in the stream");
-	else if (!out.finalStop) out.errors.push(`final assistant reply ended with ${lastStop}, not stop`);
+	else if (!out.finalStop && options.ceilingStop && (cutByCeiling || (lastStop !== undefined && COMPLETED_STOPS.has(lastStop)))) {
+		out.notes.push(`the token ceiling stopped the run after a ${lastStop} reply`);
+	} else if (!out.finalStop) out.errors.push(`final assistant reply ended with ${lastStop}, not stop`);
 	return out;
 }
 
@@ -1509,14 +1544,22 @@ export function isOfficialGrid(expected: ExpectedCell[]): boolean {
 	return expected.length === want.size && got.size === want.size && [...want].every((cell) => got.has(cell));
 }
 
-export type Arm = "baseline" | "candidate";
+/** The two arms the acceptance gate pairs. */
+export type PairArm = "baseline" | "candidate";
+
+/**
+ * Every arm a grid can run. `matched` (plan item 2.5) is the candidate snapshot
+ * with delegation off, run k times at the candidate's token budget; it is never
+ * one of a pair's two arms, and the gate never reads it.
+ */
+export type Arm = PairArm | "matched";
 
 export interface ScheduledPair {
 	index: number;
 	target: string;
 	pass: number;
 	key: string;
-	order: [Arm, Arm];
+	order: [PairArm, PairArm];
 }
 
 /**

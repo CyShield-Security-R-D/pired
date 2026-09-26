@@ -229,6 +229,10 @@ export function parentStopInput(facts: ParentStopFacts): StopInput {
 	if (timedOut) return { ...base, timedOut: true };
 	if (facts.stoppedByRunner) return { ...base, error: "interrupted by the runner" };
 	if (facts.process.exitCode !== 0) return { ...base, error: `process exited ${facts.process.exitCode ?? "without a code"}${facts.process.signal ? ` (${facts.process.signal})` : ""}` };
+	// A token ceiling that cut the run (plan item 2.5) leaves the empty reply of
+	// the request it kept from being sent as the last one, so the last reply is
+	// not read: the stop is the budget, as a time limit's kill is.
+	if (facts.tokenCeiling) return base;
 	const stop = facts.lastReply?.stopReason;
 	if (!facts.lastReply) return { ...base, error: "no assistant reply" };
 	if (stop !== "stop") return { ...base, error: `last reply ended ${typeof stop === "string" ? stop : "without a stopReason"}` };
