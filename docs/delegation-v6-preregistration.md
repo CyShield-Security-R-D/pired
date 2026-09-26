@@ -123,7 +123,17 @@ as much per pair.
 
 **Secondary**
 - **Dollars,** at the provider's list prices, with cache reads priced separately.
-- **Stop reasons** per arm (ADR-030): the offered-to-continue rate is the metric 3.2 should move.
+- **Stopping, which 3.2 should move:**
+  - **Offered-to-continue rate:** always read by the ADR-030 text test, in every arm. An arm's own
+    settle record is tallied separately and never replaces the text test, so the arms are measured
+    with the same instrument.
+  - **An arm-neutral co-primary**, because the settle wording could change how a closing reads
+    without changing the work done:
+    - the share of the run limit used at the stop;
+    - the share of runs that stop with time left **and** open cells or hypotheses.
+
+    3.2 passes on stopping only if the co-primary moves in the same direction as the text-test
+    rate.
 - **Verifier:** confirmed-tier against suspected-tier precision; rejected true positives, as a
   share of labelled true positives among refuted rows; quote-downgrade rate.
 - **Patched twins:** claims within ±3 lines of each fixed region, per arm. This is re-flagging
