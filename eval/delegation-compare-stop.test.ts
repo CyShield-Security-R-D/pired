@@ -69,11 +69,53 @@ describe("the closing text test", () => {
 	});
 
 	it("does not read a first-person report of a failure as an offer", () => {
+		// "can't" slipped past a guard written for "couldn't": after "can" the text is "'t", not "n't".
 		expect(closingFeatures("I could not reach the admin panel, and I couldn't log in.").offer).toBe(false);
-		expect(closingFeatures("I can extend this to the admin panel.").offer).toBe(true);
+		expect(closingFeatures("If you want the admin panel covered, I can't reach it from the sandbox.").offer).toBe(false);
+		const cant = classifyStop({ finalText: "I can't reach the admin panel from the sandbox, so you will need to verify it manually." });
+		expect(cant).toEqual({ outcome: "finished", evidence: ["reader-address"] });
+	});
+
+	it("reads an offer of more work aimed at the reader as an offer, in any of its grammatical shapes", () => {
 		expect(closingFeatures("Shall we look at the payment flow next?").offer).toBe(true);
 		expect(closingFeatures("Let me know which module matters most.").offer).toBe(true);
-		expect(closingFeatures("I'll wait for direction.").offer).toBe(true);
+		expect(closingFeatures("Happy to go further; would you like me to test the refund path.").offer).toBe(true);
+		expect(closingFeatures("Should you prefer, I could also write a proof of concept.").offer).toBe(true);
+		expect(classifyStop({ finalText: "Let me know which module matters most." }).outcome).toBe("offered-to-continue");
+	});
+
+	it("does not read a recommendation to the reader as an offer to continue", () => {
+		// A bare "I would" beside a "you" anywhere in the paragraph read the usual
+		// closing of a security report as an offer.
+		for (const text of [
+			"I would recommend you patch the upload handler first.",
+			"I'd prioritise the SQL injection; your team should rotate the database credentials.",
+			"I may have missed issues in the payment module, which your developers should review.",
+			"I will now stop. You have the full ledger.",
+			"I'll wait for direction.",
+		]) expect(classifyStop({ finalText: text }).outcome, text).toBe("finished");
+	});
+
+	it("does not read a conditional that points the reader at evidence as an offer", () => {
+		for (const text of [
+			"If you need the raw requests, they are in evidence/requests.txt.",
+			"Should you need to reproduce it, run the curl command above. All findings are recorded.",
+		]) expect(classifyStop({ finalText: text }).outcome, text).toBe("finished");
+	});
+
+	it("reads an offer only in the closing sentences, not a conditional earlier in the paragraph", () => {
+		const text = "If you want, I can walk through the chain. The export endpoint was tested. The upload handler was tested. Every finding is recorded.";
+		expect(classifyStop({ finalText: text }).outcome).toBe("finished");
+	});
+
+	it("labels a rhetorical closing question and a closing question in another language as offered: known false positives of the question feature", () => {
+		expect(classifyStop({ finalText: "Done. What would an attacker gain here?" }).outcome).toBe("offered-to-continue");
+		expect(classifyStop({ finalText: "Il reste deux hypothèses. Voulez-vous que je continue ?" }).outcome).toBe("offered-to-continue");
+	});
+
+	it("misses an offer written as a list item, because list items are stripped as findings: a known blind spot", () => {
+		const text = "All done.\n\n**Next steps (optional):**\n\n- Want me to test the refund path?";
+		expect(classifyStop({ finalText: text })).toEqual({ outcome: "finished", evidence: ["states-incomplete"] });
 	});
 
 	it("ignores a question inside a quotation, a list item or a table", () => {
@@ -120,11 +162,21 @@ describe("workerStopInput", () => {
 		expect(classifyStop(workerStopInput(worker({ status: "timed-out", ending: "aborted-between-requests" }))).outcome).toBe("budget");
 	});
 
-	it("labels a worker with no session, session errors, a cut-off or a failed row as an error", () => {
+	it("labels a worker whose session ends on pired's turn budget as turn cap even when pi-subagents then reports it timed out", () => {
+		// The pi-subagents timeout can fire between pired's stop and the settle (childOutcome).
+		expect(classifyStop(workerStopInput(worker({ status: "timed-out", ending: "budget-stop" }))).outcome).toBe("turn-cap");
+	});
+
+	it("labels a worker with no session, a cut-off, a length-limited reply or a failed row as an error", () => {
 		expect(workerStopInput(worker({ ending: undefined })).error).toBe("no session");
-		expect(workerStopInput(worker({ sessionErrors: 2 })).error).toBe("2 session error(s)");
 		expect(workerStopInput(worker({ ending: "cut-off" })).error).toBe("session ended cut-off");
+		expect(workerStopInput(worker({ finalStop: "length" })).error).toBe("last reply ended length");
 		expect(workerStopInput(worker({ status: "failed" })).error).toBe("pi-subagents reports it failed");
+	});
+
+	it("judges a worker on how its session ended, not on an error pi retried before a clean handoff", () => {
+		const stop = classifyRunStop(cleanExit(), undefined, [worker({ sessionErrors: 2 })]);
+		expect(stop.workers[0]).toMatchObject({ outcome: "finished", sessionErrors: 2 });
 	});
 
 	it("runs the text test on a clean worker handoff", () => {
@@ -156,14 +208,26 @@ describe("classifyRunStop and summarizeStops", () => {
 		const offered = classifyRunStop(cleanExit({ lastReply: { stopReason: "stop", text: "Want me to go on?" } }), undefined, []);
 		const finishedOpen = classifyRunStop(cleanExit(), { surface: 2, hypotheses: 2, settled: 0 }, [worker()]);
 		const summary = summarizeStops([
-			{ arm: "baseline", stop: offered },
-			{ arm: "baseline" },
-			{ arm: "candidate", stop: finishedOpen },
-			{ arm: "candidate", stop: { outcome: "not-an-outcome" } },
+			{ arm: "baseline", key: "t/p1", valid: true, stop: offered },
+			{ arm: "baseline", key: "t/p2", valid: true },
+			{ arm: "candidate", key: "t/p1", valid: true, stop: finishedOpen },
+			{ arm: "candidate", key: "t/p2", valid: true, stop: { outcome: "not-an-outcome" } },
 		]);
 		expect(summary.runs.baseline).toMatchObject({ "offered-to-continue": 1, unclassified: 1, finished: 0 });
 		expect(summary.runs.candidate).toMatchObject({ finished: 1, unclassified: 1 });
 		expect(summary.workers.finished).toBe(1);
-		expect(summary.finishedWithOpenHypotheses).toEqual({ baseline: 0, candidate: 1 });
+		// Listed, not rated per arm: ADR-028 keeps a worker's open lead open, which biases a per-arm count against the candidate.
+		expect(summary.finishedWithOpenHypotheses).toEqual([{ arm: "candidate", key: "t/p1", openHypotheses: 2 }]);
+	});
+
+	it("counts valid runs apart, so the stop counts can refer to the runs the comparison scores", () => {
+		const errored = classifyRunStop(cleanExit({ process: { exitCode: 1, signal: null, timedOut: false } }), undefined, []);
+		const finished = classifyRunStop(cleanExit(), undefined, []);
+		const summary = summarizeStops([
+			{ arm: "candidate", key: "t/p1", valid: false, stop: errored },
+			{ arm: "candidate", key: "t/p2", valid: true, stop: finished },
+		]);
+		expect(summary.runs.candidate).toMatchObject({ error: 1, finished: 1 });
+		expect(summary.valid.runs.candidate).toMatchObject({ error: 0, finished: 1 });
 	});
 });

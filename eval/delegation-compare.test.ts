@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
 	accountCellUsage, AUTH_HORIZON_CAP_MS, AUTH_MARGIN_MS, benchmarkRuntimeOf, checkAuthHorizon, childProviderFailure, classifyInfra,
 	credentialExpiry, decideInfra, fetchErrorsFromStderr, gridWorstCaseMs, isBrokerEnvVar, metricFromRecord, notLaunchedOutcome, ownerIsLive,
-	parseComparePins, parseOwnerRecord, planResume, providerFailureTexts, resumeMismatches, runtimeMismatch, scopedSealCommand,
+	parseComparePins, parseOwnerRecord, planResume, providerFailureTexts, resumeMismatches, runStop, runtimeMismatch, scopedSealCommand,
 	startTimeFromStat, subagentConfigFor, toolSurfaceErrors, trackStream, type ProviderFailures,
 } from "./delegation-compare.ts";
 import { BENCHMARK_SETTINGS } from "./delegation-compare-entry.ts";
@@ -743,5 +743,34 @@ describe("sealed environment", () => {
 		expect(scoped.args.slice(6)).toEqual(["/usr/bin/env", "-u", "DBUS_SESSION_BUS_ADDRESS", "-u", "XDG_RUNTIME_DIR", "-u", "INVOCATION_ID", "/tmp/seal", "--read", "/usr", "--", "node", "entry.ts"]);
 		expect(scoped.env).toEqual({ PATH: "/usr/bin", HOME: "/h", DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/1/bus", XDG_RUNTIME_DIR: "/run/user/1" });
 		expect(scoped.unit).toBe("pired-cell-abc");
+	});
+});
+
+describe("runStop", () => {
+	// The only point where pi's message_end shape meets the stop classifier: a
+	// renamed field there would label every run by an empty closing.
+	const reply = (stopReason: string, text: string) => ({ type: "message_end", message: { role: "assistant", stopReason, content: [{ type: "thinking", thinking: "hmm" }, { type: "text", text }] } });
+
+	it("reads the parent's last assistant reply and each worker's session from the harness's own shapes", () => {
+		const events = [
+			reply("toolUse", "Checking the login flow."),
+			{ type: "message_end", message: { role: "toolResult", content: [{ type: "text", text: "Shall I?" }] } },
+			reply("stop", "Two leads are recorded. If you want, I can test the refund path next."),
+		];
+		const session = { ending: "handoff", finalStop: "length", finalText: "Recorded one lead.", errors: [], providerErrors: ["retried"] };
+		const stop = runStop({
+			result: { exitCode: 0, signal: null, timedOut: false }, stoppedByRunner: false, events,
+			telemetry: { surface: 3, hypotheses: 2, settled: 1 },
+			children: [{ child: { childKey: "run-a/run-0", agent: "pired-investigate", status: "completed" }, session }] as never,
+		});
+		expect(stop.outcome).toBe("offered-to-continue");
+		expect(stop.evidence).toEqual(["reader-address", "first-person-offer"]);
+		expect(stop.crossCheck).toEqual({ surfaceCells: 3, hypotheses: 2, settledHypotheses: 1, openHypotheses: 1 });
+		expect(stop.workers).toEqual([{ childKey: "run-a/run-0", agent: "pired-investigate", outcome: "error", evidence: ["last reply ended length"], sessionErrors: 1 }]);
+	});
+
+	it("reads a run that never launched as an error with no workers and no cross-check", () => {
+		const stop = runStop({ launchError: "not launched: interrupted", stoppedByRunner: false, events: [], telemetry: undefined, children: [] });
+		expect(stop).toEqual({ outcome: "error", evidence: ["not launched: interrupted"], crossCheck: null, workers: [] });
 	});
 });

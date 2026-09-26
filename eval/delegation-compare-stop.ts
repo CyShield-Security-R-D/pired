@@ -16,13 +16,16 @@
  *   4. the text test on the closing prose: offered-to-continue or finished.
  *
  * The text test is grammatical, not a phrase list: it asks whether the closing
- * is a question, whether it addresses the reader, whether the writer offers or
- * conditions further work in the first person, and whether it says the work is
- * incomplete. A list of one model's sign-off phrases would be fitted to that
- * model's transcripts and miss the next model's wording; the grammar of an
- * offer (a question to the reader, or "you" plus a first-person modal) holds
- * across wordings. The rule was written against synthetic text only. English
- * only: a closing in another language reads as finished.
+ * sentence is a question, and whether a closing sentence offers the reader more
+ * work by the writer; whether it addresses the reader and says the work is
+ * incomplete are recorded as evidence. A list of one model's sign-off phrases
+ * would be fitted to that model's transcripts and miss the next model's
+ * wording; the grammar of an offer (a question to the reader, or a first-person
+ * modal made conditional on the reader's wish) holds across wordings. The rule
+ * was written against synthetic text only. English only for the offer: a
+ * closing in another language that ends in "?" still reads as offered, through
+ * the question alone, and one that does not reads as finished. A rhetorical
+ * closing question ("What would an attacker gain here?") reads as offered.
  */
 
 /** How a run or a worker stopped. */
@@ -52,9 +55,14 @@ export interface StopInput {
 export interface ClosingFeatures {
 	/** The closing sentence ends in a question mark. */
 	question: boolean;
-	/** The closing paragraph uses a second-person pronoun. */
+	/** A closing sentence uses a second-person pronoun. Evidence only: "your team should rotate the keys" addresses the reader without handing anything back. */
 	readerAddress: boolean;
-	/** A first-person modal, an inverted first-person question, a first-person imperative ("let me"), or a conditional on the reader's wish. */
+	/**
+	 * A closing sentence offers the reader more work by the writer: a first-person
+	 * question ("shall I"), the reader's wish about the writer's work ("would you
+	 * like me to"), "let me know", or a conditional on the reader's wish joined to
+	 * a first-person modal in the same sentence ("if you want, I can").
+	 */
 	offer: boolean;
 	/** The closing paragraph says the work is not done. */
 	incomplete: boolean;
@@ -89,21 +97,38 @@ export function closingParagraph(text: string): string {
 	return paragraphs.at(-1) ?? "";
 }
 
-/** The last sentence of a paragraph, with trailing emphasis and brackets trimmed. */
-function closingSentence(paragraph: string): string {
-	const sentences = paragraph.split(/(?<=[.!?])\s+/).filter((s) => /[A-Za-z]/.test(s));
-	return (sentences.at(-1) ?? "").replace(/[\s*_)\]'’]+$/, "");
+/** The sentences of a paragraph, with trailing emphasis and brackets trimmed from each. */
+function sentences(paragraph: string): string[] {
+	return paragraph.split(/(?<=[.!?])\s+/).filter((s) => /[A-Za-z]/.test(s)).map((s) => s.replace(/[\s*_)\]'’]+$/, ""));
 }
 
+/**
+ * How many sentences at the end count as the sign-off. Two, so an offer
+ * followed by a courtesy ("If you want, I can go on. Thanks.") is still read,
+ * but not so many that a recommendation earlier in the paragraph is.
+ */
+const CLOSING_SENTENCES = 2;
+
 const SECOND_PERSON = /\b(?:you|your|yours|yourself|yourselves)\b/i;
-/** "I can", "I'll", "I could" — not "I could not" or "I couldn't", which report, not offer. */
-const FIRST_PERSON_MODAL = /\bI(?:\s+(?:can|could|would|will|shall|might|may)\b(?!\s+not\b|n['’]t)|['’](?:ll|d)\b)/;
-/** "shall I", "should we", "can I" — a first-person question the writer puts to the reader. */
+/**
+ * A first-person modal: "I can", "I'll", "I could". Not "I could not",
+ * "I couldn't" or "I can't", which report, not offer. On its own it is not an
+ * offer: "I would recommend you patch it" is advice, "I will now stop" an
+ * announcement. It counts only joined to a conditional on the reader's wish.
+ */
+const FIRST_PERSON_MODAL = /\bI(?:\s+(?:can|could|would|will|shall)\b(?!\s+not\b|n?['’]t\b)|['’](?:ll|d)\b)/;
+/** "shall I", "should we", "can I": a first-person question the writer puts to the reader, about what the writer does next. */
 const INVERTED_FIRST_PERSON = /\b(?:shall|should|can|could|may)\s+(?:I|we)\b/i;
-/** "let me", "let us", "let's" — a first-person imperative. */
-const FIRST_PERSON_IMPERATIVE = /\blet(?:\s+(?:me|us)\b|['’]s\b)/i;
-/** "if you want", "would you like": a conditional on, or a question about, the reader's wish. */
-const READER_WISH = /\b(?:if\s+you|would\s+you|do\s+you|should\s+you)\s+(?:\w+\s+)?(?:want|like|wish|prefer|need)\b/i;
+/** "would you like me to", "do you want us to", "want me to": the reader's wish about the writer's next work. */
+const READER_WISH_FOR_WRITER = /\b(?:(?:would|do|should)\s+you\s+(?:\w+\s+)?)?(?:want|like|wish|prefer)\s+(?:me|us)\s+to\b/i;
+/** "let me know", "let us know": an imperative that hands the next move to the reader. */
+const HAND_BACK = /\blet\s+(?:me|us)\s+know\b/i;
+/**
+ * "if you want", "should you prefer": a conditional on the reader's wish. An
+ * offer only in the same sentence as a first-person modal; "if you need the raw
+ * requests, they are in evidence/" is a pointer, not an offer.
+ */
+const READER_CONDITIONAL = /\b(?:if\s+you|should\s+you)\s+(?:\w+\s+)?(?:want|like|wish|prefer|need)\b/i;
 /**
  * Words that say work is unfinished. Generic English, not any model's sign-off;
  * it is evidence only and never decides the outcome on its own, because a
@@ -111,11 +136,19 @@ const READER_WISH = /\b(?:if\s+you|would\s+you|do\s+you|should\s+you)\s+(?:\w+\s
  */
 const INCOMPLETE = /\b(?:not\s+yet|remain(?:s|ing)?|still\s+(?:need|open|to|untested|unverified|pending)|unfinished|incomplete|pending|outstanding|untested|unverified|next\s+steps?|did\s+not\s+(?:finish|complete|get\s+to)|didn['’]t\s+(?:finish|complete|get\s+to)|ran\s+out\s+of)\b/i;
 
+/** Whether one sentence offers the reader more work by the writer. */
+function offersMoreWork(sentence: string): boolean {
+	if (INVERTED_FIRST_PERSON.test(sentence) && sentence.endsWith("?")) return true;
+	if (READER_WISH_FOR_WRITER.test(sentence) || HAND_BACK.test(sentence)) return true;
+	return READER_CONDITIONAL.test(sentence) && FIRST_PERSON_MODAL.test(sentence);
+}
+
 export function closingFeatures(paragraph: string): ClosingFeatures {
+	const closing = sentences(paragraph).slice(-CLOSING_SENTENCES);
 	return {
-		question: closingSentence(paragraph).endsWith("?"),
-		readerAddress: SECOND_PERSON.test(paragraph),
-		offer: FIRST_PERSON_MODAL.test(paragraph) || INVERTED_FIRST_PERSON.test(paragraph) || FIRST_PERSON_IMPERATIVE.test(paragraph) || READER_WISH.test(paragraph),
+		question: (closing.at(-1) ?? "").endsWith("?"),
+		readerAddress: closing.some((s) => SECOND_PERSON.test(s)),
+		offer: closing.some(offersMoreWork),
 		incomplete: INCOMPLETE.test(paragraph),
 	};
 }
@@ -134,7 +167,10 @@ export function classifyStop(input: StopInput): StopClassification {
 	if (!paragraph) return { outcome: "finished", evidence: ["no prose closing"] };
 	const features = closingFeatures(paragraph);
 	const fired = FEATURE_NAMES.filter(([key]) => features[key]).map(([, name]) => name);
-	const offered = features.question || (features.readerAddress && features.offer);
+	// The offer is aimed at the reader by construction, so it needs no separate
+	// "you": a bare "you" plus a bare "I would" was advice ("I would recommend you
+	// patch it") far more often than a hand-back.
+	const offered = features.question || features.offer;
 	return { outcome: offered ? "offered-to-continue" : "finished", evidence: fired };
 }
 
@@ -143,6 +179,12 @@ export function classifyStop(input: StopInput): StopClassification {
  * never merged into it: a run can offer to continue with nothing open, or sign
  * off as finished with hypotheses nobody tested. Disagreement between the two is
  * the thing to look at, so both are kept.
+ *
+ * `surfaceCells` is the inventory's size, not the unsettled cells: the
+ * telemetry carries no per-cell status, and computing one would re-read the
+ * ledger here. The harness passes no telemetry when the engagement directory
+ * is absent, so that case is null; a ledger that exists but fails to read still
+ * comes back from engagementTelemetry as zeros and reads as nothing open.
  */
 export interface LedgerCrossCheck {
 	surfaceCells: number;
@@ -201,66 +243,118 @@ export interface WorkerStopFacts {
 	status: string;
 	/** How the session ended (ChildEnding); undefined when no session was found. */
 	ending?: string;
+	/** The last reply's stopReason; `length` also ends as a `handoff`. */
+	finalStop?: string;
 	finalText?: string;
-	/** Structural or provider errors in the session. */
+	/** Structural or provider errors anywhere in the session. Recorded, not decisive. */
 	sessionErrors: number;
 }
 
 /**
- * A worker's stop. pired's turn budget shows as a `budget-stop` ending; the
- * pi-subagents timeout as a `timed-out` status. A worker whose session ends
- * cleanly on a handoff gets the text test on its handoff, which is where a
- * worker that asks the parent for leave to continue shows up.
+ * A worker's stop, judged on how its session ended, the way the parent is judged
+ * on its last reply.
+ *
+ * - pired's turn budget shows as a `budget-stop` ending, and is read before
+ *   pi-subagents' `timed-out` status: that timeout can fire in the moments
+ *   between pired's stop and pi-subagents settling the child (childOutcome), so
+ *   the status alone would name the time limit when the turn cap is what fired.
+ * - A last reply that ended `length` is an error for a worker as for the parent:
+ *   a reply cut off by the output limit has no sign-off to read.
+ * - An error earlier in the session that pi retried, after which the worker
+ *   handed off cleanly, does not make the worker an error; the parent is not
+ *   judged on its earlier replies either. The count is kept beside the outcome.
+ * - A clean handoff gets the text test, which is where a worker that asks the
+ *   parent for leave to continue shows up.
  */
 export function workerStopInput(facts: WorkerStopFacts): StopInput {
 	const finalText = facts.finalText ?? "";
 	if (facts.ending === undefined) return { finalText, error: "no session" };
-	if (facts.status === "timed-out") return { finalText, timedOut: true };
 	if (facts.ending === "budget-stop") return { finalText, turnCap: "pired's worker turn budget" };
-	if (facts.sessionErrors > 0) return { finalText, error: `${facts.sessionErrors} session error(s)` };
+	if (facts.status === "timed-out") return { finalText, timedOut: true };
 	if (facts.ending !== "handoff") return { finalText, error: `session ended ${facts.ending}` };
+	if (facts.finalStop === "length") return { finalText, error: "last reply ended length" };
 	if (facts.status !== "completed") return { finalText, error: `pi-subagents reports it ${facts.status}` };
 	return { finalText };
 }
 
+export interface WorkerStop extends StopClassification {
+	childKey: string;
+	agent: string;
+	sessionErrors: number;
+}
+
 export interface RunStop extends StopClassification {
 	crossCheck: LedgerCrossCheck | null;
-	workers: Array<StopClassification & { childKey: string; agent: string }>;
+	workers: WorkerStop[];
 }
 
 export function classifyRunStop(parent: ParentStopFacts, telemetry: unknown, workers: WorkerStopFacts[]): RunStop {
 	return {
 		...classifyStop(parentStopInput(parent)),
 		crossCheck: ledgerCrossCheck(telemetry),
-		workers: workers.map((w) => ({ childKey: w.childKey, agent: w.agent, ...classifyStop(workerStopInput(w)) })),
+		workers: workers.map((w) => ({ childKey: w.childKey, agent: w.agent, ...classifyStop(workerStopInput(w)), sessionErrors: w.sessionErrors })),
 	};
 }
 
 export type StopCounts = Record<StopOutcome, number>;
 
-export interface StopSummary {
+export interface StopCountsByArm {
 	/** Runs per arm by stop outcome. Rows written before this field existed are counted under `unclassified`. */
 	runs: Record<string, StopCounts & { unclassified: number }>;
 	/** Candidate workers by stop outcome. */
 	workers: StopCounts;
-	/** Runs whose text says finished while the ledger still holds open hypotheses, per arm. */
-	finishedWithOpenHypotheses: Record<string, number>;
+}
+
+/**
+ * A run whose text says finished while its ledger still holds open hypotheses:
+ * the disagreement to inspect. Listed, not counted per arm, because the count is
+ * not comparable between arms: since ADR-028 the candidate keeps a worker's open
+ * lead open by design, so it shows more of these when both arms behave alike.
+ */
+export interface FinishedWithOpen {
+	arm: string;
+	key: string;
+	openHypotheses: number;
+}
+
+export interface StopSummary extends StopCountsByArm {
+	/**
+	 * The same counts over valid runs only: the runs the comparison scores. The
+	 * top-level counts include invalid and infrastructure-failed runs, so an arm
+	 * with more infrastructure failures shows more `error` rows there.
+	 */
+	valid: StopCountsByArm;
+	finishedWithOpenHypotheses: FinishedWithOpen[];
 }
 
 const zero = (): StopCounts => ({ error: 0, budget: 0, "turn-cap": 0, "offered-to-continue": 0, finished: 0 });
 
-export function summarizeStops(rows: Array<{ arm: string; stop?: unknown }>): StopSummary {
+export interface StopRow {
+	arm: string;
+	key: string;
+	valid: boolean;
+	stop?: unknown;
+}
+
+const isStop = (stop: unknown): stop is RunStop => !!stop && typeof stop === "object" && (stop as RunStop).outcome in zero();
+
+function countStops(rows: StopRow[]): StopCountsByArm {
 	const runs: StopSummary["runs"] = {};
 	const workers = zero();
-	const finishedWithOpenHypotheses: Record<string, number> = {};
 	for (const row of rows) {
 		const arm = (runs[row.arm] ??= { ...zero(), unclassified: 0 });
-		finishedWithOpenHypotheses[row.arm] ??= 0;
-		const stop = row.stop as RunStop | undefined;
-		if (!stop || typeof stop !== "object" || !(stop.outcome in arm)) { arm.unclassified++; continue; }
-		arm[stop.outcome]++;
-		if (stop.outcome === "finished" && (stop.crossCheck?.openHypotheses ?? 0) > 0) finishedWithOpenHypotheses[row.arm]!++;
-		for (const w of Array.isArray(stop.workers) ? stop.workers : []) if (w.outcome in workers) workers[w.outcome]++;
+		if (!isStop(row.stop)) { arm.unclassified++; continue; }
+		arm[row.stop.outcome]++;
+		for (const w of Array.isArray(row.stop.workers) ? row.stop.workers : []) if (w.outcome in workers) workers[w.outcome]++;
 	}
-	return { runs, workers, finishedWithOpenHypotheses };
+	return { runs, workers };
+}
+
+export function summarizeStops(rows: StopRow[]): StopSummary {
+	return {
+		...countStops(rows),
+		valid: countStops(rows.filter((r) => r.valid)),
+		finishedWithOpenHypotheses: rows.flatMap((r) => isStop(r.stop) && r.stop.outcome === "finished" && (r.stop.crossCheck?.openHypotheses ?? 0) > 0
+			? [{ arm: r.arm, key: r.key, openHypotheses: r.stop.crossCheck!.openHypotheses }] : []),
+	};
 }

@@ -2262,7 +2262,17 @@ async function inspectRun(ctx: Context, cell: PreparedCell, launched: Launch, at
 		catch (error) { delegationAudit = { error: error instanceof Error ? error.message : String(error) }; }
 	}
 	(record as JsonRecord).delegationAudit = delegationAudit;
-	(record as JsonRecord).stop = runStop(launched, stoppedByRunner, events, telemetry, accounting) as unknown as JsonRecord;
+	// Guarded like the audit: a diagnostic that throws must not cost the run its record.
+	let stop: RunStop | { error: string };
+	try {
+		// engagementTelemetry reads a missing engagement as zeros; passed on, that
+		// would read as "nothing open" rather than "no ledger".
+		const ledger = telemetry && await exists(cell.workspaceDir) ? telemetry : undefined;
+		stop = runStop({ launchError: launched.launchError, result: launched.result, stoppedByRunner, events, telemetry: ledger, children: accounting?.children ?? [] });
+	} catch (error) {
+		stop = { error: error instanceof Error ? error.message : String(error) };
+	}
+	(record as JsonRecord).stop = stop as unknown as JsonRecord;
 	// Written only now, after the process is gone, and outside every granted path.
 	await writeJson(join(cell.cellDir, "run.json"), record);
 	return {
@@ -2277,16 +2287,23 @@ async function inspectRun(ctx: Context, cell: PreparedCell, launched: Launch, at
  * offers to continue is still a valid run, it is the model's choice. Kept apart
  * from `valid` so an old grid's rows, which lack it, still load and compare.
  */
-function runStop(launched: Launch, stoppedByRunner: boolean, events: JsonRecord[], telemetry: JsonRecord | undefined, accounting: CellUsage | undefined): RunStop {
-	const last = assistantReplies(events).at(-1);
+export function runStop(run: {
+	launchError?: string;
+	result?: Pick<OwnedResult, "exitCode" | "signal" | "timedOut">;
+	stoppedByRunner: boolean;
+	events: JsonRecord[];
+	telemetry: JsonRecord | undefined;
+	children: Array<Pick<ChildAccount, "child" | "session">>;
+}): RunStop {
+	const last = assistantReplies(run.events).at(-1);
 	return classifyRunStop({
-		...(launched.launchError ? { launchError: launched.launchError } : {}),
-		process: launched.result ? { exitCode: launched.result.exitCode, signal: launched.result.signal, timedOut: launched.result.timedOut } : null,
-		stoppedByRunner,
+		...(run.launchError ? { launchError: run.launchError } : {}),
+		process: run.result ? { exitCode: run.result.exitCode, signal: run.result.signal, timedOut: run.result.timedOut } : null,
+		stoppedByRunner: run.stoppedByRunner,
 		...(last ? { lastReply: { stopReason: last.stopReason, text: contentText(last.content) } } : {}),
-	}, telemetry, (accounting?.children ?? []).map(({ child, session }) => ({
+	}, run.telemetry, run.children.map(({ child, session }) => ({
 		childKey: child.childKey, agent: child.agent, status: child.status,
-		...(session ? { ending: session.ending, finalText: session.finalText } : {}),
+		...(session ? { ending: session.ending, finalText: session.finalText, ...(session.finalStop ? { finalStop: session.finalStop } : {}) } : {}),
 		sessionErrors: session ? session.errors.length + session.providerErrors.length : 0,
 	})));
 }
@@ -3448,7 +3465,7 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 			return o.arm === "candidate" && audit && !("error" in audit) ? [{ label: `${String((o.record as JsonRecord).key ?? o.cellId)}`, audit }] : [];
 		})),
 		// Per arm, so an arm that hands the turn back early is visible next to its TP.
-		stops: summarizeStops(outcomes.map((o) => ({ arm: o.arm, stop: (o.record as JsonRecord).stop }))),
+		stops: summarizeStops(outcomes.map((o) => ({ arm: o.arm, key: String((o.record as JsonRecord).key ?? o.cellId), valid: o.metric.valid, stop: (o.record as JsonRecord).stop }))),
 		rows: outcomes.map((o) => o.record),
 	};
 	await serially(() => writeJson(join(output, "summary.json"), summary));
