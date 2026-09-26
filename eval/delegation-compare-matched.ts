@@ -33,8 +33,15 @@ export type MatchedMode = "follow" | "fixed";
 
 export interface MatchedPolicy {
 	mode: MatchedMode;
-	/** Sessions per pair; each gets a ceiling of B / k. */
+	/** The sessions B is first split over: session i ≤ k gets an even share of what is left. */
 	k: number;
+	/**
+	 * The most sessions a pair may run. After the first k, while at least
+	 * `floorShare` of B is unspent, another session runs with all of it.
+	 */
+	kMax: number;
+	/** The share of B below which no further session is started. */
+	floorShare: number;
 	/** `fixed` only: B per target id, in tokens. */
 	budgets?: Record<string, number>;
 	/**
@@ -48,15 +55,19 @@ export interface MatchedPolicy {
 export const DEFAULT_MATCHED_K = 3;
 /** Past this many sessions a pair's matched arm alone outlasts the two arms it is compared with several times over. */
 export const MAX_MATCHED_K = 8;
+export const MAX_MATCHED_K_MAX = 16;
+/** 5% of B: below it a fresh session would spend most of its budget re-reading the target. */
+export const DEFAULT_FLOOR_SHARE = 0.05;
 
-const POLICY_KEYS = new Set(["mode", "k", "budgets", "snapshot"]);
+const POLICY_KEYS = new Set(["mode", "k", "kMax", "floorShare", "budgets", "snapshot"]);
 
 const isTokenCount = (v: unknown): v is number => typeof v === "number" && Number.isSafeInteger(v) && v > 0;
 
 /**
  * The policy as a manifest stores it, read strictly: a resume must run the arm
  * its grid started with, so a malformed policy refuses rather than reading as
- * "no matched arm", and an unknown key refuses rather than being dropped.
+ * "no matched arm", and an unknown or missing key refuses rather than being
+ * filled in.
  */
 export function parseMatchedPolicy(value: unknown): MatchedPolicy {
 	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("matched must be an object");
@@ -64,7 +75,9 @@ export function parseMatchedPolicy(value: unknown): MatchedPolicy {
 	for (const key of Object.keys(row)) if (!POLICY_KEYS.has(key)) throw new Error(`matched has an unknown key ${key}`);
 	if (row.mode !== "follow" && row.mode !== "fixed") throw new Error(`matched.mode must be "follow" or "fixed", got ${JSON.stringify(row.mode)}`);
 	if (typeof row.k !== "number" || !Number.isSafeInteger(row.k) || row.k < 1 || row.k > MAX_MATCHED_K) throw new Error(`matched.k must be an integer from 1 to ${MAX_MATCHED_K}`);
-	const policy: MatchedPolicy = { mode: row.mode, k: row.k };
+	if (typeof row.kMax !== "number" || !Number.isSafeInteger(row.kMax) || row.kMax < row.k || row.kMax > MAX_MATCHED_K_MAX) throw new Error(`matched.kMax must be an integer from k to ${MAX_MATCHED_K_MAX}`);
+	if (typeof row.floorShare !== "number" || !Number.isFinite(row.floorShare) || row.floorShare <= 0 || row.floorShare >= 1) throw new Error("matched.floorShare must be a share of B above 0 and below 1");
+	const policy: MatchedPolicy = { mode: row.mode, k: row.k, kMax: row.kMax, floorShare: row.floorShare };
 	if (row.mode === "fixed") {
 		const budgets = row.budgets;
 		if (!budgets || typeof budgets !== "object" || Array.isArray(budgets) || Object.keys(budgets).length === 0) throw new Error("matched.mode fixed needs a budget per target in matched.budgets");
@@ -84,13 +97,13 @@ export function parseMatchedPolicy(value: unknown): MatchedPolicy {
 }
 
 /**
- * --matched's value: "follow", "fixed", or k=v pairs over mode follow and
- * k = 3. A fixed budget is `budget.<target id>=<tokens>`. Validated by the rule
- * the manifest is read back with, so a grid cannot start under a policy its own
- * resume would refuse.
+ * --matched's value: "follow", "fixed", or k=v pairs over mode follow, k = 3,
+ * kMax = 2k and floor = 0.05. A fixed budget is `budget.<target id>=<tokens>`.
+ * Validated by the rule the manifest is read back with, so a grid cannot start
+ * under a policy its own resume would refuse.
  */
 export function parseMatchedSpec(spec: string, snapshot?: string): MatchedPolicy {
-	const policy: Record<string, unknown> = { mode: "follow", k: DEFAULT_MATCHED_K };
+	const policy: Record<string, unknown> = { mode: "follow", k: DEFAULT_MATCHED_K, floorShare: DEFAULT_FLOOR_SHARE };
 	const text = spec.trim();
 	if (text === "follow" || text === "fixed") policy.mode = text;
 	else {
@@ -103,14 +116,19 @@ export function parseMatchedSpec(spec: string, snapshot?: string): MatchedPolicy
 			seen.add(key);
 			if (key === "mode") policy.mode = value;
 			else if (key === "k") policy.k = Number(value);
+			else if (key === "kMax") policy.kMax = Number(value);
+			else if (key === "floor") policy.floorShare = Number(value);
 			else if (key.startsWith("budget.") && key.length > "budget.".length) budgets[key.slice("budget.".length)] = Number(value);
 			else throw new Error(`--matched: unknown key ${key}`);
 		}
 		if (Object.keys(budgets).length) policy.budgets = budgets;
 	}
+	if (policy.kMax === undefined && typeof policy.k === "number") policy.kMax = Math.min(2 * policy.k, MAX_MATCHED_K_MAX);
 	if (snapshot !== undefined) policy.snapshot = snapshot;
+	// The manifest's own key order, so a pinned policy reads the same however it was typed.
+	const ordered = Object.fromEntries(["mode", "k", "kMax", "floorShare", "budgets", "snapshot"].filter((k) => policy[k] !== undefined).map((k) => [k, policy[k]]));
 	try {
-		return parseMatchedPolicy(policy);
+		return parseMatchedPolicy(ordered);
 	} catch (error) {
 		throw new Error(`--matched: ${error instanceof Error ? error.message : String(error)}`);
 	}
@@ -122,31 +140,84 @@ export function targetsWithoutBudget(policy: MatchedPolicy, targetIds: readonly 
 }
 
 export type SessionBudget =
-	| { ok: true; budget: number; ceiling: number; source: "candidate" | "fixed" }
+	| { ok: true; budget: number; source: "candidate" | "fixed" }
 	| { ok: false; reason: string };
 
 /**
- * B for one pair and each session's ceiling, B / k rounded down so that the k
- * ceilings never add up to more than B. Under `follow` a candidate run that is
- * not valid has no measured tokens, so the arm has no budget and is not run.
+ * B for one pair. Under `follow` a candidate run that is not valid has no
+ * measured tokens, so the arm has no budget and is not run.
  */
 export function sessionBudget(policy: MatchedPolicy, target: string, candidate: { valid: boolean; totalTokens: number } | undefined): SessionBudget {
-	let budget: number;
-	let source: "candidate" | "fixed";
 	if (policy.mode === "fixed") {
 		const fixed = policy.budgets?.[target];
-		if (!isTokenCount(fixed)) return { ok: false, reason: `no pre-registered budget for ${target}` };
-		budget = fixed;
-		source = "fixed";
-	} else {
-		if (!candidate?.valid) return { ok: false, reason: "the pair's candidate run is not valid, so it measured no budget" };
-		if (!Number.isFinite(candidate.totalTokens) || candidate.totalTokens <= 0) return { ok: false, reason: "the pair's candidate run reports no tokens" };
-		budget = Math.round(candidate.totalTokens);
-		source = "candidate";
+		return isTokenCount(fixed) ? { ok: true, budget: fixed, source: "fixed" } : { ok: false, reason: `no pre-registered budget for ${target}` };
 	}
-	const ceiling = Math.floor(budget / policy.k);
-	if (ceiling < 1) return { ok: false, reason: `a budget of ${budget} tokens over ${policy.k} sessions leaves no ceiling` };
-	return { ok: true, budget, ceiling, source };
+	if (!candidate?.valid) return { ok: false, reason: "the pair's candidate run is not valid, so it measured no budget" };
+	if (!Number.isFinite(candidate.totalTokens) || candidate.totalTokens <= 0) return { ok: false, reason: "the pair's candidate run reports no tokens" };
+	return { ok: true, budget: Math.round(candidate.totalTokens), source: "candidate" };
+}
+
+/** One session's latest run at its pair's attempt, as the plan reads it. */
+export interface SessionState {
+	index: number;
+	/** The session's own attempt. */
+	attempt: number;
+	valid: boolean;
+	infra: boolean;
+	/** The gate's metric for a valid session; ignored for an invalid one. */
+	tokens: number;
+	/** The ceiling the index was first launched with; a re-run keeps it. */
+	ceiling: number;
+}
+
+export type SessionStep =
+	| { kind: "run"; index: number; attempt: number; ceiling: number; spentBefore: number }
+	| { kind: "done"; sessions: number; spent: number }
+	| { kind: "blocked" | "abandoned"; index: number; reason: string };
+
+/**
+ * The matched arm's next session, from the sessions it has run.
+ *
+ * - **Rollover.** Session i ≤ k gets floor((B − spent) / (k − i + 1)), where
+ *   spent is the valid sessions' tokens before it. A fixed split of B / k would
+ *   leave a session that stops early (about 40% of Luna runs end within five
+ *   minutes, research/12) with its share unspent, and the arm below the
+ *   candidate's compute for a reason that is not the single agent's.
+ * - **Extra sessions.** After the first k, while at least floorShare × B is
+ *   left and fewer than kMax sessions have run, one more session runs with all
+ *   of what is left.
+ * - **Re-runs.** A session that failed for infrastructure re-runs at attempt + 1
+ *   with its index's original ceiling, so a drop does not move the split.
+ * - **A blocked or abandoned session ends the arm** (review): nothing more is
+ *   spent on a union that could never be valid.
+ */
+export function nextSessionStep(policy: Pick<MatchedPolicy, "k" | "kMax" | "floorShare">, budget: number, sessions: readonly SessionState[], rules: Pick<PairRules, "attemptCeiling"> = {}): SessionStep {
+	const latest = new Map<number, SessionState>();
+	for (const s of sessions) {
+		const held = latest.get(s.index);
+		// Two rows at one attempt resolve to the last written, as in planResume.
+		if (!held || s.attempt >= held.attempt) latest.set(s.index, s);
+	}
+	for (const s of [...latest.values()].sort((a, b) => a.index - b.index)) {
+		if (s.valid) continue;
+		const action = nextPairAction(s.attempt, [{ valid: false, infra: s.infra }], rules);
+		const reason = action.kind === "keep" ? "" : action.reason.replace("an arm", "the session").replace("the pair is", "the session is");
+		if (action.kind === "blocked" || action.kind === "abandoned") return { kind: action.kind, index: s.index, reason };
+	}
+	let spent = 0;
+	for (let index = 1; index <= policy.kMax; index++) {
+		const s = latest.get(index);
+		if (s?.valid) { spent += s.tokens; continue; }
+		if (s) return { kind: "run", index, attempt: s.attempt + 1, ceiling: s.ceiling, spentBefore: spent };
+		const left = budget - spent;
+		let ceiling: number;
+		if (index <= policy.k) ceiling = Math.floor(left / (policy.k - index + 1));
+		else if (left >= policy.floorShare * budget) ceiling = Math.floor(left);
+		else return { kind: "done", sessions: index - 1, spent };
+		if (ceiling < 1) return { kind: "done", sessions: index - 1, spent };
+		return { kind: "run", index, attempt: 1, ceiling, spentBefore: spent };
+	}
+	return { kind: "done", sessions: policy.kMax, spent };
 }
 
 /**
@@ -161,12 +232,15 @@ export function unionFindings(sessions: ReadonlyArray<readonly Finding[]>): Find
 
 /** One matched session's latest run, as the union needs it. */
 export interface SessionRun {
-	/** 1..k. */
+	/** 1..kMax. */
 	index: number;
 	/** The session's own attempt; a failed session re-runs alone. */
 	attempt: number;
 	cellId: string;
 	valid: boolean;
+	infra: boolean;
+	/** The ceiling it ran under. */
+	ceiling: number;
 	/** The gate's metric; NaN when the session is not valid. */
 	totalTokens: number;
 	truePositives: number;
@@ -188,8 +262,8 @@ export interface MatchedUnion {
 	/** The pair attempt whose candidate run set the budget. */
 	attempt: number;
 	k: number;
+	kMax: number;
 	budget: number | null;
-	ceiling: number | null;
 	valid: boolean;
 	/** Why the arm is not valid; empty when it is. */
 	reasons: string[];
@@ -198,7 +272,7 @@ export interface MatchedUnion {
 	truePositives: number;
 	totalClaims: number;
 	precision: number;
-	/** Sum over the k sessions; null when the arm is not valid. */
+	/** Sum over the sessions; null when the arm is not valid. */
 	totalTokens: number | null;
 	/** Findings submitted to the scorer after deduplication across sessions. */
 	submittedFindings: number;
@@ -207,35 +281,41 @@ export interface MatchedUnion {
 }
 
 /**
- * The arm is valid only when all k sessions are, one latest run per index; a
- * failed session is re-run on its own, and until it is valid the arm has no
- * number. Tokens are the sum over the sessions, TP and claims the pinned
- * scorer's on the deduplicated union.
+ * The arm is valid only when the session plan is done (nextSessionStep) and
+ * every session it ran is valid, one latest run per index; a failed session is
+ * re-run on its own, and until the plan is done the arm has no number. Tokens
+ * are the sum over the sessions, TP and claims the pinned scorer's on the
+ * deduplicated union.
  */
 export async function scoreUnion(input: {
-	key: string; target: string; pass: number; attempt: number; k: number;
-	budget: number | null; ceiling: number | null;
+	key: string; target: string; pass: number; attempt: number;
+	policy: Pick<MatchedPolicy, "k" | "kMax" | "floorShare">;
+	budget: number | null;
 	sessions: readonly SessionRun[];
 	grade: (findings: Finding[]) => Promise<UnionGrade>;
 }): Promise<MatchedUnion> {
 	const reasons: string[] = [];
 	const byIndex = new Map<number, SessionRun>();
 	for (const s of input.sessions) {
-		if (!Number.isSafeInteger(s.index) || s.index < 1 || s.index > input.k) reasons.push(`session index ${s.index} is outside 1..${input.k}`);
+		if (!Number.isSafeInteger(s.index) || s.index < 1 || s.index > input.policy.kMax) reasons.push(`session index ${s.index} is outside 1..${input.policy.kMax}`);
 		else if (byIndex.has(s.index)) reasons.push(`session ${s.index} is given twice`);
 		else byIndex.set(s.index, s);
 	}
-	for (let i = 1; i <= input.k; i++) {
-		const s = byIndex.get(i);
-		if (!s) reasons.push(`session ${i} has no run`);
-		else if (!s.valid) reasons.push(`session ${i} (attempt ${s.attempt}) is not valid`);
-		else if (!Number.isFinite(s.totalTokens) || s.totalTokens <= 0) reasons.push(`session ${i} reports no tokens`);
-		else if (!s.findings) reasons.push(`session ${i}'s findings were not read`);
-	}
 	const sessions = [...byIndex.values()].sort((a, b) => a.index - b.index);
+	if (input.budget === null) reasons.push("the arm has no budget");
+	else if (!reasons.length) {
+		const step = nextSessionStep(input.policy, input.budget, sessions.map((s) => ({ index: s.index, attempt: s.attempt, valid: s.valid, infra: s.infra, tokens: s.totalTokens, ceiling: s.ceiling })));
+		if (step.kind === "run") reasons.push(byIndex.has(step.index) ? `session ${step.index} (attempt ${step.attempt - 1}) is not valid` : `session ${step.index} has no run`);
+		else if (step.kind !== "done") reasons.push(`session ${step.index}: ${step.reason}`);
+	}
+	for (const s of sessions) {
+		if (!s.valid) continue;
+		if (!Number.isFinite(s.totalTokens) || s.totalTokens <= 0) reasons.push(`session ${s.index} reports no tokens`);
+		else if (!s.findings) reasons.push(`session ${s.index}'s findings were not read`);
+	}
 	const base = {
-		key: input.key, target: input.target, pass: input.pass, attempt: input.attempt, k: input.k,
-		budget: input.budget, ceiling: input.ceiling,
+		key: input.key, target: input.target, pass: input.pass, attempt: input.attempt, k: input.policy.k, kMax: input.policy.kMax,
+		budget: input.budget,
 		sessions: sessions.map(({ findings: _findings, ...rest }) => rest),
 		claimsBeforeUnion: sessions.reduce((n, s) => n + (s.findings?.length ?? 0), 0),
 	};
@@ -258,44 +338,6 @@ export function metricOfUnion(u: MatchedUnion): RunMetric {
 		truePositives: u.truePositives, precision: u.precision, totalClaims: u.totalClaims,
 		totalTokens: u.totalTokens ?? Number.NaN,
 	};
-}
-
-/** A session's latest run at its pair's attempt, as a resume reads it. */
-export interface SessionRow { index: number; attempt: number; valid: boolean; infra: boolean }
-
-export interface SessionPlan {
-	/** Sessions to launch, each at its next session attempt. */
-	run: Array<{ index: number; attempt: number }>;
-	kept: number[];
-	blocked: Array<{ index: number; reason: string }>;
-	abandoned: Array<{ index: number; reason: string }>;
-}
-
-/**
- * Which of a pair's k sessions still need a run, judged per session at its own
- * highest attempt by the same rule a pair is judged by (nextPairAction with one
- * arm): valid is kept, missing or invalid for infrastructure re-runs that
- * session alone at attempt + 1, invalid for any other reason blocks it (the arm
- * then stays invalid), and a session failing at the attempt ceiling is
- * abandoned.
- */
-export function planSessions(k: number, rows: readonly SessionRow[], rules: Pick<PairRules, "attemptCeiling"> = {}): SessionPlan {
-	const latest = new Map<number, SessionRow>();
-	for (const row of rows) {
-		const held = latest.get(row.index);
-		// Two rows at one attempt resolve to the last written, as in planResume.
-		if (!held || row.attempt >= held.attempt) latest.set(row.index, row);
-	}
-	const plan: SessionPlan = { run: [], kept: [], blocked: [], abandoned: [] };
-	for (let index = 1; index <= k; index++) {
-		const row = latest.get(index);
-		const action = nextPairAction(row?.attempt ?? 0, [row && { valid: row.valid, infra: row.infra }], rules);
-		if (action.kind === "keep") plan.kept.push(index);
-		else if (action.kind === "blocked") plan.blocked.push({ index, reason: action.reason.replace("an arm", "the session") });
-		else if (action.kind === "abandoned") plan.abandoned.push({ index, reason: action.reason.replace("an arm", "the session").replace("the pair is", "the session is") });
-		else if (action.kind === "rerun") plan.run.push({ index, attempt: action.attempt });
-	}
-	return plan;
 }
 
 export function median(xs: readonly number[]): number | null {
