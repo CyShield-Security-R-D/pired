@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-	classifyRunStop, classifyStop, closingFeatures, closingParagraph, ledgerCrossCheck, parentStopInput, summarizeStops, workerStopInput,
+	classifyRunStop, classifyStop, closingFeatures, closingParagraph, ledgerCrossCheck, parentStopInput, settleFacts, summarizeStops, workerStopInput,
 	type ParentStopFacts, type WorkerStopFacts,
 } from "./delegation-compare-stop.ts";
 
@@ -229,5 +229,111 @@ describe("classifyRunStop and summarizeStops", () => {
 		]);
 		expect(summary.runs.candidate).toMatchObject({ error: 1, finished: 1 });
 		expect(summary.valid.runs.candidate).toMatchObject({ error: 0, finished: 1 });
+	});
+});
+
+describe("the settle (3.2)", () => {
+	const OFFER = "Two routes remain untested. Shall I continue with the admin panel?";
+	const DONE = "The review is complete. Four findings are recorded in the ledger.";
+
+	it("classifier reads a finished settle and keeps the text test as evidence", () => {
+		// The closing offers more work, but the ledger says the session finished:
+		// the settle decides, and the text test's reading is kept beside it.
+		const stop = classifyStop({ finalText: OFFER, settle: { outcome: "finished", laterWrites: 0 } });
+		expect(stop.outcome).toBe("finished");
+		expect(stop.evidence).toEqual(["settle: finished", "text test: offered-to-continue (closing-question, first-person-offer, states-incomplete)"]);
+		expect(stop.textTest).toEqual({ outcome: "offered-to-continue", evidence: ["closing-question", "first-person-offer", "states-incomplete"] });
+	});
+
+	it("reads a paused or blocked settle as offered to continue, since budget was left", () => {
+		for (const outcome of ["paused", "blocked"]) {
+			const stop = classifyStop({ finalText: DONE, settle: { outcome, laterWrites: 0 } });
+			expect(stop.outcome).toBe("offered-to-continue");
+			expect(stop.evidence).toEqual([`settle: ${outcome}`, "text test: finished"]);
+		}
+	});
+
+	it("falls back to the text test without a settle, and adds nothing to its result", () => {
+		expect(classifyStop({ finalText: OFFER })).toEqual({ outcome: "offered-to-continue", evidence: ["closing-question", "first-person-offer", "states-incomplete"] });
+		expect(classifyStop({ finalText: DONE })).toEqual({ outcome: "finished", evidence: [] });
+	});
+
+	it("ignores a settle superseded by later work, reading the text instead and saying why", () => {
+		// A model that settles as a ritual and keeps going did not stop where it settled.
+		const stop = classifyStop({ finalText: OFFER, settle: { outcome: "finished", laterWrites: 3 } });
+		expect(stop.outcome).toBe("offered-to-continue");
+		expect(stop.evidence.at(-1)).toBe("settle finished superseded by 3 later ledger write(s)");
+		expect(stop.textTest?.outcome).toBe("offered-to-continue");
+		const odd = classifyStop({ finalText: DONE, settle: { outcome: "done", laterWrites: 0 } });
+		expect(odd).toMatchObject({ outcome: "finished", evidence: ['settle outcome "done" not read'] });
+	});
+
+	it("reads the error, the budget and a turn cap before the settle", () => {
+		const settle = { outcome: "finished", laterWrites: 0 };
+		expect(classifyStop({ error: "crash", finalText: DONE, settle }).outcome).toBe("error");
+		expect(classifyStop({ timedOut: true, finalText: DONE, settle }).outcome).toBe("budget");
+		expect(classifyStop({ turnCap: "cap", finalText: DONE, settle }).outcome).toBe("turn-cap");
+	});
+
+	it("takes the last settle from the telemetry, keeps it on the run, and reads nothing from a malformed one", () => {
+		const telemetry = { surface: 2, hypotheses: 1, settled: 1, lastSettle: { outcome: "paused", at: "2026-01-01T00:00:00.000Z", note: "auth left", laterWrites: 0, remainder: {} } };
+		const stop = classifyRunStop(cleanExit(), telemetry, []);
+		expect(stop.outcome).toBe("offered-to-continue");
+		expect(stop.settle).toEqual({ outcome: "paused", at: "2026-01-01T00:00:00.000Z", note: "auth left", laterWrites: 0 });
+		expect(classifyRunStop(cleanExit(), { surface: 0, hypotheses: 0, settled: 0 }, [])).not.toHaveProperty("settle");
+		for (const bad of [undefined, null, { lastSettle: "x" }, { lastSettle: { outcome: 3 } }]) expect(settleFacts(bad)).toBeUndefined();
+		expect(settleFacts({ lastSettle: { outcome: "finished", laterWrites: -2 } })).toEqual({ outcome: "finished", laterWrites: 0 });
+	});
+});
+
+describe("the stop summary across arms that can and cannot settle (3.2 review)", () => {
+	const OFFER = "Two routes remain untested. Shall I continue with the admin panel?";
+	const DONE = "The review is complete. Four findings are recorded in the ledger.";
+	const telemetry = (extra: Record<string, unknown> = {}) => ({ surface: 4, hypotheses: 3, settled: 1, ...extra });
+
+	it("counts the text test in both arms' headline and tallies settles per arm apart", () => {
+		// The candidate settled `paused` but signed off in finished prose; the
+		// baseline cannot settle and offered in prose. The headline reads prose in
+		// both, so a settle cannot move the rate the arms are compared on.
+		const candidate = classifyRunStop(cleanExit({ lastReply: { stopReason: "stop", text: DONE } }), telemetry({ lastSettle: { outcome: "paused", laterWrites: 0 } }), []);
+		const superseded = classifyRunStop(cleanExit({ lastReply: { stopReason: "stop", text: OFFER } }), telemetry({ lastSettle: { outcome: "finished", laterWrites: 2 } }), []);
+		const baseline = classifyRunStop(cleanExit({ lastReply: { stopReason: "stop", text: OFFER } }), telemetry(), []);
+		expect(candidate.outcome).toBe("offered-to-continue");
+		const summary = summarizeStops([
+			{ arm: "candidate", key: "t/p1", valid: true, stop: candidate },
+			{ arm: "candidate", key: "t/p2", valid: true, stop: superseded },
+			{ arm: "baseline", key: "t/p1", valid: true, stop: baseline },
+		]);
+		expect(summary.runs.candidate).toMatchObject({ finished: 1, "offered-to-continue": 1 });
+		expect(summary.runs.baseline).toMatchObject({ finished: 0, "offered-to-continue": 1 });
+		expect(summary.settles.candidate).toEqual({ finished: 0, paused: 1, blocked: 0, superseded: 1, none: 0 });
+		expect(summary.settles.baseline).toEqual({ finished: 0, paused: 0, blocked: 0, superseded: 0, none: 1 });
+		// The text-finished run with open hypotheses is listed, whatever its settle said.
+		expect(summary.finishedWithOpenHypotheses).toEqual([{ arm: "candidate", key: "t/p1", openHypotheses: 2 }]);
+	});
+
+	it("records the share of the time limit used and whether the run stopped with time left and open work", () => {
+		const early = classifyRunStop(cleanExit(), telemetry({ openCells: 0 }), [], { seconds: 600, limitSeconds: 7200 });
+		expect(early.timeShare).toBeCloseTo(600 / 7200);
+		expect(early.leftWithOpenWork).toBe(true);
+		// Open cells count as open work even with every hypothesis settled.
+		expect(classifyRunStop(cleanExit(), { surface: 4, hypotheses: 1, settled: 1, openCells: 5 }, [], { seconds: 60, limitSeconds: 7200 }).leftWithOpenWork).toBe(true);
+		expect(classifyRunStop(cleanExit(), { surface: 4, hypotheses: 1, settled: 1, openCells: 0 }, [], { seconds: 60, limitSeconds: 7200 }).leftWithOpenWork).toBe(false);
+		// A time-limited run had no time left; an unknown ledger cannot be judged.
+		const timedOut = classifyRunStop(cleanExit({ process: { exitCode: null, signal: "SIGTERM", timedOut: true }, lastReply: { stopReason: "aborted", text: "" } }), telemetry(), [], { seconds: 7200, limitSeconds: 7200 });
+		expect(timedOut.leftWithOpenWork).toBe(false);
+		expect(classifyRunStop(cleanExit(), undefined, [], { seconds: 60, limitSeconds: 7200 })).not.toHaveProperty("leftWithOpenWork");
+		expect(classifyRunStop(cleanExit(), telemetry(), [])).not.toHaveProperty("timeShare");
+
+		const summary = summarizeStops([
+			{ arm: "baseline", key: "a", valid: true, stop: early },
+			{ arm: "baseline", key: "b", valid: true, stop: timedOut },
+			{ arm: "baseline", key: "c", valid: true, stop: classifyRunStop(cleanExit(), undefined, [], { seconds: 3600, limitSeconds: 7200 }) },
+			{ arm: "baseline", key: "d", valid: true },
+		]);
+		expect(summary.stopping.baseline).toEqual({ timed: 3, medianTimeShare: 0.5, leftWithOpenWork: 1, judged: 2 });
+		expect(summarizeStops([{ arm: "x", key: "a", valid: true, stop: classifyRunStop(cleanExit(), undefined, []) }]).stopping.x?.medianTimeShare).toBeNull();
+		const two = summarizeStops([early, timedOut].map((stop, i) => ({ arm: "y", key: String(i), valid: true, stop })));
+		expect(two.stopping.y?.medianTimeShare).toBeCloseTo((600 / 7200 + 1) / 2);
 	});
 });

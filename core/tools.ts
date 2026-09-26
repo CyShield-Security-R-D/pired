@@ -43,6 +43,10 @@ import {
 	SEVERITIES,
 	type LedgerStoreName,
 } from "./ontology.ts";
+import { LEAD_AUTHOR, SETTLE_OUTCOMES, type SettleRecord } from "./ontology.ts";
+import { renderAreas } from "./areas.ts";
+import { budgetState, renderBudgetLine } from "./budget.ts";
+import { lastSettle, readSettleLedger, renderLastSettle, renderSettleReply, settleAreas, settleRemainder, standingSettle } from "./settle.ts";
 import type { JsonSchema, ToolContext, ToolDefinition, ToolResult } from "./ports.ts";
 import type { Workspace } from "./workspace.ts";
 
@@ -96,13 +100,20 @@ export interface ToolDeps {
 	 * until the budget line (3.2).
 	 */
 	budget?: () => BudgetReading | undefined;
+	/**
+	 * A directory-only listing of the source tree, relative to the session's
+	 * cwd, or undefined when the host has none. Areas name the listed
+	 * directories with no recorded surface as unmapped (core/areas.ts). A
+	 * function so the host can list once, lazily, and hand back its cache.
+	 */
+	sourceDirs?: () => string[] | undefined;
 }
 
 const RECORD_KINDS = [
-	"note", "evidence", "model", "host", "service", "endpoint", "param", "tech", "hypothesis", "finding", "blocker", "loot",
+	"note", "evidence", "model", "host", "service", "endpoint", "param", "tech", "hypothesis", "finding", "blocker", "loot", "settle",
 ] as const;
 type RecordKind = (typeof RECORD_KINDS)[number];
-type LedgerKind = Exclude<RecordKind, "note" | "evidence" | "model">;
+type LedgerKind = Exclude<RecordKind, "note" | "evidence" | "model" | "settle">;
 
 const RECALL_QUERIES = [
 	"status", "next", "coverage", "surface", "gaps", "cleared", "pass", "inventory", "hypotheses", "findings", "finding", "challenge", "loot", "blockers", "notes", "model", "context",
@@ -441,10 +452,11 @@ const RECORD_DESCRIPTION = `Record engagement state to the durable workspace. On
 - finding: title, severity[info|low|medium|high|critical] (+target, class, cwe, cvss, description, repro, evidence[], status)
   A finding is anything worth carrying into the report, not only a proven vulnerability. Use severity=info for an observation that costs nothing now but may matter later — a missing dependency pin, an unpinned base image, a permissive default, a lead you could not finish. 'target' is optional and accepts a recorded element id OR a raw string (a file path, a module, a component) when no element fits; give one when you can, and record the finding either way rather than leaving it in notes.
   A finding is a section of a document a client pays for, so it is written as one: 'description' says what the flaw is and where, 'impact' says what it costs THEM — the records exposed, the money moved, the service lost, the obligation breached — and 'remediation' says the concrete change that fixes it (the control to add, the call to replace; never "sanitize input"). 'repro' is numbered steps a third party can follow. Write impact in the client's terms, not the tool's: "any logged-in customer can read all 40k customer records, including national IDs" beats "confidentiality impact is high".
-  status[suspected|open|confirmed|triaged|reported|refuted|false-positive|accepted-risk|ignored] is how a finding is settled without losing it. New findings are 'suspected': recorded, not yet challenged. 'confirmed' is earned, not asserted — pass 'control' (the case that had to FAIL for this to mean anything: the unauthenticated request, the false payload, the absent guard) and, for access-control classes, 'entitlement' (how you established the caller was not MEANT to reach the resource — reading another user's object is a bug when the reader was not entitled and a feature when they were, and the response looks identical). To refute, pass 'basis' (file:line, an evidence path, or the model section that settles it), and 'live' when the engagement has a live target — a review of source has none to reach, and there the basis is the whole bar. On a review of source the proof is quoted, not named: a confirmation carries 'path' (the source hop to the sink hop) and a refutation quotes the guard that makes it not a finding (in 'basis' or 'guards'), each as 'file:line: verbatim text'. pired checks every quote against the file; one that is not there within 3 lines settles nothing, and the reply shows what the line does say. A challenge that could not settle it is a result too: status=suspected with 'basis' or 'control' on the finding's id, and nothing about the claim itself, keeps its status and writes your grounds on it ('reason' alone is a note, not a look). Short of either bar the status does not move and nothing is lost. 'recall challenge' lists what no challenge has settled — findings nobody has examined first, then those examined but unsettled; 'recall challenge id=<id>' returns the brief for any finding, including one already examined. When the operator says a finding is not real, set status=false-positive; when they say the risk is accepted, status=accepted-risk; when they want it set aside, status=ignored. All three keep the row and its history, drop it out of the open-findings count, and take a 'reason' — which is what a client asks for three months later. Prefer them to deleting.
+  status[suspected|open|confirmed|triaged|reported|refuted|false-positive|accepted-risk|ignored] is how a finding is settled without losing it. New findings are 'suspected': recorded, not yet challenged. 'confirmed' is earned, not asserted — pass 'control' (the case that had to FAIL for this to mean anything: the unauthenticated request, the false payload, the absent guard) and, for access-control classes, 'entitlement' (how you established the caller was not MEANT to reach the resource — reading another user's object is a bug when the reader was not entitled and a feature when they were, and the response looks identical). To refute, pass 'basis' (file:line, an evidence path, or the model section that settles it), and 'live' when the engagement has a live target — a review of source has none to reach, and there the basis is the whole bar. On a review of source the proof is quoted, not named: a confirmation carries 'path' (the source hop to the sink hop) and a refutation quotes the guard that makes it not a finding (in 'basis' or 'guards'), each as 'file:line: verbatim text'. pired checks every quote against the file; one that is not there within 3 lines, or that the file repeats more than 3 times, settles nothing, and the reply shows what the line does say. A challenge that could not settle it is a result too: status=suspected with 'basis' or 'control' on the finding's id, and nothing about the claim itself, keeps its status and writes your grounds on it ('reason' alone is a note, not a look). Short of either bar the status does not move and nothing is lost. 'recall challenge' lists what no challenge has settled — findings nobody has examined first, then those examined but unsettled; 'recall challenge id=<id>' returns the brief for any finding, including one already examined. When the operator says a finding is not real, set status=false-positive; when they say the risk is accepted, status=accepted-risk; when they want it set aside, status=ignored. All three keep the row and its history, drop it out of the open-findings count, and take a 'reason' — which is what a client asks for three months later. Prefer them to deleting.
 - blocker: question (+blockerType, priority[low|medium|high], options[], blocks[] (work ids this gates), status[open|answered|dismissed], answer)
   A parked question stays open until someone closes it, and an open blocker is one you keep routing around. When the operator answers it — in a dialog, or just by telling you in chat that it is decided or already handled — write that down: \`recall blockers\` gives you the id, then \`record kind=blocker id=<id> status=answered answer=<what they said>\`. Answers given in the UI arrive on their own; you do not need a tool call to read them.
 - loot: handle (e.g. cred:web-admin), secret (+lootType, username, target, source)
+- settle: outcome[finished|paused|blocked] (+note) — where this session leaves the engagement: finished (the work you were given is done), paused (work remains that you could still do) or blocked (what remains needs something only the operator can give). pired computes what remains from the ledger — open test cases, unmapped areas, unchallenged findings, inconclusive hypotheses, open blockers, budget spent — and records it with your note. It does not end the session.
 Pass 'id' to update an existing record. Pass 'id' with delete=true (and a 'reason') to retire one: it disappears from every view, the superseded lines stay in the file, and the tombstone records why. Delete only what should never have been recorded — a mistake, a row the operator asked you to remove. A finding that is real but will not be acted on is a status, not a deletion; deleting it removes it from the report the client reads.
 
 Recording something twice is safe. Every kind has an identity — an endpoint is its method and path, a hypothesis is its (target, class) cell, a finding is its title and location — and a second recording of the same thing updates the first instead of creating a second row: fields you add are kept, a severity is never lowered, evidence and params are merged. So when you are not sure whether something is already recorded, record it. The reply names the id it matched, and 'id=<that>' is how you change it afterwards.
@@ -497,11 +509,12 @@ const RECORD_PARAMETERS: JsonSchema = {
 			anyOf: [{ type: "string" }, { type: "array", items: { type: "string" } }],
 			description: "Checklist class id, or a list of class ids to settle together.",
 		},
-		approach: { type: "string" }, outcome: { enum: HYPOTHESIS_OUTCOMES },
+		approach: { type: "string" }, outcome: { enum: [...HYPOTHESIS_OUTCOMES, ...SETTLE_OUTCOMES], description: "For kind=hypothesis: proposed|testing|confirmed|refuted|inconclusive. For kind=settle: finished|paused|blocked." },
+		note: { type: "string", description: "For kind=settle: what you would say about where the session leaves the work." },
 		content: { type: "string", description: "For kind=evidence: the raw output to save to the file." },
 		title: { type: "string" }, severity: { enum: SEVERITIES }, cwe: { type: "string" }, cvss: { type: "string", description: `CVSS vector. v4.0 by default, e.g. "${CVSS_EXAMPLE["4.0"]}"; a v3.1 vector is accepted when the engagement requires one.` }, description: { type: "string", description: "What the flaw is and where: the mechanism, in plain language." }, impact: { type: "string", description: "What it costs the client in their terms — records exposed, money moved, service lost, obligation breached." }, remediation: { type: "string", description: "The concrete change that fixes it: the control to add, the call to replace. Not \"sanitize input\"." }, repro: { type: "string" }, status: { type: "string" }, evidence: { type: "array", items: { type: "string" }, description: "Workspace-relative paths to evidence files you wrote (e.g. [\"evidence/sqli-login.txt\"]). Not inline text." },
 		control: { type: "string", description: "For kind=finding: the control case you ran and what it returned — the request that had to FAIL for the finding to mean anything." },
-		basis: { type: "array", items: { type: "string" }, description: "The grounds for a refutation, a severity change, or a second look at a cleared cell — file:line, an evidence path, or the model section that settles it. Written as 'file:line: verbatim text', an entry is a quote and is checked against the file: the text must be on that line or within 3 of it. On kind=hypothesis with an id, this is what marks the row as independently re-checked. On kind=finding with an id and status=suspected (and no claim fields), it records a challenge that could not settle the claim." },
+		basis: { type: "array", items: { type: "string" }, description: "The grounds for a refutation, a severity change, or a second look at a cleared cell — file:line, an evidence path, or the model section that settles it. Written as 'file:line: verbatim text', an entry is a quote and is checked against the file: the text must be on that line or within 3 of it, and rare enough in the file (at most 3 times) to identify it. On kind=hypothesis with an id, this is what marks the row as independently re-checked. On kind=finding with an id and status=suspected (and no claim fields), it records a challenge that could not settle the claim." },
 		guards: { type: "array", items: { type: "string" }, description: "For a kind=finding verdict: the checks you examined — validation, an authorization test, escaping, a parameterised call — each as 'file:line: verbatim text', checked against the file. On a review of source a refutation quotes the guard (here or in basis) that makes the claim not a finding." },
 		live: { type: "boolean", description: "For an engagement with a live target: was it reachable, and the session valid, when you challenged it? A refutation against a dead session refutes nothing. When there is no running target, leave it out: a review of source has no target to reach, and there the cited basis carries the refutation. Applies to kind=finding and to a re-checked kind=hypothesis." },
 		entitlement: { type: "string", description: "For kind=finding: how you established the caller was (or was not) meant to reach the resource. Required to confirm an access-control finding." },
@@ -738,6 +751,12 @@ async function citedEvidence(deps: ToolDeps, texts: readonly string[]): Promise<
 	return out;
 }
 
+/** The host's source listing and the root it is relative to, for the areas view. */
+function sourceListing(deps: ToolDeps, ctx: ToolContext): { dirs?: string[]; root?: string } {
+	const dirs = deps.sourceDirs?.();
+	return dirs ? { dirs, root: ctx.cwd } : {};
+}
+
 /** Resolve one target to an element id, or leave it as written. */
 /**
  * The id of the element this target names, or the target unchanged.
@@ -916,8 +935,8 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 			// says why. A wrong deletion is recoverable by anyone who opens the
 			// ledger, which is the property that makes it safe to expose at all.
 			if (a.delete === true || str(a.delete) === "true") {
-				if (kind === "note" || kind === "evidence" || kind === "model") {
-					throw new Error(`record delete: '${kind}' is not a ledger row and has no id to retire. Notes, evidence files and the target model are edited on disk — or, for the model, corrected by recording the section again.`);
+				if (kind === "note" || kind === "evidence" || kind === "model" || kind === "settle") {
+					throw new Error(`record delete: '${kind}' is not a ledger row and has no id to retire. Notes, evidence files and the target model are edited on disk — or, for the model, corrected by recording the section again. A settle is history: record another.`);
 				}
 				const id = required(str(a.id), "record delete: 'id' is required — name the record to retire.");
 				const store = STORE_FOR_KIND[kind];
@@ -999,6 +1018,41 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 				const body = required(str(a.content) ?? str(a.text), "record evidence: 'content' is required (the raw output to save)");
 				const rel = await deps.workspace.writeEvidence(name, body);
 				return text(`Evidence saved to ${rel} — cite this exact path in the finding's evidence[].`, { kind, path: rel });
+			}
+
+			// Where the session leaves the engagement (3.2, core/settle.ts). Only the
+			// outcome and the note are the caller's; the remainder is computed here
+			// from the ledger, and one sent with the call is never read. Nothing
+			// about the ledger's state can refuse it.
+			// The schema's `outcome` enum carries both kinds' values, so a settle word
+			// on a hypothesis would pass it and then be dropped without a word.
+			if (kind === "hypothesis" && sent(a.outcome) && !oneOf(a.outcome, HYPOTHESIS_OUTCOMES)) {
+				throw new Error(`record hypothesis: 'outcome' must be one of ${HYPOTHESIS_OUTCOMES.join(", ")}; ${JSON.stringify(a.outcome)} is not a hypothesis outcome.`);
+			}
+			if (kind === "settle") {
+				// Only the lead settles. A worker's settle would describe a worker's
+				// stop as the session's, and the stop classifier reads the session's.
+				// core/child.ts refuses it in a child too; this holds on its own.
+				const author = ctx.author ?? deps.author?.();
+				if (author !== LEAD_AUTHOR) {
+					throw new Error(`record settle: only the lead session settles, and this call is from ${author ?? "an unnamed author"}. Hand back to the lead with what you found; the lead settles.`);
+				}
+				const outcome = oneOf(a.outcome, SETTLE_OUTCOMES);
+				if (!outcome) throw new Error(`record settle: 'outcome' must be one of ${SETTLE_OUTCOMES.join(", ")}.`);
+				const note = str(a.note) ?? str(a.text);
+				const ledger = await readSettleLedger(deps.workspace, {
+					surfaceKinds: deps.surfaceKinds ?? DEFAULT_SURFACE_KINDS,
+					...sourceListing(deps, ctx),
+					...(deps.budget?.() ? { budget: deps.budget()! } : {}),
+				});
+				const areas = settleAreas(ledger);
+				const record = {
+					v: RECORD_VERSION, id: ctx.services.ids.newId(), kind: "settle", createdAt: ctx.services.clock.nowIso(),
+					...passStamp(deps), ...authorStamp(deps, ctx),
+					outcome, ...(note ? { note } : {}), remainder: settleRemainder(ledger, areas),
+				} as SettleRecord;
+				await deps.workspace.append("sessions", record);
+				return text(renderSettleReply(record, areas, a.remainder !== undefined), { kind, id: record.id, outcome, remainder: record.remainder, created: [record.id] });
 			}
 			// A refutation clears cells, so it must say what was checked.
 			//
@@ -1962,7 +2016,7 @@ export function createRecallTool(deps: ToolDeps): ToolDefinition {
 			"Read engagement state back — the same views the operator sees. " +
 			"Coverage is a TEST PLAN: checklist classes x the surface you recorded, one cell per test case " +
 			"(this class, asked of this element). query: " +
-			"status (the rollup: surface, coverage %, findings by severity, blockers), " +
+			"status (the rollup: surface, coverage %, findings by severity, blockers, the areas, the budget when one is set, and the last settle), " +
 			"coverage (the full test plan as a matrix, one row per class), " +
 			"surface (one row per recorded element with its coverage bar), " +
 			"next (the next test case to run), gaps (test cases not run yet, plus the ones blocked), " +
@@ -1984,7 +2038,7 @@ export function createRecallTool(deps: ToolDeps): ToolDefinition {
 				limit: { type: "integer", description: "Max items (default 50)." },
 			},
 		},
-		async execute(args: unknown, _ctx: ToolContext): Promise<ToolResult> {
+		async execute(args: unknown, ctx: ToolContext): Promise<ToolResult> {
 			const a = asRecord(args);
 			const query = oneOf(a.query, RECALL_QUERIES);
 			if (!query) throw new Error(`recall: 'query' must be one of ${RECALL_QUERIES.join(", ")}`);
@@ -2275,11 +2329,19 @@ export function createRecallTool(deps: ToolDeps): ToolDefinition {
 						.join(" · ");
 					const m = await coverageMatrix();
 					const gaps = m ? m.counts["not-tested"] + m.counts.blocked : 0;
+					// The budget line and the last settle (3.2): the same line the tail
+					// block carries, and where the last session said it left things.
+					const reading = deps.budget?.();
+					const budget = renderBudgetLine(reading, budgetState(reading)?.level === "spent" ? await standingSettle(deps.workspace) : undefined);
+					const areas = renderAreas(settleAreas(await readSettleLedger(deps.workspace, { surfaceKinds, ...sourceListing(deps, ctx) })), 20);
 					return text([
 						`surface    ${stats.surface} element(s)`,
 						`coverage   ${stats.coveragePct ?? 0}%${m ? ` · ${m.applicable} askable cells · ${gaps} gap(s)` : " (no checklist)"}`,
 						`findings   ${stats.findingsTotal}${sev ? ` (${sev})` : ""}${stats.disposed > 0 ? ` · ${stats.disposed} disposed` : ""}`,
 						`blockers   ${stats.blockers} open`,
+						...(budget ? [`budget     ${budget.replace(/^Budget: /, "")}`] : []),
+						renderLastSettle(lastSettle(await deps.workspace.read("sessions"))),
+						...(areas.length > 0 ? ["areas", ...areas] : []),
 					].join("\n"));
 				}
 				case "gaps": {

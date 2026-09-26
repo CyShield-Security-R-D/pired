@@ -940,6 +940,15 @@ describe("runStop", () => {
 		const stop = runStop({ launchError: "not launched: interrupted", stoppedByRunner: false, events: [], telemetry: undefined, children: [] });
 		expect(stop).toEqual({ outcome: "error", evidence: ["not launched: interrupted"], crossCheck: null, workers: [] });
 	});
+
+	it("records the share of the run limit used at the stop from the process's own start and end (3.2)", () => {
+		const stop = runStop({
+			result: { exitCode: 0, signal: null, timedOut: false, startedAt: 1_000, finishedAt: 1_000 + 30 * 60_000 }, stoppedByRunner: false,
+			events: [reply("stop", "The review is complete.")], telemetry: { surface: 2, hypotheses: 2, settled: 1 }, children: [], limitMs: 2 * 60 * 60_000,
+		});
+		expect(stop.timeShare).toBe(0.25);
+		expect(stop.leftWithOpenWork).toBe(true);
+	});
 });
 
 describe("the candidate's worker cap", () => {
@@ -968,14 +977,29 @@ describe("the candidate's worker cap", () => {
 		expect(reviewScope("e", "/w", "candidate", 0).maxAgents).toBe(0);
 	});
 
-	it("leaves the baseline's scope exactly as it was, naming no cap", () => {
-		expect(reviewScope("e", "/w", "baseline", 8)).toEqual({ engagement: "e", workspace: "/w", mode: "off", authorized: false, targets: {} });
+	it("leaves the baseline's scope exactly as it was, naming no cap and no budget", () => {
+		// Byte-identical to earlier grids' baseline scopes, run limit or not.
+		const expected = { engagement: "e", workspace: "/w", mode: "off", authorized: false, targets: {} };
+		expect(reviewScope("e", "/w", "baseline", 8)).toEqual(expected);
+		expect(JSON.stringify(reviewScope("e", "/w", "baseline", 8, 2 * 60 * 60 * 1000))).toBe(JSON.stringify(expected));
 	});
 
 	// A grid whose manifest predates the option wrote no maxAgents; its resume
 	// must write the same scope, or its later pairs measure a different candidate.
 	it("writes no cap for a grid whose manifest predates the option", () => {
 		expect(reviewScope("e", "/w", "candidate", undefined)).not.toHaveProperty("maxAgents");
+	});
+
+	// 3.2: the budget line states only a ceiling the harness enforces. The run
+	// limit is one; no token ceiling is enforced yet, so none is written.
+	it("states the run limit and its deadline in the candidate's scope, rounded down, and no token ceiling", () => {
+		const twoHours = 2 * 60 * 60 * 1000;
+		const now = Date.parse("2026-09-26T10:00:00.000Z");
+		expect(reviewScope("e", "/w", "candidate", 8, twoHours, now).budget).toEqual({ minutes: 120, deadline: "2026-09-26T12:00:00.000Z" });
+		expect(reviewScope("e", "/w", "candidate", 8, 90_500, now).budget).toEqual({ minutes: 1, deadline: "2026-09-26T10:01:30.500Z" });
+		// Under a minute states nothing rather than a zero ceiling that reads as spent on the first request.
+		expect(reviewScope("e", "/w", "candidate", 8, 59_999)).not.toHaveProperty("budget");
+		expect(reviewScope("e", "/w", "candidate", 8, Number.NaN)).not.toHaveProperty("budget");
 	});
 
 	// Eight is what the v3/v4 snapshots defaulted to, so re-running one of them
