@@ -404,7 +404,9 @@ native-worker snapshot from ADR-025, which the candidate probe refuses because i
 - **Grid kinds.** `--grid-kind v6-stage1` or `v6-stage2` claims a kind pinned under `gridKinds`;
   the grid is official only when its corpus, snapshots and every option match it, and each
   difference is listed as an exploratory reason. Both kinds are drafts until the pre-registration
-  is frozen. The stage command lines, with the paths elided, are:
+  is frozen. Both declare `extendablePasses`: the pilot starts the grid at `--passes 2`, and
+  `--resume <out> --extend-passes <n>` grows it to the count the pilot fixes, keeping the pilot's
+  pairs; each extension is an amendment in `<out>/amendments.jsonl`. The stage command lines, with the paths elided, are:
 
   ```sh
   # stage 1: A (main at the freeze) against S

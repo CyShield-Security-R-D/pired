@@ -83,9 +83,14 @@ export function parseCorpora(value: unknown): Record<string, PinnedCorpus> {
 	return out;
 }
 
-/** A corpus's official shape, or undefined while its targets or passes are not frozen. */
-export function shapeOf(corpus: PinnedCorpus | undefined): OfficialShape | undefined {
-	return corpus && corpus.targets && corpus.passes !== null ? { targets: corpus.targets, passes: corpus.passes } : undefined;
+/**
+ * A corpus's official shape, or undefined while its targets or passes are not
+ * frozen. `gridPasses` is the grid's own pass count, for a kind whose passes
+ * are extendable: the corpus then fixes the targets only.
+ */
+export function shapeOf(corpus: PinnedCorpus | undefined, gridPasses?: number): OfficialShape | undefined {
+	const passes = gridPasses ?? corpus?.passes ?? null;
+	return corpus && corpus.targets && passes !== null ? { targets: corpus.targets, passes } : undefined;
 }
 
 /**
@@ -111,6 +116,8 @@ export interface CorpusInput {
 	manifestSha256: string;
 	/** sha256 of the twins file, when the grid runs twins. */
 	twinsSha256?: string;
+	/** The grid's kind sets its own pass count (extendablePasses), so the corpus's is neither read nor required. */
+	passesByGrid?: boolean;
 }
 
 /**
@@ -122,13 +129,13 @@ export interface CorpusInput {
 export function corpusReasons(name: string, corpus: PinnedCorpus, input: CorpusInput): string[] {
 	const reasons: string[] = [];
 	const unfrozen = [
-		...(corpus.targets === null ? ["targets"] : []), ...(corpus.passes === null ? ["passes"] : []),
+		...(corpus.targets === null ? ["targets"] : []), ...(corpus.passes === null && !input.passesByGrid ? ["passes"] : []),
 		...(corpus.manifestSha256 === null ? ["manifestSha256"] : []), ...(corpus.truthSha256 === null ? ["truthSha256"] : []),
 		...(corpus.twinsSha256 === null ? ["twinsSha256"] : []),
 	];
 	if (unfrozen.length) reasons.push(`corpus ${name} is not frozen: eval/delegation-compare.pins.json has no ${unfrozen.join(", ")} for it`);
 	if (input.selected) reasons.push("--only selects a subset");
-	if (corpus.passes !== null && input.passes !== corpus.passes) reasons.push(`--passes ${input.passes} is not ${corpus.passes}`);
+	if (corpus.passes !== null && !input.passesByGrid && input.passes !== corpus.passes) reasons.push(`--passes ${input.passes} is not ${corpus.passes}`);
 	const pinned = corpus.targets;
 	if (pinned && !input.selected && (input.gateIds.length !== pinned.length || input.gateIds.some((id) => !pinned.includes(id)))) {
 		reasons.push(`manifest targets differ from ${corpus.label}`);
@@ -435,6 +442,12 @@ export interface GridKind {
 	breaker: boolean | BreakerPolicy;
 	/** --timeout; null leaves the run limit open. */
 	timeoutMs: number | null;
+	/**
+	 * Whether the grid's passes may grow at a resume (--extend-passes). When true
+	 * the pass count is the grid's own, set by its pilot and its extensions, and
+	 * the corpus pins none.
+	 */
+	extendablePasses: boolean;
 }
 
 const hexCommit = (value: unknown): boolean => typeof value === "string" && /^[0-9a-f]{40}$/.test(value);
@@ -483,12 +496,13 @@ export function parseGridKinds(value: unknown, corpora: Record<string, PinnedCor
 			try { breaker = parseBreakerPolicy(raw.breaker); } catch (error) { throw new Error(`${where}.breaker: ${error instanceof Error ? error.message : String(error)}`); }
 		}
 		if (raw.timeoutMs !== null && !(typeof raw.timeoutMs === "number" && Number.isSafeInteger(raw.timeoutMs) && raw.timeoutMs > 0)) throw new Error(`${where}.timeoutMs must be null or a positive integer`);
+		if (raw.extendablePasses !== undefined && typeof raw.extendablePasses !== "boolean") throw new Error(`${where}.extendablePasses must be a boolean`);
 		out[name] = {
 			corpus: raw.corpus, baseline: { ...baseline } as GridKind["baseline"], candidate: { digest: candidate.digest as string | null },
 			baselineMaxAgents: raw.baselineMaxAgents as number | null, candidateMaxAgents: raw.candidateMaxAgents,
 			maxVerifiers: { ...verifiers } as Partial<Record<PairArm, number>>, budgetArms: arms("budgetArms", ARM_ORDER), subagentsArms: arms("subagentsArms", ARM_ORDER),
 			twinArms: arms("twinArms", ["baseline", "candidate"]) as PairArm[],
-			matched, retry: raw.retry, breaker, timeoutMs: raw.timeoutMs as number | null,
+			matched, retry: raw.retry, breaker, timeoutMs: raw.timeoutMs as number | null, extendablePasses: raw.extendablePasses === true,
 		};
 	}
 	return out;
@@ -561,4 +575,64 @@ export function kindSnapshotReasons(name: string, kind: GridKind, measured: { ba
 	if (kind.candidate.digest === null) reasons.push(`grid kind ${name}: no candidate is frozen (its candidate.digest is null)`);
 	else if (measured.candidateDigest !== kind.candidate.digest) reasons.push(`grid kind ${name}: candidate input digest ${measured.candidateDigest.slice(0, 12)} is not the pinned ${kind.candidate.digest.slice(0, 12)}`);
 	return reasons;
+}
+
+/**
+ * One amendment to a running grid (plan item 2.8): its pass count extended at
+ * a resume. The grid's manifest.json is written once and never rewritten, so
+ * amendments are appended to <out>/amendments.jsonl when the resume that makes
+ * them is accepted, and every later resume's manifest lists them all.
+ */
+export interface PassesAmendment { kind: "extend-passes"; at: string; from: number; to: number; resume: number }
+
+/** The amendments a grid's amendments.jsonl holds, read strictly: a malformed row refuses the resume. */
+export function parseAmendments(rows: readonly unknown[]): PassesAmendment[] {
+	return rows.map((row, i) => {
+		if (!isRecord(row) || row.kind !== "extend-passes" || typeof row.at !== "string" || !Number.isSafeInteger(row.from) || !Number.isSafeInteger(row.to)
+			|| (row.to as number) <= (row.from as number) || !Number.isSafeInteger(row.resume)) {
+			throw new Error(`amendments.jsonl row ${i + 1} is not an extend-passes amendment`);
+		}
+		return { kind: "extend-passes", at: row.at, from: row.from as number, to: row.to as number, resume: row.resume as number };
+	});
+}
+
+/**
+ * The pass count a grid runs at now: its manifest's, then each amendment's in
+ * order. An amendment that does not start where the last one ended means the
+ * record was edited, and refuses the resume.
+ */
+export function currentPasses(manifestPasses: number, amendments: readonly PassesAmendment[]): number {
+	let passes = manifestPasses;
+	for (const a of amendments) {
+		if (a.from !== passes) throw new Error(`amendments.jsonl extends ${a.from} passes, but the grid had ${passes} at that point`);
+		passes = a.to;
+	}
+	return passes;
+}
+
+/**
+ * Why a resume may not extend a grid's passes to `to`, or undefined when it
+ * may. The v6 pre-registration's pilot runs 2 passes whose pairs count toward
+ * the final analysis, so its grid must grow to the pass count the pilot fixes.
+ * An official grid grows only when its kind says it may: a v5 official grid is
+ * three passes by definition, and extending it would turn a decision in
+ * progress into an exploratory grid.
+ */
+export function extensionRefusal(grid: { passes: number; official: boolean; gridKind?: string }, to: number, kinds: Record<string, Pick<GridKind, "extendablePasses">>): string | undefined {
+	if (!Number.isSafeInteger(to) || to <= grid.passes) return `--extend-passes ${to} must be greater than the grid's ${grid.passes} passes`;
+	if (!grid.official) return undefined;
+	if (grid.gridKind === undefined) return "an official grid without a grid kind has a fixed pass count and cannot be extended";
+	if (!kinds[grid.gridKind]?.extendablePasses) return `grid kind ${grid.gridKind} does not declare extendablePasses, so its official grid cannot be extended`;
+	return undefined;
+}
+
+/**
+ * Whether `fresh` continues `prior`: the same pairs in the same order and arm
+ * order for every pass `prior` had, with later passes after them. planSchedule
+ * is pass-major with an arm-order rule that depends only on the pass and the
+ * target's position, so an extended grid's schedule starts with the one it
+ * had, and a pair already run keeps its cells.
+ */
+export function scheduleExtends(prior: readonly unknown[], fresh: readonly unknown[]): boolean {
+	return fresh.length > prior.length && prior.every((pair, i) => JSON.stringify(pair) === JSON.stringify(fresh[i]));
 }

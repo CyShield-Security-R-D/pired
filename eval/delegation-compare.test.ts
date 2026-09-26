@@ -2274,3 +2274,48 @@ describe("S is the same arm in both stages (plan 2.8)", () => {
 		expect(account.errors.some((e) => e.startsWith("baseline arm launched 0 worker(s) (1 child session file(s)); its scope states maxAgents 0"))).toBe(true);
 	});
 });
+
+describe("extending a grid's passes on resume (plan 2.8)", () => {
+	const argv = (...extra: string[]): string[] => [
+		"--baseline", "/b", "--candidate", "/c", "--corpus", "/corpus", "--truth", "/truth", "--out", "/out",
+		"--provider", "openai-codex", "--model", "gpt-6-luna", ...extra,
+	];
+
+	it("takes --extend-passes with --resume, and nothing else", () => {
+		expect(parseOptions(["--resume", "/grid", "--extend-passes", "6"])).toEqual({ kind: "resume", dir: "/grid", extendPasses: 6 });
+		expect(parseOptions(["--resume", "/grid"])).toEqual({ kind: "resume", dir: "/grid" });
+		expect(() => parseOptions(["--resume", "/grid", "--extend-passes", "x"])).toThrow(/--extend-passes/);
+		expect(() => parseOptions(["--resume", "/grid", "--passes", "6"])).toThrow(/--resume takes exactly one argument/);
+		expect(() => parseOptions(["--resume", "/grid", "--extend-passes"])).toThrow(/--resume takes exactly one argument/);
+	});
+
+	// The pilot's 2 passes count toward the analysis, so a kind grid may start below three.
+	it("lets a kind grid start at the pilot's two passes, and keeps three as the floor otherwise", () => {
+		const parsed = parseOptions(argv("--passes", "2", "--grid-kind", "v6-stage1"));
+		expect(parsed !== "help" && parsed.kind === "run" && parsed.options.passes).toBe(2);
+		expect(() => parseOptions(argv("--passes", "2"))).toThrow(/--passes must be an integer of at least 3/);
+	});
+
+	// Passes 1..p keep their pairs; everything but the pass count is compared as on any resume.
+	it("accepts a resume whose schedule continues the grid's to the amended passes, and refuses any other change", () => {
+		const schedule = (passes: number) => planSchedule(["A", "B"], passes).map((p) => ({ key: p.key, order: p.order }));
+		const prior = { passes: 2, schedule: schedule(2), requested: { passes: 2, provider: "p" } };
+		const fresh = { passes: 6, schedule: schedule(6), requested: { passes: 6, provider: "p" } };
+		expect(resumeMismatches(prior, fresh, { passes: 6 })).toEqual([]);
+		// Without the amendment the same change is two grids.
+		expect(resumeMismatches(prior, fresh)).toEqual(["schedule", "passes", "requested.passes"]);
+		expect(resumeMismatches(prior, fresh, { passes: 5 })).toEqual(["passes", "requested.passes"]);
+		expect(resumeMismatches(prior, { ...fresh, schedule: planSchedule(["B", "A"], 6).map((p) => ({ key: p.key, order: p.order })) }, { passes: 6 })).toEqual(["schedule"]);
+		expect(resumeMismatches(prior, { ...fresh, requested: { passes: 6, provider: "q" } }, { passes: 6 })).toEqual(["requested.provider"]);
+		// A resume at the manifest's own count is an ordinary resume.
+		expect(resumeMismatches(prior, prior, { passes: 2 })).toEqual([]);
+	});
+
+	it("keeps the pairs that ran and runs the new passes from their first attempt", () => {
+		const rows = planSchedule(["A", "B"], 2).flatMap((p) => (["baseline", "candidate"] as const).map((arm) => ({ key: p.key, arm, attempt: 1, valid: true })));
+		const plan = planResume(planSchedule(["A", "B"], 3), rows);
+		expect(plan.keepKeys).toEqual(["A#1", "B#1", "A#2", "B#2"]);
+		expect(plan.rerunKeys).toEqual(["A#3", "B#3"]);
+		expect(plan.nextAttempt).toEqual({ "A#3": 1, "B#3": 1 });
+	});
+});

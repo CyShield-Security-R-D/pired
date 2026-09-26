@@ -40,7 +40,7 @@ import {
 // The grid's shape and identity (plan item 2.8): the pinned official corpora.
 import {
 	ARM_ORDER, corpusReasons, DEFAULT_BUDGET_ARMS, DEFAULT_SUBAGENTS_ARMS, delegationOff, loadsSubagentsFor, gridKindReasons, kindlessArmReasons, kindlessCorpus, kindSnapshotReasons, parseArmList, parseCorpora,
-	parseGridKinds, parseMaxVerifiers, sameArms, scopeFor, scopeSettingsFor, shapeOf, summarizeTwins, twinTargets, type GridKind, type PinnedCorpus, type ScopeSettings,
+	currentPasses, extensionRefusal, parseAmendments, parseGridKinds, parseMaxVerifiers, scheduleExtends, type PassesAmendment, sameArms, scopeFor, scopeSettingsFor, shapeOf, summarizeTwins, twinTargets, type GridKind, type PinnedCorpus, type ScopeSettings,
 } from "./delegation-compare-grid.ts";
 // The staging, target-copy and tree-hash helpers moved to their own module so
 // the same digest rule draws the panel here, in the preflight and in tests.
@@ -323,7 +323,7 @@ type Options = {
 type JsonRecord = Record<string, unknown>;
 type Provider = { provider: string; model: string; baseHost: string; allowedHosts: string[] };
 type EntryConfig = CompareEntryConfig & { probe?: ProbeConfig };
-type Parsed = "help" | { kind: "run"; options: Options } | { kind: "resume"; dir: string };
+type Parsed = "help" | { kind: "run"; options: Options } | { kind: "resume"; dir: string; extendPasses?: number };
 
 /**
  * The pre-registered re-run rule, printed in --help and written verbatim into
@@ -396,7 +396,8 @@ Options:
   --provider <id>       Provider ID (required)
   --model <id>          Model ID (required)
   --thinking <level>    Fixed effort for both arms (default: medium)
-  --passes <n>          Complete passes per target, minimum 3; 1 allowed with --only (default: 3)
+  --passes <n>          Complete passes per target, minimum 3; 1 allowed with --only
+                        or --grid-kind (default: 3)
   --only <ids>          Comma-separated exact target IDs (default: every target
                         in the manifest; any number, at least one)
   --concurrency <n>     Matched pairs in flight, 1-8; each pair runs its two
@@ -453,6 +454,13 @@ Options:
                         OAuth check sizes (see --auth-horizon-hours)
   --out <dir>           New or empty directory; must not contain an advisory ID
   --resume <out-dir>    Continue a stopped grid in place; takes no other option
+                        but --extend-passes
+  --extend-passes <n>   With --resume only: grow the grid to n passes. Passes
+                        already scheduled keep their pairs and cells; new ones
+                        follow in the same pass-major order and arm-order rule.
+                        Recorded in <out>/amendments.jsonl and every later
+                        resume's manifest. An official grid grows only when its
+                        kind declares extendablePasses
   --retry               Retry transient provider errors inside a run: pi's agent
                         retry, ${DEFAULT_RETRY_POLICY.maxRetries} per streak; a run may fail at most
                         max(${DEFAULT_RETRY_POLICY.maxFailedAttempts}, ${DEFAULT_RETRY_POLICY.maxFailedAttemptRate * 100}% of its metered requests) attempts,
@@ -588,10 +596,16 @@ Exit status: 0 for a passing --dry-run or an official approval decision;
 export function parseOptions(argv: string[]): Parsed {
 	if (argv.includes("--help") || argv.includes("-h")) return "help";
 	if (argv.includes("--resume")) {
-		if (argv.length !== 2 || argv[0] !== "--resume" || !argv[1] || argv[1].startsWith("--")) {
-			throw new Error("--resume takes exactly one argument, the output directory, and no other option.");
+		// --extend-passes (plan item 2.8) is the one option a resume takes: it grows
+		// the grid's passes, and everything else is read from the grid's manifest.
+		const extend = argv.length === 4 && argv[2] === "--extend-passes";
+		if ((argv.length !== 2 && !extend) || argv[0] !== "--resume" || !argv[1] || argv[1].startsWith("--")) {
+			throw new Error("--resume takes exactly one argument, the output directory, and no other option but --extend-passes <n>.");
 		}
-		return { kind: "resume", dir: resolve(argv[1]!) };
+		if (!extend) return { kind: "resume", dir: resolve(argv[1]!) };
+		const passes = Number(argv[3]);
+		if (!Number.isSafeInteger(passes) || passes < 2) throw new Error("--extend-passes must be an integer pass count, greater than the grid's");
+		return { kind: "resume", dir: resolve(argv[1]!), extendPasses: passes };
 	}
 	const valueFlags = new Set([
 		"--baseline", "--candidate", "--corpus", "--truth", "--out", "--provider", "--model",
@@ -622,8 +636,9 @@ export function parseOptions(argv: string[]): Parsed {
 	const selected = (values.get("--only") ?? "").split(",").map((x) => x.trim()).filter(Boolean);
 	// Fewer than three passes only for an --only pilot, which is exploratory by
 	// construction: it proves the live path end to end without counting toward
-	// the decision.
-	if (!Number.isSafeInteger(passes) || passes < (selected.length ? 1 : 3)) throw new Error("--passes must be an integer of at least 3 (at least 1 with --only)");
+	// the decision; or for a grid of a kind (plan item 2.8), whose kind judges
+	// its pass count: the v6 pilot runs 2 passes that count toward the analysis.
+	if (!Number.isSafeInteger(passes) || passes < (selected.length || values.has("--grid-kind") ? 1 : 3)) throw new Error("--passes must be an integer of at least 3 (at least 1 with --only or --grid-kind)");
 	if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 8) throw new Error("--concurrency must be an integer from 1 to 8");
 	if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error("--timeout must be a positive finite millisecond count");
 	if (new Set(selected).size !== selected.length) throw new Error("--only lists a target more than once");
@@ -747,7 +762,7 @@ export function optionsFromManifest(dir: string, manifest: JsonRecord): Options 
 	const thinking = need(manifest.thinking ?? requested.thinking, "thinking");
 	if (!["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(thinking)) throw new Error(`--resume manifest has an invalid thinking level: ${thinking}`);
 	const passes = Number(manifest.passes);
-	const pilot = Array.isArray(requested.only) && requested.only.length > 0;
+	const pilot = (Array.isArray(requested.only) && requested.only.length > 0) || typeof manifest.gridKind === "string";
 	if (!Number.isSafeInteger(passes) || passes < (pilot ? 1 : 3)) throw new Error("--resume manifest has an invalid pass count");
 	const concurrency = Number(manifest.concurrency);
 	if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 8) throw new Error("--resume manifest has an invalid concurrency");
@@ -3397,7 +3412,9 @@ async function runPreflight(options: Options, manifest: JsonRecord, saveManifest
 			if (!kind) throw new Error(`--grid-kind ${options.gridKind} is not a grid kind of eval/delegation-compare.pins.json (known: ${Object.keys(comparePins.gridKinds).join(", ") || "none"})`);
 		}
 		const judged: [string, PinnedCorpus] | undefined = kind ? [kind.corpus, comparePins.corpora[kind.corpus]!] : kindlessCorpus(comparePins.corpora, ids);
-		const officialShapes: OfficialShape[] = judged && shapeOf(judged[1]) ? [shapeOf(judged[1])!] : [];
+		// A kind with extendable passes fixes the targets; the pass count is the grid's own (plan item 2.8).
+		const gridPasses = kind?.extendablePasses ? options.passes : undefined;
+		const officialShapes: OfficialShape[] = judged && shapeOf(judged[1], gridPasses) ? [shapeOf(judged[1], gridPasses)!] : [];
 		const gridOfficial = isOfficialGrid(expectedCells, officialShapes);
 		if (kind) {
 			exploratoryReasons.push(...gridKindReasons(options.gridKind!, kind, {
@@ -3410,6 +3427,7 @@ async function runPreflight(options: Options, manifest: JsonRecord, saveManifest
 				gateIds: ids, passes: options.passes, selected: options.selected.length > 0, manifestSha256: info.manifestHash,
 				targets: info.targets.map((t) => ({ id: t.id, name: t.name, truthSha256: info.truthHashes[t.id]! })),
 				...(info.twinsHash === undefined ? {} : { twinsSha256: info.twinsHash }),
+				...(kind?.extendablePasses ? { passesByGrid: true } : {}),
 			}));
 		}
 		manifest.provider = provider;
@@ -3845,9 +3863,13 @@ export function planResume(pairs: ScheduledPair[], runs: JsonRecord[], attemptCe
 }
 
 /** Identity fields a resume must find byte-identical between the grid's original manifest and its own recomputation. */
-export function resumeMismatches(prior: JsonRecord, fresh: JsonRecord): string[] {
+export function resumeMismatches(prior: JsonRecord, fresh: JsonRecord, allow: { passes?: number } = {}): string[] {
 	const diffs: string[] = [];
 	const eq = (label: string, a: unknown, b: unknown): void => { if (JSON.stringify(a ?? null) !== JSON.stringify(b ?? null)) diffs.push(label); };
+	// An extended grid (plan item 2.8) runs at its amended pass count: its
+	// schedule must be the original one with passes after it, and its pass count
+	// exactly the amended one. Everything else is compared as on any resume.
+	const extended = allow.passes !== undefined && allow.passes !== prior.passes;
 	// The probe-resolved model runtime is reported under its own name: a models.json
 	// edit (contextWindow, maxTokens, endpoint) is a different fault from a harness edit.
 	// So is the pinned pi-subagents install: a re-installed or edited tree is a
@@ -3862,8 +3884,13 @@ export function resumeMismatches(prior: JsonRecord, fresh: JsonRecord): string[]
 	eq("provider", prior.provider, fresh.provider);
 	eq("prompt", prior.prompt, fresh.prompt);
 	eq("promptSha256ByTarget", prior.promptSha256ByTarget, fresh.promptSha256ByTarget);
-	eq("schedule", prior.schedule, fresh.schedule);
-	eq("passes", prior.passes, fresh.passes);
+	if (extended) {
+		if (!Array.isArray(prior.schedule) || !Array.isArray(fresh.schedule) || !scheduleExtends(prior.schedule, fresh.schedule)) diffs.push("schedule");
+		if (fresh.passes !== allow.passes) diffs.push("passes");
+	} else {
+		eq("schedule", prior.schedule, fresh.schedule);
+		eq("passes", prior.passes, fresh.passes);
+	}
 	// The cap is half of what the candidate arm is; pairs run under two caps
 	// would be two candidates pooled into one comparison.
 	eq("candidateMaxAgents", prior.candidateMaxAgents, fresh.candidateMaxAgents);
@@ -3888,7 +3915,10 @@ export function resumeMismatches(prior: JsonRecord, fresh: JsonRecord): string[]
 	eq("matched", prior.matched, fresh.matched);
 	const pr = (prior.requested ?? {}) as JsonRecord;
 	const fr = (fresh.requested ?? {}) as JsonRecord;
-	for (const k of ["provider", "model", "thinking", "passes", "only"]) eq(`requested.${k}`, pr[k], fr[k]);
+	for (const k of ["provider", "model", "thinking", "passes", "only"]) {
+		if (k === "passes" && extended) { if (fr.passes !== allow.passes) diffs.push("requested.passes"); continue; }
+		eq(`requested.${k}`, pr[k], fr[k]);
+	}
 	const pi = (prior.inputs ?? {}) as JsonRecord;
 	const fi = (fresh.inputs ?? {}) as JsonRecord;
 	eq("inputs.sourceSha256", pi.sourceSha256, fi.sourceSha256);
@@ -4106,7 +4136,7 @@ async function main(): Promise<void> {
 	// including any `--only CVE-…`. Replace them before any child starts. The
 	// owner record also relies on this title to recognise a live runner.
 	process.title = RUNNER_TITLE;
-	if (parsed.kind === "resume") return await resumeMain(parsed.dir);
+	if (parsed.kind === "resume") return await resumeMain(parsed.dir, parsed.extendPasses);
 	const options = parsed.options;
 	const outHits = findLeaks({ "--out": options.out }, []);
 	if (outHits.length) throw new Error(`--out must not contain an advisory identifier (${outHits.join(", ")}): every cell path sits under it and reaches the model.`);
@@ -4131,7 +4161,13 @@ async function claimResumeDir(dir: string): Promise<{ n: number; root: string }>
 	throw new Error(`--resume: no free resume-<n> directory in ${dir}`);
 }
 
-type ResumeInput = { prior: JsonRecord; priorRuns: JsonRecord[]; n: number; root: string };
+type ResumeInput = {
+	prior: JsonRecord; priorRuns: JsonRecord[]; n: number; root: string;
+	/** The pass count the grid runs at when its amendments differ from its manifest's (plan item 2.8). */
+	passes?: number;
+	/** The extension this resume makes, appended to amendments.jsonl when it is accepted. */
+	extension?: PassesAmendment;
+};
 type GridPaths = { manifestPath: string; preflightRoot: string; statusPath: string };
 
 /**
@@ -4143,13 +4179,27 @@ type GridPaths = { manifestPath: string; preflightRoot: string; statusPath: stri
  * manifest go to resume-<n>/, its recomputed pins are compared with the
  * untouched original, and only an accepted resume touches progress.json.
  */
-async function resumeMain(dir: string): Promise<void> {
+async function resumeMain(dir: string, extendPasses?: number): Promise<void> {
 	const priorPath = join(dir, "manifest.json");
 	if (!await exists(priorPath)) throw new Error(`--resume: no manifest.json in ${dir}`);
 	// Before anything is written: a resume beside a live runner would re-launch its in-flight pairs.
 	await claimOwner(dir, "resume");
 	const prior = parseJsonObject(await readFile(priorPath, "utf8")) ?? {};
 	const options = optionsFromManifest(dir, prior);
+	// The grid's pass count is its manifest's as amended by earlier extensions
+	// (plan item 2.8); manifest.json itself is never rewritten.
+	const amendmentsPath = join(dir, "amendments.jsonl");
+	const amendments = await exists(amendmentsPath)
+		? parseAmendments((await readFile(amendmentsPath, "utf8")).split("\n").filter((l) => l.trim()).map((l) => parseJsonObject(l) ?? l))
+		: [];
+	options.passes = currentPasses(options.passes, amendments);
+	let extension: PassesAmendment | undefined;
+	if (extendPasses !== undefined) {
+		const why = extensionRefusal({ passes: options.passes, official: prior.official === true, ...(options.gridKind === undefined ? {} : { gridKind: options.gridKind }) }, extendPasses, loadComparePins().gridKinds);
+		if (why) throw new Error(`--resume refused: ${why}`);
+		extension = { kind: "extend-passes", at: new Date().toISOString(), from: options.passes, to: extendPasses, resume: 0 };
+		options.passes = extendPasses;
+	}
 	const priorRuns: JsonRecord[] = [];
 	const runsPath = join(dir, "runs.jsonl");
 	if (await exists(runsPath)) {
@@ -4159,10 +4209,14 @@ async function resumeMain(dir: string): Promise<void> {
 		}
 	}
 	const { n, root } = await claimResumeDir(dir);
+	if (extension) extension.resume = n;
 	const manifest = newManifest(options, "resume");
 	manifest.resumedFrom = { id: prior.id ?? null, n, priorRuns: priorRuns.length, originalManifest: priorPath };
-	console.log(`resume ${n}: preflight and pin check in ${root}; the grid's manifest.json and progress.json are not written unless the resume is accepted`);
-	await driveGrid(options, manifest, { prior, priorRuns, n, root }, {
+	// Every amendment so far, this resume's included, and only when there is one.
+	const all = [...amendments, ...(extension ? [extension] : [])];
+	if (all.length) manifest.amendments = all;
+	console.log(`resume ${n}: preflight and pin check in ${root}; the grid's manifest.json and progress.json are not written unless the resume is accepted${extension ? `; extends the grid from ${extension.from} to ${extension.to} passes` : ""}`);
+	await driveGrid(options, manifest, { prior, priorRuns, n, root, ...(all.length ? { passes: options.passes } : {}), ...(extension ? { extension } : {}) }, {
 		manifestPath: join(root, "manifest.json"), preflightRoot: root, statusPath: join(root, "status.json"),
 	});
 }
@@ -4204,7 +4258,7 @@ async function driveGrid(options: Options, manifest: JsonRecord, resume: ResumeI
 			throw error;
 		});
 		if (resume) {
-			const diffs = resumeMismatches(resume.prior, manifest);
+			const diffs = resumeMismatches(resume.prior, manifest, resume.passes === undefined ? {} : { passes: resume.passes });
 			if (diffs.length) {
 				await refuseResume(manifest, saveManifest, `--resume refused: the recomputed pins differ from the grid's original manifest.json at: ${diffs.join(", ")}. The inputs or harness changed; a resume must measure with the same rules.`, { mismatches: diffs });
 			}
@@ -4251,7 +4305,10 @@ async function driveGrid(options: Options, manifest: JsonRecord, resume: ResumeI
 			await appendJsonl(join(output, "resumes.jsonl"), {
 				n: resume.n, id: manifest.id, manifest: relative(output, paths.manifestPath), acceptedAt: new Date().toISOString(),
 				rerun: plan.rerunKeys, kept: plan.keepKeys, blocked: plan.blockedKeys, ...(options.breaker ? { abandoned: plan.abandonedKeys } : {}),
+				...(resume.extension ? { extendedPasses: { from: resume.extension.from, to: resume.extension.to } } : {}),
 			});
+			// The amendment is on record only once the resume that makes it is accepted.
+			if (resume.extension) await appendJsonl(join(output, "amendments.jsonl"), resume.extension);
 			// Accepted: from here the resume is the grid's runner and reports in progress.json.
 			statusFile.path = join(output, "progress.json");
 		}
@@ -5011,6 +5068,8 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 		official, decisionScope: official ? "official" : "exploratory", exploratoryReasons: pre.exploratoryReasons,
 		// Only a grid launched as a kind names one.
 		...(options.gridKind === undefined ? {} : { gridKind: options.gridKind }),
+		// Only a grid whose passes were extended lists the amendments (plan item 2.8).
+		...(Array.isArray(manifest.amendments) ? { passesAmendments: manifest.amendments } : {}),
 		interrupted, interruptedAt: runState.abortedAtMs === undefined ? null : new Date(runState.abortedAtMs).toISOString(),
 		stoppedInvalid, stopReason: runState.stopReason ?? null, quotaExhausted: runState.quotaExhausted ?? null, runtimeStable,
 		// Only a grid run with --breaker has this block, so a fail-fast grid's summary is what it always was.

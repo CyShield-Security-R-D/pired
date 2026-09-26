@@ -45,7 +45,7 @@
 	"gridKinds": {
 		"_comment": "Plan item 2.8. A grid launched with --grid-kind <name> is official only when every option matches its kind, its corpus is frozen and matched, and its snapshots are the kind's; otherwise it is exploratory with the reasons listed. Both kinds below are DRAFTS from docs/delegation-v6-preregistration.md: every value is to be frozen with the pre-registration, and the verifier cap (2) and the twin arms are still operator decisions there.",
 		"v6-stage1": {
-			"_comment": "To be frozen. Arm A (main at the freeze, single agent, its own defaults) against arm S (the candidate snapshot, maxAgents 0, maxVerifiers 0, budget line on). Patched twins in both arms. Retry and breaker required; run limit 4 h.",
+			"_comment": "To be frozen. Arm A (main at the freeze, single agent, its own defaults) against arm S (the candidate snapshot, maxAgents 0, maxVerifiers 0, budget line on). Patched twins in both arms. Retry and breaker required; run limit 4 h. Extendable passes: the internal pilot runs 2 passes, and --resume --extend-passes grows the grid to the count the pilot fixes, its pilot pairs kept.",
 			"corpus": "v6-fresh",
 			"baseline": {
 				"commit": null
@@ -80,10 +80,11 @@
 				"maxAttempts": 4,
 				"attemptCeiling": 16
 			},
-			"timeoutMs": 14400000
+			"timeoutMs": 14400000,
+			"extendablePasses": true
 		},
 		"v6-stage2": {
-			"_comment": "To be frozen. Arm S as the baseline (the candidate snapshot, with exactly the scope it had as stage 1's candidate, and loading pi-subagents as it did there) against arm D (the same snapshot, maxAgents 8, maxVerifiers 2, budget line on), with the matched arm M (follow, k 3). No twins. Retry and breaker required; run limit 4 h. baseline.digest and candidate.digest are both the candidate snapshot's digest.",
+			"_comment": "To be frozen. Arm S as the baseline (the candidate snapshot, with exactly the scope it had as stage 1's candidate, and loading pi-subagents as it did there) against arm D (the same snapshot, maxAgents 8, maxVerifiers 2, budget line on), with the matched arm M (follow, k 3). No twins. Retry and breaker required; run limit 4 h. baseline.digest and candidate.digest are both the candidate snapshot's digest. Extendable passes, to be decided at the freeze: stage 2 may run at the pilot's count from the start.",
 			"corpus": "v6-fresh",
 			"baseline": {
 				"digest": null
@@ -123,7 +124,8 @@
 				"maxAttempts": 4,
 				"attemptCeiling": 16
 			},
-			"timeoutMs": 14400000
+			"timeoutMs": 14400000,
+			"extendablePasses": true
 		}
 	}
 }
