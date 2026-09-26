@@ -13,7 +13,7 @@ import { execFile, execFileSync, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream, createWriteStream, readFileSync } from "node:fs";
 import { access, appendFile, cp, link, lstat, mkdir, open, readdir, readFile, realpath, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
+import { homedir, hostname, userInfo } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -40,7 +40,7 @@ import {
 // The grid's shape and identity (plan item 2.8): the pinned official corpora.
 import {
 	ARM_ORDER, corpusReasons, DEFAULT_BUDGET_ARMS, DEFAULT_SUBAGENTS_ARMS, delegationOff, loadsSubagentsFor, gridKindReasons, kindlessArmReasons, kindlessCorpus, kindSnapshotReasons, parseArmList, parseCorpora,
-	currentPasses, extensionRefusal, parseAmendments, parseGridKinds, parseMaxVerifiers, scheduleExtends, type PassesAmendment, sameArms, scopeFor, scopeSettingsFor, shapeOf, summarizeTwins, twinTargets, type GridKind, type PinnedCorpus, type ScopeSettings,
+	amendmentsMismatch, currentPasses, extensionRefusal, kindPassesReasons, parseAmendments, parseGridKinds, parseMaxVerifiers, scheduleExtends, type PassesAmendment, sameArms, scopeFor, scopeSettingsFor, shapeOf, summarizeTwins, twinTargets, type GridKind, type PinnedCorpus, type ScopeSettings,
 } from "./delegation-compare-grid.ts";
 // The staging, target-copy and tree-hash helpers moved to their own module so
 // the same digest rule draws the panel here, in the preflight and in tests.
@@ -303,6 +303,10 @@ type Options = {
 	 * against the kindless (v5) corpus exactly as before.
 	 */
 	gridKind?: string;
+	/** --passes-from (plan item 2.8 review): the grid whose fixed pass count this one adopts, before adoption. */
+	passesFromDir?: string;
+	/** The adopted pass count and where it came from, pinned in the manifest as `passesFrom`. */
+	passesFrom?: PassesFromRecord;
 	/**
 	 * --breaker: re-queue infrastructure-failed pairs and stop on the circuit
 	 * breaker instead of on the first invalid run. Absent: fail-fast, exactly as
@@ -325,7 +329,7 @@ type Options = {
 type JsonRecord = Record<string, unknown>;
 type Provider = { provider: string; model: string; baseHost: string; allowedHosts: string[] };
 type EntryConfig = CompareEntryConfig & { probe?: ProbeConfig };
-type Parsed = "help" | { kind: "run"; options: Options } | { kind: "resume"; dir: string; extendPasses?: number };
+type Parsed = "help" | { kind: "run"; options: Options } | { kind: "resume"; dir: string; extendPasses?: number; extendReason?: string };
 
 /**
  * The pre-registered re-run rule, printed in --help and written verbatim into
@@ -456,13 +460,22 @@ Options:
                         OAuth check sizes (see --auth-horizon-hours)
   --out <dir>           New or empty directory; must not contain an advisory ID
   --resume <out-dir>    Continue a stopped grid in place; takes no other option
-                        but --extend-passes
-  --extend-passes <n>   With --resume only: grow the grid to n passes. Passes
-                        already scheduled keep their pairs and cells; new ones
-                        follow in the same pass-major order and arm-order rule.
-                        Recorded in <out>/amendments.jsonl and every later
-                        resume's manifest. An official grid grows only when its
-                        kind declares extendablePasses
+                        but --extend-passes and --extend-reason
+  --extend-passes <n>   With --resume only: amend the grid's pass count to n
+                        (n equal to it fixes the count). Passes already
+                        scheduled keep their pairs and cells; new ones follow
+                        in the same pass-major order and arm-order rule.
+                        Recorded, with who, why and a hash of runs.jsonl and
+                        summary.json, in <out>/amendments.jsonl and
+                        resumes.jsonl, which must agree. An official grid is
+                        amended once, from its kind's pilotPasses to at most
+                        its maxPasses, and only when the kind declares
+                        extendablePasses
+  --extend-reason <text>
+                        With --extend-passes: why; required on an official grid
+  --passes-from <dir>   With --grid-kind: run at the pass count the grid in
+                        <dir> fixed by its one amendment (stage 2 adopts stage
+                        1's); takes the place of --passes
   --retry               Retry transient provider errors inside a run: pi's agent
                         retry, ${DEFAULT_RETRY_POLICY.maxRetries} per streak; a run may fail at most
                         max(${DEFAULT_RETRY_POLICY.maxFailedAttempts}, ${DEFAULT_RETRY_POLICY.maxFailedAttemptRate * 100}% of its metered requests) attempts,
@@ -598,22 +611,30 @@ Exit status: 0 for a passing --dry-run or an official approval decision;
 export function parseOptions(argv: string[]): Parsed {
 	if (argv.includes("--help") || argv.includes("-h")) return "help";
 	if (argv.includes("--resume")) {
-		// --extend-passes (plan item 2.8) is the one option a resume takes: it grows
-		// the grid's passes, and everything else is read from the grid's manifest.
-		const extend = argv.length === 4 && argv[2] === "--extend-passes";
-		if ((argv.length !== 2 && !extend) || argv[0] !== "--resume" || !argv[1] || argv[1].startsWith("--")) {
-			throw new Error("--resume takes exactly one argument, the output directory, and no other option but --extend-passes <n>.");
+		// --extend-passes and --extend-reason (plan item 2.8) are the only options a
+		// resume takes: they amend the grid's pass count, and everything else is read
+		// from the grid's manifest.
+		const usage = "--resume takes exactly one argument, the output directory, and no other option but --extend-passes <n> [--extend-reason <text>].";
+		if (argv[0] !== "--resume" || !argv[1] || argv[1].startsWith("--") || argv.length % 2 !== 0) throw new Error(usage);
+		const extra = new Map<string, string>();
+		for (let i = 2; i < argv.length; i += 2) {
+			const flag = argv[i]!;
+			const value = argv[i + 1];
+			if ((flag !== "--extend-passes" && flag !== "--extend-reason") || value === undefined || extra.has(flag)) throw new Error(usage);
+			extra.set(flag, value);
 		}
-		if (!extend) return { kind: "resume", dir: resolve(argv[1]!) };
-		const passes = Number(argv[3]);
-		if (!Number.isSafeInteger(passes) || passes < 2) throw new Error("--extend-passes must be an integer pass count, greater than the grid's");
-		return { kind: "resume", dir: resolve(argv[1]!), extendPasses: passes };
+		if (!extra.size) return { kind: "resume", dir: resolve(argv[1]!) };
+		if (!extra.has("--extend-passes")) throw new Error("--extend-reason needs --extend-passes <n>");
+		const passes = Number(extra.get("--extend-passes"));
+		if (!Number.isSafeInteger(passes) || passes < 1) throw new Error("--extend-passes must be an integer pass count, at least the grid's");
+		const reason = extra.get("--extend-reason");
+		return { kind: "resume", dir: resolve(argv[1]!), extendPasses: passes, ...(reason === undefined ? {} : { extendReason: reason }) };
 	}
 	const valueFlags = new Set([
 		"--baseline", "--candidate", "--corpus", "--truth", "--out", "--provider", "--model",
 		"--thinking", "--passes", "--only", "--concurrency", "--timeout", "--manifest", "--fs-seal", "--auth-horizon-hours",
 		"--candidate-max-agents", "--breaker", "--matched", "--matched-snapshot",
-		"--baseline-max-agents", "--max-verifiers", "--budget-arms", "--subagents-arms", "--twins", "--twin-arms", "--grid-kind",
+		"--baseline-max-agents", "--max-verifiers", "--budget-arms", "--subagents-arms", "--twins", "--twin-arms", "--grid-kind", "--passes-from",
 	]);
 	const values = new Map<string, string>();
 	let dryRun = false;
@@ -669,6 +690,11 @@ export function parseOptions(argv: string[]): Parsed {
 	if (twinsText !== undefined && !twinList.length) throw new Error("--twins needs --twin-arms <arm,...>: no arm would run the twins");
 	const gridKind = values.get("--grid-kind");
 	if (gridKind !== undefined && !/^[A-Za-z0-9._-]+$/.test(gridKind)) throw new Error("--grid-kind must be a pinned kind's name");
+	// Stage 2 runs at the count stage 1's pilot fixed (plan item 2.8 review): the
+	// count is read from that grid before the preflight, never typed.
+	const passesFromDir = values.get("--passes-from");
+	if (passesFromDir !== undefined && gridKind === undefined) throw new Error("--passes-from needs --grid-kind: it adopts a pass count for a grid of a kind");
+	if (passesFromDir !== undefined && values.has("--passes")) throw new Error("--passes-from sets the pass count; do not also pass --passes");
 	const breakerText = values.get("--breaker");
 	const breaker = breakerText === undefined ? undefined : parseBreakerSpec(breakerText);
 	const matchedText = values.get("--matched");
@@ -700,6 +726,7 @@ export function parseOptions(argv: string[]): Parsed {
 			...(subagentsArms === undefined ? {} : { subagentsArms }),
 			...(twinsText === undefined ? {} : { twinsPath: resolve(twinsText), twinArms: twinList }),
 			...(gridKind === undefined ? {} : { gridKind }),
+			...(passesFromDir === undefined ? {} : { passesFromDir: resolve(passesFromDir) }),
 			...(breaker === undefined ? {} : { breaker }),
 			...(retry ? { retryPolicy: { ...DEFAULT_RETRY_POLICY } } : {}),
 			...(matched === undefined ? {} : { matched }),
@@ -781,6 +808,7 @@ export function optionsFromManifest(dir: string, manifest: JsonRecord): Options 
 	const twins = twinOptionsFromManifest(manifest);
 	if (manifest.gridKind !== undefined && (typeof manifest.gridKind !== "string" || !manifest.gridKind)) throw new Error("--resume manifest has an invalid gridKind");
 	const gridKind = manifest.gridKind as string | undefined;
+	const passesFrom = manifest.passesFrom === undefined ? undefined : passesFromRecordOf(manifest.passesFrom);
 	// Absent: the grid ran fail-fast, and so does its resume. A present policy is
 	// read strictly, for the same reason as the cap above.
 	let breaker: BreakerPolicy | undefined;
@@ -805,9 +833,73 @@ export function optionsFromManifest(dir: string, manifest: JsonRecord): Options 
 		...arms,
 		...twins,
 		...(gridKind === undefined ? {} : { gridKind }),
+		...(passesFrom === undefined ? {} : { passesFrom }),
 		...(breaker === undefined ? {} : { breaker }),
 		...(retryPolicy === undefined ? {} : { retryPolicy }),
 		...(matched === undefined ? {} : { matched }),
+	};
+}
+
+/** Where a grid's pass count came from when it adopted another grid's (plan item 2.8 review). */
+export interface PassesFromRecord { dir: string; gridKind: string | null; gridId: string | null; official: boolean; passes: number; amendment: PassesAmendment }
+
+function passesFromRecordOf(value: unknown): PassesFromRecord {
+	if (!isJsonRecord(value) || typeof value.dir !== "string" || !(value.gridKind === null || typeof value.gridKind === "string") || !(value.gridId === null || typeof value.gridId === "string")
+		|| typeof value.official !== "boolean" || !Number.isSafeInteger(value.passes)) throw new Error("--resume manifest has an invalid passesFrom");
+	const [amendment] = parseAmendments([value.amendment]);
+	return { dir: value.dir, gridKind: value.gridKind as string | null, gridId: value.gridId as string | null, official: value.official, passes: value.passes as number, amendment: amendment! };
+}
+
+/** A JSONL file's rows; a line that is not a JSON object is kept as its text, so a strict reader refuses it. */
+async function jsonlRows(path: string): Promise<unknown[]> {
+	if (!await exists(path)) return [];
+	return (await readFile(path, "utf8")).split("\n").filter((l) => l.trim()).map((l) => parseJsonObject(l) ?? l);
+}
+
+/**
+ * A grid's pass-count amendments, cross-checked against resumes.jsonl (plan
+ * item 2.8 review): either file can be edited, and one edited without the
+ * other is a mismatch that refuses a resume and keeps a summary from ready.
+ */
+export async function gridAmendments(dir: string): Promise<{ amendments: PassesAmendment[]; mismatch?: string }> {
+	const amendments = parseAmendments(await jsonlRows(join(dir, "amendments.jsonl")));
+	const mismatch = amendmentsMismatch(amendments, await jsonlRows(join(dir, "resumes.jsonl")));
+	return { amendments, ...(mismatch ? { mismatch } : {}) };
+}
+
+/**
+ * The pass count a stage-2 grid adopts from its stage-1 grid: the one its
+ * pilot's single amendment fixed, with that grid's identity, so the preflight
+ * can check it is the kind's own stage 1 and official.
+ */
+export async function adoptPasses(dir: string): Promise<PassesFromRecord> {
+	const manifest = parseJsonObject(await readFile(join(dir, "manifest.json"), "utf8").catch(() => ""));
+	if (!manifest) throw new Error(`--passes-from ${dir}: no readable manifest.json`);
+	const { amendments, mismatch } = await gridAmendments(dir);
+	if (mismatch) throw new Error(`--passes-from ${dir}: ${mismatch}`);
+	if (amendments.length !== 1) throw new Error(`--passes-from ${dir}: that grid's pass count is not fixed (${amendments.length} amendments; its pilot's one amendment fixes it)`);
+	const amendment = amendments[0]!;
+	return {
+		dir, gridKind: typeof manifest.gridKind === "string" ? manifest.gridKind : null, gridId: typeof manifest.id === "string" ? manifest.id : null,
+		official: manifest.official === true, passes: amendment.to, amendment,
+	};
+}
+
+/**
+ * The amendment a resume makes, with what the grid held at that moment: how
+ * many runs, a hash of runs.jsonl and of summary.json (null when there is
+ * none), and who made it, so an amendment made after results were read can be
+ * told from one made before.
+ */
+async function makeAmendment(dir: string, from: number, to: number, reason: string | undefined, resume: number): Promise<PassesAmendment> {
+	const runsText = await readFile(join(dir, "runs.jsonl"), "utf8").catch(() => "");
+	const summaryText = await readFile(join(dir, "summary.json")).catch(() => undefined);
+	let user = "unknown";
+	try { user = userInfo().username; } catch { /* no passwd entry: the host still names the machine */ }
+	return {
+		kind: to === from ? "fix-passes" : "extend-passes", at: new Date().toISOString(), from, to, by: `${user}@${hostname()}`, reason: reason ?? null,
+		runsCompleted: runsText.split("\n").filter((l) => parseJsonObject(l)).length, runsSha256: sha256(runsText),
+		summarySha256: summaryText === undefined ? null : sha256(summaryText), resume,
 	};
 }
 
@@ -3388,6 +3480,8 @@ type Preflight = {
 	exploratoryReasons: string[];
 	/** The pinned official shapes this grid was judged against; the comparison's decision reads the same ones. */
 	officialShapes: OfficialShape[];
+	/** The grid kind it was launched as (plan item 2.8), when it was. */
+	kind?: GridKind;
 };
 
 async function runPreflight(options: Options, manifest: JsonRecord, saveManifest: () => Promise<void>, preflightRoot: string): Promise<Preflight> {
@@ -3455,13 +3549,19 @@ async function runPreflight(options: Options, manifest: JsonRecord, saveManifest
 			if (!kind) throw new Error(`--grid-kind ${options.gridKind} is not a grid kind of eval/delegation-compare.pins.json (known: ${Object.keys(comparePins.gridKinds).join(", ") || "none"})`);
 		}
 		const judged: [string, PinnedCorpus] | undefined = kind ? [kind.corpus, comparePins.corpora[kind.corpus]!] : kindlessCorpus(comparePins.corpora, ids);
-		// A kind with extendable passes fixes the targets; the pass count is the grid's own (plan item 2.8).
-		const gridPasses = kind?.extendablePasses ? options.passes : undefined;
+		// A kind with extendable or adopted passes fixes the targets; the pass count
+		// is the grid's own, checked by kindPassesReasons (plan item 2.8).
+		const passesByGrid = kind !== undefined && (kind.extendablePasses || kind.passesFrom !== null);
+		const gridPasses = passesByGrid ? options.passes : undefined;
 		const officialShapes: OfficialShape[] = judged && shapeOf(judged[1], gridPasses) ? [shapeOf(judged[1], gridPasses)!] : [];
 		const gridOfficial = isOfficialGrid(expectedCells, officialShapes);
 		if (kind) {
 			exploratoryReasons.push(...gridKindReasons(options.gridKind!, kind, {
 				...options, retry: options.retryPolicy !== undefined,
+			}));
+			exploratoryReasons.push(...kindPassesReasons(options.gridKind!, kind, {
+				passes: options.passes, amendments: Array.isArray(manifest.amendments) ? parseAmendments(manifest.amendments) : [],
+				...(options.passesFrom ? { passesFrom: options.passesFrom } : {}),
 			}));
 		}
 		if (!judged) exploratoryReasons.push("eval/delegation-compare.pins.json pins no corpus a grid without --grid-kind can be official on");
@@ -3470,7 +3570,7 @@ async function runPreflight(options: Options, manifest: JsonRecord, saveManifest
 				gateIds: ids, passes: options.passes, selected: options.selected.length > 0, manifestSha256: info.manifestHash,
 				targets: info.targets.map((t) => ({ id: t.id, name: t.name, truthSha256: info.truthHashes[t.id]! })),
 				...(info.twinsHash === undefined ? {} : { twinsSha256: info.twinsHash }),
-				...(kind?.extendablePasses ? { passesByGrid: true } : {}),
+				...(passesByGrid ? { passesByGrid: true } : {}),
 			}));
 		}
 		manifest.provider = provider;
@@ -3822,7 +3922,7 @@ async function runPreflight(options: Options, manifest: JsonRecord, saveManifest
 
 	preflight.status = "passed";
 	await saveManifest();
-	return { ctx, targets: inputs.targets, expectedCells: inputs.expectedCells, official, exploratoryReasons, officialShapes: inputs.officialShapes };
+	return { ctx, targets: inputs.targets, expectedCells: inputs.expectedCells, official, exploratoryReasons, officialShapes: inputs.officialShapes, ...(inputs.kind ? { kind: inputs.kind } : {}) };
 }
 
 /**
@@ -3956,6 +4056,7 @@ export function resumeMismatches(prior: JsonRecord, fresh: JsonRecord, allow: { 
 	eq("twinArms", prior.twinArms, fresh.twinArms);
 	// A grid that claimed a kind is judged by it; resumed as another it would be two grids.
 	eq("gridKind", prior.gridKind, fresh.gridKind);
+	eq("passesFrom", prior.passesFrom, fresh.passesFrom);
 	// A grid that re-queued and stopped under one policy, then resumed under
 	// another, would be one grid run under two stopping rules.
 	eq("breaker", prior.breaker, fresh.breaker);
@@ -4165,6 +4266,7 @@ export function newManifest(options: Options, mode: string): JsonRecord {
 		...(options.subagentsArms === undefined ? {} : { subagentsArms: options.subagentsArms }),
 		...(options.twinArms === undefined ? {} : { twinArms: options.twinArms }),
 		...(options.gridKind === undefined ? {} : { gridKind: options.gridKind }),
+		...(options.passesFrom === undefined ? {} : { passesFrom: options.passesFrom }),
 		...(options.breaker === undefined ? {} : { breaker: options.breaker }),
 		// Only a grid that asked for retries records a policy, so a grid without
 		// one writes the v5 manifest, and a v5 manifest resumes with retries off.
@@ -4188,8 +4290,13 @@ async function main(): Promise<void> {
 	// including any `--only CVE-…`. Replace them before any child starts. The
 	// owner record also relies on this title to recognise a live runner.
 	process.title = RUNNER_TITLE;
-	if (parsed.kind === "resume") return await resumeMain(parsed.dir, parsed.extendPasses);
+	if (parsed.kind === "resume") return await resumeMain(parsed.dir, parsed.extendPasses, parsed.extendReason);
 	const options = parsed.options;
+	if (options.passesFromDir !== undefined) {
+		options.passesFrom = await adoptPasses(options.passesFromDir);
+		options.passes = options.passesFrom.passes;
+		console.log(`--passes-from ${options.passesFromDir}: ${options.passes} passes, fixed by that grid's ${options.passesFrom.amendment.kind} amendment of ${options.passesFrom.amendment.at}`);
+	}
 	const outHits = findLeaks({ "--out": options.out }, []);
 	if (outHits.length) throw new Error(`--out must not contain an advisory identifier (${outHits.join(", ")}): every cell path sits under it and reaches the model.`);
 	await ensureEmptyOutput(options.out);
@@ -4231,25 +4338,26 @@ type GridPaths = { manifestPath: string; preflightRoot: string; statusPath: stri
  * manifest go to resume-<n>/, its recomputed pins are compared with the
  * untouched original, and only an accepted resume touches progress.json.
  */
-async function resumeMain(dir: string, extendPasses?: number): Promise<void> {
+async function resumeMain(dir: string, extendPasses?: number, extendReason?: string): Promise<void> {
 	const priorPath = join(dir, "manifest.json");
 	if (!await exists(priorPath)) throw new Error(`--resume: no manifest.json in ${dir}`);
 	// Before anything is written: a resume beside a live runner would re-launch its in-flight pairs.
 	await claimOwner(dir, "resume");
 	const prior = parseJsonObject(await readFile(priorPath, "utf8")) ?? {};
 	const options = optionsFromManifest(dir, prior);
-	// The grid's pass count is its manifest's as amended by earlier extensions
-	// (plan item 2.8); manifest.json itself is never rewritten.
-	const amendmentsPath = join(dir, "amendments.jsonl");
-	const amendments = await exists(amendmentsPath)
-		? parseAmendments((await readFile(amendmentsPath, "utf8")).split("\n").filter((l) => l.trim()).map((l) => parseJsonObject(l) ?? l))
-		: [];
+	// The grid's pass count is its manifest's as amended (plan item 2.8);
+	// manifest.json itself is never rewritten. amendments.jsonl must agree with
+	// resumes.jsonl, or one of them was edited.
+	const { amendments, mismatch } = await gridAmendments(dir);
+	if (mismatch) throw new Error(`--resume refused: ${mismatch}`);
 	options.passes = currentPasses(options.passes, amendments);
-	let extension: PassesAmendment | undefined;
+	const amendFrom = options.passes;
 	if (extendPasses !== undefined) {
-		const why = extensionRefusal({ passes: options.passes, official: prior.official === true, ...(options.gridKind === undefined ? {} : { gridKind: options.gridKind }) }, extendPasses, loadComparePins().gridKinds);
+		const why = extensionRefusal({
+			passes: options.passes, official: prior.official === true, amendments, to: extendPasses,
+			...(options.gridKind === undefined ? {} : { gridKind: options.gridKind }), ...(extendReason === undefined ? {} : { reason: extendReason }),
+		}, loadComparePins().gridKinds);
 		if (why) throw new Error(`--resume refused: ${why}`);
-		extension = { kind: "extend-passes", at: new Date().toISOString(), from: options.passes, to: extendPasses, resume: 0 };
 		options.passes = extendPasses;
 	}
 	const priorRuns: JsonRecord[] = [];
@@ -4261,13 +4369,13 @@ async function resumeMain(dir: string, extendPasses?: number): Promise<void> {
 		}
 	}
 	const { n, root } = await claimResumeDir(dir);
-	if (extension) extension.resume = n;
+	const extension = extendPasses === undefined ? undefined : await makeAmendment(dir, amendFrom, extendPasses, extendReason, n);
 	const manifest = newManifest(options, "resume");
 	manifest.resumedFrom = { id: prior.id ?? null, n, priorRuns: priorRuns.length, originalManifest: priorPath };
 	// Every amendment so far, this resume's included, and only when there is one.
 	const all = [...amendments, ...(extension ? [extension] : [])];
 	if (all.length) manifest.amendments = all;
-	console.log(`resume ${n}: preflight and pin check in ${root}; the grid's manifest.json and progress.json are not written unless the resume is accepted${extension ? `; extends the grid from ${extension.from} to ${extension.to} passes` : ""}`);
+	console.log(`resume ${n}: preflight and pin check in ${root}; the grid's manifest.json and progress.json are not written unless the resume is accepted${extension ? `; ${extension.kind === "fix-passes" ? `fixes the grid at ${extension.to}` : `extends the grid from ${extension.from} to ${extension.to}`} passes` : ""}`);
 	await driveGrid(options, manifest, { prior, priorRuns, n, root, ...(all.length ? { passes: options.passes } : {}), ...(extension ? { extension } : {}) }, {
 		manifestPath: join(root, "manifest.json"), preflightRoot: root, statusPath: join(root, "status.json"),
 	});
@@ -4357,7 +4465,7 @@ async function driveGrid(options: Options, manifest: JsonRecord, resume: ResumeI
 			await appendJsonl(join(output, "resumes.jsonl"), {
 				n: resume.n, id: manifest.id, manifest: relative(output, paths.manifestPath), acceptedAt: new Date().toISOString(),
 				rerun: plan.rerunKeys, kept: plan.keepKeys, blocked: plan.blockedKeys, ...(options.breaker ? { abandoned: plan.abandonedKeys } : {}),
-				...(resume.extension ? { extendedPasses: { from: resume.extension.from, to: resume.extension.to } } : {}),
+				...(resume.extension ? { extendedPasses: { from: resume.extension.from, to: resume.extension.to }, amendment: resume.extension } : {}),
 			});
 			// The amendment is on record only once the resume that makes it is accepted.
 			if (resume.extension) await appendJsonl(join(output, "amendments.jsonl"), resume.extension);
@@ -5172,9 +5280,19 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 	// written; the gate's own completeness decides, as the arm never enters it.
 	// So does a stop a patched twin's run caused (plan item 2.8).
 	const stopWithholdsApproval = stoppedInvalid && runState.stoppedBy === undefined;
+	// The pass-count amendments, cross-checked again at the summary: an edit to
+	// amendments.jsonl or resumes.jsonl during the grid keeps it from a decision.
+	const recorded = await gridAmendments(output).catch((error: unknown) => ({ amendments: [] as PassesAmendment[], mismatch: `amendments unreadable: ${message(error)}` }));
+	const amendmentReasons = [
+		...(recorded.mismatch ? [`pass-count amendments: ${recorded.mismatch}`] : []),
+		...(JSON.stringify(recorded.amendments) !== JSON.stringify(manifest.amendments ?? []) ? ["pass-count amendments: amendments.jsonl changed during the grid"] : []),
+		// A pilot's grid is not ready until its one amendment fixes the pass count.
+		...(pre.kind?.extendablePasses && !recorded.amendments.length ? [`the pass count is not fixed yet: the pilot's amendment (--resume ${output} --extend-passes <n> --extend-reason <text>) is pending`] : []),
+	];
 	// A grid of a kind (plan item 2.8) is decided by the v6 pre-registration's
 	// rule, computed elsewhere: ADR-026's approval is neither computed nor printed.
-	const approved = options.gridKind === undefined && official && !interrupted && !stopWithholdsApproval && runtimeStable && comparison.complete && comparison.decision === APPROVAL;
+	const approved = options.gridKind === undefined && official && !interrupted && !stopWithholdsApproval && runtimeStable && comparison.complete && comparison.decision === APPROVAL
+		&& amendmentReasons.length === 0;
 	// A patched twin that gave up or was abandoned is no reason the gate did not
 	// approve; it is listed in the breaker block and the twins block instead.
 	const twinKeys = new Set(pairs.filter((p) => p.twin).map((p) => p.key));
@@ -5193,6 +5311,7 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 		...(!runtimeStable ? ["the pi runtime changed during the grid"] : []),
 		...(!comparison.complete ? [`grid incomplete or invalid: ${comparison.missingOrInvalid.slice(0, 4).join("; ") || "missing pairs"}`] : []),
 		...(comparison.complete && comparison.decision !== APPROVAL && options.gridKind === undefined ? [`comparison decision: ${comparison.decision}`] : []),
+		...amendmentReasons,
 	];
 	const verdictOut = verdictFields(options.gridKind, { approved, notApprovedReasons, comparison, ...(meteredOnlyComparison ? { meteredOnlyComparison } : {}) });
 	const inputsRecord = (manifest.inputs ?? {}) as JsonRecord;

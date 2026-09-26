@@ -6,7 +6,7 @@ import {
 	accountCellUsage, atHighestAttempt, attemptReport, AUTH_HORIZON_CAP_MS, AUTH_MARGIN_MS, benchmarkRuntimeOf, checkAuthHorizon, childProviderFailure, classifyInfra,
 	credentialExpiry, decideInfra, DEFAULT_CANDIDATE_MAX_AGENTS, fetchErrorsFromStderr, gridWorstCaseMs, isBrokerEnvVar, loadTargets, metricFromRecord, notLaunchedOutcome, ownerIsLive,
 	newManifest, optionsFromManifest, parseBreakerSpec, parseComparePins, parseOptions, parseOwnerRecord, planResume, providerFailureTexts, requestLogFromStderr,
-	armOptionsFromManifest, cellModelInputs, credentialStopOutcome, credentialStopReason, horizonRefusal, redactTermsFor, V6_DECISION, verdictFields, manifestTargetEntry, probeDelegationScope, resumeMismatches, splitTwinRuns, twinOptionsFromManifest, retryPolicyFromManifest, reviewScope, runPairs, runStop, runtimeMismatch, scopedSealCommand, startTimeFromStat, subagentConfigFor,
+	adoptPasses, armOptionsFromManifest, cellModelInputs, credentialStopOutcome, gridAmendments, credentialStopReason, horizonRefusal, redactTermsFor, V6_DECISION, verdictFields, manifestTargetEntry, probeDelegationScope, resumeMismatches, splitTwinRuns, twinOptionsFromManifest, retryPolicyFromManifest, reviewScope, runPairs, runStop, runtimeMismatch, scopedSealCommand, startTimeFromStat, subagentConfigFor,
 	toolSurfaceErrors, trackStream, workerCapReason,
 	ceilingOf, ceilingProbeErrors, latestMatchedSessions, planMatchedResume, sessionRunOf, verifyCeiling,
 	type GridStopState, type MatchedSessionSpec, type ProviderFailures, type RunOutcome,
@@ -19,8 +19,8 @@ import { compareMatchedRuns, DEFAULT_BREAKER, observationsFromChildSession, plan
 
 /** The shipped pins, read once: every stage command line below is built from its kind (kindFlags). */
 const SHIPPED_PINS = parseComparePins(readFileSync(new URL("./delegation-compare.pins.json", import.meta.url), "utf8"));
-const STAGE1 = [...kindFlags("v6-stage1", SHIPPED_PINS.gridKinds["v6-stage1"]!, { twins: "/twins.json" }), "--passes", "6"];
-const STAGE2 = [...kindFlags("v6-stage2", SHIPPED_PINS.gridKinds["v6-stage2"]!), "--auth-horizon-hours", "200", "--passes", "6"];
+const STAGE1 = [...kindFlags("v6-stage1", SHIPPED_PINS.gridKinds["v6-stage1"]!, { twins: "/twins.json" }), "--auth-horizon-hours", "200"];
+const STAGE2 = [...kindFlags("v6-stage2", SHIPPED_PINS.gridKinds["v6-stage2"]!, { passesFrom: "/grids/stage1" }), "--auth-horizon-hours", "200"];
 
 // Per-file builders: a run record as the runner appends it to runs.jsonl, a
 // manifest fragment as resume reads it back, pi's transcript events, and the
@@ -2431,5 +2431,70 @@ describe("the OAuth horizon of long grids (plan 2.8 review)", () => {
 		const partner = credentialStopOutcome(planSchedule(["A"], 1)[0]!, "candidate", 1);
 		expect(partner.record).toMatchObject({ notLaunched: true, infraFailure: true, valid: false });
 		expect(planResume(planSchedule(["A"], 1), [{ key: "A#1", arm: "baseline", attempt: 1, valid: true }, partner.record]).rerunKeys).toEqual(["A#1"]);
+	});
+});
+
+describe("the pilot's one amendment and stage 2's adopted passes (plan 2.8 review)", () => {
+	const argv = (...extra: string[]): string[] => [
+		"--baseline", "/b", "--candidate", "/c", "--corpus", "/corpus", "--truth", "/truth", "--out", "/out",
+		"--provider", "openai-codex", "--model", "gpt-6-luna", ...extra,
+	];
+	const amendment = (over: Record<string, unknown> = {}) => ({
+		kind: "extend-passes", at: "2026-09-27T10:00:00Z", from: 2, to: 6, by: "op@host", reason: "pilot SD 1.1 gives 6", runsCompleted: 48,
+		runsSha256: "1".repeat(64), summarySha256: null, resume: 1, ...over,
+	});
+	// A stage-1 grid directory as the runner leaves it after its amendment.
+	const stage1Dir = async (files: { amendments?: unknown[]; resumes?: unknown[]; manifest?: Record<string, unknown> } = {}) => {
+		const dir = await mkdtemp(join(tmpdir(), "pired-stage1-"));
+		await writeFile(join(dir, "manifest.json"), JSON.stringify(files.manifest ?? { id: "g1", gridKind: "v6-stage1", official: true, passes: 2 }));
+		const lines = (rows: unknown[]) => rows.map((r) => JSON.stringify(r)).join("\n") + (rows.length ? "\n" : "");
+		await writeFile(join(dir, "amendments.jsonl"), lines(files.amendments ?? [amendment()]));
+		await writeFile(join(dir, "resumes.jsonl"), lines(files.resumes ?? [{ n: 1, rerun: [], extendedPasses: { from: 2, to: 6 }, amendment: amendment() }]));
+		return dir;
+	};
+
+	it("takes a reason with the amendment, and never a reason alone", () => {
+		expect(parseOptions(["--resume", "/grid", "--extend-passes", "6", "--extend-reason", "pilot SD 1.1 gives 6"])).toEqual({ kind: "resume", dir: "/grid", extendPasses: 6, extendReason: "pilot SD 1.1 gives 6" });
+		expect(parseOptions(["--resume", "/grid", "--extend-reason", "x", "--extend-passes", "2"])).toMatchObject({ extendPasses: 2, extendReason: "x" });
+		expect(() => parseOptions(["--resume", "/grid", "--extend-reason", "x"])).toThrow(/needs --extend-passes/);
+		expect(() => parseOptions(["--resume", "/grid", "--extend-passes", "6", "--extend-passes", "7"])).toThrow(/--resume takes exactly one argument/);
+	});
+
+	// Stage 2's count is read from stage 1's amendment, never typed.
+	it("takes stage 2's pass count only from a stage-1 grid, and only with a kind", () => {
+		const parsed = parseOptions(argv("--passes-from", "/grids/s1", "--grid-kind", "v6-stage2"));
+		expect(parsed !== "help" && parsed.kind === "run" && parsed.options.passesFromDir).toBe("/grids/s1");
+		expect(() => parseOptions(argv("--passes-from", "/grids/s1"))).toThrow(/--passes-from needs --grid-kind/);
+		expect(() => parseOptions(argv("--passes-from", "/grids/s1", "--passes", "6", "--grid-kind", "v6-stage2"))).toThrow(/do not also pass --passes/);
+	});
+
+	it("adopts the count stage 1's one amendment fixed, with that grid's identity", async () => {
+		const dir = await stage1Dir();
+		expect(await adoptPasses(dir)).toEqual({ dir, gridKind: "v6-stage1", gridId: "g1", official: true, passes: 6, amendment: amendment() });
+		const fixed = await stage1Dir({ amendments: [amendment({ kind: "fix-passes", to: 2 })], resumes: [{ n: 1, amendment: amendment({ kind: "fix-passes", to: 2 }) }] });
+		expect((await adoptPasses(fixed)).passes).toBe(2);
+		await expect(adoptPasses(await stage1Dir({ amendments: [], resumes: [] }))).rejects.toThrow(/not fixed \(0 amendments/);
+	});
+
+	// Either jsonl can be edited; an amendment in one and not the other refuses.
+	it("refuses a stage-1 grid whose amendments disagree with its resumes", async () => {
+		const edited = await stage1Dir({ amendments: [amendment({ to: 8 })] });
+		await expect(adoptPasses(edited)).rejects.toThrow(/amendment 1 differs/);
+		expect((await gridAmendments(edited)).mismatch).toMatch(/amendment 1 differs/);
+		const unrecorded = await stage1Dir({ resumes: [{ n: 1, rerun: [] }] });
+		expect((await gridAmendments(unrecorded)).mismatch).toMatch(/resumes.jsonl records 0/);
+		// A grid with neither file has no amendments and no mismatch.
+		expect(await gridAmendments(await mkdtemp(join(tmpdir(), "pired-plain-")))).toEqual({ amendments: [] });
+	});
+
+	it("pins the adopted count and its source in the manifest, and refuses a resume that changes it", () => {
+		const opts = parseOptions(argv("--passes-from", "/grids/s1", "--grid-kind", "v6-stage2"));
+		if (opts === "help" || opts.kind !== "run") throw new Error("expected a run");
+		const passesFrom = { dir: "/grids/s1", gridKind: "v6-stage1", gridId: "g1", official: true, passes: 6, amendment: { ...amendment(), kind: "extend-passes" as const } };
+		const manifest: Record<string, unknown> = { ...newManifest({ ...opts.options, passes: 6, passesFrom }, "live"), inputs: { corpus: "/corpus", truth: "/truth", corpusManifest: { path: "/m.json" }, baseline: { path: "/b" }, candidate: { path: "/c" } }, pins: { landlockWrapper: "/seal" } };
+		expect(manifest.passesFrom).toEqual(passesFrom);
+		expect(optionsFromManifest("/out", manifest).passesFrom).toEqual(passesFrom);
+		expect(resumeMismatches({ passesFrom }, { passesFrom: { ...passesFrom, passes: 8 } })).toEqual(["passesFrom"]);
+		expect(() => optionsFromManifest("/out", { ...manifest, passesFrom: { ...passesFrom, amendment: {} } })).toThrow(/row 1/);
 	});
 });

@@ -454,10 +454,19 @@ export interface GridKind {
 	thinking: string | null;
 	/**
 	 * Whether the grid's passes may grow at a resume (--extend-passes). When true
-	 * the pass count is the grid's own, set by its pilot and its extensions, and
-	 * the corpus pins none.
+	 * the pass count is the grid's own, set by its pilot and its one amendment,
+	 * and the corpus pins none.
 	 */
 	extendablePasses: boolean;
+	/** The pilot's pass count an extendable kind's grid starts at; null otherwise. */
+	pilotPasses: number | null;
+	/** The most passes its one amendment may fix; null leaves it open. */
+	maxPasses: number | null;
+	/**
+	 * The kind whose fixed pass count this kind's grid adopts (--passes-from):
+	 * stage 2 runs at the count stage 1's pilot fixed. Null otherwise.
+	 */
+	passesFrom: string | null;
 }
 
 const hexCommit = (value: unknown): boolean => typeof value === "string" && /^[0-9a-f]{40}$/.test(value);
@@ -505,6 +514,18 @@ export function parseGridKinds(value: unknown, corpora: Record<string, PinnedCor
 		}
 		if (raw.timeoutMs !== null && !(typeof raw.timeoutMs === "number" && Number.isSafeInteger(raw.timeoutMs) && raw.timeoutMs > 0)) throw new Error(`${where}.timeoutMs must be null or a positive integer`);
 		if (raw.extendablePasses !== undefined && typeof raw.extendablePasses !== "boolean") throw new Error(`${where}.extendablePasses must be a boolean`);
+		const passCount = (key: "pilotPasses" | "maxPasses"): number | null => {
+			const v = raw[key] ?? null;
+			if (v !== null && !(Number.isSafeInteger(v) && (v as number) >= 1)) throw new Error(`${where}.${key} must be null or a positive integer`);
+			return v as number | null;
+		};
+		const pilotPasses = passCount("pilotPasses");
+		const maxPasses = passCount("maxPasses");
+		if (raw.extendablePasses === true && pilotPasses === null) throw new Error(`${where}: an extendable kind needs pilotPasses, the count its grid starts at`);
+		if (pilotPasses !== null && maxPasses !== null && pilotPasses > maxPasses) throw new Error(`${where}.pilotPasses is above maxPasses`);
+		const passesFrom = raw.passesFrom ?? null;
+		if (passesFrom !== null && (typeof passesFrom !== "string" || !passesFrom || name === passesFrom)) throw new Error(`${where}.passesFrom must be null or another kind's name`);
+		if (passesFrom !== null && raw.extendablePasses === true) throw new Error(`${where} takes its passes from ${String(passesFrom)}, so it cannot also extend them`);
 		if (raw.thinking !== null && !(typeof raw.thinking === "string" && ["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(raw.thinking))) throw new Error(`${where}.thinking must be null or a thinking level`);
 		out[name] = {
 			corpus: raw.corpus, baseline: { ...(baseline as Record<string, unknown>) } as GridKind["baseline"], candidate: { ...(candidate as Record<string, unknown>) } as unknown as SnapshotPin,
@@ -512,7 +533,11 @@ export function parseGridKinds(value: unknown, corpora: Record<string, PinnedCor
 			maxVerifiers: { ...verifiers } as Partial<Record<PairArm, number>>, budgetArms: arms("budgetArms", ARM_ORDER), subagentsArms: arms("subagentsArms", ARM_ORDER),
 			twinArms: arms("twinArms", ["baseline", "candidate"]) as PairArm[],
 			matched, retry: raw.retry, breaker, timeoutMs: raw.timeoutMs as number | null, thinking: raw.thinking as string | null, extendablePasses: raw.extendablePasses === true,
+			pilotPasses, maxPasses, passesFrom: passesFrom as string | null,
 		};
+	}
+	for (const [name, kind] of Object.entries(out)) {
+		if (kind.passesFrom !== null && !out[kind.passesFrom]?.extendablePasses) throw new Error(`pins: gridKinds.${name}.passesFrom must name an extendable kind`);
 	}
 	// Resolve `sameAs` once every kind is read: a pin names "<kind>.<baseline|candidate>",
 	// which must itself be a digest pin, never another reference.
@@ -623,21 +648,48 @@ export function kindSnapshotReasons(name: string, kind: GridKind, measured: {
 }
 
 /**
- * One amendment to a running grid (plan item 2.8): its pass count extended at
- * a resume. The grid's manifest.json is written once and never rewritten, so
- * amendments are appended to <out>/amendments.jsonl when the resume that makes
- * them is accepted, and every later resume's manifest lists them all.
+ * One amendment to a running grid's pass count (plan item 2.8). The grid's
+ * manifest.json is written once and never rewritten, so an amendment is
+ * appended to <out>/amendments.jsonl, and to its resume's row in
+ * resumes.jsonl, when the resume that makes it is accepted; every later
+ * resume's manifest lists them all.
+ *
+ * - `extend-passes` grows the grid from `from` to `to` passes.
+ * - `fix-passes` keeps the count (`from` = `to`): the pilot's rule gave no
+ *   more passes than it ran, and the grid says so rather than staying open.
+ *
+ * It records who made it and why, and what the grid held at that moment (how
+ * many runs, a hash of runs.jsonl, a hash of summary.json when there is one),
+ * so an amendment made after reading results can be told from one made before.
  */
-export interface PassesAmendment { kind: "extend-passes"; at: string; from: number; to: number; resume: number }
+export interface PassesAmendment {
+	kind: "extend-passes" | "fix-passes";
+	at: string;
+	from: number;
+	to: number;
+	/** user@host of the operator who ran the resume. */
+	by: string;
+	reason: string | null;
+	runsCompleted: number;
+	runsSha256: string;
+	summarySha256: string | null;
+	resume: number;
+}
 
 /** The amendments a grid's amendments.jsonl holds, read strictly: a malformed row refuses the resume. */
 export function parseAmendments(rows: readonly unknown[]): PassesAmendment[] {
 	return rows.map((row, i) => {
-		if (!isRecord(row) || row.kind !== "extend-passes" || typeof row.at !== "string" || !Number.isSafeInteger(row.from) || !Number.isSafeInteger(row.to)
-			|| (row.to as number) <= (row.from as number) || !Number.isSafeInteger(row.resume)) {
-			throw new Error(`amendments.jsonl row ${i + 1} is not an extend-passes amendment`);
-		}
-		return { kind: "extend-passes", at: row.at, from: row.from as number, to: row.to as number, resume: row.resume as number };
+		const ok = isRecord(row) && (row.kind === "extend-passes" || row.kind === "fix-passes") && typeof row.at === "string"
+			&& Number.isSafeInteger(row.from) && Number.isSafeInteger(row.to)
+			&& (row.kind === "extend-passes" ? (row.to as number) > (row.from as number) : row.to === row.from)
+			&& typeof row.by === "string" && (row.reason === null || typeof row.reason === "string")
+			&& Number.isSafeInteger(row.runsCompleted) && hex64(row.runsSha256) && (row.summarySha256 === null || hex64(row.summarySha256)) && Number.isSafeInteger(row.resume);
+		if (!ok) throw new Error(`amendments.jsonl row ${i + 1} is not a pass-count amendment`);
+		const r = row as Record<string, unknown>;
+		return {
+			kind: r.kind as PassesAmendment["kind"], at: r.at as string, from: r.from as number, to: r.to as number, by: r.by as string, reason: r.reason as string | null,
+			runsCompleted: r.runsCompleted as number, runsSha256: r.runsSha256 as string, summarySha256: r.summarySha256 as string | null, resume: r.resume as number,
+		};
 	});
 }
 
@@ -649,26 +701,94 @@ export function parseAmendments(rows: readonly unknown[]): PassesAmendment[] {
 export function currentPasses(manifestPasses: number, amendments: readonly PassesAmendment[]): number {
 	let passes = manifestPasses;
 	for (const a of amendments) {
-		if (a.from !== passes) throw new Error(`amendments.jsonl extends ${a.from} passes, but the grid had ${passes} at that point`);
+		if (a.from !== passes) throw new Error(`amendments.jsonl amends ${a.from} passes, but the grid had ${passes} at that point`);
 		passes = a.to;
 	}
 	return passes;
 }
 
 /**
- * Why a resume may not extend a grid's passes to `to`, or undefined when it
- * may. The v6 pre-registration's pilot runs 2 passes whose pairs count toward
- * the final analysis, so its grid must grow to the pass count the pilot fixes.
- * An official grid grows only when its kind says it may: a v5 official grid is
- * three passes by definition, and extending it would turn a decision in
- * progress into an exploratory grid.
+ * Why amendments.jsonl and resumes.jsonl disagree, or undefined when every
+ * amendment is recorded in both, in the same order, field for field. Either
+ * file can be edited; one edited without the other is caught here, on every
+ * resume and at every summary.
  */
-export function extensionRefusal(grid: { passes: number; official: boolean; gridKind?: string }, to: number, kinds: Record<string, Pick<GridKind, "extendablePasses">>): string | undefined {
-	if (!Number.isSafeInteger(to) || to <= grid.passes) return `--extend-passes ${to} must be greater than the grid's ${grid.passes} passes`;
-	if (!grid.official) return undefined;
-	if (grid.gridKind === undefined) return "an official grid without a grid kind has a fixed pass count and cannot be extended";
-	if (!kinds[grid.gridKind]?.extendablePasses) return `grid kind ${grid.gridKind} does not declare extendablePasses, so its official grid cannot be extended`;
+export function amendmentsMismatch(amendments: readonly PassesAmendment[], resumeRows: readonly unknown[]): string | undefined {
+	const recorded = resumeRows.flatMap((row) => isRecord(row) && row.amendment !== undefined ? [row.amendment] : []);
+	if (recorded.length !== amendments.length) return `amendments.jsonl holds ${amendments.length} amendment(s) and resumes.jsonl records ${recorded.length}`;
+	for (const [i, a] of amendments.entries()) {
+		if (JSON.stringify(a) !== JSON.stringify(recorded[i])) return `amendment ${i + 1} differs between amendments.jsonl and resumes.jsonl`;
+	}
 	return undefined;
+}
+
+/** What a resume is asked to amend, and the grid it amends. */
+export interface AmendmentRequest {
+	passes: number;
+	official: boolean;
+	gridKind?: string;
+	amendments: readonly PassesAmendment[];
+	to: number;
+	reason?: string;
+}
+
+/**
+ * Why a resume may not amend a grid's passes to `to`, or undefined when it
+ * may. The v6 pre-registration's internal pilot runs `pilotPasses` passes whose
+ * pairs count toward the final analysis, and its rule then fixes the count, so
+ * the pilot's grid grows into the full one: once.
+ *
+ * - An official grid of a kind amends only when its kind declares
+ *   extendablePasses, only once, only from the pilot's count, to at most
+ *   `maxPasses`, and only with a stated reason. A second amendment would let
+ *   the count follow the results.
+ * - An official grid without a kind (v5) is three passes by definition.
+ * - An exploratory grid may grow; it may fix its count only if it has a kind
+ *   that is extendable, since nothing else reads the fix.
+ */
+export function extensionRefusal(request: AmendmentRequest, kinds: Record<string, Pick<GridKind, "extendablePasses" | "pilotPasses" | "maxPasses">>): string | undefined {
+	const { passes, to } = request;
+	if (!Number.isSafeInteger(to) || to < passes) return `--extend-passes ${to} is below the grid's ${passes} passes`;
+	const kind = request.gridKind === undefined ? undefined : kinds[request.gridKind];
+	if (to === passes && !kind?.extendablePasses) return `--extend-passes ${to} keeps the grid's ${passes} passes, and only a grid of an extendable kind has a pass count to fix`;
+	if (!request.official) return undefined;
+	if (request.gridKind === undefined) return "an official grid without a grid kind has a fixed pass count and cannot be extended";
+	if (!kind?.extendablePasses) return `grid kind ${request.gridKind} does not declare extendablePasses, so its official grid cannot be extended`;
+	if (request.amendments.length) return `grid kind ${request.gridKind}'s official grid has already fixed its pass count (${request.amendments.length} amendment(s)); it is amended once`;
+	if (passes !== kind.pilotPasses) return `grid kind ${request.gridKind}'s official grid is amended from its pilot's ${kind.pilotPasses} passes, not ${passes}`;
+	if (kind.maxPasses !== null && to > kind.maxPasses) return `grid kind ${request.gridKind} runs at most ${kind.maxPasses} passes, not ${to}`;
+	if (!request.reason?.trim()) return `grid kind ${request.gridKind}'s official grid needs --extend-reason <text>: why the pass count is ${to}`;
+	return undefined;
+}
+
+/**
+ * Why a kind grid's pass count is not its kind's, or [] when it is: a pilot
+ * grid starts at its pilot's count and is amended once to at most maxPasses;
+ * a grid whose kind takes its passes from another stage runs exactly the
+ * count that stage fixed.
+ */
+export function kindPassesReasons(name: string, kind: GridKind, grid: { passes: number; amendments: readonly PassesAmendment[]; passesFrom?: { gridKind: string | null; passes: number; official: boolean } }): string[] {
+	const reasons: string[] = [];
+	const say = (text: string): void => { reasons.push(`grid kind ${name}: ${text}`); };
+	if (kind.extendablePasses) {
+		const [first, ...more] = grid.amendments;
+		if (!first && grid.passes !== kind.pilotPasses) say(`the pilot runs ${kind.pilotPasses} passes, not ${grid.passes}`);
+		if (first && first.from !== kind.pilotPasses) say(`its amendment starts from ${first.from} passes, not the pilot's ${kind.pilotPasses}`);
+		if (first && kind.maxPasses !== null && first.to > kind.maxPasses) say(`its amendment runs ${first.to} passes, past ${kind.maxPasses}`);
+		if (more.length) say(`its pass count was amended ${grid.amendments.length} times, not once`);
+	}
+	if (kind.passesFrom !== null) {
+		const from = grid.passesFrom;
+		if (!from) say(`it takes its pass count from a ${kind.passesFrom} grid (--passes-from <dir>)`);
+		else {
+			if (from.gridKind !== kind.passesFrom) say(`its passes come from a ${from.gridKind ?? "kindless"} grid, not ${kind.passesFrom}`);
+			if (!from.official) say("the grid it takes its passes from is not official");
+			if (grid.passes !== from.passes) say(`it runs ${grid.passes} passes, not the ${from.passes} it adopted`);
+		}
+	} else if (!kind.extendablePasses && grid.amendments.length) {
+		say(`its pass count was amended ${grid.amendments.length} time(s), and the kind does not declare extendablePasses`);
+	}
+	return reasons;
 }
 
 /**
@@ -689,7 +809,7 @@ export function scheduleExtends(prior: readonly unknown[], fresh: readonly unkno
  * from this, so a kind and the flags that claim it cannot drift apart. The
  * paths (snapshots, corpus, twins file, output) are the caller's.
  */
-export function kindFlags(name: string, kind: GridKind, paths: { twins?: string } = {}): string[] {
+export function kindFlags(name: string, kind: GridKind, paths: { twins?: string; passesFrom?: string } = {}): string[] {
 	const flags: string[] = [];
 	if (kind.thinking !== null) flags.push("--thinking", kind.thinking);
 	flags.push("--candidate-max-agents", String(kind.candidateMaxAgents));
@@ -707,6 +827,8 @@ export function kindFlags(name: string, kind: GridKind, paths: { twins?: string 
 	if (kind.breaker === true) flags.push("--breaker", "default");
 	else if (kind.breaker) flags.push("--breaker", Object.entries(kind.breaker).map(([k, v]) => `${k}=${v}`).join(","));
 	if (kind.timeoutMs !== null) flags.push("--timeout", String(kind.timeoutMs));
+	if (kind.extendablePasses && kind.pilotPasses !== null) flags.push("--passes", String(kind.pilotPasses));
+	if (kind.passesFrom !== null) flags.push("--passes-from", paths.passesFrom ?? `<${kind.passesFrom} grid>`);
 	flags.push("--grid-kind", name);
 	return flags;
 }

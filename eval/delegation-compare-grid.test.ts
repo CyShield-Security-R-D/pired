@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import {
 	corpusReasons, DEFAULT_BUDGET_ARMS, delegationOff, kindlessArmReasons, kindlessCorpus, parseArmList, parseCorpora, parseMaxVerifiers, scopeFor, scopeSettingsFor, shapeOf,
-	currentPasses, extensionRefusal, gridKindReasons, kindSnapshotReasons, parseAmendments, parseGridKinds, scheduleExtends, summarizeTwins, twinTargets, type CorpusInput, type GridKind, type GridOptions, type PinnedCorpus,
+	amendmentsMismatch, currentPasses, extensionRefusal, gridKindReasons, kindFlags, kindPassesReasons, kindSnapshotReasons, parseAmendments, parseGridKinds, scheduleExtends, summarizeTwins, twinTargets, type CorpusInput, type GridKind, type GridOptions, type PinnedCorpus,
 } from "./delegation-compare-grid.ts";
 import { armsOfPair, DEFAULT_BREAKER, isOfficialGrid, OFFICIAL_PASSES, OFFICIAL_TARGET_IDS, planSchedule, type ExpectedCell } from "./delegation-compare-lib.ts";
 
@@ -289,7 +289,8 @@ describe("grid kinds", () => {
 	const kind = (over: Partial<GridKind> = {}): GridKind => ({
 		corpus: "c", baseline: { digest: sha("b") }, candidate: { digest: sha("c") }, baselineMaxAgents: 0, candidateMaxAgents: 8,
 		maxVerifiers: { baseline: 0, candidate: 2 }, budgetArms: ["baseline", "candidate", "matched"], subagentsArms: ["baseline", "candidate", "matched"], twinArms: [],
-		matched: { mode: "follow", k: 3, kMax: 6, floorShare: 0.05 }, retry: true, breaker: { ...DEFAULT_BREAKER }, timeoutMs: 14_400_000, thinking: "medium", extendablePasses: false, ...over,
+		matched: { mode: "follow", k: 3, kMax: 6, floorShare: 0.05 }, retry: true, breaker: { ...DEFAULT_BREAKER }, timeoutMs: 14_400_000, thinking: "medium", extendablePasses: false,
+		pilotPasses: null, maxPasses: null, passesFrom: null, ...over,
 	});
 	const ran = (over: Partial<GridOptions> = {}): GridOptions => ({
 		candidateMaxAgents: 8, baselineMaxAgents: 0, maxVerifiers: { baseline: 0, candidate: 2 }, budgetArms: ["baseline", "candidate", "matched"],
@@ -435,24 +436,75 @@ describe("extending a grid's passes", () => {
 		expect(scheduleExtends(pinned(head), pinned(planSchedule(["B", "A", "C"], 6)))).toBe(false);
 	});
 
-	it("reads the amended pass count from the amendments, and refuses a chain with a gap", () => {
-		const rows = [{ kind: "extend-passes", at: "2026-09-27T10:00:00Z", from: 2, to: 6, resume: 1 }, { kind: "extend-passes", at: "2026-09-28T10:00:00Z", from: 6, to: 8, resume: 3 }];
-		expect(currentPasses(2, parseAmendments(rows))).toBe(8);
+	// An amendment records who made it, why, and what the grid held then.
+	const amendment = (over: Record<string, unknown> = {}) => ({
+		kind: "extend-passes", at: "2026-09-27T10:00:00Z", from: 2, to: 6, by: "op@host", reason: "pilot SD 1.1 gives 6", runsCompleted: 48,
+		runsSha256: sha("1"), summarySha256: sha("2"), resume: 1, ...over,
+	});
+
+	it("reads the amended pass count from the amendments, and refuses a chain with a gap or a malformed row", () => {
+		expect(currentPasses(2, parseAmendments([amendment()]))).toBe(6);
+		expect(currentPasses(2, parseAmendments([amendment({ kind: "fix-passes", to: 2, summarySha256: null })]))).toBe(2);
 		expect(currentPasses(3, [])).toBe(3);
-		expect(() => currentPasses(3, parseAmendments(rows))).toThrow(/extends 2 passes, but the grid had 3/);
-		expect(() => parseAmendments([{ kind: "extend-passes", at: "x", from: 6, to: 6, resume: 1 }])).toThrow(/row 1/);
+		expect(() => currentPasses(3, parseAmendments([amendment()]))).toThrow(/amends 2 passes, but the grid had 3/);
+		expect(() => parseAmendments([amendment({ to: 2 })])).toThrow(/row 1/);
+		expect(() => parseAmendments([amendment({ kind: "fix-passes" })])).toThrow(/row 1/);
+		expect(() => parseAmendments([amendment({ runsSha256: "x" })])).toThrow(/row 1/);
 		expect(() => parseAmendments(["not json"])).toThrow(/row 1/);
 	});
 
-	// A v5 official grid is three passes by definition; an official kind grid
-	// grows only when its kind says so. An exploratory grid may grow.
-	it("lets an official grid grow only when its kind declares extendable passes", () => {
-		const kinds = { open: { extendablePasses: true }, fixed: { extendablePasses: false } };
-		expect(extensionRefusal({ passes: 2, official: true, gridKind: "open" }, 6, kinds)).toBeUndefined();
-		expect(extensionRefusal({ passes: 2, official: false }, 6, kinds)).toBeUndefined();
-		expect(extensionRefusal({ passes: 2, official: true, gridKind: "fixed" }, 6, kinds)).toMatch(/does not declare extendablePasses/);
-		expect(extensionRefusal({ passes: 3, official: true }, 6, kinds)).toMatch(/without a grid kind/);
-		expect(extensionRefusal({ passes: 6, official: false }, 6, kinds)).toMatch(/greater than the grid's 6 passes/);
+	// Either file can be edited; one edited without the other must refuse.
+	it("holds amendments.jsonl to the amendments resumes.jsonl recorded, field for field", () => {
+		const a = parseAmendments([amendment()]);
+		expect(amendmentsMismatch(a, [{ n: 1, rerun: [] }, { n: 2, amendment: amendment() }])).toBeUndefined();
+		expect(amendmentsMismatch([], [{ n: 1 }])).toBeUndefined();
+		expect(amendmentsMismatch(a, [{ n: 1 }])).toMatch(/holds 1 amendment\(s\) and resumes.jsonl records 0/);
+		expect(amendmentsMismatch(a, [{ n: 2, amendment: amendment({ to: 7 }) }])).toMatch(/amendment 1 differs/);
+	});
+
+	// The pre-registration's pilot fixes the count once; a second amendment would
+	// let the count follow the results.
+	it("lets an official grid amend its passes once, from the pilot's count, to at most maxPasses, with a reason", () => {
+		const kinds = {
+			pilot: { extendablePasses: true, pilotPasses: 2, maxPasses: 10 },
+			fixed: { extendablePasses: false, pilotPasses: null, maxPasses: null },
+		};
+		const official = { passes: 2, official: true, gridKind: "pilot", amendments: [], reason: "pilot SD 1.1 gives 6" };
+		expect(extensionRefusal({ ...official, to: 6 }, kinds)).toBeUndefined();
+		// The rule gave 2 or fewer: the count is fixed where it is.
+		expect(extensionRefusal({ ...official, to: 2 }, kinds)).toBeUndefined();
+		expect(extensionRefusal({ ...official, to: 11 }, kinds)).toMatch(/at most 10 passes, not 11/);
+		expect(extensionRefusal({ ...official, to: 6, reason: " " }, kinds)).toMatch(/needs --extend-reason/);
+		expect(extensionRefusal({ ...official, passes: 6, to: 8, amendments: parseAmendments([amendment()]) }, kinds)).toMatch(/already fixed its pass count/);
+		expect(extensionRefusal({ ...official, passes: 3, to: 6 }, kinds)).toMatch(/from its pilot's 2 passes, not 3/);
+		expect(extensionRefusal({ ...official, gridKind: "fixed", to: 6 }, kinds)).toMatch(/does not declare extendablePasses/);
+		expect(extensionRefusal({ passes: 3, official: true, amendments: [], to: 6 }, kinds)).toMatch(/without a grid kind/);
+		// An exploratory grid may grow, more than once, without a reason; it fixes only under an extendable kind.
+		expect(extensionRefusal({ passes: 6, official: false, amendments: parseAmendments([amendment()]), to: 8 }, kinds)).toBeUndefined();
+		expect(extensionRefusal({ passes: 3, official: false, amendments: [], to: 3 }, kinds)).toMatch(/only a grid of an extendable kind/);
+		expect(extensionRefusal({ passes: 6, official: false, amendments: [], to: 5 }, kinds)).toMatch(/below the grid's 6 passes/);
+	});
+
+	it("judges a kind grid's pass count: the pilot's before its amendment, one amendment after, the adopted count in stage 2", async () => {
+		const pins = await shipped();
+		const kinds = parseGridKinds(pins.gridKinds, parseCorpora(pins.corpora));
+		const s1 = kinds["v6-stage1"]!;
+		const s2 = kinds["v6-stage2"]!;
+		expect(s1).toMatchObject({ extendablePasses: true, pilotPasses: 2, maxPasses: 10, passesFrom: null });
+		expect(s2).toMatchObject({ extendablePasses: false, passesFrom: "v6-stage1" });
+		expect(kindPassesReasons("v6-stage1", s1, { passes: 2, amendments: [] })).toEqual([]);
+		expect(kindPassesReasons("v6-stage1", s1, { passes: 6, amendments: [] })).toEqual(["grid kind v6-stage1: the pilot runs 2 passes, not 6"]);
+		expect(kindPassesReasons("v6-stage1", s1, { passes: 6, amendments: parseAmendments([amendment()]) })).toEqual([]);
+		expect(kindPassesReasons("v6-stage1", s1, { passes: 12, amendments: parseAmendments([amendment({ to: 12 })]) })).toEqual(["grid kind v6-stage1: its amendment runs 12 passes, past 10"]);
+		const adopted = { gridKind: "v6-stage1", passes: 6, official: true };
+		expect(kindPassesReasons("v6-stage2", s2, { passes: 6, amendments: [], passesFrom: adopted })).toEqual([]);
+		expect(kindPassesReasons("v6-stage2", s2, { passes: 6, amendments: [] })).toEqual(["grid kind v6-stage2: it takes its pass count from a v6-stage1 grid (--passes-from <dir>)"]);
+		expect(kindPassesReasons("v6-stage2", s2, { passes: 6, amendments: [], passesFrom: { ...adopted, gridKind: null, official: false } })).toEqual([
+			"grid kind v6-stage2: its passes come from a kindless grid, not v6-stage1", "grid kind v6-stage2: the grid it takes its passes from is not official",
+		]);
+		expect(kindFlags("v6-stage1", s1)).toEqual(expect.arrayContaining(["--passes", "2"]));
+		expect(kindFlags("v6-stage2", s2, { passesFrom: "/g1" })).toEqual(expect.arrayContaining(["--passes-from", "/g1"]));
+		expect(() => parseGridKinds({ ...pins.gridKinds as object, bad: { ...(pins.gridKinds as Record<string, object>)["v6-stage2"], passesFrom: "v6-stage2" } }, parseCorpora(pins.corpora))).toThrow(/passesFrom/);
 	});
 
 	it("judges a kind with extendable passes by the grid's own pass count, and does not ask the corpus for one", async () => {
