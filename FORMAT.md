@@ -120,7 +120,7 @@ Single JSON object at the workspace root.
   "pass": 2,                                       // optional; see below
   "stores": {
     "inventory": 1, "hypotheses": 1, "findings": 1,
-    "blockers": 1, "loot": 1
+    "blockers": 1, "loot": 1, "sessions": 1
   }
 }
 ```
@@ -160,7 +160,9 @@ Single JSON object — the authorized engagement scope. Canonical copy of the
   "passes": {                      // optional; absent means one `route` pass
     "enabled": true,
     "lenses": ["route", "file", "invariant", "adversarial"]
-  }
+  },
+  "budget": { "tokens": 20000000, "minutes": 240 },   // optional; see below
+  "maxVerifiers": 2                                   // optional; see below
 }
 ```
 
@@ -173,6 +175,14 @@ in `model.md` no hypothesis has tested), `adversarial` (unchallenged findings,
 then cleared cells) and `credentialed` (surface settled before the engagement held
 a credential). `PIRED_PASSES=route,file` overrides it for a headless run, and
 `PIRED_PASSES=off` turns it off. See ADR-018.
+
+`budget` and `maxVerifiers` are declared by the Phase 3 groundwork; their
+semantics are introduced by Phase 3 of delegation v6 (see its ADRs). `budget`
+holds the session's ceilings: `tokens` across every model call the session pays
+for, `minutes` of wall clock. `maxVerifiers` caps verifier launches separately
+from `maxAgents`. Both take non-negative integers. A `budget` value that is not
+one is dropped, and absent means no budget. A `maxVerifiers` that is not one
+reads as `0`, the rule `maxAgents` follows.
 
 Matching rules (documented for interoperability): `*.base` matches `base` and any
 subdomain; IPs match exactly; CIDRs use IPv4 containment; `exclude` wins over
@@ -291,6 +301,22 @@ working **and** the control failing — an IDOR whose unauthenticated control al
 succeeds is a public resource. A refutation carries `basis`; one without it is
 recorded as `unresolved` and settles nothing. See [ADR-007](docs/decisions.md).
 
+Four more `verification` fields are declared by the Phase 3 groundwork and judged by a
+later change (3.1):
+
+```jsonc
+"verification": {
+  "verdict": "refuted", "at": "...", "basis": ["api/notes.py:40"],
+  "by": "pired-verify",          // who judged it, in the vocabulary of `by` (§4)
+  "path":   [{ "at": "api/notes.py:12", "quote": "note = Note.get(request.args['id'])" }],
+  "guards": [{ "at": "api/notes.py:40", "quote": "if note.owner_id != user.id: abort(404)" }],
+  "tier": "static"               // "static" | "executed"; derived by pired, never taken from the caller
+}
+```
+
+`path` is the hops from source to sink, and `guards` the checks examined. Each
+entry is a cited `file:line` and the text quoted from it.
+
 `description`, `impact` and `remediation` are the three sections a client's report
 is read for — what it is, what it costs us, what we do about it — and the export
 writes all three whether or not they were recorded, marking an unwritten one
@@ -349,6 +375,27 @@ the gated work on its next `recall`. See `PLAN.md` §7.1.
 Elsewhere (context, notes, reports) secrets are referred to by `handle`; the raw
 `secret` value is masked at every export/share boundary.
 
+### 8.6 `sessions.jsonl` — how sessions were settled
+
+Declared by the Phase 3 groundwork; written by a later change (3.2).
+
+```jsonc
+{
+  "v":1, "id":"s1", "kind":"settle", "createdAt":"...", "by":"lead",
+  "outcome":"paused",            // "finished" | "paused" | "blocked"
+  "note":"auth routes left; the admin panel needs a credential",
+  "remainder":{                  // computed by pired from the ledger; a caller's is ignored
+    "openCells":12, "unmappedAreas":["src/admin"],
+    "unverified":{ "pired-investigate":["f3","f9"] },
+    "inconclusive":["y4"], "openBlockers":["b2"],
+    "spent":{ "tokens":6100000, "minutes":52 }
+  }
+}
+```
+
+An engagement written before this store existed has no `sessions.jsonl`, and reads
+as having no settles.
+
 ## 9. `model.md`
 
 The target model: what the system is for, who its actors are, the invariants
@@ -399,8 +446,10 @@ Login uses a legacy session cookie without SameSite. Worth an CSRF pass on state
 ## 13. Migration log
 
 - `formatVersion 1` — initial specification. No prior versions.
-- `formatVersion 1`, Phase 3 groundwork — `by` on every created row (§4). Additive
-  and optional, so no version bump: a ledger written before it reads unchanged, its
-  rows with no author.
+- `formatVersion 1`, Phase 3 groundwork — `by` on every created row (§4); the
+  `budget` and `maxVerifiers` scope fields (§6); `verification.by`, `path`, `guards`
+  and `tier` (§8.3); the `sessions` store (§5, §8.6). All additive and optional, so
+  no version bump: a workspace written before them reads unchanged, its rows with
+  no author and no `sessions.jsonl`.
 
 *(Future breaking changes append here with the old→new field mapping and reader behavior.)*

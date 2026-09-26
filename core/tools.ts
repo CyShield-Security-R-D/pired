@@ -23,6 +23,7 @@ import { computeCoverageView, computeEngagementStats, isDisposed } from "./stats
 import { CELL_GLYPH, renderCoveragePanel } from "./coverage-panel.ts";
 import {
 	type BlockerRecord,
+	type BudgetReading,
 	BLOCKER_STATUSES,
 	BLOCKER_TYPES,
 	FINDING_SOURCES,
@@ -40,7 +41,7 @@ import {
 	PRIORITIES,
 	RECORD_VERSION,
 	SEVERITIES,
-	type StoreName,
+	type LedgerStoreName,
 } from "./ontology.ts";
 import type { JsonSchema, ToolContext, ToolDefinition, ToolResult } from "./ports.ts";
 import type { Workspace } from "./workspace.ts";
@@ -82,6 +83,12 @@ export interface ToolDeps {
 	 * arrive after its tools are built.
 	 */
 	author?: () => string | undefined;
+	/**
+	 * The session's ceilings and what it has spent, or undefined when the scope
+	 * declares no budget. Declared by the Phase 3 groundwork; nothing reads it
+	 * until the budget line (3.2).
+	 */
+	budget?: () => BudgetReading | undefined;
 }
 
 const RECORD_KINDS = [
@@ -109,7 +116,7 @@ const PLAIN = {
 	width: 100,
 };
 
-const STORE_FOR_KIND: Record<LedgerKind, StoreName> = {
+const STORE_FOR_KIND: Record<LedgerKind, LedgerStoreName> = {
 	host: "inventory", service: "inventory", endpoint: "inventory", param: "inventory", tech: "inventory",
 	hypothesis: "hypotheses", finding: "findings", blocker: "blockers", loot: "loot",
 };

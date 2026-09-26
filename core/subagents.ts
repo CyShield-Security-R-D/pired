@@ -202,6 +202,24 @@ export function workerCap(scope: EngagementScope | undefined): number {
 }
 
 /**
+ * Verifier launches are off unless the scope asks for them (Phase 3, 3.1), for
+ * the reason delegation is: they cost parent turns, and their benefit is not yet
+ * measured.
+ */
+export const DEFAULT_MAX_VERIFIERS = 0;
+
+/**
+ * The session's verifier cap: the engagement's `maxVerifiers` when it is a
+ * non-negative integer, else the default — the rule `workerCap` applies, and
+ * stricter by the integer, since a fraction of a launch is not a request either.
+ * Declared by the Phase 3 groundwork; nothing enforces it until 3.1.
+ */
+export function verifierCap(scope: EngagementScope | undefined): number {
+	const n = scope?.maxVerifiers;
+	return typeof n === "number" && Number.isInteger(n) && n >= 0 ? n : DEFAULT_MAX_VERIFIERS;
+}
+
+/**
  * The pi-subagents tools pired takes out of the parent's active set, re-applied
  * every turn because pi-subagents' lazy loader can put them back.
  *

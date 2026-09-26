@@ -29,7 +29,7 @@
 
 import { recordLabel } from "./browser.ts";
 import { type Fields, findDuplicate, type IdentityKind, mergeRecord } from "./identity.ts";
-import { type LedgerRecord, RECORD_VERSION, type StoreName } from "./ontology.ts";
+import { type LedgerRecord, type LedgerStoreName as StoreName, RECORD_VERSION } from "./ontology.ts";
 
 /** The ledgers a sweep reads, as `Workspace.read` returns them. */
 export type Ledgers = Record<StoreName, LedgerRecord[]>;

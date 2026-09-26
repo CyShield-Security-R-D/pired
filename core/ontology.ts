@@ -200,13 +200,31 @@ export type Priority = (typeof PRIORITIES)[number];
 export const LOOT_TYPES = ["password", "hash", "token", "apikey", "cookie", "key"] as const;
 export type LootType = (typeof LOOT_TYPES)[number];
 
+/**
+ * How far a verification's grounds reach: `static` is quoted source, `executed` a
+ * live check or evidence that is not a static excerpt. Derived by pired, never
+ * taken from the caller. Declared by the Phase 3 groundwork; judged by 3.1.
+ */
+export const VERIFICATION_TIERS = ["static", "executed"] as const;
+export type VerificationTier = (typeof VERIFICATION_TIERS)[number];
+
+/** How a session was settled (`record kind=settle`, Phase 3, 3.2). */
+export const SETTLE_OUTCOMES = ["finished", "paused", "blocked"] as const;
+export type SettleOutcome = (typeof SETTLE_OUTCOMES)[number];
+
 /** Derived per-cell coverage status (never stored; computed by core/coverage.ts). */
 export const COVERAGE_STATUSES = ["not-tested", "testing", "clear", "vulnerable", "blocked", "n/a"] as const;
 export type CoverageStatus = (typeof COVERAGE_STATUSES)[number];
 
-/** Append-only JSONL ledgers held in the workspace. */
-export const STORE_NAMES = ["inventory", "hypotheses", "findings", "blockers", "loot"] as const;
+/**
+ * Append-only JSONL ledgers held in the workspace. `sessions` holds settle records
+ * (Phase 3, 3.2); an engagement written before it has no such file and reads as
+ * having no settles.
+ */
+export const STORE_NAMES = ["inventory", "hypotheses", "findings", "blockers", "loot", "sessions"] as const;
 export type StoreName = (typeof STORE_NAMES)[number];
+/** The stores whose rows are `LedgerRecord`s: every store but `sessions`, which holds settle records. */
+export type LedgerStoreName = Exclude<StoreName, "sessions">;
 
 // ---------------------------------------------------------------------------
 // Primitives
@@ -383,6 +401,35 @@ export interface EngagementScope {
 	 * fail-open so unparseable-but-legitimate commands are not needlessly blocked.
 	 */
 	strictUnresolved?: boolean;
+	/**
+	 * The session's ceilings, when the operator or the benchmark harness states
+	 * them. Absent means no budget, and no budget line. Read through
+	 * core/budget.ts `parseBudget`, which drops a value that is not a
+	 * non-negative integer. Declared by the Phase 3 groundwork; shown by 3.2.
+	 */
+	budget?: ScopeBudget;
+	/**
+	 * Most verifier launches this session may make, counted apart from
+	 * `maxAgents` so verification does not compete with work launches. Read
+	 * through core/subagents.ts `verifierCap`: absent or invalid is 0. Declared by
+	 * the Phase 3 groundwork; enforced by 3.1.
+	 */
+	maxVerifiers?: number;
+}
+
+/** A session's ceilings. Tokens count every model call the session pays for; minutes are wall clock. */
+export interface ScopeBudget {
+	tokens?: number;
+	minutes?: number;
+}
+
+/**
+ * What the host reports against the budget (`ToolDeps.budget`): the ceilings the
+ * scope states and what has been spent so far, in the same units.
+ */
+export interface BudgetReading {
+	ceiling: ScopeBudget;
+	spent: { tokens?: number; minutes?: number };
 }
 
 // ---------------------------------------------------------------------------
@@ -525,8 +572,28 @@ export interface HypothesisRecord extends RecordBase {
  * silently dropping a real bug. That is the whole safety argument for letting a
  * machine challenge findings at all.
  */
+/**
+ * One cited line and the text quoted from it: `at` is `file:line`, `quote` the
+ * verbatim text. The model sends `"file:line: text"` strings; pired stores this.
+ */
+export interface QuotedLocation {
+	at: string;
+	quote: string;
+}
+
 export interface Verification {
 	verdict: ChallengeVerdict;
+	/**
+	 * Who judged the finding, in `RecordBase.by`'s vocabulary. Declared by the
+	 * Phase 3 groundwork; written and judged by 3.1, like the three below.
+	 */
+	by?: string;
+	/** The hops from source to sink, each a grounded quote. */
+	path?: QuotedLocation[];
+	/** The checks examined on the way, each a grounded quote. */
+	guards?: QuotedLocation[];
+	/** `static` or `executed`, derived by pired and never taken from the caller. */
+	tier?: VerificationTier;
 	/** When it was challenged. A proof reproduced on day 1 is not a proof on day 5. */
 	at: IsoTimestamp;
 	/**
@@ -664,6 +731,37 @@ export interface LootRecord extends RecordBase {
 }
 
 // ---------------------------------------------------------------------------
+// sessions.jsonl (settle records; Phase 3, 3.2)
+// ---------------------------------------------------------------------------
+
+/**
+ * What was left when a session settled, computed by the harness from the ledger.
+ * A remainder the caller sends is ignored. Declared by the Phase 3 groundwork;
+ * written by 3.2.
+ */
+export interface SettleRemainder {
+	/** Coverage cells not yet settled. */
+	openCells?: number;
+	/** Source directories with no recorded surface. */
+	unmappedAreas?: string[];
+	/** Unverified finding ids, keyed by the `by` that created them. */
+	unverified?: Record<string, string[]>;
+	/** Hypothesis ids left `inconclusive`. */
+	inconclusive?: string[];
+	/** Open blocker ids. */
+	openBlockers?: string[];
+	/** What the session had spent when it settled. */
+	spent?: BudgetReading["spent"];
+}
+
+export interface SettleRecord extends RecordBase {
+	kind: "settle";
+	outcome: SettleOutcome;
+	note?: string;
+	remainder: SettleRemainder;
+}
+
+// ---------------------------------------------------------------------------
 // Union of all ledger records
 // ---------------------------------------------------------------------------
 
@@ -676,6 +774,7 @@ export interface StoreRecordMap {
 	findings: FindingRecord;
 	blockers: BlockerRecord;
 	loot: LootRecord;
+	sessions: SettleRecord;
 }
 
 // ---------------------------------------------------------------------------

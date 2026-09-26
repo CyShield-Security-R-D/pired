@@ -4,6 +4,7 @@ import {
 	agentMarker,
 	buildPiredAgentDefinitions,
 	DEFAULT_MAX_AGENTS,
+	DEFAULT_MAX_VERIFIERS,
 	delegationBlock,
 	eagerSubagentSchema,
 	hiddenParentTools,
@@ -12,6 +13,7 @@ import {
 	SUBAGENTS_ABSENT_NOTICE,
 	SUBAGENTS_EAGER_NOTICE,
 	SUGGESTED_MAX_AGENTS,
+	verifierCap,
 	WORKER_TOOLS,
 	workerCap,
 	workerPrompt,
@@ -339,6 +341,21 @@ describe("the delegation prompt block", () => {
 		expect(workerCap(undefined)).toBe(DEFAULT_MAX_AGENTS);
 		expect(workerCap(scope({ maxAgents: -3 }))).toBe(DEFAULT_MAX_AGENTS);
 		expect(workerCap(scope({ maxAgents: 0 }))).toBe(0);
+	});
+
+	it("reads the verifier cap apart from the worker cap, off unless the scope names a whole count", () => {
+		// Verification is not to compete with work launches for one budget, so it
+		// has its own. Nothing enforces it until the verification tier lands; the
+		// number it will enforce is settled here, by the rule maxAgents follows.
+		expect(DEFAULT_MAX_VERIFIERS).toBe(0);
+		expect(verifierCap(undefined)).toBe(0);
+		expect(verifierCap(scope())).toBe(0);
+		expect(verifierCap(scope({ maxVerifiers: 3 }))).toBe(3);
+		expect(verifierCap(scope({ maxVerifiers: 0, maxAgents: 8 }))).toBe(0);
+		for (const bad of [-1, 2.5, Number.NaN, "4"]) {
+			expect(verifierCap(scope({ maxVerifiers: bad as number })), String(bad)).toBe(DEFAULT_MAX_VERIFIERS);
+		}
+		expect(workerCap(scope({ maxAgents: 2, maxVerifiers: 5 }))).toBe(2);
 	});
 
 	it("tells the parent a verifier's verdict passes the same evidence checks, so it is not told to leave status alone", () => {

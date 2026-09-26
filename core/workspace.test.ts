@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { EngagementScope, FindingRecord, HostRecord, LootRecord } from "./ontology.ts";
+import { type EngagementScope, type FindingRecord, type HostRecord, type LootRecord, type SettleRecord, STORE_NAMES } from "./ontology.ts";
 import { makeFakeServices } from "./testing/fakes.ts";
 import { Workspace } from "./workspace.ts";
 
@@ -32,6 +32,22 @@ describe("Workspace.ensure", () => {
 });
 
 describe("Workspace ledgers", () => {
+	it("reads an engagement written before the sessions store as having no settles, and keeps one once written", async () => {
+		// `sessions` is additive: every workspace on disk predates it, and none
+		// of them may need a migration to open.
+		const svc = makeFakeServices();
+		const ws = await Workspace.open(DIR, "acme", svc);
+		expect(STORE_NAMES).toContain("sessions");
+		expect(await ws.read("sessions")).toEqual([]);
+		const settle: SettleRecord = {
+			v: 1, id: "s1", kind: "settle", createdAt: svc.clock.nowIso(), by: "lead",
+			outcome: "paused", note: "auth routes left", remainder: { openCells: 12, openBlockers: ["b2"] },
+		};
+		await ws.append("sessions", settle);
+		expect(await ws.read("sessions")).toEqual([settle]);
+		expect(await svc.fs.readFileIfExists(ws.storePath("sessions"))).toBe(`${JSON.stringify(settle)}\n`);
+	});
+
 	it("appends and reads back records", async () => {
 		const svc = makeFakeServices();
 		const ws = await Workspace.open(DIR, "acme", svc);
