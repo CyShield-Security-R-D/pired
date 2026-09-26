@@ -1545,21 +1545,34 @@ export function accountUsage(observations: UsageObservation[]): UsageAccounting 
 }
 
 /**
- * The only grid whose result may be read as the acceptance decision: the five
+ * The v5 grid whose result could be read as the acceptance decision: the five
  * research targets, three fixed passes. A `--only` subset or extra passes still
  * produce a comparison, labelled exploratory, so a favourable slice cannot pass
  * for the corpus result.
+ *
+ * Since plan item 2.8 the official corpora are pinned in
+ * eval/delegation-compare.pins.json (`corpora`), and the runner passes their
+ * shapes in. These constants are the "v5-official" entry's shape, kept as the
+ * default for callers that name none; a test holds them equal to the pin.
  */
 export const OFFICIAL_TARGET_IDS: readonly string[] = [
 	"CVE-2025-52903", "CVE-2025-62721", "CVE-2022-39281", "CVE-2024-22417", "CVE-2026-40262",
 ];
 export const OFFICIAL_PASSES = 3;
 
-export function isOfficialGrid(expected: ExpectedCell[]): boolean {
-	const want = new Set(OFFICIAL_TARGET_IDS.flatMap((target) =>
-		Array.from({ length: OFFICIAL_PASSES }, (_, i) => `${target}\u0000${i + 1}`)));
+/** An official grid's shape: its gate targets and its fixed pass count. Twins are never part of it. */
+export interface OfficialShape { targets: readonly string[]; passes: number }
+
+export const V5_OFFICIAL_SHAPE: OfficialShape = { targets: OFFICIAL_TARGET_IDS, passes: OFFICIAL_PASSES };
+
+/** Whether the expected gate cells are exactly one of the official shapes: every target at every pass, once. */
+export function isOfficialGrid(expected: ExpectedCell[], shapes: readonly OfficialShape[] = [V5_OFFICIAL_SHAPE]): boolean {
 	const got = new Set(expected.map((cell) => `${cell.target}\u0000${cell.pass}`));
-	return expected.length === want.size && got.size === want.size && [...want].every((cell) => got.has(cell));
+	return shapes.some((shape) => {
+		const want = new Set(shape.targets.flatMap((target) =>
+			Array.from({ length: shape.passes }, (_, i) => `${target}\u0000${i + 1}`)));
+		return want.size > 0 && expected.length === want.size && got.size === want.size && [...want].every((cell) => got.has(cell));
+	});
 }
 
 /** The two arms the acceptance gate pairs. */
@@ -1904,7 +1917,7 @@ export interface QualityGate {
 
 export interface MatchedComparison {
 	complete: boolean;
-	/** The exact five-target, three-pass grid. Anything else is exploratory. */
+	/** Exactly one of the official shapes (the v5 five targets x three passes by default). Anything else is exploratory. */
 	official: boolean;
 	missingOrInvalid: string[];
 	pairedRuns: number;
@@ -1921,7 +1934,7 @@ export interface MatchedComparison {
 /** Float sums in a different order must not turn a tie into a loss. */
 const TIE = 1e-9;
 
-export function compareMatchedRuns(baselineRuns: RunMetric[], candidateRuns: RunMetric[], expectedCells: ExpectedCell[]): MatchedComparison {
+export function compareMatchedRuns(baselineRuns: RunMetric[], candidateRuns: RunMetric[], expectedCells: ExpectedCell[], officialShapes: readonly OfficialShape[] = [V5_OFFICIAL_SHAPE]): MatchedComparison {
 	const expected = expectedCells.map((cell) => cell.key).sort();
 	const expectedByKey = new Map(expectedCells.map((cell) => [cell.key, cell]));
 	const expectedGrid = new Set(expectedCells.map((cell) => `${cell.target}\u0000${cell.pass}`));
@@ -2058,7 +2071,7 @@ export function compareMatchedRuns(baselineRuns: RunMetric[], candidateRuns: Run
 	// Strict, transparent separation: every candidate pass is below every
 	// baseline pass. Overlapping ranges remain a mean-only observation.
 	const tokenRangesSeparated = complete && cs.totalTokens.max < bs.totalTokens.min;
-	const official = isOfficialGrid(expectedCells);
+	const official = isOfficialGrid(expectedCells, officialShapes);
 	const decision: ComparisonDecision = !complete ? "incomplete_or_invalid"
 		: !official ? "exploratory_not_decisive"
 		: gate.qualityWithinMargin === true && meanTokenReductionObserved ? APPROVAL_DECISION

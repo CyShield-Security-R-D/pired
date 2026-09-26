@@ -31,12 +31,14 @@ import {
 } from "./delegation-compare-entry.ts";
 import {
 	accountUsage, APPROVAL_DECISION, compareMatchedRuns, contentText, createBreaker, DEFAULT_BREAKER, findLeaks, isOfficialGrid, leakTermsFor,
-	meteredCallCount, nextPairAction, observationsFromChildSession, observationsFromPiEvents, OFFICIAL_PASSES, OFFICIAL_TARGET_IDS,
+	meteredCallCount, nextPairAction, observationsFromChildSession, observationsFromPiEvents,
 	parseBreakerPolicy, planSchedule, reconcileChildSession, reconcileSubagentCalls, SUBAGENT_TOOL, summarizeRetries,
 	type Arm, type BreakerPolicy, type PairArm, type BreakerVerdict, type ChildSessionExtraction, type ChildVerdict, type ExpectedCell, type PiUsageExtraction,
-	type RetriedAttempt, type RetrySummary, type RunMetric, type ScheduledPair, type SubagentChild, type SubagentReconciliation,
+	type OfficialShape, type RetriedAttempt, type RetrySummary, type RunMetric, type ScheduledPair, type SubagentChild, type SubagentReconciliation,
 	type UsageAccounting, type UsageObservation,
 } from "./delegation-compare-lib.ts";
+// The grid's shape and identity (plan item 2.8): the pinned official corpora.
+import { corpusReasons, kindlessCorpus, parseCorpora, shapeOf, type PinnedCorpus } from "./delegation-compare-grid.ts";
 // The staging, target-copy and tree-hash helpers moved to their own module so
 // the same digest rule draws the panel here, in the preflight and in tests.
 import { copyTargetTree, shouldIncludeSnapshotPath, stageSnapshot, treeManifest } from "./delegation-compare-stage.ts";
@@ -136,25 +138,19 @@ const HARNESS_FILES = [
 	"eval/delegation-compare.ts", "eval/delegation-compare-lib.ts", "eval/delegation-compare-entry.ts",
 	"eval/delegation-compare-stage.ts", "eval/delegation-compare-proc.ts", "eval/delegation-audit.ts", "eval/corpus/fs-seal.c",
 	"eval/delegation-compare-bash-timeout.ts", "eval/delegation-compare-stop.ts", "eval/delegation-compare-matched.ts",
-	"eval/delegation-compare.pins.json",
+	"eval/delegation-compare-grid.ts", "eval/delegation-compare.pins.json",
 ] as const;
 
-/**
- * The frozen research inputs an official decision is pinned to. `--help` and the
- * handoff both promise that a different manifest or truth set is exploratory, so
- * these are byte-compared, not merely recorded. The values were measured from
+/*
+ * The frozen research inputs an official decision is pinned to (the corpus
+ * manifest's sha256 and every truth key's) live in the pins file's `corpora`
+ * since plan item 2.8. `--help` and the handoff both promise that a different
+ * manifest or truth set is exploratory, so they are byte-compared, not merely
+ * recorded. The v5 values were measured from
  * eval/artifacts/claude-handoff-2026-09-23/research/corpus (byte-identical to
- * /tmp/pired-research/corpus) on 2026-09-23; a manifest or key edited afterwards
- * no longer matches and cannot approve.
+ * /tmp/pired-research/corpus) on 2026-09-23 and moved unchanged; a manifest or
+ * key edited afterwards no longer matches and cannot approve.
  */
-const RESEARCH_MANIFEST_SHA256 = "b0d72812a4481d69a5a141429d2b5d0800c81d7c120da1ea4c071f1d40dba954";
-const TRUTH_SHA256: Readonly<Record<string, string>> = {
-	"filebrowser_filebrowser-fetgso": "83332797cd184082843c7fd65098a67c2fb37e407aba070b301dcc9830c2f7b0",
-	"Kovah_LinkAce-z2dd6z": "3032a2db2a39ae3394b7e6343cb6c26d6643d30442766dd40786cd546bd7fba1",
-	"fatfreecrm_fat_free_crm-1wl9c6": "7fb53e4e089f3951d9ab62550f246741f22da2c4d19c1b9fe9439935ca7fbb00",
-	"benbusby_whoogle-search-03n6cv": "3b231b8378334b838daa882fd575fd282a829d9e6b9dfe68ad6fc45297910f7c",
-	"enchant97_note-mark-i71l34": "ad9049a1e4d2d56943a0c5967b2cecf9c16911df1fed479c7b9ed5376e7e272e",
-};
 /**
  * The intended baseline is git 496b190 and the candidate is a frozen snapshot of
  * the pi-subagents implementation (ADR-027). The baseline is verified against
@@ -177,6 +173,8 @@ export interface ComparePins {
 	 */
 	candidateMaxAgents: number | null;
 	piSubagents: { dir: string; version: string; digest: string };
+	/** The official corpora (plan item 2.8), by name; none when the file has no `corpora`, so every grid is exploratory. */
+	corpora: Record<string, PinnedCorpus>;
 }
 
 export function parseComparePins(text: string): ComparePins {
@@ -195,6 +193,7 @@ export function parseComparePins(text: string): ComparePins {
 		candidateFrozenAt: typeof raw.candidateFrozenAt === "string" ? raw.candidateFrozenAt : null,
 		candidateMaxAgents: isWorkerCap(raw.candidateMaxAgents) ? raw.candidateMaxAgents : null,
 		piSubagents: { dir: sub.dir, version: sub.version, digest: sub.digest as string },
+		corpora: parseCorpora(raw.corpora),
 	};
 }
 
@@ -216,7 +215,7 @@ export const REVIEW_PROMPT =
 	"as findings with cwe, severity and the exact file:line of the vulnerable sink. Notes are not a " +
 	"substitute for recording: anything not in the ledger does not count.";
 
-type Target = {
+export type Target = {
 	id: string;
 	name: string;
 	package: string;
@@ -348,7 +347,8 @@ Options:
   --model <id>          Model ID (required)
   --thinking <level>    Fixed effort for both arms (default: medium)
   --passes <n>          Complete passes per target, minimum 3; 1 allowed with --only (default: 3)
-  --only <ids>          Comma-separated exact target IDs (default: all five)
+  --only <ids>          Comma-separated exact target IDs (default: every target
+                        in the manifest; any number, at least one)
   --concurrency <n>     Matched pairs in flight, 1-8; each pair runs its two
                         arms one after the other (default: 2)
   --timeout <ms>        Per-arm deadline (default: ${DEFAULT_TIMEOUT_MS})
@@ -443,9 +443,11 @@ scope's close; the escape-vector check refuses if a sealed process can reach the
 docker socket, the user D-Bus, or systemd --user, or sees a D-Bus address; the
 network check refuses if DNS or TLS to the provider fails.
 
-Official vs exploratory: only the five research targets x ${OFFICIAL_PASSES} passes is an
-acceptance decision, and only when the manifest, every truth key, the baseline,
-the candidate snapshot, its worker cap and the pi-subagents tree match their pins:
+Official vs exploratory: only a pinned corpus's targets x its passes is an
+acceptance decision (the pins file's corpora; without --grid-kind, the v5 five
+research targets x 3 passes), and only when the manifest, every truth key, the
+baseline, the candidate snapshot, its worker cap and the pi-subagents tree
+match their pins:
   baseline:  git ${baseline}
   candidate: ${candidate}
   cap:       ${pins ? (pins.candidateMaxAgents === null ? "NOT PINNED (every grid is exploratory)" : `--candidate-max-agents ${pins.candidateMaxAgents}`) : "(pins unreadable)"}
@@ -1388,7 +1390,7 @@ async function checkNetwork(options: Options, provider: Provider, nodePath: stri
 	return { ok: true, origin, status: typeof report.status === "number" ? report.status : null, note: "unauthenticated GET; any status proves reachability and spends no tokens" };
 }
 
-async function loadTargets(options: Options): Promise<{ manifestHash: string; targets: Target[]; truthHashes: Record<string, string>; sourceHashes: Record<string, string> }> {
+export async function loadTargets(options: Pick<Options, "manifestPath" | "truth" | "corpus" | "selected">): Promise<{ manifestHash: string; targets: Target[]; truthHashes: Record<string, string>; sourceHashes: Record<string, string> }> {
 	const raw = await readFile(options.manifestPath, "utf8");
 	const manifest = JSON.parse(raw.replaceAll("PLACEHOLDER", dirname(options.truth))) as Target[];
 	const wanted = options.selected;
@@ -1397,7 +1399,16 @@ async function loadTargets(options: Options): Promise<{ manifestHash: string; ta
 		const found = new Set(selected.map((t) => t.id));
 		throw new Error(`Unknown --only target ID(s): ${wanted.filter((id) => !found.has(id)).join(", ")}`);
 	}
-	if (selected.length !== 5 && !wanted.length) throw new Error(`Research manifest must resolve exactly five targets (found ${selected.length}).`);
+	// Any number of targets (plan item 2.8): the fresh v6 corpus has twelve. What
+	// makes a grid official is its pinned corpus, not a count. Ids key every cell,
+	// pin and pair, so two entries under one id would silently merge.
+	if (!selected.length) throw new Error("Research manifest resolves no target.");
+	const seen = new Set<string>();
+	for (const target of manifest) {
+		if (typeof target.id !== "string" || !target.id) throw new Error("Research manifest has a target without an id.");
+		if (seen.has(target.id)) throw new Error(`Research manifest lists target id ${target.id} more than once.`);
+		seen.add(target.id);
+	}
 	const truthHashes: Record<string, string> = {};
 	const sourceHashes: Record<string, string> = {};
 	for (const target of selected) {
@@ -3039,6 +3050,8 @@ type Preflight = {
 	expectedCells: ExpectedCell[];
 	official: boolean;
 	exploratoryReasons: string[];
+	/** The pinned official shapes this grid was judged against; the comparison's decision reads the same ones. */
+	officialShapes: OfficialShape[];
 };
 
 async function runPreflight(options: Options, manifest: JsonRecord, saveManifest: () => Promise<void>, preflightRoot: string): Promise<Preflight> {
@@ -3088,22 +3101,20 @@ async function runPreflight(options: Options, manifest: JsonRecord, saveManifest
 		const provider = await providerMetadata(options.provider, options.model);
 		const expectedCells: ExpectedCell[] = info.targets.flatMap((target) =>
 			Array.from({ length: options.passes }, (_, i) => ({ target: target.id, pass: i + 1, key: `${target.id}#${i + 1}` })));
-		const gridOfficial = isOfficialGrid(expectedCells);
 		const ids = info.targets.map((t) => t.id);
-		if (options.selected.length) exploratoryReasons.push("--only selects a subset");
-		if (options.passes !== OFFICIAL_PASSES) exploratoryReasons.push(`--passes ${options.passes} is not ${OFFICIAL_PASSES}`);
-		if (!options.selected.length && (ids.length !== OFFICIAL_TARGET_IDS.length || ids.some((id) => !OFFICIAL_TARGET_IDS.includes(id)))) {
-			exploratoryReasons.push("manifest targets differ from the five research targets");
-		}
-		// Pin the identity of what is graded, not only the grid shape: a manifest
-		// whose scope changed (which changes the prompt) or an edited truth key can
-		// keep the five IDs and would otherwise read as official.
-		if (info.manifestHash !== RESEARCH_MANIFEST_SHA256) exploratoryReasons.push(`research manifest sha256 ${info.manifestHash.slice(0, 12)} is not the pinned ${RESEARCH_MANIFEST_SHA256.slice(0, 12)}`);
-		for (const target of info.targets) {
-			const pinned = TRUTH_SHA256[target.name];
-			const actual = info.truthHashes[target.id];
-			if (!pinned) exploratoryReasons.push(`${target.id} (${target.name}) has no pinned truth hash`);
-			else if (actual !== pinned) exploratoryReasons.push(`${target.name} truth key sha256 ${String(actual).slice(0, 12)} is not the pinned ${pinned.slice(0, 12)}`);
+		// The official definition is pinned (plan item 2.8): the grid is judged
+		// against the corpus its identity names, and read as official only when its
+		// cells are exactly that corpus's shape and every pinned input matches.
+		const comparePins = loadComparePins();
+		const judged = kindlessCorpus(comparePins.corpora, ids);
+		const officialShapes: OfficialShape[] = judged && shapeOf(judged[1]) ? [shapeOf(judged[1])!] : [];
+		const gridOfficial = isOfficialGrid(expectedCells, officialShapes);
+		if (!judged) exploratoryReasons.push("eval/delegation-compare.pins.json pins no corpus a grid without --grid-kind can be official on");
+		else {
+			exploratoryReasons.push(...corpusReasons(judged[0], judged[1], {
+				gateIds: ids, passes: options.passes, selected: options.selected.length > 0, manifestSha256: info.manifestHash,
+				targets: info.targets.map((t) => ({ id: t.id, name: t.name, truthSha256: info.truthHashes[t.id]! })),
+			}));
 		}
 		manifest.provider = provider;
 		manifest.targets = info.targets.map((t) => ({ id: t.id, name: t.name, package: t.package, scope: t.scope ?? null }));
@@ -3116,7 +3127,7 @@ async function runPreflight(options: Options, manifest: JsonRecord, saveManifest
 			sourceSha256: info.sourceHashes, truthSha256: info.truthHashes,
 		};
 		return {
-			value: { ...info, provider, expectedCells, gridOfficial },
+			value: { ...info, provider, expectedCells, gridOfficial, officialShapes, comparePins },
 			record: { targets: ids.length, gridOfficial },
 		};
 	});
@@ -3148,7 +3159,7 @@ async function runPreflight(options: Options, manifest: JsonRecord, saveManifest
 	// carries, and prove the baseline is the pinned commit, the candidate its
 	// pinned snapshot, and the pi-subagents tree the candidate loads its pin.
 	const staging = await stage("staging", async () => {
-		const comparePins = loadComparePins();
+		const { comparePins } = inputs;
 		const source = {
 			baseline: await treeManifest(options.baseline, "snapshot"),
 			candidate: await treeManifest(options.candidate, "snapshot"),
@@ -3408,7 +3419,7 @@ async function runPreflight(options: Options, manifest: JsonRecord, saveManifest
 
 	preflight.status = "passed";
 	await saveManifest();
-	return { ctx, targets: inputs.targets, expectedCells: inputs.expectedCells, official, exploratoryReasons };
+	return { ctx, targets: inputs.targets, expectedCells: inputs.expectedCells, official, exploratoryReasons, officialShapes: inputs.officialShapes };
 }
 
 /**
@@ -4565,7 +4576,7 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 	const comparison = compareMatchedRuns(
 		compared.filter((o) => o.arm === "baseline").map((o) => o.metric),
 		compared.filter((o) => o.arm === "candidate").map((o) => o.metric),
-		expectedCells,
+		expectedCells, pre.officialShapes,
 	);
 	// Under a retry policy the gate reads metered tokens plus the estimate for
 	// unmetered attempts; the same comparison on metered tokens alone is reported
@@ -4573,7 +4584,7 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 	const meteredOnlyComparison = options.retryPolicy ? compareMatchedRuns(
 		outcomes.filter((o) => o.arm === "baseline").map((o) => metricFromRecord(o.record, "metered")),
 		outcomes.filter((o) => o.arm === "candidate").map((o) => metricFromRecord(o.record, "metered")),
-		expectedCells,
+		expectedCells, pre.officialShapes,
 	) : undefined;
 	const matchedSummary = options.matched ? await summarizeMatched(options.matched, pairs, compared, outcomes, expectedCells, targetById, output, loop.matched, matchedResume) : undefined;
 	// Each cell loads node_modules afresh, and hashing it (~25k files) per launch

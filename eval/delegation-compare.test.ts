@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
 	accountCellUsage, atHighestAttempt, attemptReport, AUTH_HORIZON_CAP_MS, AUTH_MARGIN_MS, benchmarkRuntimeOf, checkAuthHorizon, childProviderFailure, classifyInfra,
-	credentialExpiry, decideInfra, DEFAULT_CANDIDATE_MAX_AGENTS, fetchErrorsFromStderr, gridWorstCaseMs, isBrokerEnvVar, metricFromRecord, notLaunchedOutcome, ownerIsLive,
+	credentialExpiry, decideInfra, DEFAULT_CANDIDATE_MAX_AGENTS, fetchErrorsFromStderr, gridWorstCaseMs, isBrokerEnvVar, loadTargets, metricFromRecord, notLaunchedOutcome, ownerIsLive,
 	newManifest, optionsFromManifest, parseBreakerSpec, parseComparePins, parseOptions, parseOwnerRecord, planResume, providerFailureTexts, requestLogFromStderr,
 	resumeMismatches, retryPolicyFromManifest, reviewScope, runPairs, runStop, runtimeMismatch, scopedSealCommand, startTimeFromStat, subagentConfigFor,
 	toolSurfaceErrors, trackStream, workerCapReason,
@@ -1840,5 +1840,45 @@ describe("the matched-compute arm (plan 2.5)", () => {
 			expect(sessionRunOf(record, [])).toEqual({ index: 2, attempt: 3, cellId: "m-A#1-2-3", valid: true, infra: false, ceiling: 3000, totalTokens: 3300, truePositives: 1, claims: 2, stop: "budget", findings: [] });
 			expect(sessionRunOf(sessionRecord("A#1", 1, 1, 1, false))).toMatchObject({ valid: false, infra: true, stop: null, claims: 0 });
 		});
+	});
+});
+
+describe("the corpus manifest (plan 2.8)", () => {
+	// A corpus on disk as the runner reads it: a manifest, each target's
+	// pristine tree and its truth file.
+	const corpusOf = async (entries: Array<Record<string, unknown>>): Promise<{ manifestPath: string; truth: string; corpus: string }> => {
+		const root = await mkdtemp(join(tmpdir(), "pired-grid-"));
+		const corpus = join(root, "targets");
+		const truth = join(root, "truth");
+		await mkdir(truth, { recursive: true });
+		for (const entry of entries) {
+			const name = String(entry.name);
+			await mkdir(join(corpus, `${name}.pristine`), { recursive: true });
+			await writeFile(join(corpus, `${name}.pristine`, "app.py"), `print("${name}")\n`);
+			await writeFile(join(truth, `${name}.truth.json`), `${JSON.stringify(entry.twinOf ? [] : [{ file: "app.py", line: 1 }])}\n`);
+		}
+		const manifestPath = join(root, "manifest.json");
+		await writeFile(manifestPath, JSON.stringify(entries));
+		return { manifestPath, truth, corpus };
+	};
+	const target = (i: number, extra: Record<string, unknown> = {}): Record<string, unknown> => ({ id: `CVE-2030-${1000 + i}`, name: `app-${i}`, package: `o/app-${i}`, ...extra });
+
+	// The harness refused anything but exactly five targets; the fresh v6 corpus has twelve.
+	it("accepts a manifest of twelve targets", async () => {
+		const files = await corpusOf(Array.from({ length: 12 }, (_, i) => target(i + 1)));
+		const loaded = await loadTargets({ ...files, selected: [] });
+		expect(loaded.targets.map((t) => t.id)).toHaveLength(12);
+		expect(Object.keys(loaded.truthHashes)).toHaveLength(12);
+	});
+
+	it("accepts a single target, and refuses a manifest that resolves none", async () => {
+		expect((await loadTargets({ ...await corpusOf([target(1)]), selected: [] })).targets).toHaveLength(1);
+		await expect(loadTargets({ ...await corpusOf([]), selected: [] })).rejects.toThrow(/resolves no target/);
+	});
+
+	// Ids key every cell, pin and pair; two entries under one id would merge.
+	it("refuses two targets under one id", async () => {
+		const files = await corpusOf([target(1), { ...target(2), id: "CVE-2030-1001" }]);
+		await expect(loadTargets({ ...files, selected: [] })).rejects.toThrow(/CVE-2030-1001 more than once/);
 	});
 });
