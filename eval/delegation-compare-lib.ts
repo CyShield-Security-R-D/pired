@@ -62,6 +62,29 @@ export interface PiUsageExtraction {
 	/** Delegation tool results whose usage was left to the children's own sessions. */
 	delegatedResults: number;
 	finalStop: boolean;
+	/** Failed attempts pi retried and recovered from; present only with the `retry` option. */
+	retries?: RetriedAttempt[];
+}
+
+/**
+ * One failed provider attempt pi's agent retry replaced (ADR draft 2.1). Its
+ * reply stays among the observations with whatever usage it reported, which is
+ * usually none: codex sets usage only on `response.completed` and completions
+ * on the last chunk, so a dropped stream reports zero.
+ */
+export interface RetriedAttempt {
+	/** The observation ID of the failed reply, or `summary-retry:<n>` for a compaction attempt, which has no observation. */
+	id: string;
+	origin: "parent" | "worker";
+	errorMessage?: string;
+	/** Tokens the attempt itself reported. */
+	meteredTokens: number;
+	/**
+	 * For an attempt that reported nothing: the previous reply's prompt plus its
+	 * output. The failed request sent at least that prompt, so this is a lower
+	 * bound on its spend; 0 when it reported usage or no reply came before it.
+	 */
+	estimatedTokens: number;
 }
 
 export interface UsageAccounting {
@@ -370,6 +393,17 @@ export interface PiEventsOptions {
 	 * counted once, from the child's own session.
 	 */
 	delegationTools?: readonly string[];
+	/**
+	 * The grid runs under a retry policy: a failed reply followed by
+	 * `auto_retry_start` is a retried attempt, not a failure. Off, a retry event
+	 * is a failure as before and the output is unchanged.
+	 */
+	retry?: boolean;
+}
+
+/** A reply's whole prompt (fresh, cached and cache-written input) plus its output. */
+function promptPlusOutput(usage: Partial<UsageTotals>): number {
+	return num(usage.inputTokens) + num(usage.cacheReadTokens) + num(usage.cacheWriteTokens) + num(usage.outputTokens);
 }
 
 /**
@@ -450,6 +484,16 @@ export function observationsFromPiEvents(events: Array<Record<string, unknown>>,
 	const timestamps = new Map<string, unknown>();
 	let summaries = 0;
 	let echoes = 0;
+	const retry = options.retry === true;
+	if (retry) out.retries = [];
+	// The last reply that reported spend, and the failed reply awaiting its retry
+	// event: pi emits auto_retry_start after the failed reply's message_end.
+	let lastPromptPlusOutput = 0;
+	let lastReply: { id: string; usage?: Partial<UsageTotals> } | undefined;
+	const retried = (id: string, usage: Partial<UsageTotals> | undefined, errorMessage: string | undefined) => {
+		const meteredTokens = usage && reportsSpend(usage) ? num(usage.totalTokens) : 0;
+		out.retries!.push({ id, origin: "parent", ...(errorMessage === undefined ? {} : { errorMessage }), meteredTokens, estimatedTokens: meteredTokens > 0 ? 0 : lastPromptPlusOutput });
+	};
 	for (const event of events) {
 		switch (event.type) {
 			case "message_end": {
@@ -494,6 +538,10 @@ export function observationsFromPiEvents(events: Array<Record<string, unknown>>,
 				const usage = normalizePiUsage(message.usage);
 				const costUsd = piCostUsd(message.usage);
 				out.observations.push({ id, origin: "parent", ...(usage ? { usage } : {}), ...(costUsd === undefined ? {} : { costUsd }) });
+				if (retry) {
+					// Read before this reply updates it: a retried attempt is estimated from the reply before it.
+					lastReply = { id, ...(usage ? { usage } : {}) };
+				}
 				if (!usage) out.errors.push(`assistant reply ${id} carries no usage`);
 				else if (hasCompleteUsage(usage)) {
 					const defect = usageDefect(usage, COMPLETED_STOPS.has(stopReason));
@@ -504,6 +552,7 @@ export function observationsFromPiEvents(events: Array<Record<string, unknown>>,
 					pending = { id, stopReason, ...(typeof message.errorMessage === "string" ? { errorMessage: message.errorMessage } : {}) };
 				} else if (!COMPLETED_STOPS.has(stopReason)) out.errors.push(`assistant reply ${id} ended with unexpected stopReason ${stopReason}`);
 				lastStop = stopReason;
+				if (retry && stopReason !== "error" && usage && reportsSpend(usage)) lastPromptPlusOutput = promptPlusOutput(usage);
 				break;
 			}
 			case "compaction_end": {
@@ -573,10 +622,40 @@ export function observationsFromPiEvents(events: Array<Record<string, unknown>>,
 				break;
 			}
 			case "auto_retry_start":
+				if (!retry) {
+					fail(`${event.type}: retries are disabled, so a retry means a failed attempt whose usage pi does not report`);
+					break;
+				}
+				// pi retries only a reply that ended in error (agent-session.js
+				// _prepareRetry); anything else before this event is a stream this
+				// reader does not understand.
+				if (pending?.stopReason === "error" && lastReply?.id === pending.id) {
+					retried(pending.id, lastReply.usage, pending.errorMessage);
+					out.notes.push(`assistant reply ${pending.id} failed (${pending.errorMessage || "provider error"}); pi retried it (attempt ${String(event.attempt)})`);
+					pending = undefined;
+				} else out.errors.push(`auto_retry_start (attempt ${String(event.attempt)}) with no failed reply before it`);
+				break;
 			case "auto_retry_end":
+				if (!retry) {
+					fail(`${event.type}: retries are disabled, so a retry means a failed attempt whose usage pi does not report`);
+					break;
+				}
+				// success: false is a cancelled streak ("Retry cancelled"); the run did not recover.
+				if (event.success !== true) fail(`auto_retry_end: retry streak ended without success: ${typeof event.finalError === "string" ? event.finalError : "unknown"}`, `retry-end:${out.providerErrors.length + 1}`);
+				break;
 			case "summarization_retry_scheduled":
+				if (!retry) {
+					fail(`${event.type}: retries are disabled, so a retry means a failed attempt whose usage pi does not report`);
+					break;
+				}
+				// A failed summary call: pi discards its usage, so only the estimate
+				// remains. A streak that runs out ends in a compaction_end with an
+				// errorMessage, which is a failure above.
+				retried(`summary-retry:${(out.retries ?? []).length + 1}`, undefined, typeof event.errorMessage === "string" ? event.errorMessage : undefined);
+				break;
 			case "summarization_retry_attempt_start":
 			case "summarization_retry_finished":
+				if (retry) break;
 				fail(`${event.type}: retries are disabled, so a retry means a failed attempt whose usage pi does not report`);
 				break;
 		}

@@ -372,6 +372,96 @@ describe("observationsFromPiEvents", () => {
 		}
 	});
 
+	it("accepts a transient failure pi retried and counts the failed attempt's reported usage", () => {
+		// v5 lost whole runs to one dropped stream pi could have retried; with a
+		// policy the failed attempt is kept, with the usage it did report.
+		const events = [
+			reply({ id: "r1", stop: "toolUse", usage: piUsage(100, 10, 50) }),
+			reply({ id: "r2", stop: "error", usage: piUsage(40, 0), errorMessage: "terminated" }),
+			{ type: "auto_retry_start", attempt: 1, maxAttempts: 4, delayMs: 2000, errorMessage: "terminated" },
+			{ type: "entry_appended", entry: { type: "context_edit", id: "e1", targetId: "m2", replacement: null } },
+			reply({ id: "r3" }),
+			{ type: "auto_retry_end", success: true, attempt: 1 },
+		];
+		const parsed = observationsFromPiEvents(events, { retry: true });
+		expect(parsed.errors).toEqual([]);
+		expect(parsed.providerErrors).toEqual([]);
+		expect(parsed.retries).toEqual([{ id: "r2", origin: "parent", errorMessage: "terminated", meteredTokens: 40, estimatedTokens: 0 }]);
+		const result = accountUsage(parsed.observations);
+		expect(result.valid).toBe(true);
+		expect(result.parent.totalTokens).toBe(160 + 40 + 12);
+	});
+
+	it("estimates an unmetered attempt from the previous reply's prompt plus output", () => {
+		// A dropped stream reports zero usage, yet the request sent at least the
+		// previous reply's prompt; counting it as zero would flatter the arm that retries.
+		const parsed = observationsFromPiEvents([
+			reply({ id: "r1", stop: "toolUse", usage: piUsage(100, 10, 50) }),
+			reply({ id: "r2", stop: "error", usage: zeroUsage(), errorMessage: "terminated" }),
+			{ type: "auto_retry_start", attempt: 1, errorMessage: "terminated" },
+			reply({ id: "r3", stop: "error", usage: zeroUsage(), errorMessage: "terminated" }),
+			{ type: "auto_retry_start", attempt: 2, errorMessage: "terminated" },
+			reply({ id: "r4" }),
+			{ type: "auto_retry_end", success: true, attempt: 2 },
+		], { retry: true });
+		expect(parsed.providerErrors).toEqual([]);
+		expect(parsed.retries?.map((r) => [r.id, r.meteredTokens, r.estimatedTokens])).toEqual([["r2", 0, 160], ["r3", 0, 160]]);
+	});
+
+	it("still refuses retry events when the retry policy is off", () => {
+		const events = [reply({ id: "r1", stop: "error", usage: zeroUsage(), errorMessage: "terminated" }), { type: "auto_retry_start", attempt: 1 }, reply({ id: "r2" })];
+		const off = observationsFromPiEvents(events);
+		expect(off.retries).toBeUndefined();
+		expect(off.providerErrors.length).toBeGreaterThan(0);
+		expect(accountUsage(off.observations).valid).toBe(false);
+	});
+
+	it("leaves the run invalid when the retries run out", () => {
+		// pi gives up after maxRetries: the last failed reply has no auto_retry_start and ends the run.
+		const exhausted = observationsFromPiEvents([
+			reply({ id: "r1", stop: "error", usage: zeroUsage(), errorMessage: "terminated" }),
+			{ type: "auto_retry_start", attempt: 1 },
+			reply({ id: "r2", stop: "error", usage: zeroUsage(), errorMessage: "terminated" }),
+		], { retry: true });
+		expect(exhausted.providerErrors.join(" ")).toContain("r2 failed: terminated");
+		expect(accountUsage(exhausted.observations).valid).toBe(false);
+		const cancelled = observationsFromPiEvents([
+			reply({ id: "r1", stop: "error", usage: zeroUsage(), errorMessage: "terminated" }),
+			{ type: "auto_retry_start", attempt: 1 },
+			{ type: "auto_retry_end", success: false, attempt: 1, finalError: "Retry cancelled" },
+		], { retry: true });
+		expect(cancelled.providerErrors.join(" ")).toContain("Retry cancelled");
+	});
+
+	it("refuses a retry event with no failed reply before it, which this reader does not understand", () => {
+		const parsed = observationsFromPiEvents([reply({ id: "r1", stop: "toolUse" }), { type: "auto_retry_start", attempt: 1 }, reply({ id: "r2" })], { retry: true });
+		expect(parsed.errors.join(" ")).toContain("no failed reply before it");
+	});
+
+	it("keeps an overflow recovery apart from a retry", () => {
+		const parsed = observationsFromPiEvents([
+			reply({ id: "r1", stop: "toolUse", usage: piUsage(100, 10) }),
+			reply({ id: "r2", stop: "error", usage: zeroUsage(), errorMessage: "context_length_exceeded" }),
+			compactionEnd("overflow", { summary: "s", usage: piUsage(50, 5) }, { willRetry: true }),
+			reply({ id: "r3" }),
+		], { retry: true });
+		expect(parsed.recoveredOverflows).toBe(1);
+		expect(parsed.retries).toEqual([]);
+		expect(parsed.providerErrors).toEqual([]);
+	});
+
+	it("counts a failed summary call as an estimated retry and ignores the attempt markers", () => {
+		const parsed = observationsFromPiEvents([
+			reply({ id: "r1", stop: "toolUse", usage: piUsage(100, 10) }),
+			{ type: "summarization_retry_scheduled", attempt: 1, errorMessage: "terminated" },
+			{ type: "summarization_retry_attempt_start", attempt: 2 },
+			{ type: "summarization_retry_finished", success: true },
+			reply({ id: "r2" }),
+		], { retry: true });
+		expect(parsed.providerErrors).toEqual([]);
+		expect(parsed.retries).toEqual([{ id: "summary-retry:1", origin: "parent", errorMessage: "terminated", meteredTokens: 0, estimatedTokens: 110 }]);
+	});
+
 	it("counts a branch summary once by entry ID and notes that print mode should not produce one", () => {
 		const summary = { type: "entry_appended", entry: { type: "branch_summary", id: "b1", usage: piUsage(7, 1) } };
 		const parsed = observationsFromPiEvents([summary, summary, reply({ id: "r1" })]);
