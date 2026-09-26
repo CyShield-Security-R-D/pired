@@ -1951,6 +1951,23 @@ describe("observationsFromPiEvents under a token ceiling (plan 2.5)", () => {
 		expect(parsed.finalStop).toBe(false);
 		expect(parsed.notes.join("\n")).toMatch(/token ceiling aborts a run before its next request/);
 		expect(accountUsage(parsed.observations)).toMatchObject({ valid: true, total: { totalTokens: 1350 } });
+		// The dropped reply had no response ID; it is not counted as a reply that lacked one.
+		expect(parsed.missingResponseIds).toBe(0);
+		expect(parsed.notes.join("\n")).not.toMatch(/has no responseId/);
+	});
+
+	it("accepts a compaction the ceiling aborted at its start, and fails the same compaction without a ceiling", () => {
+		const aborted = compactionEnd("threshold", undefined, { aborted: true });
+		const events = [reply({ id: "r1", stop: "toolUse", usage: piUsage(600, 20) }), aborted, abortedBeforeRequest()];
+		const cut = observationsFromPiEvents(events, { ceilingStop: true });
+		expect(cut.errors).toEqual([]);
+		expect(cut.providerErrors).toEqual([]);
+		expect(cut.ceilingAbortedCompactions).toBe(1);
+		expect(accountUsage(cut.observations).valid).toBe(true);
+		expect(observationsFromPiEvents(events).providerErrors.join("\n")).toMatch(/compaction 1 \(threshold\) was aborted/);
+		// A compaction that failed on its own is still a failure under a ceiling.
+		const failed = observationsFromPiEvents([reply({ id: "r1", stop: "toolUse" }), compactionEnd("threshold", undefined, { errorMessage: "summary failed" }), abortedBeforeRequest()], { ceilingStop: true });
+		expect(failed.providerErrors.join("\n")).toMatch(/summary failed/);
 	});
 
 	it("reads the same stream as a failed run without the option, so a cell without a ceiling is judged as before", () => {

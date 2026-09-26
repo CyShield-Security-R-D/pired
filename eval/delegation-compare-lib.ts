@@ -70,6 +70,8 @@ export interface PiUsageExtraction {
 	finalStop: boolean;
 	/** Failed attempts pi retried, recovered or not; present only with the `retry` option. */
 	retries?: RetriedAttempt[];
+	/** Compactions the token ceiling aborted before their request; present only with `ceilingStop`. */
+	ceilingAbortedCompactions?: number;
 }
 
 /**
@@ -508,6 +510,9 @@ export interface PiEventsOptions {
 	 * `toolUse`. The empty reply is dropped as it is for a worker aborted between
 	 * requests, and the missing final `stop` is noted, not an error. An in-flight
 	 * abort still fails the run: its reply is `aborted`, with unknown spend.
+	 * A compaction the ceiling aborted at its start (no result, no error) sent no
+	 * request and is noted, not failed; the harness checks it came after the
+	 * ceiling was reached.
 	 */
 	ceilingStop?: boolean;
 }
@@ -638,7 +643,8 @@ export function observationsFromPiEvents(events: Array<Record<string, unknown>>,
 	// overflow recovery turns it into a retried turn, anything else leaves it failed.
 	let pending: { id: string; stopReason: string; errorMessage?: string } | undefined;
 	// The last reply, and the stop of the one before it: read only under ceilingStop.
-	let lastReplyRow: { id: string; observation: number; empty: boolean } | undefined;
+	let lastReplyRow: { id: string; observation: number; empty: boolean; missingId: boolean } | undefined;
+	if (options.ceilingStop) out.ceilingAbortedCompactions = 0;
 	let stopBeforeLast: string | undefined;
 	const settle = () => {
 		if (pending?.stopReason === "error") fail(`assistant reply ${pending.id} failed: ${pending.errorMessage || "provider error"}`);
@@ -720,7 +726,7 @@ export function observationsFromPiEvents(events: Array<Record<string, unknown>>,
 					const content = Array.isArray(message.content) ? message.content : [];
 					stopBeforeLast = lastStop;
 					lastReplyRow = {
-						id, observation: out.observations.length - 1,
+						id, observation: out.observations.length - 1, missingId: !isName(message.responseId),
 						empty: content.every((part) => isRow(part) && part.type === "text" && !String(part.text ?? "").trim()) && !reportsSpend(message.usage) && Boolean(usage),
 					};
 				}
@@ -752,6 +758,12 @@ export function observationsFromPiEvents(events: Array<Record<string, unknown>>,
 				const n = ++out.compactions;
 				const reason = typeof event.reason === "string" ? event.reason : "unknown";
 				const result = event.result;
+				if (options.ceilingStop && event.aborted === true && !isRow(result) && event.errorMessage === undefined) {
+					out.ceilingAbortedCompactions!++;
+					out.notes.push(`compaction ${n} (${reason}) was aborted at its start by the token ceiling; no summary request was sent`);
+					summaryStreak = [];
+					break;
+				}
 				if (event.aborted === true || !isRow(result) || event.errorMessage !== undefined) {
 					const why = event.aborted === true ? "was aborted" : typeof event.errorMessage === "string" ? `failed: ${event.errorMessage}` : "returned no result";
 					fail(`compaction ${n} (${reason}) ${why}`, `compaction:${n}`);
@@ -884,6 +896,12 @@ export function observationsFromPiEvents(events: Array<Record<string, unknown>>,
 		assistants--;
 		lastStop = stopBeforeLast;
 		cutByCeiling = true;
+		// It was never a reply of the run's, so its missing response ID is not one either.
+		if (lastReplyRow.missingId) {
+			out.missingResponseIds--;
+			const at = out.notes.findIndex((n) => n.endsWith(`has no responseId; counted as ${lastReplyRow!.id}`));
+			if (at >= 0) out.notes.splice(at, 1);
+		}
 		out.notes.push(`assistant reply ${lastReplyRow.id} is the empty reply pi writes when the token ceiling aborts a run before its next request; no provider call was made for it, so it is not counted`);
 	}
 	settle();
