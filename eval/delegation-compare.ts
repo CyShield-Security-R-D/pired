@@ -812,11 +812,6 @@ export function optionsFromManifest(dir: string, manifest: JsonRecord): Options 
 }
 
 /**
- * The per-arm options (plan item 2.8) a grid pinned, read strictly: a manifest
- * without a field predates it or left it at its default, and a present but
- * malformed one refuses the resume rather than silently changing an arm.
- */
-/**
  * The patched twins a grid ran (plan item 2.8): its twin arms and the twins
  * file its preflight recorded. A manifest without `twinArms` ran none, and its
  * resume runs none; one with them but no recorded file cannot be resumed.
@@ -833,6 +828,11 @@ export function twinOptionsFromManifest(manifest: JsonRecord): Pick<Options, "tw
 	return { twinsPath: file.path, twinArms: raw as PairArm[] };
 }
 
+/**
+ * The per-arm options (plan item 2.8) a grid pinned, read strictly: a manifest
+ * without a field predates it or left it at its default, and a present but
+ * malformed one refuses the resume rather than silently changing an arm.
+ */
 export function armOptionsFromManifest(manifest: JsonRecord): Pick<Options, "baselineMaxAgents" | "maxVerifiers" | "budgetArms" | "subagentsArms"> {
 	const out: Pick<Options, "baselineMaxAgents" | "maxVerifiers" | "budgetArms" | "subagentsArms"> = {};
 	if (manifest.baselineMaxAgents !== undefined) {
