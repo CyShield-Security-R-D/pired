@@ -5934,5 +5934,5401 @@
    "chosen": "CVE-2026-28678"
   }
  ],
- "variants": []
+ "variants": [
+  {
+   "logged": "2026-09-26T20:23:02.239Z",
+   "reason": "review found non-applications before any run",
+   "selection": {
+    "procedure": "eval/corpus/select-fresh.ts draw",
+    "rules_version": 2,
+    "seed": 20260926,
+    "parameters": {
+     "n": 12,
+     "controls": 0,
+     "max_per_language": 6,
+     "tries_per_repo": 3,
+     "size_range": [
+      3650,
+      38977
+     ],
+     "max_source_files": 3000,
+     "label_max_lines": 31,
+     "merge_gap": 6,
+     "max_labels_per_advisory": 12,
+     "scorer_ext": "\\.(?:py|pyi|js|jsx|ts|tsx|go|rb|php|java|cs|rs|kt|scala)$",
+     "published_since_tried": "2026-01-01"
+    },
+    "pool": {
+     "path": "eval/corpus/fresh/pool.json",
+     "sha256": "4d50c3d4ea46f3fa48f5d255342f17fd3d2471dcd4f86fb2f342f64e9d4a137e",
+     "file_sha256": "2e7c7fa464d12e17cfd6a0ac14459cc847275739a3b05048e5a96fa60d7c9968",
+     "source": {
+      "url": "https://osv-vulnerabilities.storage.googleapis.com/GIT/all.zip",
+      "last_modified": "Sat, 26 Sep 2026 13:19:46 GMT",
+      "etag": "\"5c25c98595517d733e74a98d6ddb160d\"",
+      "zip_sha256": "2afa8f54884c3083921e03d32b01535a400b0c7635579263eb979c871b741adb",
+      "cve_records": 88101
+     },
+     "advisories": 23279
+    },
+    "exclusions": {
+     "path": "eval/corpus/fresh/exclusions.json",
+     "sha256": "03105eb92b6d93c342440ca281bc00697236233d73b085bcb026afe169e9d10e",
+     "file_sha256": "bae31dcdfe83f449df14aa3f8a7d4a8e3726a42dac79309efe68ea8a84b016ec",
+     "repos": 805
+    },
+    "date_rule": {
+     "cutoff": "2026-01-01",
+     "rule": "keep the cutoff only if the eligible repositories it leaves, estimated as the walk's Wilson 95% lower-bound yield times the candidate repositories, are at least 3x the draw (targets + controls)",
+     "candidate_repos": 2107,
+     "examined": 314,
+     "eligible": 12,
+     "wilson_lower": 0.022,
+     "estimate": 46,
+     "required": 36,
+     "exhausted": false,
+     "holds": true
+    },
+    "counts": {
+     "metadata": [
+      {
+       "filter": "pool: CVE record with a FIX-typed GitHub commit",
+       "advisories": 23279,
+       "repos": 6642
+      },
+      {
+       "filter": "fix commits in one repository",
+       "advisories": 23088,
+       "repos": 6479
+      },
+      {
+       "filter": "exactly one fix commit",
+       "advisories": 20178,
+       "repos": 6086
+      },
+      {
+       "filter": "publication date recorded",
+       "advisories": 20178,
+       "repos": 6086
+      },
+      {
+       "filter": "repository not excluded",
+       "advisories": 16115,
+       "repos": 5342
+      },
+      {
+       "filter": "published on or after 2026-01-01",
+       "advisories": 6387,
+       "repos": 2107
+      }
+     ],
+     "walk": {
+      "examined_repos": 314,
+      "eligible_repos": 12,
+      "advisory_failures": {
+       "source obtainable at the parent commit": 1,
+       "size within the official range": 406,
+       "served application": 94,
+       "deployable service": 0,
+       "not a framework or library": 1,
+       "language in the scorer's list": 3,
+       "labellable fix": 1,
+       "fix not diffuse": 2,
+       "labels survive leak stripping": 0,
+       "history obtainable": 0,
+       "no other known advisory open in the fixed tree": 0,
+       "fixed tree obtainable": 0,
+       "fixed tree within the official range": 0,
+       "fixed tree is a served application": 0,
+       "fixed tree language in the scorer's list": 0
+      },
+      "outcomes": {
+       "ineligible": 302,
+       "admitted": 12
+      },
+      "exhausted": false
+     }
+    },
+    "published": {
+     "candidates_by_year": {
+      "2026": 6387
+     },
+     "drawn": [
+      "2026-01-19",
+      "2026-08-11",
+      "2026-04-27",
+      "2026-07-13",
+      "2026-02-25",
+      "2026-05-08",
+      "2026-06-15",
+      "2026-09-17",
+      "2026-08-31",
+      "2026-04-02",
+      "2026-02-06",
+      "2026-07-20"
+     ],
+     "controls": []
+    },
+    "targets": [
+     {
+      "repo": "Quenary/tugtainer",
+      "id": "CVE-2026-23846",
+      "aliases": [
+       "GHSA-f2qf-f544-xm4p"
+      ],
+      "published": "2026-01-19",
+      "cwe": [
+       "CWE-598"
+      ],
+      "severity": "high",
+      "fix_commit": "9d23bf40ac1d39005582abfcf0a84753a4e29d52",
+      "parent_commit": "896847e53c9ebd4ec520609b5af5abbbb719d05b",
+      "language": "Python",
+      "scope_files": 167,
+      "scope_loc": 10054,
+      "routes": 3,
+      "labels": 2,
+      "unscoreable_hunks": 0,
+      "name": "Quenary_tugtainer-f4dh8w",
+      "key": "quenary/tugtainer"
+     },
+     {
+      "repo": "OpenBMB/XAgent",
+      "id": "CVE-2026-72713",
+      "aliases": [],
+      "published": "2026-08-11",
+      "cwe": [
+       "CWE-22"
+      ],
+      "severity": null,
+      "fix_commit": "26f2b6edc75127af524f027c022b382967178e3a",
+      "parent_commit": "3619c25855f878481ddb893709c1e30d76aff794",
+      "language": "Python",
+      "scope_files": 184,
+      "scope_loc": 20522,
+      "routes": 10,
+      "labels": 12,
+      "unscoreable_hunks": 0,
+      "name": "OpenBMB_XAgent-f73set",
+      "key": "openbmb/xagent"
+     },
+     {
+      "repo": "wooey/Wooey",
+      "id": "CVE-2026-7142",
+      "aliases": [
+       "GHSA-w65c-cmxj-qrhm",
+       "PYSEC-2026-3427"
+      ],
+      "published": "2026-04-27",
+      "cwe": [
+       "CWE-266",
+       "CWE-285"
+      ],
+      "severity": null,
+      "fix_commit": "f7846fc0c323da8325422cab32623491757f1b88",
+      "parent_commit": "dc457291cf3d976f5cfbc15fce71c95a733d3699",
+      "language": "Python",
+      "scope_files": 78,
+      "scope_loc": 6542,
+      "routes": 1,
+      "labels": 1,
+      "unscoreable_hunks": 0,
+      "name": "wooey_Wooey-rzhxdt",
+      "key": "wooey/wooey"
+     },
+     {
+      "repo": "go-shiori/shiori",
+      "id": "CVE-2026-61463",
+      "aliases": [],
+      "published": "2026-07-13",
+      "cwe": [
+       "CWE-269"
+      ],
+      "severity": null,
+      "fix_commit": "6c8a7dbc11b131609bfda736b14d61c51f9027b2",
+      "parent_commit": "899b4ee417a99d0b89c85625a265e79c27e82aba",
+      "language": "Go",
+      "scope_files": 135,
+      "scope_loc": 18207,
+      "routes": 2,
+      "labels": 1,
+      "unscoreable_hunks": 0,
+      "name": "go-shiori_shiori-f6jaq5",
+      "key": "go-shiori/shiori"
+     },
+     {
+      "repo": "feiyuchuixue/sz-boot-parent",
+      "id": "CVE-2026-3187",
+      "aliases": [],
+      "published": "2026-02-25",
+      "cwe": [
+       "CWE-284",
+       "CWE-434"
+      ],
+      "severity": null,
+      "fix_commit": "aefaabfd7527188bfba3c8c9eee17c316d094802",
+      "parent_commit": "72dab1d0196f303c6b715529c068782033c99b79",
+      "language": "Java",
+      "scope_files": 456,
+      "scope_loc": 29822,
+      "routes": 24,
+      "labels": 10,
+      "unscoreable_hunks": 0,
+      "name": "feiyuchuixue_sz-boot-parent-rzfdja",
+      "key": "feiyuchuixue/sz-boot-parent"
+     },
+     {
+      "repo": "geopython/pygeoapi",
+      "id": "CVE-2026-42352",
+      "aliases": [
+       "GHSA-jgvc-94c8-3chc",
+       "PYSEC-2026-2986"
+      ],
+      "published": "2026-05-08",
+      "cwe": [
+       "CWE-918"
+      ],
+      "severity": "high",
+      "fix_commit": "3a63f5b0cc6275e3ae0edb47726b13a43cdd90ef",
+      "parent_commit": "bf25b8695edbdd5476eeffc102b633d1d3e45f52",
+      "language": "Python",
+      "scope_files": 92,
+      "scope_loc": 32155,
+      "routes": 2,
+      "labels": 7,
+      "unscoreable_hunks": 0,
+      "name": "geopython_pygeoapi-f5gbrd",
+      "key": "geopython/pygeoapi"
+     },
+     {
+      "repo": "juice-shop/multi-juicer",
+      "id": "CVE-2026-48518",
+      "aliases": [
+       "GHSA-h759-hf7w-j6m6"
+      ],
+      "published": "2026-06-15",
+      "cwe": [
+       "CWE-352"
+      ],
+      "severity": "medium",
+      "fix_commit": "75b08c3fdda410781d421bfdf041fb1e913d6b49",
+      "parent_commit": "afff9a3874bc924bca6e04ebe50b4a05e5a0c5e7",
+      "language": "JavaScript/TypeScript",
+      "scope_files": 118,
+      "scope_loc": 13572,
+      "routes": 4,
+      "labels": 3,
+      "unscoreable_hunks": 0,
+      "name": "juice-shop_multi-juicer-f5k72n",
+      "key": "juice-shop/multi-juicer"
+     },
+     {
+      "repo": "vmDeshpande/ai-agent-automation",
+      "id": "CVE-2026-54519",
+      "aliases": [
+       "GHSA-qv97-83w4-ff86"
+      ],
+      "published": "2026-09-17",
+      "cwe": [
+       "CWE-862"
+      ],
+      "severity": "high",
+      "fix_commit": "96b31c216f6f670e64584f3623c07ac54461e703",
+      "parent_commit": "a3eae9810ddb2483234c1f95230049cd4b64de62",
+      "language": "JavaScript/TypeScript",
+      "scope_files": 188,
+      "scope_loc": 23644,
+      "routes": 16,
+      "labels": 11,
+      "unscoreable_hunks": 0,
+      "name": "vmDeshpande_ai-agent-automation-f61fpx",
+      "key": "vmdeshpande/ai-agent-automation"
+     },
+     {
+      "repo": "zhenorzz/goploy",
+      "id": "CVE-2026-53553",
+      "aliases": [
+       "GHSA-4g5x-hcwm-82jw",
+       "GO-2026-5938"
+      ],
+      "published": "2026-08-31",
+      "cwe": [
+       "CWE-200",
+       "CWE-22"
+      ],
+      "severity": "high",
+      "fix_commit": "d51aa15ebc0a474d9d71d6c453a0fe798dd5e007",
+      "parent_commit": "5438ef05777e1d3b1e1ed2fa0892a39b4cb3161a",
+      "language": "Go",
+      "scope_files": 190,
+      "scope_loc": 24931,
+      "routes": 1,
+      "labels": 8,
+      "unscoreable_hunks": 0,
+      "name": "zhenorzz_goploy-f60sto",
+      "key": "zhenorzz/goploy"
+     },
+     {
+      "repo": "ShaneIsrael/fireshare",
+      "id": "CVE-2026-34745",
+      "aliases": [
+       "GHSA-fvvp-rj8g-c7gc"
+      ],
+      "published": "2026-04-02",
+      "cwe": [
+       "CWE-22"
+      ],
+      "severity": "critical",
+      "fix_commit": "b76915607924756e6fa1a5f6c8823c38d611fb24",
+      "parent_commit": "e2747854354e237abb1359336cf835fc9f9e2951",
+      "language": "JavaScript/TypeScript",
+      "scope_files": 87,
+      "scope_loc": 20699,
+      "routes": 3,
+      "labels": 2,
+      "unscoreable_hunks": 0,
+      "name": "ShaneIsrael_fireshare-f4xw32",
+      "key": "shaneisrael/fireshare"
+     },
+     {
+      "repo": "denpiligrim/3dp-manager",
+      "id": "CVE-2026-25803",
+      "aliases": [
+       "GHSA-5x57-h7cw-9jmw"
+      ],
+      "published": "2026-02-06",
+      "cwe": [
+       "CWE-798"
+      ],
+      "severity": "critical",
+      "fix_commit": "f568de41de97dd1b70a963708a1ee18e52b9d248",
+      "parent_commit": "f7495d691b626b7d2aefefbde2d4a27fb30e284a",
+      "language": "JavaScript/TypeScript",
+      "scope_files": 58,
+      "scope_loc": 5119,
+      "routes": 8,
+      "labels": 2,
+      "unscoreable_hunks": 5,
+      "name": "denpiligrim_3dp-manager-f4er4f",
+      "key": "denpiligrim/3dp-manager"
+     },
+     {
+      "repo": "vastsa/FileCodeBox",
+      "id": "CVE-2026-64619",
+      "aliases": [],
+      "published": "2026-07-20",
+      "cwe": [
+       "CWE-348"
+      ],
+      "severity": null,
+      "fix_commit": "1b6d8e7277d3cfa34dc7a85803731d927b2147da",
+      "parent_commit": "eb6fc627aece0ee3543c57af942e4f8f5e3e1aa6",
+      "language": "Python",
+      "scope_files": 28,
+      "scope_loc": 5899,
+      "routes": 3,
+      "labels": 8,
+      "unscoreable_hunks": 0,
+      "name": "vastsa_FileCodeBox-f6l91z",
+      "key": "vastsa/filecodebox"
+     }
+    ],
+    "controls": [],
+    "walk": [
+     {
+      "repo": "medplum/medplum",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-49120",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "182312 loc, 2 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-53728",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "169534 loc, 2 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "sysfce2/mruby",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-1979",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); templates, server entry"
+       }
+      ]
+     },
+     {
+      "repo": "foundry376/mailspring",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-93405",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "96232 loc, 3 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "fraillt/bitsery",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-9521",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "0 loc"
+       }
+      ]
+     },
+     {
+      "repo": "nasa/cryptolib",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-22025",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "133 loc"
+       },
+       {
+        "advisory": "CVE-2026-22026",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "133 loc"
+       },
+       {
+        "advisory": "CVE-2026-22027",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "133 loc"
+       }
+      ]
+     },
+     {
+      "repo": "sigstore/cosign",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-22703",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); templates, server entry"
+       },
+       {
+        "advisory": "CVE-2026-24122",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); templates, server entry"
+       }
+      ]
+     },
+     {
+      "repo": "cbcoutinho/nextcloud-mcp-server",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-55640",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "61853 loc"
+       }
+      ]
+     },
+     {
+      "repo": "quenary/tugtainer",
+      "outcome": "admitted",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-23846",
+        "ok": true
+       }
+      ],
+      "chosen": "CVE-2026-23846"
+     },
+     {
+      "repo": "microsoft/prompty",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-53597",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "141303 loc, 2 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-53598",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "140907 loc, 2 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "nousresearch/hermes-agent",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-53870",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "423697 loc, 12 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-17432",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "539890 loc, 15 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-82021",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "709737 loc, 22 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "sanluan/publiccms",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-2010",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "170651 loc, 142 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "flytohub/flyto-core",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-67424",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "178431 loc"
+       },
+       {
+        "advisory": "CVE-2026-67429",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "178138 loc"
+       },
+       {
+        "advisory": "CVE-2026-67426",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "178431 loc"
+       }
+      ]
+     },
+     {
+      "repo": "editorconfig/editorconfig-core-c",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-40489",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "0 loc"
+       }
+      ]
+     },
+     {
+      "repo": "baomidou/dynamic-datasource",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-7045",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); no templates, migrations or server entry"
+       }
+      ]
+     },
+     {
+      "repo": "ash-project/ash_graphql",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-82367",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "0 loc, 1 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-81643",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "0 loc, 1 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-80223",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "0 loc, 1 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "kludex/python-multipart",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-24486",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "2343 loc"
+       }
+      ]
+     },
+     {
+      "repo": "sahlberg/libnfs",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-53689",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "0 loc, 2 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-57918",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "0 loc, 2 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "dragonmonk111/junoclaw",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-43992",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); templates, server entry"
+       },
+       {
+        "advisory": "CVE-2026-43989",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); templates, server entry"
+       },
+       {
+        "advisory": "CVE-2026-43993",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); templates, server entry"
+       }
+      ]
+     },
+     {
+      "repo": "treeverse/lakefs",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-26187",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "230213 loc, 16 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2025-68671",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "223816 loc, 12 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-66006",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "227131 loc, 15 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "lief-project/lief",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2025-15504",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "52971 loc, 19 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "ronf/asyncssh",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-54591",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); no templates, migrations or server entry"
+       },
+       {
+        "advisory": "CVE-2026-54590",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); no templates, migrations or server entry"
+       }
+      ]
+     },
+     {
+      "repo": "doobidoo/mcp-memory-service",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-29787",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "98107 loc, 4 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "sipeed/picoclaw",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-16196",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "155725 loc, 1 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-16081",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "159594 loc, 1 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-16198",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "155937 loc, 1 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "pgvector/pgvector",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-18022",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "0 loc"
+       }
+      ]
+     },
+     {
+      "repo": "npm/pacote",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-9496",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "1887 loc"
+       }
+      ]
+     },
+     {
+      "repo": "opensource-workshop/connect-cms",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-32276",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "186859 loc, 4 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-32278",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "185345 loc, 4 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-32300",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "185345 loc, 4 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "datadog/dd-trace-dotnet",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-50273",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "5251 source files"
+       }
+      ]
+     },
+     {
+      "repo": "jknack/handlebars.java",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-55760",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); templates"
+       },
+       {
+        "advisory": "CVE-2026-63490",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); templates"
+       }
+      ]
+     },
+     {
+      "repo": "kazuho/starlet",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-40561",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "0 loc"
+       }
+      ]
+     },
+     {
+      "repo": "rybbit-io/rybbit",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-82287",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "118555 loc"
+       }
+      ]
+     },
+     {
+      "repo": "ethyca/fides",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-44541",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "4363 source files"
+       }
+      ]
+     },
+     {
+      "repo": "wkentaro/gdown",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-40491",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "1276 loc"
+       }
+      ]
+     },
+     {
+      "repo": "suitenumerique/people",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-42185",
+        "ok": false,
+        "filter": "labellable fix",
+        "detail": "no code line changed in a source file"
+       }
+      ]
+     },
+     {
+      "repo": "thorsten/phpmyfaq",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-48488",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "158680 loc, 5 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-46364",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "190681 loc, 21 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-27836",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "112964 loc, 5 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "1panel-dev/maxkb",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-79919",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "132571 loc, 38 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-39419",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "115926 loc, 33 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-39424",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "116260 loc, 33 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "hkuds/vibe-trading",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-58171",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "109624 loc"
+       },
+       {
+        "advisory": "CVE-2026-58170",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "109646 loc"
+       }
+      ]
+     },
+     {
+      "repo": "signalk/signalk-server",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-39320",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "70372 loc, 3 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-55591",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "98137 loc, 3 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-25228",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "51919 loc, 1 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "misp/bsimvis",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-53693",
+        "ok": false,
+        "filter": "fix not diffuse",
+        "detail": "14 labels"
+       }
+      ]
+     },
+     {
+      "repo": "jelmer/dulwich",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-47712",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "62171 loc, 3 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-42563",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "62232 loc, 3 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "etruel/wpematico",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-19883",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); no templates, migrations or server entry"
+       }
+      ]
+     },
+     {
+      "repo": "xwiki/xwiki-platform",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-40104",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "4684 source files"
+       },
+       {
+        "advisory": "CVE-2026-33229",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "4684 source files"
+       },
+       {
+        "advisory": "CVE-2026-24128",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "4444 source files"
+       }
+      ]
+     },
+     {
+      "repo": "baptistearno/typebot.io",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-48767",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "145754 loc, 2 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-62861",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "147370 loc, 2 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-62862",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "147383 loc, 2 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "rustdesk/rustdesk",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-100417",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "160399 loc, 3 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-100388",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "160399 loc, 3 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-73102",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "141620 loc, 1 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "lwip-tcpip/lwip",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-8836",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); templates"
+       }
+      ]
+     },
+     {
+      "repo": "ronsavage/crypt-passwdmd5",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-6659",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "0 loc"
+       }
+      ]
+     },
+     {
+      "repo": "myems/myems",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-15321",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "729628 loc, 73 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "mythicalltd/mythicaldash",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-54608",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "68803 loc"
+       }
+      ]
+     },
+     {
+      "repo": "sooperset/mcp-atlassian",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-73497",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); templates, server entry"
+       },
+       {
+        "advisory": "CVE-2026-77249",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); templates, server entry"
+       },
+       {
+        "advisory": "CVE-2026-77248",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); templates, server entry"
+       }
+      ]
+     },
+     {
+      "repo": "taskosaur/taskosaur",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-31874",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "136929 loc"
+       }
+      ]
+     },
+     {
+      "repo": "taigaio/taiga-front",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-41250",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); server entry"
+       }
+      ]
+     },
+     {
+      "repo": "guno1928/alos-http",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-55484",
+        "ok": false,
+        "filter": "source obtainable at the parent commit",
+        "detail": "fatal: Needed a single revision"
+       }
+      ]
+     },
+     {
+      "repo": "npitre/cramfs-tools",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-8274",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "0 loc"
+       },
+       {
+        "advisory": "CVE-2026-8784",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "0 loc"
+       }
+      ]
+     },
+     {
+      "repo": "tomwright/dasel",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-59168",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); server entry"
+       },
+       {
+        "advisory": "CVE-2026-46377",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); server entry"
+       },
+       {
+        "advisory": "CVE-2026-46378",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); server entry"
+       }
+      ]
+     },
+     {
+      "repo": "envoyproxy/envoy",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-26308",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); templates, server entry"
+       },
+       {
+        "advisory": "CVE-2026-6994",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); templates, server entry"
+       }
+      ]
+     },
+     {
+      "repo": "pomerium/pomerium",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-50285",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "101259 loc, 25 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "lintsinghua/deepaudit",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-25729",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "87471 loc"
+       },
+       {
+        "advisory": "CVE-2026-2532",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "86545 loc"
+       }
+      ]
+     },
+     {
+      "repo": "bytedance/deer-flow",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-34430",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "52116 loc"
+       },
+       {
+        "advisory": "CVE-2026-32859",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "50466 loc"
+       },
+       {
+        "advisory": "CVE-2026-40518",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "68624 loc"
+       }
+      ]
+     },
+     {
+      "repo": "icalendar/icalendar",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-33635",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "2617 loc"
+       }
+      ]
+     },
+     {
+      "repo": "alam00000/bentopdf",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-63630",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "80824 loc, 6 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "contentful/contentful-mcp-server",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-53957",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); no templates, migrations or server entry"
+       }
+      ]
+     },
+     {
+      "repo": "agno-agi/agno",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-35002",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "321868 loc, 2 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-76832",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "321896 loc, 2 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "toon-format/toon",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-82404",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); no templates, migrations or server entry"
+       }
+      ]
+     },
+     {
+      "repo": "openbmb/xagent",
+      "outcome": "admitted",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-72713",
+        "ok": true
+       }
+      ],
+      "chosen": "CVE-2026-72713"
+     },
+     {
+      "repo": "unitronix/betterdesk",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-50575",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "141395 loc, 12 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "bacnet-stack/bacnet-stack",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-21878",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "2181 loc, 8 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-26264",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "2181 loc, 8 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-21870",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "2181 loc, 8 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "ocsinventory-ng/ocsinventory-server",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-22675",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "0 loc"
+       }
+      ]
+     },
+     {
+      "repo": "grisuno/lazyown",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-68502",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "116618 loc, 18 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-68503",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "116618 loc, 18 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "getkin/kin-openapi",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-73502",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); templates, server entry"
+       },
+       {
+        "advisory": "CVE-2026-73501",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); templates, server entry"
+       },
+       {
+        "advisory": "CVE-2026-76905",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); templates, server entry"
+       }
+      ]
+     },
+     {
+      "repo": "logto-io/logto",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-54714",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "4734 source files"
+       },
+       {
+        "advisory": "CVE-2026-63203",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "4851 source files"
+       },
+       {
+        "advisory": "CVE-2026-82262",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "5006 source files"
+       }
+      ]
+     },
+     {
+      "repo": "jupyterlab/jupyterlab-git",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-54528",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); server entry"
+       },
+       {
+        "advisory": "CVE-2026-54527",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); server entry"
+       }
+      ]
+     },
+     {
+      "repo": "sgbett/bsv-ruby-sdk",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-40069",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); no templates, migrations or server entry"
+       },
+       {
+        "advisory": "CVE-2026-40070",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); no templates, migrations or server entry"
+       }
+      ]
+     },
+     {
+      "repo": "vitodeploy/vito",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-29789",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "78061 loc, 4 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "micronaut-projects/micronaut-core",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-33012",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "309669 loc"
+       },
+       {
+        "advisory": "CVE-2026-33013",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "309655 loc"
+       }
+      ]
+     },
+     {
+      "repo": "openedx/openedx-platform",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-42857",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "3710 source files"
+       },
+       {
+        "advisory": "CVE-2026-35404",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "3715 source files"
+       },
+       {
+        "advisory": "CVE-2026-34736",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "3714 source files"
+       }
+      ]
+     },
+     {
+      "repo": "moquette-io/moquette",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-95847",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); templates"
+       },
+       {
+        "advisory": "CVE-2026-95846",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); templates"
+       },
+       {
+        "advisory": "CVE-2026-85724",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); templates"
+       }
+      ]
+     },
+     {
+      "repo": "takumin/mruby",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-79590",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); server entry"
+       }
+      ]
+     },
+     {
+      "repo": "xuxueli/xxl-job",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-7303",
+        "ok": false,
+        "filter": "not a framework or library",
+        "detail": "README: \"a distributed task scheduling framework\""
+       }
+      ]
+     },
+     {
+      "repo": "predis/predis",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-84372",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "39071 loc"
+       }
+      ]
+     },
+     {
+      "repo": "scadabr/scadabr",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-94148",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "181808 loc, 7 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "sshnet/ssh.net",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-85756",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "51455 loc"
+       },
+       {
+        "advisory": "CVE-2026-48798",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "51529 loc"
+       }
+      ]
+     },
+     {
+      "repo": "siemvk/openlearn",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-41243",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "2247 loc"
+       }
+      ]
+     },
+     {
+      "repo": "zeecka/aperisolve",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-34977",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "3581 loc"
+       }
+      ]
+     },
+     {
+      "repo": "woostify/woostify",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-4805",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "45519 loc, 15 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "bergskenop/blender-mcp",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-10662",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); no templates, migrations or server entry"
+       },
+       {
+        "advisory": "CVE-2026-10661",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); no templates, migrations or server entry"
+       }
+      ]
+     },
+     {
+      "repo": "robrwo/file-rotate-simple",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-17435",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "0 loc"
+       }
+      ]
+     },
+     {
+      "repo": "slackhq/nebula",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-25793",
+        "ok": false,
+        "filter": "served application",
+        "detail": "1 route source file(s); server entry"
+       }
+      ]
+     },
+     {
+      "repo": "openmcdf/openmcdf",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-41511",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); templates"
+       },
+       {
+        "advisory": "CVE-2026-45785",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); templates"
+       }
+      ]
+     },
+     {
+      "repo": "ha-china/blueprint-studio",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-53454",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "46041 loc"
+       },
+       {
+        "advisory": "CVE-2026-53455",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "46041 loc"
+       },
+       {
+        "advisory": "CVE-2026-53457",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "46041 loc"
+       }
+      ]
+     },
+     {
+      "repo": "poco-ai/poco-claw",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-16015",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "199217 loc, 2 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-15622",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "199217 loc, 2 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "feast-dev/feast",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-56121",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "138761 loc"
+       },
+       {
+        "advisory": "CVE-2025-11157",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "114069 loc"
+       },
+       {
+        "advisory": "CVE-2026-55563",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "172615 loc"
+       }
+      ]
+     },
+     {
+      "repo": "opencost/opencost",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-67349",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "117569 loc, 6 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "hayat01sh1da/mrubyc",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-38976",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "1466 loc, 55 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "ultravioletrs/cocos",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-92702",
+        "ok": false,
+        "filter": "served application",
+        "detail": "1 route source file(s); server entry"
+       }
+      ]
+     },
+     {
+      "repo": "wildfirechat/im-server",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2025-66480",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "52444 loc, 2 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "dgraph-io/dgraph",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-44840",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "138614 loc, 4 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-63637",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "140203 loc, 4 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "appium/appium-mcp",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-58500",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); server entry"
+       }
+      ]
+     },
+     {
+      "repo": "infracost/infracost",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-71493",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "100141 loc"
+       },
+       {
+        "advisory": "CVE-2026-71494",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "100228 loc"
+       }
+      ]
+     },
+     {
+      "repo": "lyc8503/uptimeflare",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-29779",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "3383 loc"
+       }
+      ]
+     },
+     {
+      "repo": "open-telemetry/opentelemetry-js",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-59892",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "61431 loc, 29 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "mauriciopoppe/math-codegen",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-41507",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "320 loc"
+       }
+      ]
+     },
+     {
+      "repo": "getmaxun/maxun",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-56767",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "72275 loc"
+       }
+      ]
+     },
+     {
+      "repo": "nocobase/nocobase",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-52888",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "7762 source files"
+       },
+       {
+        "advisory": "CVE-2026-41641",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "6436 source files"
+       },
+       {
+        "advisory": "CVE-2026-40346",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "6437 source files"
+       }
+      ]
+     },
+     {
+      "repo": "talishar/talishar",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-25144",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "136306 loc, 3 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-28428",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "137825 loc, 4 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-28429",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "137825 loc, 4 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "trustwallet/wallet-core",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2025-66692",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "78074 loc, 5 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "xx-net/xx-net",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-10099",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "112771 loc, 9 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "datadog/dd-trace-rb",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-50276",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "78335 loc, 6 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "eclipse-wakaama/wakaama",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-58465",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "0 loc"
+       }
+      ]
+     },
+     {
+      "repo": "free5gc/ausf",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-33063",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "3161 loc"
+       },
+       {
+        "advisory": "CVE-2026-53551",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "3215 loc"
+       },
+       {
+        "advisory": "CVE-2026-55785",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "3227 loc"
+       }
+      ]
+     },
+     {
+      "repo": "freescout-help-desk/freescout",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-40566",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "178088 loc, 77 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-40569",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "177850 loc, 77 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-32753",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "176487 loc, 77 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "pymumu/smartdns",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-1425",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); templates, server entry"
+       }
+      ]
+     },
+     {
+      "repo": "arnog/mathlive",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-54705",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "65065 loc"
+       }
+      ]
+     },
+     {
+      "repo": "knmi/adaguc-server",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-50126",
+        "ok": false,
+        "filter": "language in the scorer's list",
+        "detail": "C/C++"
+       }
+      ]
+     },
+     {
+      "repo": "wooey/wooey",
+      "outcome": "admitted",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-7142",
+        "ok": true
+       }
+      ],
+      "chosen": "CVE-2026-7142"
+     },
+     {
+      "repo": "theskumar/python-dotenv",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-28684",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "1044 loc"
+       }
+      ]
+     },
+     {
+      "repo": "go-shiori/shiori",
+      "outcome": "admitted",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-61463",
+        "ok": true
+       }
+      ],
+      "chosen": "CVE-2026-61463"
+     },
+     {
+      "repo": "a2aproject/a2a-java",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-90820",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "160112 loc, 1 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-90819",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "160060 loc, 1 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "ymw0407/auth-fetch-mcp",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-49857",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "760 loc"
+       }
+      ]
+     },
+     {
+      "repo": "mythicalltd/featherpanel",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-84715",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "367222 loc, 1 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "getsolus/eopkg",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-21437",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); no templates, migrations or server entry"
+       },
+       {
+        "advisory": "CVE-2026-21436",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); no templates, migrations or server entry"
+       }
+      ]
+     },
+     {
+      "repo": "shlomif/perl-config-inifiles",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-11527",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "3 loc"
+       }
+      ]
+     },
+     {
+      "repo": "smallstep/certificates",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-30836",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "48955 loc"
+       },
+       {
+        "advisory": "CVE-2026-40097",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "48887 loc"
+       }
+      ]
+     },
+     {
+      "repo": "ethereum/go-ethereum",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-22862",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "228946 loc, 11 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-26314",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "228977 loc, 11 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-22868",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "228946 loc, 11 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "feiyuchuixue/sz-boot-parent",
+      "outcome": "admitted",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-3187",
+        "ok": true
+       }
+      ],
+      "chosen": "CVE-2026-3187"
+     },
+     {
+      "repo": "contiki-ng/contiki-ng",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-5856",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "1732 loc, 11 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-5857",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "1732 loc, 11 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-5855",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "1732 loc, 11 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "cilium/cilium",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-26963",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "3001 source files"
+       },
+       {
+        "advisory": "CVE-2026-49445",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "3020 source files"
+       }
+      ]
+     },
+     {
+      "repo": "esp32async/espasyncwebserver",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-54571",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "0 loc"
+       }
+      ]
+     },
+     {
+      "repo": "h2o/picotls",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-45271",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "1924 loc, 1 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "openfun/richie",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-26717",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "57113 loc, 70 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "nilfs-dev/nilfs-utils",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-55392",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "0 loc, 1 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "geopython/pygeoapi",
+      "outcome": "admitted",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-42352",
+        "ok": true
+       }
+      ],
+      "chosen": "CVE-2026-42352"
+     },
+     {
+      "repo": "aiyiyi121/sxdevops",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-93969",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "57358 loc, 2 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-93966",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "57358 loc, 2 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-93965",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "57358 loc, 2 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "wger-project/wger",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-40474",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "41088 loc, 93 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-27835",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "39941 loc, 90 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-82544",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "44404 loc, 108 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "stefanzweifel/laravel-backup-restore",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-53932",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "1400 loc"
+       }
+      ]
+     },
+     {
+      "repo": "ormar-orm/ormar",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-27953",
+        "ok": false,
+        "filter": "served application",
+        "detail": "1 route source file(s); server entry"
+       }
+      ]
+     },
+     {
+      "repo": "juice-shop/multi-juicer",
+      "outcome": "admitted",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-48518",
+        "ok": true
+       }
+      ],
+      "chosen": "CVE-2026-48518"
+     },
+     {
+      "repo": "nanomq/nanonng",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-44639",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "511 loc, 4 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-73863",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "511 loc, 4 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-32134",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "511 loc, 4 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "neovim/neovim",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-11487",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "210 loc, 20 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "oras-project/oras-go",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-50162",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); no templates, migrations or server entry"
+       },
+       {
+        "advisory": "CVE-2026-48978",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); no templates, migrations or server entry"
+       },
+       {
+        "advisory": "CVE-2026-50163",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); no templates, migrations or server entry"
+       }
+      ]
+     },
+     {
+      "repo": "dfir-iris/iris-web",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-22783",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "248985 loc, 45 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "immich-app/immich",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-59258",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "99055 loc, 2 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-53662",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "93607 loc, 2 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "qwikdev/qwik",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-25148",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "111769 loc, 6 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-25155",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "106719 loc, 4 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-25150",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "111289 loc, 6 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "microweber/microweber",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2025-70791",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "4466 source files"
+       },
+       {
+        "advisory": "CVE-2025-70792",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "4466 source files"
+       }
+      ]
+     },
+     {
+      "repo": "dracutdevs/dracut",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-16445",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "60 loc"
+       }
+      ]
+     },
+     {
+      "repo": "josdejong/mathjs",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-40897",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "64850 loc, 1 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "combodo/itop",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-34948",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "4747 source files"
+       },
+       {
+        "advisory": "CVE-2026-27462",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "4719 source files"
+       },
+       {
+        "advisory": "CVE-2026-27463",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "4723 source files"
+       }
+      ]
+     },
+     {
+      "repo": "cesargb/laravel-magiclink",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-61701",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "1586 loc"
+       }
+      ]
+     },
+     {
+      "repo": "pgpartman/pg_partman",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-61822",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "454 loc"
+       },
+       {
+        "advisory": "CVE-2026-61781",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "454 loc"
+       },
+       {
+        "advisory": "CVE-2026-61817",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "454 loc"
+       }
+      ]
+     },
+     {
+      "repo": "yunaiv/ruoyi-vue-pro",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-57949",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "5168 source files"
+       },
+       {
+        "advisory": "CVE-2026-57950",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "5168 source files"
+       }
+      ]
+     },
+     {
+      "repo": "bentoml/bentoml",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-27905",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "63625 loc, 2 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-40610",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "63615 loc, 2 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-24123",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "63430 loc, 2 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "open-iscsi/open-isns",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-55995",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "0 loc"
+       }
+      ]
+     },
+     {
+      "repo": "lightning-ai/pytorch-lightning",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-58659",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "57023 loc"
+       }
+      ]
+     },
+     {
+      "repo": "fdawgs/node-poppler",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-78637",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "1661 loc"
+       }
+      ]
+     },
+     {
+      "repo": "squirrelchat/smol-toml",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-85730",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "4 loc, 12 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "brightio/penelope",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-50558",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "349 loc, 1 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "authelia/authelia",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-47203",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "95219 loc"
+       },
+       {
+        "advisory": "CVE-2026-48794",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "95215 loc"
+       }
+      ]
+     },
+     {
+      "repo": "super-productivity/super-productivity",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-71551",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "281691 loc, 2 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "zhayujie/cowagent",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-15330",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "65242 loc, 1 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-14714",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "63557 loc, 1 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-16194",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "67409 loc, 1 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "sgoudelis/ground-station",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-53985",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "226624 loc"
+       },
+       {
+        "advisory": "CVE-2026-53452",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "202184 loc"
+       },
+       {
+        "advisory": "CVE-2026-53451",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "202184 loc"
+       }
+      ]
+     },
+     {
+      "repo": "denoland/deno",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-27190",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "384363 loc, 118 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "samverschueren/decode-uri-component",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-45822",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "166 loc"
+       }
+      ]
+     },
+     {
+      "repo": "kubeflow/pipelines",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-54745",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "326994 loc, 5 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "any1/neatvnc",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-42859",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "0 loc, 1 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "argos-ci/argos-javascript",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-59960",
+        "ok": false,
+        "filter": "served application",
+        "detail": "8 route source file(s); templates"
+       }
+      ]
+     },
+     {
+      "repo": "dtwang/line-desktop-mcp",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-49357",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "2042 loc"
+       }
+      ]
+     },
+     {
+      "repo": "ncarlier/webhookd",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-59157",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "3092 loc"
+       }
+      ]
+     },
+     {
+      "repo": "readest/readest",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-82642",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "165767 loc"
+       }
+      ]
+     },
+     {
+      "repo": "sagredo-dev/qmail",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-41113",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "0 loc, 2 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "absinthe-graphql/absinthe",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-42793",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "0 loc"
+       },
+       {
+        "advisory": "CVE-2026-43967",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "0 loc"
+       }
+      ]
+     },
+     {
+      "repo": "mojolicious/mojo",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-14803",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "468 loc, 3 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-15747",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "468 loc, 3 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-68914",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "468 loc, 3 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "sysown/proxysql",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-48774",
+        "ok": false,
+        "filter": "language in the scorer's list",
+        "detail": "C/C++"
+       }
+      ]
+     },
+     {
+      "repo": "dresende/node-sql-query",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-19351",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "1425 loc"
+       }
+      ]
+     },
+     {
+      "repo": "primefaces/primereact",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-15538",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "136798 loc, 3 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "janssenproject/jans",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-45795",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "3387 source files"
+       }
+      ]
+     },
+     {
+      "repo": "88250/lute",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-25647",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "51277 loc, 1 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "michaelrsweet/mxml",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-88385",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "0 loc"
+       },
+       {
+        "advisory": "CVE-2026-5037",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "0 loc"
+       }
+      ]
+     },
+     {
+      "repo": "zulip/zulip",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-26058",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "318291 loc, 722 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-25741",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "332599 loc, 748 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-24050",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "318200 loc, 722 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "kirachon/context-engine",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-19266",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "73039 loc, 2 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "zeeeepa/maamcp",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-81847",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); no templates, migrations or server entry"
+       }
+      ]
+     },
+     {
+      "repo": "mybb/mybb",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-45128",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "172835 loc, 33 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-45734",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "172847 loc, 33 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-45116",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "172748 loc, 33 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "elixir-lang/elixir",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-49762",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "0 loc, 4 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "isso-comments/isso",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-27469",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); templates, server entry"
+       }
+      ]
+     },
+     {
+      "repo": "frostming/unearth",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-73030",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); no templates, migrations or server entry"
+       }
+      ]
+     },
+     {
+      "repo": "confetti/yayson",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-61534",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "1678 loc"
+       }
+      ]
+     },
+     {
+      "repo": "qdrant/qdrant",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-25628",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "237574 loc, 2 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "openzeppelin/openzeppelin-confidential-contracts",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-73645",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "765 loc"
+       }
+      ]
+     },
+     {
+      "repo": "habitrpg/habitica",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-54461",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "87877 loc"
+       }
+      ]
+     },
+     {
+      "repo": "google/go-attestation",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-12681",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); no templates, migrations or server entry"
+       }
+      ]
+     },
+     {
+      "repo": "tecnickcom/tcexam",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-4169",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "89162 loc, 10 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "mayswind/ezbookkeeping",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-94112",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "109900 loc"
+       }
+      ]
+     },
+     {
+      "repo": "neorazorx/facturascripts",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-23476",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "97935 loc, 9 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-25513",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "97970 loc, 9 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-27892",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "97594 loc, 9 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "robrichards/xmlseclibs",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-32313",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "2586 loc"
+       }
+      ]
+     },
+     {
+      "repo": "ulrikstrid/ocaml-jose",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-89086",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "0 loc"
+       }
+      ]
+     },
+     {
+      "repo": "robrwo/net-statsd-lite",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-46719",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "0 loc"
+       }
+      ]
+     },
+     {
+      "repo": "apptainer/apptainer",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-48785",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "87378 loc, 1 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "vmdeshpande/ai-agent-automation",
+      "outcome": "admitted",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-54519",
+        "ok": true
+       }
+      ],
+      "chosen": "CVE-2026-54519"
+     },
+     {
+      "repo": "krayin/laravel-crm",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-41453",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "117659 loc, 1 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-97897",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "126716 loc, 1 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-97895",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "127109 loc, 1 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "http4s/http4s",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-69216",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "0 loc, 1 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-69208",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "0 loc, 1 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-69205",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "0 loc, 1 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "elenavanengelenmaslova/mocknest-serverless",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-86516",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "0 loc"
+       }
+      ]
+     },
+     {
+      "repo": "kiyochii/tinyobjloader",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-29628",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "230 loc, 1 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "tautulli/tautulli",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-54915",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "519827 loc, 33 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-49995",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "519852 loc, 33 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-52835",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "519852 loc, 33 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "dromara/lamp-cloud",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-69100",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "61140 loc"
+       }
+      ]
+     },
+     {
+      "repo": "blinkospace/blinko",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-23481",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "63038 loc, 3 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-23882",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "62822 loc, 3 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-23482",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "62696 loc, 3 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "hyperledger/fabric-ca",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-53658",
+        "ok": false,
+        "filter": "served application",
+        "detail": "2 route source file(s); server entry"
+       }
+      ]
+     },
+     {
+      "repo": "pseitz/lz4_flex",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-32829",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); no templates, migrations or server entry"
+       }
+      ]
+     },
+     {
+      "repo": "beaugunderson/ip-address",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-69192",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "2697 loc"
+       },
+       {
+        "advisory": "CVE-2026-69198",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "2662 loc"
+       }
+      ]
+     },
+     {
+      "repo": "qax-os/excelize",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-59161",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "140 loc, 53 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-59162",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "140 loc, 53 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "hitarth-gg/zenshin",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-37281",
+        "ok": false,
+        "filter": "served application",
+        "detail": "1 route source file(s); templates"
+       }
+      ]
+     },
+     {
+      "repo": "reconurge/flowsint",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-32311",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "59527 loc"
+       }
+      ]
+     },
+     {
+      "repo": "kjur/jsrsasign",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-4599",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); templates"
+       },
+       {
+        "advisory": "CVE-2026-4603",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); templates"
+       },
+       {
+        "advisory": "CVE-2026-4598",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); templates"
+       }
+      ]
+     },
+     {
+      "repo": "mem0ai/mem0",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-59706",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "90847 loc, 1 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-7597",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "86877 loc"
+       },
+       {
+        "advisory": "CVE-2026-49948",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "91427 loc, 1 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "davorg-cpan/tie-hash-regex",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-77781",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "0 loc"
+       }
+      ]
+     },
+     {
+      "repo": "craigjbass/clearancekit",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-33632",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "0 loc"
+       },
+       {
+        "advisory": "CVE-2026-33631",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "0 loc"
+       }
+      ]
+     },
+     {
+      "repo": "arcadedata/arcadedb",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-54076",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "376189 loc, 5 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-65831",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "393195 loc, 5 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-54077",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "376017 loc, 5 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "nuxt/devtools",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-71319",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); templates"
+       }
+      ]
+     },
+     {
+      "repo": "middleapi/orpc",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-33331",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "49287 loc, 1 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-77360",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "49494 loc, 1 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-28794",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "48958 loc, 1 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "bash-it/bash-it",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-73036",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "0 loc"
+       }
+      ]
+     },
+     {
+      "repo": "sigstore/sigstore-go",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-49834",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); no templates, migrations or server entry"
+       },
+       {
+        "advisory": "CVE-2026-54787",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); no templates, migrations or server entry"
+       }
+      ]
+     },
+     {
+      "repo": "facebook/proxygen",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-44909",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "656 loc"
+       }
+      ]
+     },
+     {
+      "repo": "jupyter/nbviewer",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-86258",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); templates, server entry"
+       }
+      ]
+     },
+     {
+      "repo": "pathwaycom/pathway",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-59094",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "178551 loc, 2 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "askbot/askbot-devel",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-1213",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "82116 loc, 413 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "ekacnet/grafanacubism-panel",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-32117",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "969 loc"
+       }
+      ]
+     },
+     {
+      "repo": "opencryptoki/opencryptoki",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-40253",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "0 loc, 12 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-23893",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "0 loc, 12 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "moonshotai/kimi-code",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-17534",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "335610 loc, 4 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "crazyforks/repomix",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-59703",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); server entry"
+       },
+       {
+        "advisory": "CVE-2026-59702",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); server entry"
+       }
+      ]
+     },
+     {
+      "repo": "feathersjs/feathers",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-27191",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); templates"
+       },
+       {
+        "advisory": "CVE-2026-27193",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); templates"
+       },
+       {
+        "advisory": "CVE-2026-27192",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); templates"
+       }
+      ]
+     },
+     {
+      "repo": "qusetions/minicode-python",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-16488",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "74377 loc"
+       }
+      ]
+     },
+     {
+      "repo": "junrar/junrar",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-86071",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); no templates, migrations or server entry"
+       },
+       {
+        "advisory": "CVE-2026-41245",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); no templates, migrations or server entry"
+       },
+       {
+        "advisory": "CVE-2026-28208",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); no templates, migrations or server entry"
+       }
+      ]
+     },
+     {
+      "repo": "jovancoding/network-ai",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-58484",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "59377 loc, 34 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-46701",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "53852 loc, 34 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-58413",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "59377 loc, 34 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "dotnet/aspnetcore",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-25667",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "6423 source files"
+       }
+      ]
+     },
+     {
+      "repo": "libvips/libvips",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-33327",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "296 loc, 3 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-3282",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "296 loc, 3 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-33328",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "296 loc, 3 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "supabase/realtime",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-62247",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "331 loc"
+       }
+      ]
+     },
+     {
+      "repo": "perl-authen-sasl/perl-authen-sasl",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-86219",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "0 loc"
+       }
+      ]
+     },
+     {
+      "repo": "doyensec/safeurl",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-54452",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "901 loc"
+       }
+      ]
+     },
+     {
+      "repo": "gradle/gradle-completion",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-25063",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "0 loc"
+       }
+      ]
+     },
+     {
+      "repo": "withastro/astro",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-59731",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "109668 loc"
+       },
+       {
+        "advisory": "CVE-2026-33768",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "100006 loc"
+       },
+       {
+        "advisory": "CVE-2026-25545",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "90173 loc"
+       }
+      ]
+     },
+     {
+      "repo": "presenton/presenton",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-58446",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "137470 loc"
+       }
+      ]
+     },
+     {
+      "repo": "controlplaneio-fluxcd/flux-operator",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-23990",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "51962 loc"
+       }
+      ]
+     },
+     {
+      "repo": "openemr/openemr",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-25743",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "4095 source files"
+       },
+       {
+        "advisory": "CVE-2026-40507",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "4196 source files"
+       },
+       {
+        "advisory": "CVE-2026-25744",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "4098 source files"
+       }
+      ]
+     },
+     {
+      "repo": "coding-solo/godot-mcp",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-25546",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "2237 loc"
+       }
+      ]
+     },
+     {
+      "repo": "cacalabs/libcaca",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-42046",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); no templates, migrations or server entry"
+       }
+      ]
+     },
+     {
+      "repo": "i18next/i18nextify",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-41692",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "1164 loc, 1 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "zyddnys/manga-image-translator",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-10042",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "51178 loc"
+       }
+      ]
+     },
+     {
+      "repo": "ahmedadelfahim/express-xss-sanitizer",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-33979",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "99 loc"
+       }
+      ]
+     },
+     {
+      "repo": "danielbrendel/hortusfox-web",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-92980",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); templates, migrations, server entry"
+       }
+      ]
+     },
+     {
+      "repo": "lesterchan/wp-downloadmanager",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-2419",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "3399 loc"
+       },
+       {
+        "advisory": "CVE-2026-2426",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "3397 loc"
+       }
+      ]
+     },
+     {
+      "repo": "pyasn1/pyasn1",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-59885",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); no templates, migrations or server entry"
+       },
+       {
+        "advisory": "CVE-2026-59886",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); no templates, migrations or server entry"
+       },
+       {
+        "advisory": "CVE-2026-30922",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); no templates, migrations or server entry"
+       }
+      ]
+     },
+     {
+      "repo": "dragonflyoss/dragonfly",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-24124",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "54120 loc, 1 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-49254",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "54611 loc, 1 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-54637",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "54611 loc, 1 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "lsegal/yard",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-49342",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); templates"
+       }
+      ]
+     },
+     {
+      "repo": "ddnexus/pagy",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-54659",
+        "ok": false,
+        "filter": "served application",
+        "detail": "1 route source file(s); templates"
+       }
+      ]
+     },
+     {
+      "repo": "i18next/i18next-fs-backend",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-48713",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); no templates, migrations or server entry"
+       }
+      ]
+     },
+     {
+      "repo": "libp2p/py-libp2p",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-73568",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "86337 loc"
+       }
+      ]
+     },
+     {
+      "repo": "yt-dlp/yt-dlp",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-50023",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "223120 loc, 1 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-55404",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "224455 loc, 1 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-26331",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "232525 loc, 1 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "podofo/podofo",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-54633",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "499 loc, 5 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-44348",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "379 loc, 7 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "josh-xt/agixt",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-39981",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "143429 loc, 7 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "openwrt/openwrt",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-55490",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "3371 loc, 13 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "sibercii6-crypto/teklifolustur_app",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-23843",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); templates"
+       }
+      ]
+     },
+     {
+      "repo": "libredwg/libredwg",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-15184",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "0 loc, 18 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-15182",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "0 loc, 18 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-9504",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "0 loc, 18 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "tencent/ncnn",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-50144",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); no templates, migrations or server entry"
+       }
+      ]
+     },
+     {
+      "repo": "danielgatis/rembg",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-40086",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "3340 loc"
+       }
+      ]
+     },
+     {
+      "repo": "nevware21/ts-utils",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-46681",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); no templates, migrations or server entry"
+       }
+      ]
+     },
+     {
+      "repo": "tygo-van-den-hurk/slyde",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-26974",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); server entry"
+       }
+      ]
+     },
+     {
+      "repo": "phpipam/phpipam",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-67602",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "151444 loc, 27 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-75105",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "151454 loc, 27 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "lemmynet/activitypub-federation-rust",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-33693",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); no templates, migrations or server entry"
+       }
+      ]
+     },
+     {
+      "repo": "mtrudel/bandit",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-39806",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "0 loc"
+       },
+       {
+        "advisory": "CVE-2026-75484",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "0 loc"
+       },
+       {
+        "advisory": "CVE-2026-39807",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "0 loc"
+       }
+      ]
+     },
+     {
+      "repo": "datadog/dd-trace-go",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-50274",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "135819 loc, 6 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "zhenorzz/goploy",
+      "outcome": "admitted",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-53553",
+        "ok": true
+       }
+      ],
+      "chosen": "CVE-2026-53553"
+     },
+     {
+      "repo": "prometheus/prometheus",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-40179",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "186227 loc"
+       },
+       {
+        "advisory": "CVE-2026-44903",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "183650 loc"
+       }
+      ]
+     },
+     {
+      "repo": "dhax/go-base",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-48031",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "3173 loc"
+       }
+      ]
+     },
+     {
+      "repo": "sepinetam/stata-mcp",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-31040",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); no templates, migrations or server entry"
+       }
+      ]
+     },
+     {
+      "repo": "dangerblack/n8n-node-sqlite3",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-54687",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "1862 loc"
+       }
+      ]
+     },
+     {
+      "repo": "pipecat-ai/pipecat",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-44716",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "114537 loc"
+       }
+      ]
+     },
+     {
+      "repo": "locutusjs/locutus",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-25521",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); templates"
+       },
+       {
+        "advisory": "CVE-2026-33993",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "44269 loc"
+       },
+       {
+        "advisory": "CVE-2026-33994",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "44269 loc"
+       }
+      ]
+     },
+     {
+      "repo": "valtimo-platform/valtimo",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-34164",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "182779 loc, 3 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "osticket/osticket",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-22200",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "181354 loc, 15 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-36214",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "181384 loc, 15 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-38446",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "181383 loc, 15 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "django-crm/django-crm",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-90806",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "79663 loc, 108 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "golioth/golioth-firmware-sdk",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-23749",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "29 loc"
+       },
+       {
+        "advisory": "CVE-2026-23748",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "29 loc"
+       },
+       {
+        "advisory": "CVE-2026-23747",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "29 loc"
+       }
+      ]
+     },
+     {
+      "repo": "leepeuker/movary",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-40348",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "39021 loc, 4 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-40349",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "39015 loc, 4 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-40350",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "39009 loc, 4 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "yanhu007/kratos",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-6993",
+        "ok": false,
+        "filter": "served application",
+        "detail": "1 route source file(s); server entry"
+       }
+      ]
+     },
+     {
+      "repo": "resteasy/resteasy",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-89059",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "112876 loc, 27 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-89058",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "113104 loc, 27 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "academysoftwarefoundation/openexr",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-34544",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "1043 loc, 1 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-42217",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "1474 loc, 1 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-65979",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "1469 loc, 1 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "raysan5/raylib",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2025-15534",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "0 loc, 22 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2025-15533",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "0 loc, 22 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "sepinetam/mcp-for-stata",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-47708",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); server entry"
+       }
+      ]
+     },
+     {
+      "repo": "jxxghp/moviepilot",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-10107",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "169620 loc"
+       },
+       {
+        "advisory": "CVE-2026-16224",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "173510 loc"
+       },
+       {
+        "advisory": "CVE-2026-11416",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "171792 loc"
+       }
+      ]
+     },
+     {
+      "repo": "gravitl/netmaker",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-38651",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "55639 loc, 4 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "openpanel-dev/openpanel",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-77768",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "169328 loc, 1 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-77769",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "169328 loc, 1 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "jump-app/esaml",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-28809",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "0 loc"
+       }
+      ]
+     },
+     {
+      "repo": "shaneisrael/fireshare",
+      "outcome": "admitted",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-34745",
+        "ok": true
+       }
+      ],
+      "chosen": "CVE-2026-34745"
+     },
+     {
+      "repo": "bpg/terraform-provider-proxmox",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-25499",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "59728 loc, 1 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "xyproto/algernon",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-52792",
+        "ok": false,
+        "filter": "served application",
+        "detail": "2 route source file(s); server entry"
+       }
+      ]
+     },
+     {
+      "repo": "sigstore/rekor",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-23831",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "45501 loc"
+       },
+       {
+        "advisory": "CVE-2026-24117",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "45517 loc"
+       }
+      ]
+     },
+     {
+      "repo": "dtstack/taier",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-11618",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "339625 loc"
+       },
+       {
+        "advisory": "CVE-2026-19763",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "340502 loc"
+       },
+       {
+        "advisory": "CVE-2026-19761",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "340472 loc"
+       }
+      ]
+     },
+     {
+      "repo": "3clyp50/agent-zero",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-47119",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "118612 loc"
+       },
+       {
+        "advisory": "CVE-2026-47118",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "118612 loc"
+       }
+      ]
+     },
+     {
+      "repo": "samrocketman/jervis",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2025-68702",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "1286 loc, 2 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2025-68704",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "1286 loc, 2 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2025-68701",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "1286 loc, 2 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "foswiki/distro",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-2861",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "85205 loc, 43 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "spinnaker/spinnaker",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-25534",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "8674 source files"
+       }
+      ]
+     },
+     {
+      "repo": "denpiligrim/3dp-manager",
+      "outcome": "admitted",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-25803",
+        "ok": true
+       }
+      ],
+      "chosen": "CVE-2026-25803"
+     },
+     {
+      "repo": "antrea-io/antrea",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-34992",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "184382 loc, 2 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-25804",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "181988 loc, 2 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "gitroomhq/postiz-app",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-48783",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "87906 loc, 2 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-34590",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "82590 loc, 2 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-40168",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "83621 loc, 2 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "givanz/vvvebjs",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-5615",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); templates, server entry"
+       }
+      ]
+     },
+     {
+      "repo": "seaweedfs/seaweedfs",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-55873",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "406907 loc, 35 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-73080",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "400296 loc, 33 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-58371",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "409687 loc, 33 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "pmqs/io-compress",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-48961",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "0 loc"
+       },
+       {
+        "advisory": "CVE-2026-48959",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "0 loc"
+       },
+       {
+        "advisory": "CVE-2025-15649",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "0 loc"
+       }
+      ]
+     },
+     {
+      "repo": "runatlantis/atlantis",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-64679",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "50474 loc, 1 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "gopacket/gopacket",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-54345",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "45588 loc, 4 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-54332",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "45597 loc, 4 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-65819",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "45627 loc, 4 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "toddr/yaml-syck",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-57077",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "0 loc, 6 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-13713",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "0 loc, 6 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-57076",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "0 loc, 6 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "snyk/sweater-comb",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-75486",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "3525 loc, 1 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "1panel-dev/cordyscrm",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-10514",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "159491 loc, 1 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-63647",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "167902 loc, 1 vendored file(s) left out"
+       },
+       {
+        "advisory": "CVE-2026-76900",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "166950 loc, 1 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "pjsip/pjproject",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-40614",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); templates"
+       },
+       {
+        "advisory": "CVE-2026-25994",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); templates"
+       },
+       {
+        "advisory": "CVE-2026-28799",
+        "ok": false,
+        "filter": "served application",
+        "detail": "0 route source file(s); templates"
+       }
+      ]
+     },
+     {
+      "repo": "codecentric/spring-boot-admin",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-62242",
+        "ok": false,
+        "filter": "language in the scorer's list",
+        "detail": "Vue/Svelte"
+       }
+      ]
+     },
+     {
+      "repo": "hapijs/inert",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-48049",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "938 loc"
+       }
+      ]
+     },
+     {
+      "repo": "ash-project/ash_postgres",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-78699",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "0 loc"
+       }
+      ]
+     },
+     {
+      "repo": "yacy/yacy_search_server",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-82880",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "116404 loc, 614 vendored file(s) left out"
+       }
+      ]
+     },
+     {
+      "repo": "appsmithorg/appsmith",
+      "outcome": "ineligible",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-7299",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "7730 source files"
+       },
+       {
+        "advisory": "CVE-2026-22794",
+        "ok": false,
+        "filter": "size within the official range",
+        "detail": "7681 source files"
+       }
+      ]
+     },
+     {
+      "repo": "vastsa/filecodebox",
+      "outcome": "admitted",
+      "verdicts": [
+       {
+        "advisory": "CVE-2026-82543",
+        "ok": false,
+        "filter": "fix not diffuse",
+        "detail": "16 labels"
+       },
+       {
+        "advisory": "CVE-2026-64619",
+        "ok": true
+       }
+      ],
+      "chosen": "CVE-2026-64619"
+     }
+    ]
+   }
+  }
+ ]
 }
