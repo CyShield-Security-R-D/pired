@@ -965,6 +965,41 @@ export function gridWorstCaseMs(grid: { passes: number; targets: number; concurr
 }
 
 /**
+ * Why a grid of a kind, or any grid with a breaker, must state its horizon
+ * (plan item 2.8 review), or undefined when it need not. Past the cap the
+ * check would silently size a shorter grid than the one launched, the fault
+ * parseOptions already refuses for --matched with --breaker; the v6 grids'
+ * worst case is 576 h fail-fast and about 2,311 h with the breaker, against
+ * a 168 h cap and a codex token that lives 240 h.
+ */
+export function horizonRefusal(grid: { worstCaseMs: number; gridKind?: string | undefined; breaker: boolean; requestedHours?: number | undefined }): string | undefined {
+	if (grid.requestedHours !== undefined || grid.worstCaseMs <= AUTH_HORIZON_CAP_MS) return undefined;
+	if (grid.gridKind === undefined && !grid.breaker) return undefined;
+	const hours = Math.round(grid.worstCaseMs / 36_000) / 100;
+	return `this ${grid.gridKind === undefined ? "breaker" : `grid kind ${grid.gridKind}`} grid's worst case is ${hours} h, past the ${AUTH_HORIZON_CAP_MS / 3_600_000} h the OAuth check would otherwise size without saying so. `
+		+ "Pass --auth-horizon-hours <h>, the stretch one runner is to cover, and plan token refreshes between resumes: the grid stops before an arm the token would not outlive.";
+}
+
+/**
+ * Why the grid must stop before its next launch (plan item 2.8 review), or
+ * undefined when the credential outlives one more arm. Read before every
+ * launch from the shared auth store, expiry only, never the token: an arm
+ * that starts with less than its run limit plus the margin left could have a
+ * worker refresh the token inside its cell, under the cell's own lock. The
+ * grid then stops like an exhausted quota, resumably, and the operator
+ * refreshes outside every cell.
+ */
+export function credentialStopReason(credential: CredentialExpiry, provider: string, nowMs: number, needMs: number): string | undefined {
+	if (credential.kind === "static") return undefined;
+	if (credential.kind !== "oauth") return provider === "openai-codex" ? `the ${provider} credential is ${credential.kind === "missing" ? "missing" : `unreadable (${credential.why})`}; log in or refresh outside the grid, then --resume` : undefined;
+	const left = credential.expiresAt - nowMs;
+	if (left >= needMs) return undefined;
+	const hours = (ms: number): number => Math.round(ms / 36_000) / 100;
+	return `the ${provider} OAuth token expires ${new Date(credential.expiresAt).toISOString()} (${hours(left)} h from now), inside the next arm's run limit plus margin (${hours(needMs)} h); `
+		+ "no arm is launched that a worker could refresh it inside. Refresh it outside the grid, then --resume";
+}
+
+/**
  * Whether the provider's OAuth token outlives the grid, so that nothing inside
  * a cell ever refreshes it.
  *
@@ -1769,6 +1804,8 @@ const runState = {
 	quotaExhausted: undefined as string | undefined,
 	/** The stop came from a matched session (plan item 2.5); it does not by itself withhold the gate's approval. */
 	stoppedBy: undefined as "matched" | "twin" | undefined,
+	/** The OAuth token would expire inside the next arm (plan item 2.8 review): refresh outside the grid, then --resume. */
+	credentialExpiring: undefined as string | undefined,
 };
 
 async function runOwned(command: string, args: string[], config: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number; stdoutPath: string; stderrPath: string; onLine?: LineSink; scopeUnit?: string }): Promise<OwnedResult> {
@@ -3467,6 +3504,8 @@ async function runPreflight(options: Options, manifest: JsonRecord, saveManifest
 			...(options.matched === undefined ? {} : { matchedSessions: options.matched.kMax }),
 			...(inputs.twinIds.length && options.twinArms ? { twins: inputs.twinIds.length, twinArms: options.twinArms.length } : {}),
 		});
+		const refusal = horizonRefusal({ worstCaseMs, gridKind: options.gridKind, breaker: options.breaker !== undefined, requestedHours: options.authHorizonHours });
+		if (refusal) throw new Error(refusal);
 		const verdict = checkAuthHorizon({
 			provider: options.provider, credential: credentialExpiry(authText, options.provider), worstCaseMs,
 			...(options.authHorizonHours === undefined ? {} : { requestedHours: options.authHorizonHours }),
@@ -4428,6 +4467,23 @@ export function attemptReport(rows: JsonRecord[], abandonedKeys: string[]): Atte
 	return report;
 }
 
+/**
+ * The record of a pair's second arm that was not launched because the OAuth
+ * token would not have outlived it (plan item 2.8 review). Infrastructure, so
+ * --resume re-runs both arms once the token is refreshed.
+ */
+export function credentialStopOutcome(pair: ScheduledPair, arm: Arm, attempt: number): RunOutcome {
+	const record: JsonRecord = {
+		key: pair.key, target: pair.target, pass: pair.pass, arm, attempt, cellId: null, valid: false, notLaunched: true,
+		infraFailure: true, infraReason: "credential expiring: the OAuth token would not outlive this arm", totalTokens: null,
+		errors: ["not launched: the OAuth token expires inside this arm's run limit; refresh it outside the grid, then --resume"],
+	};
+	return {
+		metric: { key: pair.key, target: pair.target, pass: pair.pass, valid: false, truePositives: 0, precision: 0, totalClaims: 0, totalTokens: Number.NaN },
+		arm, cellId: "", seconds: 0, record, infraFailure: true,
+	};
+}
+
 /** The record of an arm whose launch threw inside the runner: a harness fault, never infrastructure. */
 function runnerFaultOutcome(pair: ScheduledPair, arm: Arm, attempt: number, error: unknown): RunOutcome {
 	const record: JsonRecord = { key: pair.key, target: pair.target, pass: pair.pass, arm, attempt, valid: false, infraFailure: false, errors: [`runner fault: ${message(error)}`] };
@@ -4438,7 +4494,7 @@ function runnerFaultOutcome(pair: ScheduledPair, arm: Arm, attempt: number, erro
 }
 
 /** The part of runState the pair loop reads and sets; the signal handlers share the same object. */
-export type GridStopState = { aborted: boolean; stopInvalid: boolean; stopReason: string | undefined; quotaExhausted: string | undefined; stoppedBy?: "matched" | "twin" | undefined };
+export type GridStopState = { aborted: boolean; stopInvalid: boolean; stopReason: string | undefined; quotaExhausted: string | undefined; stoppedBy?: "matched" | "twin" | undefined; credentialExpiring?: string | undefined };
 
 /** What the pair loop needs from the grid around it. runGrid passes the real runner; the tests pass fakes and a fake clock. */
 export interface PairLoop {
@@ -4465,6 +4521,11 @@ export interface PairLoop {
 	out: string;
 	/** The matched arm (plan item 2.5). Absent, the loop is the one every earlier grid ran. */
 	matched?: MatchedLoop;
+	/**
+	 * Read before every launch (plan item 2.8 review): a reason to stop when the
+	 * provider's OAuth token would not outlive the next arm. Absent, no check.
+	 */
+	credentialCheck?: () => Promise<string | undefined>;
 }
 
 /**
@@ -4590,6 +4651,17 @@ export async function runPairs(loop: PairLoop): Promise<PairLoopResult> {
 		}
 		await loop.report(outcome, pair, arm, attempt);
 	};
+	/** Stop the grid, resumably, when the credential would not outlive the next launch. */
+	const credentialStop = async (): Promise<string | undefined> => {
+		if (!loop.credentialCheck) return undefined;
+		const why = await loop.credentialCheck();
+		if (why) {
+			if (!state.credentialExpiring) loop.log(`CREDENTIAL EXPIRING — ${why}. No further arm will launch; refresh it outside the grid, then --resume ${loop.out}.`);
+			state.credentialExpiring ??= why;
+			if (!state.stopInvalid) { state.stopInvalid = true; state.stopReason = why; }
+		}
+		return why;
+	};
 	const runPair = async ({ pair, attempt, firstAttempt, matchedOnly }: Queued): Promise<void> => {
 		if (matchedOnly) {
 			await runMatched(pair, attempt, matchedOnly.candidate, matchedOnly.sessions);
@@ -4607,12 +4679,19 @@ export async function runPairs(loop: PairLoop): Promise<PairLoopResult> {
 			try {
 				let outcome: RunOutcome;
 				let launched = false;
-				if (first && (!first.metric.valid || state.aborted)) {
+				const partnerBlocked = first !== undefined && (!first.metric.valid || state.aborted);
+				const expiring = !partnerBlocked ? await credentialStop() : undefined;
+				if (expiring && !first) break;
+				if (partnerBlocked) {
 					// The partner is not launched: a first arm invalid for a non-infra
 					// reason blocks the pair and one invalid for infra re-runs both arms,
 					// so up to two hours of this arm could never be compared. It is
 					// recorded, as infra exactly when the first arm was.
-					outcome = notLaunchedOutcome(pair, arm, attempt, first, state.aborted);
+					outcome = notLaunchedOutcome(pair, arm, attempt, first!, state.aborted);
+				} else if (expiring) {
+					// The first arm ran; this one is recorded as not launched for
+					// infrastructure, so --resume re-runs both at the next attempt.
+					outcome = credentialStopOutcome(pair, arm, attempt);
 				} else {
 					launched = true;
 					try {
@@ -4700,6 +4779,8 @@ export async function runPairs(loop: PairLoop): Promise<PairLoopResult> {
 				loop.log(`MATCHED SESSION ${step.kind.toUpperCase()} ${pair.target} pass ${pair.pass} session ${step.index} · ${step.reason}`);
 				return;
 			}
+			// A session is an arm too: none starts that the token would not outlive.
+			if (await credentialStop()) return;
 			const name = `${pair.key}/${step.index}`;
 			const spec: MatchedSessionSpec = {
 				index: step.index, k: matched.policy.k, kMax: matched.policy.kMax, sessionAttempt: step.attempt, budget: budget.budget, ceiling: step.ceiling,
@@ -5040,6 +5121,10 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 		log: (line) => console.log(line),
 		warn: (line) => console.error(line),
 		out: output,
+		credentialCheck: async () => {
+			const authText = await readFile(join(AGENT_BASE, "auth.json"), "utf8").catch(() => undefined);
+			return credentialStopReason(credentialExpiry(authText, options.provider), options.provider, Date.now(), options.timeoutMs + AUTH_MARGIN_MS);
+		},
 		...(options.matched ? {
 			matched: {
 				policy: options.matched,
@@ -5102,6 +5187,7 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 		...(interrupted ? ["interrupted before the grid finished"] : []),
 		...(stoppedInvalid && !interrupted ? [`stopped early: ${runState.stopReason ?? "an invalid run"}`] : []),
 		...(runState.quotaExhausted ? [`provider quota exhausted (${runState.quotaExhausted}); it must reset before --resume`] : []),
+		...(runState.credentialExpiring ? [`stopped before the OAuth token expired (${runState.credentialExpiring})`] : []),
 		...(gateGaveUp.length ? [`${gateGaveUp.length} pair(s) reached the attempt cap (${gateGaveUp.map((g) => g.key).join(", ")}); --resume re-runs them`] : []),
 		...(gateAbandoned.length ? [`${gateAbandoned.length} pair(s) abandoned at the attempt ceiling (${gateAbandoned.join(", ")}); no resume re-runs them`] : []),
 		...(!runtimeStable ? ["the pi runtime changed during the grid"] : []),
@@ -5120,7 +5206,10 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 		// Only a grid whose passes were extended lists the amendments (plan item 2.8).
 		...(Array.isArray(manifest.amendments) ? { passesAmendments: manifest.amendments } : {}),
 		interrupted, interruptedAt: runState.abortedAtMs === undefined ? null : new Date(runState.abortedAtMs).toISOString(),
-		stoppedInvalid, stopReason: runState.stopReason ?? null, quotaExhausted: runState.quotaExhausted ?? null, runtimeStable,
+		stoppedInvalid, stopReason: runState.stopReason ?? null, quotaExhausted: runState.quotaExhausted ?? null,
+		// Only a grid that stopped before its token expired says so.
+		...(runState.credentialExpiring ? { credentialExpiring: runState.credentialExpiring } : {}),
+		runtimeStable,
 		// Only a grid run with --breaker has this block, so a fail-fast grid's summary is what it always was.
 		...(options.breaker === undefined ? {} : {
 			breaker: {
@@ -5166,6 +5255,7 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 	if (interrupted) console.log("INTERRUPTED — grid incomplete");
 	if (stoppedInvalid && !interrupted) console.log(`STOPPED EARLY — ${runState.stopReason ?? "an invalid run"}`);
 	if (runState.quotaExhausted) console.log(`QUOTA EXHAUSTED — wait for the reset, then: node --experimental-strip-types eval/delegation-compare.ts --resume ${output}`);
+	if (runState.credentialExpiring) console.log(`CREDENTIAL EXPIRING — refresh the token outside the grid, then: node --experimental-strip-types eval/delegation-compare.ts --resume ${output}`);
 	if (loop.gaveUp.length) console.log(`ATTEMPT CAP — ${loop.gaveUp.length} pair(s) left for --resume: ${loop.gaveUp.map((g) => g.key).join(", ")}`);
 	if (abandonedKeys.length) console.log(`ABANDONED — ${abandonedKeys.length} pair(s) failed at the attempt ceiling and will not be re-run: ${abandonedKeys.join(", ")}`);
 	console.log(`pass-mean TP ${comparison.baseline.truePositives.mean.toFixed(2)} → ${comparison.candidate.truePositives.mean.toFixed(2)}; precision ${comparison.baseline.precision.mean.toFixed(3)} → ${comparison.candidate.precision.mean.toFixed(3)}`);

@@ -6,7 +6,7 @@ import {
 	accountCellUsage, atHighestAttempt, attemptReport, AUTH_HORIZON_CAP_MS, AUTH_MARGIN_MS, benchmarkRuntimeOf, checkAuthHorizon, childProviderFailure, classifyInfra,
 	credentialExpiry, decideInfra, DEFAULT_CANDIDATE_MAX_AGENTS, fetchErrorsFromStderr, gridWorstCaseMs, isBrokerEnvVar, loadTargets, metricFromRecord, notLaunchedOutcome, ownerIsLive,
 	newManifest, optionsFromManifest, parseBreakerSpec, parseComparePins, parseOptions, parseOwnerRecord, planResume, providerFailureTexts, requestLogFromStderr,
-	armOptionsFromManifest, cellModelInputs, redactTermsFor, V6_DECISION, verdictFields, manifestTargetEntry, probeDelegationScope, resumeMismatches, splitTwinRuns, twinOptionsFromManifest, retryPolicyFromManifest, reviewScope, runPairs, runStop, runtimeMismatch, scopedSealCommand, startTimeFromStat, subagentConfigFor,
+	armOptionsFromManifest, cellModelInputs, credentialStopOutcome, credentialStopReason, horizonRefusal, redactTermsFor, V6_DECISION, verdictFields, manifestTargetEntry, probeDelegationScope, resumeMismatches, splitTwinRuns, twinOptionsFromManifest, retryPolicyFromManifest, reviewScope, runPairs, runStop, runtimeMismatch, scopedSealCommand, startTimeFromStat, subagentConfigFor,
 	toolSurfaceErrors, trackStream, workerCapReason,
 	ceilingOf, ceilingProbeErrors, latestMatchedSessions, planMatchedResume, sessionRunOf, verifyCeiling,
 	type GridStopState, type MatchedSessionSpec, type ProviderFailures, type RunOutcome,
@@ -2373,5 +2373,63 @@ describe("the verdict of a kind grid (plan 2.8)", () => {
 		expect(out.comparison).toMatchObject({ complete: true, pairedRuns: 1, baseline: { truePositives: { mean: 1 } } });
 		const stopped = verdictFields("v6-stage1", { approved: false, notApprovedReasons: ["interrupted before the grid finished"], comparison });
 		expect(stopped.head.decision).toMatchObject({ ready: false, notReadyReasons: ["interrupted before the grid finished"] });
+	});
+});
+
+describe("the OAuth horizon of long grids (plan 2.8 review)", () => {
+	const HOUR = 3_600_000;
+	const now = Date.parse("2026-09-27T10:00:00Z");
+
+	// Past the cap the check sized a shorter grid than the one launched, silently.
+	it("refuses a kind or breaker grid past the cap unless the operator states the horizon", () => {
+		expect(horizonRefusal({ worstCaseMs: 576 * HOUR, gridKind: "v6-stage1", breaker: false })).toMatch(/grid kind v6-stage1 grid's worst case is 576 h, past the 168 h/);
+		expect(horizonRefusal({ worstCaseMs: 2311.2 * HOUR, breaker: true })).toMatch(/breaker grid's worst case is 2311.2 h/);
+		expect(horizonRefusal({ worstCaseMs: 576 * HOUR, gridKind: "v6-stage1", breaker: true, requestedHours: 150 })).toBeUndefined();
+		// Under the cap, and a fail-fast grid without a kind, are as they were.
+		expect(horizonRefusal({ worstCaseMs: 144.9 * HOUR, breaker: true })).toBeUndefined();
+		expect(horizonRefusal({ worstCaseMs: 576 * HOUR, breaker: false })).toBeUndefined();
+	});
+
+	// A worker that refreshes inside its cell locks the cell's own path and can
+	// spend the rotating refresh token twice; no arm may start that it could outlive.
+	it("stops before an arm the token would not outlive, naming no secret", () => {
+		const need = 4 * HOUR + AUTH_MARGIN_MS;
+		const oauth = (hours: number) => credentialExpiry(JSON.stringify({ "openai-codex": { type: "oauth", access: "eyJ.secret", refresh: "rt_secret", expires: now + hours * HOUR } }), "openai-codex");
+		expect(credentialStopReason(oauth(10), "openai-codex", now, need)).toBeUndefined();
+		const why = credentialStopReason(oauth(4.2), "openai-codex", now, need);
+		expect(why).toMatch(/expires 2026-09-27T14:12:00.000Z \(4.2 h from now\), inside the next arm's run limit plus margin \(4.58 h\)/);
+		expect(why).not.toMatch(/secret|eyJ|rt_/);
+		expect(credentialStopReason({ kind: "missing" }, "openai-codex", now, need)).toMatch(/missing/);
+		expect(credentialStopReason({ kind: "missing" }, "zai", now, need)).toBeUndefined();
+		expect(credentialStopReason({ kind: "static" }, "zai", now, need)).toBeUndefined();
+	});
+
+	// Like an exhausted quota: nothing more launches, and --resume re-runs what is left.
+	it("stops the pair loop resumably when the check fires, leaving the untouched pair without a row and the half-run pair to be re-run", async () => {
+		const settled: RunOutcome[] = [];
+		const launched: string[] = [];
+		const state: GridStopState = { aborted: false, stopInvalid: false, stopReason: undefined, quotaExhausted: undefined };
+		let checks = 0;
+		const make = (pair: ScheduledPair, arm: Arm, attempt: number): RunOutcome => ({
+			metric: { key: pair.key, target: pair.target, pass: pair.pass, valid: true, truePositives: 1, precision: 0.5, totalClaims: 2, totalTokens: 1000 },
+			arm, cellId: `c-${pair.key}-${arm}`, seconds: 600, infraFailure: false, record: { key: pair.key, target: pair.target, pass: pair.pass, arm, attempt, valid: true, infraFailure: false },
+		});
+		const lines: string[] = [];
+		await runPairs({
+			pairs: planSchedule(["A", "B"], 1), firstAttempt: () => 1, concurrency: 1, official: true, state, breaker: DEFAULT_BREAKER,
+			launch: async (pair, arm, attempt) => { launched.push(`${pair.key} ${arm}`); return make(pair, arm, attempt); },
+			settle: async (o) => { settled.push(o); }, report: async () => undefined,
+			nowMs: () => now, sleep: async () => undefined, log: (l) => lines.push(l), warn: () => undefined, out: "/grid",
+			// Fires on the third check: A's two arms ran, B's first arm is never launched.
+			credentialCheck: async () => (++checks >= 3 ? "the openai-codex OAuth token expires soon" : undefined),
+		});
+		expect(launched).toEqual(["A#1 baseline", "A#1 candidate"]);
+		expect(settled.map((o) => o.metric.key)).toEqual(["A#1", "A#1"]);
+		expect(state).toMatchObject({ stopInvalid: true, stopReason: "the openai-codex OAuth token expires soon", credentialExpiring: "the openai-codex OAuth token expires soon" });
+		expect(lines.some((l) => l.startsWith("CREDENTIAL EXPIRING"))).toBe(true);
+		// A pair whose first arm ran records its partner as not launched for infrastructure.
+		const partner = credentialStopOutcome(planSchedule(["A"], 1)[0]!, "candidate", 1);
+		expect(partner.record).toMatchObject({ notLaunched: true, infraFailure: true, valid: false });
+		expect(planResume(planSchedule(["A"], 1), [{ key: "A#1", arm: "baseline", attempt: 1, valid: true }, partner.record]).rerunKeys).toEqual(["A#1"]);
 	});
 });
