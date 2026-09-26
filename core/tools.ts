@@ -43,7 +43,7 @@ import {
 	SEVERITIES,
 	type LedgerStoreName,
 } from "./ontology.ts";
-import { SETTLE_OUTCOMES, type SettleRecord } from "./ontology.ts";
+import { LEAD_AUTHOR, SETTLE_OUTCOMES, type SettleRecord } from "./ontology.ts";
 import { renderAreas } from "./areas.ts";
 import { renderBudgetLine } from "./budget.ts";
 import { lastSettle, readSettleLedger, renderLastSettle, renderSettleReply, settleAreas, settleRemainder } from "./settle.ts";
@@ -884,7 +884,19 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 			// outcome and the note are the caller's; the remainder is computed here
 			// from the ledger, and one sent with the call is never read. Nothing
 			// about the ledger's state can refuse it.
+			// The schema's `outcome` enum carries both kinds' values, so a settle word
+			// on a hypothesis would pass it and then be dropped without a word.
+			if (kind === "hypothesis" && sent(a.outcome) && !oneOf(a.outcome, HYPOTHESIS_OUTCOMES)) {
+				throw new Error(`record hypothesis: 'outcome' must be one of ${HYPOTHESIS_OUTCOMES.join(", ")}; ${JSON.stringify(a.outcome)} is not a hypothesis outcome.`);
+			}
 			if (kind === "settle") {
+				// Only the lead settles. A worker's settle would describe a worker's
+				// stop as the session's, and the stop classifier reads the session's.
+				// core/child.ts refuses it in a child too; this holds on its own.
+				const author = ctx.author ?? deps.author?.();
+				if (author !== LEAD_AUTHOR) {
+					throw new Error(`record settle: only the lead session settles, and this call is from ${author ?? "an unnamed author"}. Hand back to the lead with what you found; the lead settles.`);
+				}
 				const outcome = oneOf(a.outcome, SETTLE_OUTCOMES);
 				if (!outcome) throw new Error(`record settle: 'outcome' must be one of ${SETTLE_OUTCOMES.join(", ")}.`);
 				const note = str(a.note) ?? str(a.text);

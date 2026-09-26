@@ -419,7 +419,9 @@ session could still do, `blocked` that what remains needs the operator.
   lists the remainder and the areas (§12) in full.
 - **Append-only history.** A settle is never updated or deleted (`delete=true` is refused); a
   later settle is another row. The last one is the one with the latest `createdAt`.
-- **Workers are refused `kind=settle`**; `by` is therefore the lead's (or `operator`).
+- **Only the lead settles.** The record tool refuses `kind=settle` from any author but `lead` — a
+  worker, the scribe, the operator's CLI — and a worker's child refuses it too. Readers (`recall
+  status`, the benchmark telemetry) take the newest settle whose `by` is `lead` and ignore any other.
 - **Superseded:** a settle followed by ledger writes by anyone but `scribe` or `operator` —
   created, or updated (`updatedAt`) after it — no longer describes where the session stopped. The
   benchmark's stop classifier reads it that way; the file itself is not changed.

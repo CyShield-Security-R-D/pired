@@ -17,7 +17,7 @@ function finding(id: string, extra: Partial<FindingRecord> = {}): FindingRecord 
 }
 
 function settle(id: string, createdAt: string, extra: Partial<SettleRecord> = {}): SettleRecord {
-	return { v: 1, id, kind: "settle", createdAt, outcome: "paused", remainder: {}, ...extra } as SettleRecord;
+	return { v: 1, id, kind: "settle", createdAt, by: "lead", outcome: "paused", remainder: {}, ...extra } as SettleRecord;
 }
 
 interface Session {
@@ -97,6 +97,23 @@ describe("record kind=settle", () => {
 		expect(await s.ws.read("sessions")).toEqual([]);
 	});
 
+	it("refuses a settle from anyone but the lead — a worker, the scribe, an unnamed author — and writes nothing", async () => {
+		// A worker's settle would describe a worker's stop as the session's.
+		const s = await session();
+		await expect(s.record("pired-investigate").execute({ kind: "settle", outcome: "finished" }, s.ctx)).rejects.toThrow(/only the lead session settles, and this call is from pired-investigate/);
+		await expect(s.record().execute({ kind: "settle", outcome: "finished" }, { ...s.ctx, author: "scribe" })).rejects.toThrow(/from scribe/);
+		const unnamed = createRecordTool({ workspace: s.ws });
+		await expect(unnamed.execute({ kind: "settle", outcome: "finished" }, s.ctx)).rejects.toThrow(/from an unnamed author/);
+		expect(await s.ws.read("sessions")).toEqual([]);
+	});
+
+	it("refuses a settle word as a hypothesis outcome rather than dropping it, now the schema's enum carries both", async () => {
+		const s = await session();
+		await expect(s.record().execute({ kind: "hypothesis", statement: "x", target: "e1", class: "sqli", outcome: "blocked" }, s.ctx)).rejects.toThrow(/"blocked" is not a hypothesis outcome/);
+		await s.record().execute({ kind: "hypothesis", statement: "x", target: "e1", class: "sqli", outcome: "inconclusive" }, s.ctx);
+		expect((await s.ws.read("hypotheses"))[0]?.outcome).toBe("inconclusive");
+	});
+
 	it("takes the note from `text` when the caller put it there", async () => {
 		const s = await session();
 		await s.record().execute({ kind: "settle", outcome: "paused", text: "auth left" }, s.ctx);
@@ -153,6 +170,9 @@ describe("the remainder, rendered", () => {
 			remainder: { openCells: 3, unverified: { lead: ["f1"] }, inconclusive: ["y1"], openBlockers: ["b1", "b2"], unmappedAreas: ["lib"] },
 		});
 		expect(lastSettle([newest, settle("s1", T)])).toBe(newest);
+		// Only the lead's settle stands for the session.
+		expect(lastSettle([newest, settle("s3", "2026-01-03T00:00:00.000Z", { by: "pired-investigate" })])).toBe(newest);
+		expect(lastSettle([settle("s4", T, { by: undefined })])).toBeUndefined();
 		expect(lastSettle([])).toBeUndefined();
 		expect(renderLastSettle(newest)).toBe(
 			"settled    blocked at 2026-01-02T00:00:00.000Z (left: 3 open cell(s), 1 unchallenged finding(s), 1 inconclusive, 2 open blocker(s), 1 unmapped dir(s))",

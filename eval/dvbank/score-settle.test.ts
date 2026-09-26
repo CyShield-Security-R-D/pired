@@ -16,9 +16,10 @@ async function engagement(stores: Record<string, Array<Record<string, unknown>>>
 const settle = (id: string, createdAt: string, outcome: string) => ({ id, kind: "settle", createdAt, outcome, by: "lead", remainder: { openCells: 2 } });
 
 describe("engagementTelemetry and the last settle (3.2)", () => {
-	it("carries the last settle and counts the work written after it, leaving out the scribe's and the operator's", async () => {
+	it("carries the lead's last settle and counts the work written after it, leaving out the scribe's and the operator's", async () => {
 		const dir = await engagement({
-			sessions: [settle("s1", "2026-01-01T01:00:00.000Z", "paused"), settle("s2", "2026-01-01T02:00:00.000Z", "finished")],
+			// The worker's later settle is not the session's: only the lead's is read.
+			sessions: [settle("s1", "2026-01-01T01:00:00.000Z", "paused"), settle("s2", "2026-01-01T02:00:00.000Z", "finished"), { ...settle("s3", "2026-01-01T02:50:00.000Z", "blocked"), by: "pired-investigate" }],
 			findings: [
 				{ id: "f1", kind: "finding", createdAt: "2026-01-01T00:30:00.000Z", title: "a", severity: "low", status: "suspected", by: "lead" },
 				{ id: "f2", kind: "finding", createdAt: "2026-01-01T02:30:00.000Z", title: "b", severity: "low", status: "suspected", by: "lead" },

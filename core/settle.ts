@@ -36,7 +36,7 @@ import type {
 	SettleRecord,
 	SettleRemainder,
 } from "./ontology.ts";
-import { DISPOSED_STATUSES, OPERATOR_AUTHOR, SCRIBE_AUTHOR } from "./ontology.ts";
+import { DISPOSED_STATUSES, LEAD_AUTHOR, OPERATOR_AUTHOR, SCRIBE_AUTHOR } from "./ontology.ts";
 import { computeCoverageView } from "./stats.ts";
 import type { Workspace } from "./workspace.ts";
 
@@ -161,9 +161,15 @@ export function renderSettleReply(record: SettleRecord, areas: AreasView, ignore
 	return lines.join("\n");
 }
 
-/** The newest settle, or undefined when the engagement has none. */
+/**
+ * The lead's newest settle, or undefined when it has none. Only the lead's
+ * count: the record tool refuses anyone else's, and a row by another author
+ * (written around it, or before that refusal) must not stand for the session.
+ */
 export function lastSettle(settles: SettleRecord[]): SettleRecord | undefined {
-	return settles.reduce<SettleRecord | undefined>((last, s) => (!last || s.createdAt >= last.createdAt ? s : last), undefined);
+	return settles
+		.filter((s) => s.by === LEAD_AUTHOR)
+		.reduce<SettleRecord | undefined>((last, s) => (!last || s.createdAt >= last.createdAt ? s : last), undefined);
 }
 
 /** One line for `recall status`. */

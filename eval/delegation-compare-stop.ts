@@ -55,7 +55,8 @@ export interface StopClassification {
 
 /**
  * A run's last settle, as the engagement telemetry carries it (3.2). Only the
- * lead settles: a worker is refused `kind=settle`.
+ * lead's: the record tool refuses `kind=settle` from any other author, and the
+ * telemetry reads the newest settle whose `by` is `lead`.
  */
 export interface SettleFacts {
 	outcome: string;
