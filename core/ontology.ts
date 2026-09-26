@@ -421,6 +421,13 @@ export interface EngagementScope {
 export interface ScopeBudget {
 	tokens?: number;
 	minutes?: number;
+	/**
+	 * An absolute time (ISO 8601) the session is stopped at, when whoever set
+	 * the budget enforces one — the benchmark harness writes launch time plus
+	 * the run limit. Minutes left are then read from it rather than from when
+	 * pired's session happened to start (3.2).
+	 */
+	deadline?: string;
 }
 
 /**

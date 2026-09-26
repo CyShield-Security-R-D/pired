@@ -1757,10 +1757,20 @@ export function workerCapReason(pinned: number | null, requested: number | undef
  * The baseline's scope is left as it was: it names no cap, and whatever its
  * snapshot defaults to is what it measures. An undefined cap (a manifest that
  * predates the option) writes no field, as those grids' cells did.
+ *
+ * The candidate's scope states the ceilings the harness enforces (3.2), as
+ * `budget`: `minutes` is the run's time limit, whole minutes, rounded down, and
+ * `deadline` the absolute time it runs out — computed before launch, so it is
+ * never later than the kill. `tokens` is written only when a token ceiling is
+ * enforced, and none is yet: a ceiling the harness does not enforce is never
+ * stated. The baseline's scope carries no budget and stays byte-identical to
+ * earlier grids'.
  */
-export function reviewScope(engagement: string, workspace: string, arm: Arm, candidateMaxAgents: number | undefined): Record<string, unknown> {
+export function reviewScope(engagement: string, workspace: string, arm: Arm, candidateMaxAgents: number | undefined, timeoutMs?: number, nowMs: number = Date.now()): Record<string, unknown> {
 	const scope: Record<string, unknown> = { engagement, workspace, mode: "off", authorized: false, targets: {} };
 	if (arm === "candidate" && candidateMaxAgents !== undefined) scope.maxAgents = candidateMaxAgents;
+	const minutes = timeoutMs !== undefined && Number.isFinite(timeoutMs) ? Math.floor(timeoutMs / 60_000) : 0;
+	if (arm === "candidate" && minutes >= 1) scope.budget = { minutes, deadline: new Date(nowMs + timeoutMs!).toISOString() };
 	return scope;
 }
 
@@ -1818,7 +1828,7 @@ async function prepareCell(ctx: Context, target: Target, pass: number, arm: Arm,
 	const engagement = `review-${opaqueToken()}`;
 	let probe: ProbeConfig | undefined;
 	if (probeFor) probe = await probeFor(paths);
-	const scope = probe?.mode === "delegation" ? probeDelegationScope(engagement, paths.workspaceDir) : reviewScope(engagement, paths.workspaceDir, arm, options.candidateMaxAgents);
+	const scope = probe?.mode === "delegation" ? probeDelegationScope(engagement, paths.workspaceDir) : reviewScope(engagement, paths.workspaceDir, arm, options.candidateMaxAgents, options.timeoutMs);
 	const scopeText = `${JSON.stringify(scope, null, 2)}\n`;
 	await writeFile(join(paths.targetDir, "pired.scope.json"), scopeText);
 	const prompt = probe?.mode === "delegation" ? "Map the attack surface of this codebase. Delegate the first area to a worker." : promptFor(target);
@@ -2529,7 +2539,7 @@ async function inspectRun(ctx: Context, cell: PreparedCell, launched: Launch, at
 		// engagementTelemetry reads a missing engagement as zeros; passed on, that
 		// would read as "nothing open" rather than "no ledger".
 		const ledger = telemetry && await exists(cell.workspaceDir) ? telemetry : undefined;
-		stop = runStop({ launchError: launched.launchError, result: launched.result, stoppedByRunner, events, telemetry: ledger, children: accounting?.children ?? [] });
+		stop = runStop({ launchError: launched.launchError, result: launched.result, stoppedByRunner, events, telemetry: ledger, children: accounting?.children ?? [], limitMs: ctx.options.timeoutMs });
 	} catch (error) {
 		stop = { error: error instanceof Error ? error.message : String(error) };
 	}
@@ -2550,13 +2560,18 @@ async function inspectRun(ctx: Context, cell: PreparedCell, launched: Launch, at
  */
 export function runStop(run: {
 	launchError?: string;
-	result?: Pick<OwnedResult, "exitCode" | "signal" | "timedOut">;
+	result?: Pick<OwnedResult, "exitCode" | "signal" | "timedOut"> & Partial<Pick<OwnedResult, "startedAt" | "finishedAt">>;
 	stoppedByRunner: boolean;
 	events: JsonRecord[];
 	telemetry: JsonRecord | undefined;
 	children: Array<Pick<ChildAccount, "child" | "session">>;
+	/** The run's time limit; with the process's start and end, the share of it used (3.2). */
+	limitMs?: number;
 }): RunStop {
 	const last = assistantReplies(run.events).at(-1);
+	const r = run.result;
+	const timing = r && typeof r.startedAt === "number" && typeof r.finishedAt === "number" && run.limitMs
+		? { seconds: (r.finishedAt - r.startedAt) / 1000, limitSeconds: run.limitMs / 1000 } : undefined;
 	return classifyRunStop({
 		...(run.launchError ? { launchError: run.launchError } : {}),
 		process: run.result ? { exitCode: run.result.exitCode, signal: run.result.signal, timedOut: run.result.timedOut } : null,
@@ -2566,7 +2581,7 @@ export function runStop(run: {
 		childKey: child.childKey, agent: child.agent, status: child.status,
 		...(session ? { ending: session.ending, finalText: session.finalText, ...(session.finalStop ? { finalStop: session.finalStop } : {}) } : {}),
 		sessionErrors: session ? session.errors.length + session.providerErrors.length : 0,
-	})));
+	})), timing);
 }
 
 async function runOne(ctx: Context, target: Target, pass: number, arm: Arm, attempt: number): Promise<RunOutcome> {

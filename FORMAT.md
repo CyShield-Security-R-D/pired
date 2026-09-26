@@ -132,6 +132,11 @@ hand the second morning's work the first morning's lens. Written by `/pass`; the
 lens each pass runs under comes from `scope.json` (§6), not from here, because the
 ladder is configuration and the count is state.
 
+`stores` lists every JSONL store the workspace holds. `sessions` (§8.6) holds settle records
+rather than ledger rows: it is read by `recall status` and the benchmark's stop classifier, and
+by nothing that counts coverage or findings. A manifest written before it lists no `sessions`, and
+the store reads as empty.
+
 `originPath` is the directory the engagement was first opened from, written once and never updated.
 An engagement is keyed on that directory's basename, so `~/clientA/backend` and `~/clientB/backend`
 resolve to one ledger; recording the origin is what lets a later session say so. **Optional, and its
@@ -161,7 +166,7 @@ Single JSON object — the authorized engagement scope. Canonical copy of the
     "enabled": true,
     "lenses": ["route", "file", "invariant", "adversarial"]
   },
-  "budget": { "tokens": 20000000, "minutes": 240 },   // optional; see below
+  "budget": { "tokens": 20000000, "minutes": 240 },   // optional (+ "deadline"); see below
   "maxVerifiers": 2                                   // optional; see below
 }
 ```
@@ -176,12 +181,26 @@ then cleared cells) and `credentialed` (surface settled before the engagement he
 a credential). `PIRED_PASSES=route,file` overrides it for a headless run, and
 `PIRED_PASSES=off` turns it off. See ADR-018.
 
-`budget` and `maxVerifiers` are declared by the Phase 3 groundwork; their
-semantics are introduced by Phase 3 of delegation v6 (see its ADRs). `budget`
-holds the session's ceilings: `tokens` across every model call the session pays
-for, `minutes` of wall clock. `maxVerifiers` caps verifier launches separately
-from `maxAgents`. Both take non-negative integers. A `budget` value that is not
-one is dropped, and absent means no budget. A `maxVerifiers` that is not one
+`budget` holds one session's ceilings, per session like `maxAgents`: `tokens` across every model
+call the session pays for — the lead's turns, its workers and verifiers, and the scribe — and
+`minutes` of wall clock from the session's start. Each takes a non-negative integer; a value that
+is not one is dropped, and either may be absent. Absent altogether means no budget and no budget
+line, which is the default. When one is set, pired states it on every request, in the tail block
+it refreshes after the cached prompt (never in the system prompt), as one line stating used and
+left: "Budget: 12 of 45 min used, 33 left · 6.1M of 20M tokens used, 13.9M left." From 80% of
+either ceiling it adds that the budget is a ceiling, not a target, and to record what is
+established; at a ceiling it says to settle (§8.6), or, when the lead has settled and no work has
+been written since, which outcome it settled with. pired enforces nothing: the
+ceiling is stated, and whoever set it enforces it. An optional `deadline` (ISO 8601) is an
+absolute stop time: when present, minutes spent are read as the ceiling less the minutes left
+before it, so the count follows the clock that stops the session; with no `minutes`, the ceiling
+is session start to the deadline. The benchmark harness writes the ceilings it enforces into the
+candidate's scope only — the run's time limit as `minutes` and the launch time plus that limit as
+`deadline` — and never one it does not; the baseline's scope carries no `budget`. `recall status`
+repeats the line. See the 3.2 ADR.
+
+`maxVerifiers` is declared by the Phase 3 groundwork and given its semantics by 3.1. It caps
+verifier launches separately from `maxAgents`, takes a non-negative integer, and one that is not
 reads as `0`, the rule `maxAgents` follows.
 
 Matching rules (documented for interoperability): `*.base` matches `base` and any
@@ -377,7 +396,9 @@ Elsewhere (context, notes, reports) secrets are referred to by `handle`; the raw
 
 ### 8.6 `sessions.jsonl` — how sessions were settled
 
-Declared by the Phase 3 groundwork; written by a later change (3.2).
+Written by `record kind=settle outcome=finished|paused|blocked note="…"` (3.2): where a session
+leaves the engagement. `finished` says the work given is done, `paused` that work remains the
+session could still do, `blocked` that what remains needs the operator.
 
 ```jsonc
 {
@@ -392,6 +413,28 @@ Declared by the Phase 3 groundwork; written by a later change (3.2).
   }
 }
 ```
+
+- **Only `outcome` and `note` are the caller's.** `remainder` is computed by pired from the
+  ledger when the settle is written: coverage cells not settled (`openCells`, absent when there is
+  no checklist), source directories with no recorded surface (`unmappedAreas`, when the host has a
+  directory listing), unchallenged findings keyed by the `by` that created them (`unverified`;
+  `(unknown)` for rows written before `by`), `inconclusive` hypotheses, `openBlockers`, and what
+  the session had `spent` when a budget is set. A remainder sent with the call is never read. A
+  part with nothing in it is omitted.
+- **It never refuses** on what remains, and ends nothing: the session goes on, and the reply
+  lists the remainder and the areas (§12) in full.
+- **Append-only history.** A settle is never updated or deleted (`delete=true` is refused); a
+  later settle is another row. The last one is the one with the latest `createdAt`.
+- **Only the lead settles.** The record tool refuses `kind=settle` from any author but `lead` — a
+  worker, the scribe, the operator's CLI — and a worker's child refuses it too. Readers (`recall
+  status`, the benchmark telemetry) take the newest settle whose `by` is `lead` and ignore any other.
+- **Superseded:** a settle followed by ledger writes by anyone but `scribe` or `operator` —
+  created, or updated (`updatedAt`) after it — no longer describes where the session stopped. The
+  benchmark's stop classifier reads it that way; the file itself is not changed. *An
+  approximation:* a row keeps its creator's `by` through updates, and there is no `updatedBy`, so
+  a scribe's or the operator's update to a row the lead created counts as work after the settle,
+  and a lead's update to a scribe-created row does not. The benchmark runs the scribe off, and the
+  operator does not write during a benchmark run.
 
 An engagement written before this store existed has no `sessions.jsonl`, and reads
 as having no settles.
@@ -441,6 +484,22 @@ Login uses a legacy session cookie without SameSite. Worth an CSRF pass on state
 ## 12. Derived data (never stored)
 
 - **Coverage matrix** = `checklist.classes` × inventory surface elements — a **test plan**, where one cell is one test case (this class, asked of this element), a hypothesis is that case executed, and a gap is a case not yet run. Each cell's status is derived from `hypotheses` outcomes (`not-tested` | `testing` | `clear` | `vulnerable` | `blocked` | `n/a`). A cell is `blocked` when an open blocker in `blockers.jsonl` gates it. Coverage is recomputed on read so it can never drift from the ledgers.
+- **Areas** group the recorded surface into places (`core/areas.ts`, 3.2). An element's area is the
+  directory of its `file`; with no file, its host (a param with no file goes where its endpoint
+  does); with neither, one area for surface with no file or host. Past 20 directories, every
+  directory is cut to the deepest depth that leaves 20 or fewer, so each element is still counted
+  somewhere. Each area's status comes from its coverage cells, `n/a` excluded: `settled` when every
+  cell is clear or vulnerable, `untested` when none has been touched, `blocked` when what is not
+  settled is all blocked, else `in progress`; with a count of the findings (not disposed) whose
+  target or location falls in it. A `file` that resolves outside the source root (an absolute path
+  elsewhere, or one climbing out with `..`) goes to one area of its own and marks nothing in the
+  tree as mapped. Given a directory-only listing of the source tree, the listed directories with no
+  recorded surface in or below them are **unmapped**, outermost only — and only once some surface
+  names a file in the tree. pired takes that listing (of the session's cwd, skipping hidden,
+  dependency, build and runtime-state directories) only for a source-only engagement, or once a
+  `file` is recorded: on a live target the cwd is not what is reviewed. Areas are
+  shown bounded in the tail block, in full in a settle's reply, and in `recall status`; they rank
+  nothing and are never stored.
 - **`recall` summaries** (coverage, gaps, next, …) are projections over these files, not stored artifacts.
 
 ## 13. Migration log
@@ -451,5 +510,9 @@ Login uses a legacy session cookie without SameSite. Worth an CSRF pass on state
   and `tier` (§8.3); the `sessions` store (§5, §8.6). All additive and optional, so
   no version bump: a workspace written before them reads unchanged, its rows with
   no author and no `sessions.jsonl`.
+
+- `formatVersion 1`, 3.2 — `sessions.jsonl` is written (`record kind=settle`, §8.6) and the scope
+  `budget` is read and stated (§6); areas are derived (§12). Additive, no version bump: a
+  workspace with no `sessions.jsonl` has no settles, and a scope with no `budget` shows no line.
 
 *(Future breaking changes append here with the old→new field mapping and reader behavior.)*
