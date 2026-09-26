@@ -8,8 +8,10 @@ import {
 	newManifest, optionsFromManifest, parseBreakerSpec, parseComparePins, parseOptions, parseOwnerRecord, planResume, providerFailureTexts, requestLogFromStderr,
 	resumeMismatches, retryPolicyFromManifest, reviewScope, runPairs, runStop, runtimeMismatch, scopedSealCommand, startTimeFromStat, subagentConfigFor,
 	toolSurfaceErrors, trackStream, workerCapReason,
-	type GridStopState, type ProviderFailures, type RunOutcome,
+	ceilingOf, latestMatchedSessions, planMatchedResume, sessionRunOf,
+	type GridStopState, type MatchedSessionSpec, type ProviderFailures, type RunOutcome,
 } from "./delegation-compare.ts";
+import { sessionBudget, type MatchedPolicy } from "./delegation-compare-matched.ts";
 import { BENCHMARK_SETTINGS, DEFAULT_RETRY_POLICY } from "./delegation-compare-entry.ts";
 import { DEFAULT_BREAKER, observationsFromChildSession, planSchedule, type Arm, type BreakerPolicy, type ScheduledPair } from "./delegation-compare-lib.ts";
 
@@ -1385,5 +1387,310 @@ describe("retry policy in the manifest", () => {
 	it("refuses to resume a manifest whose policy is malformed", () => {
 		expect(() => retryPolicyFromManifest({ retryPolicy: { ...DEFAULT_RETRY_POLICY, providerMaxRetries: 2 } })).toThrow(/invalid retryPolicy: .*transport retries/);
 		expect(() => optionsFromManifest("/out", preflighted({ ...newManifest(options(), "live"), retryPolicy: "on" }))).toThrow(/invalid retryPolicy/);
+	});
+});
+
+describe("the matched-compute arm (plan 2.5)", () => {
+	// Builders: the required command line, a manifest as a fresh grid writes it
+	// and a resume reads it back, and a matched session's run record.
+	const argv = (...extra: string[]): string[] => [
+		"--baseline", "/b", "--candidate", "/c", "--corpus", "/corpus", "--truth", "/truth", "--out", "/out",
+		"--provider", "zai", "--model", "glm-5.3-flash", ...extra,
+	];
+	const options = (...extra: string[]) => {
+		const parsed = parseOptions(argv(...extra));
+		if (parsed === "help" || parsed.kind !== "run") throw new Error("expected a run");
+		return parsed.options;
+	};
+	const stored = (opts: ReturnType<typeof options>): Record<string, unknown> => ({
+		...newManifest(opts, "official"),
+		inputs: { corpus: opts.corpus, truth: opts.truth, corpusManifest: { path: opts.manifestPath }, baseline: { path: opts.baseline }, candidate: { path: opts.candidate } },
+		pins: { landlockWrapper: opts.fsSeal },
+	});
+	const sessionRecord = (key: string, attempt: number, index: number, sessionAttempt: number, valid: boolean, extra: Record<string, unknown> = {}): Record<string, unknown> => ({
+		key, target: key.split("#")[0], pass: 1, arm: "matched", attempt, cellId: `m-${key}-${index}-${sessionAttempt}`, valid, infraFailure: !valid,
+		matchedSession: { index, of: 3, sessionAttempt, budget: 9000, ceiling: 3000, budgetSource: "candidate", candidateCellId: "c1" },
+		findings: valid ? 2 : 0, truePositives: valid ? 1 : 0, precisionLowerBound: valid ? 0.5 : 0, totalTokens: valid ? 3100 : null, ...extra,
+	});
+
+	describe("the option", () => {
+		it("pins mode and k in the manifest, and a resume restores them", () => {
+			const opts = options("--matched", "k=4");
+			expect(opts.matched).toEqual({ mode: "follow", k: 4 });
+			const manifest = stored(opts);
+			expect(manifest.matched).toEqual({ mode: "follow", k: 4 });
+			expect(typeof manifest.matchedResumePolicy).toBe("string");
+			expect(optionsFromManifest("/out", manifest).matched).toEqual({ mode: "follow", k: 4 });
+		});
+
+		it("refuses a resume whose matched policy changed", () => {
+			const prior = stored(options("--matched", "follow"));
+			const changed = stored(options("--matched", "k=2"));
+			expect(resumeMismatches(prior, changed)).toContain("matched");
+			expect(resumeMismatches(prior, stored(options()))).toContain("matched");
+			expect(resumeMismatches(prior, prior)).toEqual([]);
+			// The arm's snapshot is pinned by digest, as the other arms' are.
+			const withInputs = (sha256: string) => ({ ...prior, inputs: { ...(prior.inputs as object), matched: { sha256, stagedDigest: "ms" } } });
+			expect(resumeMismatches(withInputs("m1"), withInputs("m2"))).toEqual(["inputs.matched.sha256"]);
+		});
+
+		it("refuses to resume a manifest whose matched policy is malformed", () => {
+			expect(() => optionsFromManifest("/out", { ...stored(options()), matched: { mode: "follow", k: 0 } })).toThrow(/invalid matched policy: .*k must be/);
+		});
+
+		it("with the option absent, the manifest and the resumed options carry nothing new", () => {
+			const opts = options();
+			expect("matched" in opts).toBe(false);
+			const manifest = stored(opts);
+			expect("matched" in manifest).toBe(false);
+			expect("matchedResumePolicy" in manifest).toBe(false);
+			expect("matched" in optionsFromManifest("/out", manifest)).toBe(false);
+			// An old manifest has no inputs.matched either, so a resume compares what it always did.
+			expect(resumeMismatches(manifest, manifest)).toEqual([]);
+		});
+
+		it("takes an exploratory snapshot only with --matched", () => {
+			expect(options("--matched", "follow", "--matched-snapshot", "/snaps/other").matched).toEqual({ mode: "follow", k: 3, snapshot: "/snaps/other" });
+			expect(() => options("--matched-snapshot", "/snaps/other")).toThrow(/needs --matched/);
+		});
+
+		it("sizes the OAuth worst case for k sessions after each pair's two arms", () => {
+			const grid = { passes: 3, targets: 5, concurrency: 2, timeoutMs: 1000 };
+			expect(gridWorstCaseMs({ ...grid, matchedSessions: 3 })).toBe(gridWorstCaseMs(grid) * 5 / 2);
+			expect(gridWorstCaseMs({ ...grid, breaker: DEFAULT_BREAKER, matchedSessions: 3 })).toBeGreaterThan(gridWorstCaseMs({ ...grid, breaker: DEFAULT_BREAKER }));
+		});
+	});
+
+	describe("the cell", () => {
+		it("states maxAgents 0 in the matched arm's scope and leaves the other arms' scopes as they were", () => {
+			expect(reviewScope("e", "/w", "matched", 8).maxAgents).toBe(0);
+			expect(reviewScope("e", "/w", "matched", undefined).maxAgents).toBe(0);
+			expect(reviewScope("e", "/w", "candidate", 8).maxAgents).toBe(8);
+			expect("maxAgents" in reviewScope("e", "/w", "baseline", 8)).toBe(false);
+		});
+
+		it("accepts the single agent's tools with or without pi-subagents' lazy loader, and never the eager schema", () => {
+			const base = ["read", "bash", "edit", "write", "record", "recall"];
+			expect(toolSurfaceErrors("matched", base)).toEqual([]);
+			expect(toolSurfaceErrors("matched", [...base, "subagents_enable"])).toEqual([]);
+			expect(toolSurfaceErrors("matched", [...base, "subagent"])).toEqual(["matched arm exposes subagent eagerly instead of through subagents_enable"]);
+			expect(toolSurfaceErrors("matched", [...base, "pired_delegate"])).toEqual(["matched arm exposes pired_delegate, which pired hides"]);
+			expect(toolSurfaceErrors("matched", ["read"])).toContain("matched arm does not expose record");
+		});
+
+		it("fails a matched session that launched a worker, since its scope turned delegation off", async () => {
+			const dir = await mkdtemp(join(tmpdir(), "pired-matched-"));
+			await mkdir(join(dir, "run-a", "run-0"), { recursive: true });
+			await writeFile(join(dir, "run-a", "run-0", "session.jsonl"), "");
+			const events = [{ type: "message_end", message: { role: "assistant", content: [], responseId: "p1", stopReason: "stop", timestamp: 1, usage: { input: 10, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 11 } } }];
+			const account = await accountCellUsage(events, { arm: "matched", childSessionDir: dir }, { provider: "zai", model: "glm-5.3-flash", thinking: "medium" }, { subagentCalls: 0 });
+			expect(account.errors.join("\n")).toMatch(/matched arm launched 0 worker\(s\) \(1 child session file\(s\)\); its scope states maxAgents 0/);
+		});
+
+		it("meters a session the ceiling cut and does not ask it to end on stop", async () => {
+			const dir = await mkdtemp(join(tmpdir(), "pired-matched-"));
+			const u = (n: number) => ({ input: n, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: n + 1 });
+			const events = [
+				{ type: "message_end", message: { role: "assistant", content: [], responseId: "p1", stopReason: "toolUse", timestamp: 1, usage: u(2000) } },
+				{ type: "message_end", message: { role: "assistant", content: [], stopReason: "error", errorMessage: "This operation was aborted", timestamp: 2, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 } } },
+			];
+			const expectRun = { provider: "zai", model: "glm-5.3-flash", thinking: "medium" };
+			const cut = await accountCellUsage(events, { arm: "matched", childSessionDir: dir }, expectRun, { subagentCalls: 0 }, undefined, { cut: true });
+			expect(cut.errors).toEqual([]);
+			expect(cut.usage.total.totalTokens).toBe(2001);
+			const uncut = await accountCellUsage(events, { arm: "matched", childSessionDir: dir }, expectRun, { subagentCalls: 0 });
+			expect(uncut.errors.join("\n")).toMatch(/stopReason=stop/);
+		});
+
+		it("labels a session the ceiling cut as budget", () => {
+			const events = [{ type: "message_end", message: { role: "assistant", stopReason: "error", content: [] } }];
+			const stop = runStop({ result: { exitCode: 0, signal: null, timedOut: false }, stoppedByRunner: false, events, telemetry: undefined, children: [], tokenCeiling: true });
+			expect(stop).toMatchObject({ outcome: "budget", evidence: ["token ceiling"] });
+		});
+
+		it("reads the entry's ceiling line only when the cell had a ceiling, and requires it when the entry ran to its end", () => {
+			const line = { type: "benchmark_token_ceiling", ceiling: 3000, metered: 3100, requests: 7, reached: true, reachedAtRequest: 7, reachedOn: "toolUse", cut: true };
+			const ok = { exitCode: 0, timedOut: false };
+			const errors: string[] = [];
+			expect(ceilingOf([line], { tokenCeiling: 3000 }, ok, errors)).toEqual({ ceiling: 3000, metered: 3100, requests: 7, reached: true, reachedAtRequest: 7, reachedOn: "toolUse", cut: true });
+			expect(errors).toEqual([]);
+			const check = (events: Record<string, unknown>[], cell: { tokenCeiling?: number }, result = ok): string[] => {
+				const found: string[] = [];
+				ceilingOf(events, cell, result, found);
+				return found;
+			};
+			expect(check([], {})).toEqual([]);
+			expect(check([line], {})).toEqual(["a run without a token ceiling reported one"]);
+			expect(check([], { tokenCeiling: 3000 })).toEqual(["the entry did not report its token ceiling"]);
+			expect(check([], { tokenCeiling: 3000 }, { exitCode: null as unknown as number, timedOut: true })).toEqual([]);
+			expect(check([line, line], { tokenCeiling: 3000 })).toEqual(["expected one token ceiling line, found 2"]);
+			expect(check([line], { tokenCeiling: 2999 })).toEqual(["the entry ran under a token ceiling of 3000, not the cell's 2999"]);
+		});
+	});
+
+	describe("the pair loop", () => {
+		// A scripted grid: every launch takes ten minutes of a fake clock; a matched
+		// session's outcome carries its spec, as runOne's record does.
+		type Kind = "valid" | "drop" | "broken";
+		const outcome = (pair: ScheduledPair, arm: Arm, attempt: number, kind: Kind, tokens: number, session?: MatchedSessionSpec): RunOutcome => {
+			const valid = kind === "valid";
+			return {
+				metric: { key: pair.key, target: pair.target, pass: pair.pass, valid, truePositives: valid ? 1 : 0, precision: valid ? 0.5 : 0, totalClaims: valid ? 2 : 0, totalTokens: valid ? tokens : Number.NaN },
+				arm, cellId: `${pair.key}-${arm}-${attempt}${session ? `-s${session.index}.${session.sessionAttempt}` : ""}`, seconds: 600, infraFailure: kind === "drop",
+				record: { key: pair.key, target: pair.target, pass: pair.pass, arm, attempt, valid, infraFailure: kind === "drop", ...(session ? { matchedSession: session } : {}) },
+			};
+		};
+		const grid = (script: (key: string, arm: Arm, session?: MatchedSessionSpec) => Kind, opts: { breaker?: BreakerPolicy; policy?: MatchedPolicy; official?: boolean; resume?: boolean } = {}) => {
+			let clock = Date.UTC(2026, 8, 26, 12, 0);
+			const launched: string[] = [];
+			const specs: MatchedSessionSpec[] = [];
+			const settled: RunOutcome[] = [];
+			const lines: string[] = [];
+			const state: GridStopState = { aborted: false, stopInvalid: false, stopReason: undefined, quotaExhausted: undefined };
+			const policy = opts.policy ?? { mode: "follow", k: 3 };
+			const pairs = planSchedule(["A", "B"], 1);
+			const run = () => runPairs({
+				pairs: opts.resume ? [] : pairs, firstAttempt: () => 1, concurrency: 1, official: opts.official ?? false,
+				...(opts.breaker ? { breaker: opts.breaker } : {}), state,
+				launch: async (pair, arm, attempt) => {
+					launched.push(`${pair.key} ${arm} ${attempt}`);
+					clock += 10 * 60_000;
+					return outcome(pair, arm, attempt, script(pair.key, arm), arm === "candidate" ? 9_000_002 : 4_000_000);
+				},
+				settle: async (o) => { settled.push(o); },
+				report: async () => undefined,
+				nowMs: () => clock,
+				sleep: async (ms) => { clock += ms; },
+				log: (line) => lines.push(line), warn: (line) => lines.push(line), out: "/grid",
+				matched: {
+					k: policy.k,
+					budget: (pair, candidate) => sessionBudget(policy, pair.target, { valid: candidate.metric.valid, totalTokens: candidate.metric.totalTokens }),
+					launch: async (pair, attempt, session) => {
+						launched.push(`${pair.key} matched ${attempt} s${session.index}.${session.sessionAttempt}`);
+						specs.push(session);
+						clock += 10 * 60_000;
+						return outcome(pair, "matched", attempt, script(pair.key, "matched", session), session.ceiling + 100, session);
+					},
+					...(opts.resume ? { resume: [{ pair: pairs[0]!, attempt: 2, candidate: outcome(pairs[0]!, "candidate", 2, "valid", 6000), sessions: [{ index: 2, attempt: 2 }] }] } : {}),
+				},
+			});
+			return { run, launched, specs, settled, lines, state };
+		};
+
+		it("follow mode runs k sessions after the pair's two arms, each at the candidate run's tokens over k", async () => {
+			const g = grid(() => "valid");
+			const result = await g.run();
+			expect(g.launched.slice(0, 5)).toEqual(["A#1 baseline 1", "A#1 candidate 1", "A#1 matched 1 s1.1", "A#1 matched 1 s2.1", "A#1 matched 1 s3.1"]);
+			expect(g.specs[0]).toEqual({ index: 1, of: 3, sessionAttempt: 1, budget: 9_000_002, ceiling: 3_000_000, budgetSource: "candidate", candidateCellId: "A#1-candidate-1" });
+			expect(g.settled.filter((o) => o.arm === "matched")).toHaveLength(6);
+			expect(result.matched).toEqual({ skipped: [], requeued: [], gaveUp: [], blocked: [], abandoned: [] });
+		});
+
+		it("runs no matched session after a pair that is not valid at its attempt", async () => {
+			let dropped = false;
+			const g = grid((key, arm) => {
+				if (key === "A#1" && arm === "baseline" && !dropped) { dropped = true; return "drop"; }
+				return "valid";
+			}, { breaker: DEFAULT_BREAKER });
+			await g.run();
+			expect(g.launched.filter((l) => l.startsWith("A#1 matched 1"))).toEqual([]);
+			// The re-queued pair takes its matched sessions with it.
+			expect(g.launched.filter((l) => l.startsWith("A#1 matched 2"))).toHaveLength(3);
+		});
+
+		it("re-runs a failed session on its own and keeps the others", async () => {
+			let dropped = false;
+			const g = grid((key, arm, session) => {
+				if (arm === "matched" && key === "A#1" && session?.index === 2 && !dropped) { dropped = true; return "drop"; }
+				return "valid";
+			}, { breaker: DEFAULT_BREAKER });
+			const result = await g.run();
+			expect(g.launched.filter((l) => l.startsWith("A#1 matched"))).toEqual(["A#1 matched 1 s1.1", "A#1 matched 1 s2.1", "A#1 matched 1 s2.2", "A#1 matched 1 s3.1"]);
+			expect(result.matched?.requeued).toEqual([{ session: "A#1/2", sessionAttempt: 2, notBefore: expect.any(String), reason: expect.stringMatching(/infrastructure/) }]);
+			// The pair itself is not re-run: its two arms stay as they were.
+			expect(g.launched.filter((l) => l.startsWith("A#1 baseline"))).toEqual(["A#1 baseline 1"]);
+		});
+
+		it("does not trip an official grid at once on a matched session's own failure, which leaves the gate open", async () => {
+			const g = grid((key, arm, session) => arm === "matched" && key === "A#1" && session?.index === 1 ? "broken" : "valid", { breaker: DEFAULT_BREAKER, official: true });
+			const result = await g.run();
+			expect(g.state.stopInvalid).toBe(false);
+			expect(result.matched?.blocked).toEqual([{ session: "A#1/1", sessionAttempt: 1, reason: expect.stringMatching(/the session is invalid for a non-infrastructure reason/) }]);
+			// The arm cannot be valid for that pair, so its other sessions are not spent; the next pair runs.
+			expect(g.launched.filter((l) => l.startsWith("A#1 matched"))).toEqual(["A#1 matched 1 s1.1"]);
+			expect(g.launched.filter((l) => l.startsWith("B#1 matched"))).toHaveLength(3);
+		});
+
+		it("without a breaker a failed session stops the grid, marked as the matched arm's stop", async () => {
+			const g = grid((key, arm) => arm === "matched" && key === "A#1" ? "drop" : "valid");
+			await g.run();
+			expect(g.state).toMatchObject({ stopInvalid: true, stoppedBy: "matched" });
+			expect(g.launched.some((l) => l.startsWith("B#1"))).toBe(false);
+		});
+
+		it("skips the arm, with the reason, when the budget cannot be set", async () => {
+			const g = grid(() => "valid", { policy: { mode: "fixed", k: 3, budgets: { B: 6000 } } });
+			const result = await g.run();
+			expect(result.matched?.skipped).toEqual([{ key: "A#1", attempt: 1, reason: "no pre-registered budget for A" }]);
+			expect(g.specs.map((s) => [s.budget, s.ceiling, s.budgetSource])).toEqual([[6000, 2000, "fixed"], [6000, 2000, "fixed"], [6000, 2000, "fixed"]]);
+		});
+
+		it("a resume runs only a kept pair's missing session, at the budget of the pair's kept candidate run", async () => {
+			const g = grid(() => "valid", { resume: true });
+			await g.run();
+			expect(g.launched).toEqual(["A#1 matched 2 s2.2"]);
+			expect(g.specs).toEqual([{ index: 2, of: 3, sessionAttempt: 2, budget: 6000, ceiling: 2000, budgetSource: "candidate", candidateCellId: "A#1-candidate-2" }]);
+		});
+
+		it("without the matched loop the pair loop's result carries no matched block", async () => {
+			const state: GridStopState = { aborted: false, stopInvalid: false, stopReason: undefined, quotaExhausted: undefined };
+			const launched: string[] = [];
+			const result = await runPairs({
+				pairs: planSchedule(["A"], 1), firstAttempt: () => 1, concurrency: 1, official: false, state,
+				launch: async (pair, arm, attempt) => { launched.push(arm); return outcome(pair, arm, attempt, "valid", 1000); },
+				settle: async () => undefined, report: async () => undefined, nowMs: () => 0, sleep: async () => undefined,
+				log: () => undefined, warn: () => undefined, out: "/grid",
+			});
+			expect("matched" in result).toBe(false);
+			expect(launched).toEqual(["baseline", "candidate"]);
+			expect("stoppedBy" in state).toBe(false);
+		});
+	});
+
+	describe("resume and union bookkeeping", () => {
+		it("reads each session at its own highest attempt within the pair's attempt, last row winning a tie", () => {
+			const rows = [
+				sessionRecord("A#1", 1, 1, 1, true),
+				sessionRecord("A#1", 2, 1, 1, false),
+				sessionRecord("A#1", 2, 1, 2, true, { cellId: "first" }),
+				sessionRecord("A#1", 2, 1, 2, true, { cellId: "second" }),
+				sessionRecord("A#1", 2, 3, 1, true),
+				{ key: "A#1", arm: "candidate", attempt: 2, valid: true },
+			];
+			expect(latestMatchedSessions(rows, "A#1", 2).map((r) => [r.cellId, (r.matchedSession as { index: number }).index])).toEqual([["second", 1], ["m-A#1-3-1", 3]]);
+		});
+
+		it("queues a kept pair's missing and infrastructure-failed sessions, and lists the blocked ones", () => {
+			const plan = { keepKeys: ["A#1", "B#1"], latest: {
+				"A#1\u0000candidate": { key: "A#1", arm: "candidate", attempt: 2, valid: true, cellId: "cA" },
+				"B#1\u0000candidate": { key: "B#1", arm: "candidate", attempt: 1, valid: true, cellId: "cB" },
+			} };
+			const runs = [
+				sessionRecord("A#1", 2, 1, 1, true),
+				sessionRecord("A#1", 2, 2, 1, false),
+				sessionRecord("B#1", 1, 1, 1, false, { infraFailure: false }),
+				sessionRecord("B#1", 1, 2, 1, true), sessionRecord("B#1", 1, 3, 1, true),
+			];
+			const planned = planMatchedResume(plan, runs, 3, 16);
+			expect(planned.resume).toEqual([{ key: "A#1", attempt: 2, candidate: plan.latest["A#1\u0000candidate"], sessions: [{ index: 2, attempt: 2 }, { index: 3, attempt: 1 }] }]);
+			expect(planned.blocked).toEqual([{ session: "B#1/1", reason: expect.stringMatching(/non-infrastructure/) }]);
+			expect(planned.abandoned).toEqual([]);
+		});
+
+		it("reads a session record as the union needs it, with the gate's tokens", () => {
+			const record = sessionRecord("A#1", 1, 2, 3, true, { totalTokensWithRetryEstimate: 3300, stop: { outcome: "budget" } });
+			expect(sessionRunOf(record, [])).toEqual({ index: 2, attempt: 3, cellId: "m-A#1-2-3", valid: true, totalTokens: 3300, truePositives: 1, claims: 2, stop: "budget", findings: [] });
+			expect(sessionRunOf(sessionRecord("A#1", 1, 1, 1, false))).toMatchObject({ valid: false, stop: null, claims: 0 });
+		});
 	});
 });
