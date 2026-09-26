@@ -25,7 +25,22 @@ import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
-export type Arm = "baseline" | "candidate";
+/**
+ * The arms a grid can hold. `matched` (delegation v6, plan item 2.5) is the
+ * candidate snapshot with delegation off at the candidate's token budget; its
+ * row is the union of its k sessions, one per pair, as eval/rescore.ts writes it.
+ */
+export type Arm = "baseline" | "candidate" | "matched";
+
+/**
+ * Which two arms to pair: the reference first, the subject second. Every
+ * difference reported is subject − reference. The default is the gate's own
+ * pairing; `--arms matched,candidate` asks whether delegation beats a single
+ * agent that spent the same tokens.
+ */
+export type ArmPair = readonly [reference: Arm, subject: Arm];
+export const DEFAULT_ARMS: ArmPair = ["baseline", "candidate"];
+const ARMS: readonly Arm[] = ["baseline", "candidate", "matched"];
 
 /** One rescored run, as eval/rescore.ts writes it. Extra fields are ignored. */
 export interface RunRecord {
@@ -43,6 +58,11 @@ export interface RunRecord {
 	matched: Record<string, string[]>;
 }
 
+/**
+ * One pair's matched sets. The fields keep the gate's names: `baseline` holds
+ * the reference arm's set and `candidate` the subject's, whichever arms were
+ * paired.
+ */
 export interface Pair {
 	grid: string;
 	target: string;
@@ -69,14 +89,16 @@ const pairKey = (r: { grid: string; target: string; pass: number }) => JSON.stri
  * set: a mistyped `--level` otherwise prints b=0 c=0 p=1, SD 0 and MDE 0, which
  * reads as "no effect, fully powered" when nothing was measured at all.
  */
-export function pairRuns(records: readonly RunRecord[], level: string = DEFAULT_LEVEL): Pair[] {
+export function pairRuns(records: readonly RunRecord[], level: string = DEFAULT_LEVEL, arms: ArmPair = DEFAULT_ARMS): Pair[] {
 	const groups = new Map<string, { baseline?: RunRecord; candidate?: RunRecord }>();
 	for (const r of records) {
-		if (r.arm !== "baseline" && r.arm !== "candidate") continue;
+		// Any other arm is skipped, as an arm this file did not know always was.
+		const slot = r.arm === arms[0] ? "baseline" : r.arm === arms[1] ? "candidate" : undefined;
+		if (!slot) continue;
 		const key = pairKey(r);
 		const group = groups.get(key) ?? {};
-		const held = group[r.arm];
-		if (!held || r.attempt > held.attempt) group[r.arm] = r;
+		const held = group[slot];
+		if (!held || r.attempt > held.attempt) group[slot] = r;
 		groups.set(key, group);
 	}
 	const matchedAt = (r: RunRecord): Set<string> => {
@@ -290,6 +312,8 @@ export function pairsNeeded(sd: number, effect: number, alpha = 0.05, power = 0.
 
 export interface PairedReport {
 	level: string;
+	/** Present only when the pairing is not the default baseline vs candidate. */
+	arms?: ArmPair;
 	/** The grids the pairs came from; the CLI reports one grid at a time. */
 	grids: string[];
 	pairs: number;
@@ -304,14 +328,16 @@ export interface PairedReport {
 	pairsFor03: number;
 }
 
-export function analyze(records: readonly RunRecord[], level: string = DEFAULT_LEVEL, truthIdsByTarget?: ReadonlyMap<string, readonly string[]>): PairedReport {
-	const pairs = pairRuns(records, level);
+export function analyze(records: readonly RunRecord[], level: string = DEFAULT_LEVEL, truthIdsByTarget?: ReadonlyMap<string, readonly string[]>, arms: ArmPair = DEFAULT_ARMS): PairedReport {
+	const pairs = pairRuns(records, level, arms);
 	const rates = perIssueFindRate(pairs, truthIdsByTarget);
 	const diffs = pairDiffs(pairs);
 	const boot = clusterBootstrap(diffsByTarget(pairs));
 	const sd = sampleSd(diffs);
+	const isDefault = arms[0] === DEFAULT_ARMS[0] && arms[1] === DEFAULT_ARMS[1];
 	return {
 		level,
+		...(isDefault ? {} : { arms }),
 		grids: [...new Set(pairs.map((p) => p.grid))].sort(),
 		pairs: pairs.length,
 		targets: new Set(pairs.map((p) => p.target)).size,
@@ -330,12 +356,13 @@ const f = (x: number, digits = 3) => (Number.isFinite(x) ? x.toFixed(digits) : S
 
 /** Ids and counts only: finding text never reaches the report. */
 export function formatReport(r: PairedReport): string {
-	const lines = [`paired analysis at ${r.level}: ${r.pairs} pair(s) over ${r.targets} target(s)`, `grid: ${r.grids.join(", ") || "(none)"}`, "", "truth id\tbaseline\tcandidate\tn"];
+	const [ref, sub] = r.arms ?? DEFAULT_ARMS;
+	const lines = [`paired analysis at ${r.level}: ${r.pairs} pair(s) over ${r.targets} target(s)`, `grid: ${r.grids.join(", ") || "(none)"}`, "", `truth id\t${ref}\t${sub}\tn`];
 	for (const row of r.findRates) lines.push(`${row.id}\t${row.baseline}\t${row.candidate}\t${row.n}`);
 	lines.push(
 		"",
-		`McNemar: b=${r.mcnemar.b} (baseline only) c=${r.mcnemar.c} (candidate only) p=${f(r.mcnemar.p, 4)}`,
-		`mean diff per pair (candidate − baseline): ${f(r.meanDiff)} TP, 95% cluster bootstrap CI [${f(r.ci.lo)}, ${f(r.ci.hi)}]`,
+		`McNemar: b=${r.mcnemar.b} (${ref} only) c=${r.mcnemar.c} (${sub} only) p=${f(r.mcnemar.p, 4)}`,
+		`mean diff per pair (${sub} − ${ref}): ${f(r.meanDiff)} TP, 95% cluster bootstrap CI [${f(r.ci.lo)}, ${f(r.ci.hi)}]`,
 		`paired SD: ${f(r.sd)}`,
 		`minimum detectable effect (α=0.05, power 0.8): ${f(r.mde)} TP/pair`,
 		`pairs needed for +0.2 TP/pair: ${r.pairsFor02}; for +0.3 TP/pair: ${r.pairsFor03}`,
@@ -343,21 +370,33 @@ export function formatReport(r: PairedReport): string {
 	return lines.join("\n");
 }
 
-export interface CliArgs { file?: string; level: string; grid?: string; manifests: string[] }
+export interface CliArgs { file?: string; level: string; grid?: string; manifests: string[]; arms?: ArmPair }
+
+/** `--arms <reference>,<subject>`: two different known arms, or a throw naming them. */
+export function parseArms(text: string): ArmPair {
+	const parts = text.split(",").map((x) => x.trim());
+	const known = (a: string | undefined): a is Arm => ARMS.includes(a as Arm);
+	if (parts.length !== 2 || !known(parts[0]) || !known(parts[1]) || parts[0] === parts[1]) {
+		throw new Error(`--arms takes two different arms of ${ARMS.join(", ")} as <reference>,<subject>, got "${text}"`);
+	}
+	return [parts[0], parts[1]];
+}
 
 export function parseArgs(argv: readonly string[]): CliArgs {
 	let file: string | undefined;
 	let level = DEFAULT_LEVEL;
 	let grid: string | undefined;
+	let arms: ArmPair | undefined;
 	const manifests: string[] = [];
 	for (let i = 0; i < argv.length; i++) {
 		const a = argv[i]!;
 		if (a === "--level") level = argv[++i] ?? level;
 		else if (a === "--grid") grid = argv[++i];
 		else if (a === "--manifest") { const m = argv[++i]; if (m) manifests.push(m); }
+		else if (a === "--arms") arms = parseArms(argv[++i] ?? "");
 		else if (!file) file = a;
 	}
-	return { file, level, grid, manifests };
+	return { file, level, grid, manifests, ...(arms ? { arms } : {}) };
 }
 
 /**
@@ -392,7 +431,7 @@ export function truthIdsFromManifests(paths: readonly string[], readFile: (path:
 	return out;
 }
 
-const USAGE = "Usage: paired.ts <rescore.json> [--level line±3] [--grid <name|suffix|substring>] [--manifest <grid>/manifest.json]...\n";
+const USAGE = "Usage: paired.ts <rescore.json> [--level line±3] [--grid <name|suffix|substring>] [--manifest <grid>/manifest.json]... [--arms baseline,candidate|matched,candidate|baseline,matched]\n";
 
 /**
  * The CLI with its I/O injected: returns the exit code and what to print.
@@ -401,7 +440,9 @@ const USAGE = "Usage: paired.ts <rescore.json> [--level line±3] [--grid <name|s
  * bootstrap cluster and one find-rate row without a word.
  */
 export function cli(argv: readonly string[], readFile: (path: string) => string): { code: number; out: string } {
-	const { file, level, grid, manifests } = parseArgs(argv);
+	let args: CliArgs;
+	try { args = parseArgs(argv); } catch (error) { return { code: 2, out: `${error instanceof Error ? error.message : String(error)}\n${USAGE}` }; }
+	const { file, level, grid, manifests, arms } = args;
 	if (!file) return { code: 2, out: USAGE };
 	const all = JSON.parse(readFile(file)) as RunRecord[];
 	const allGrids = [...new Set(all.map((r) => r.grid))].sort();
@@ -413,7 +454,7 @@ export function cli(argv: readonly string[], readFile: (path: string) => string)
 		return { code: 2, out: `no record has level "${level}"; levels in input: ${levels.join(", ") || "(none)"}\n` };
 	}
 	const truth = manifests.length ? truthIdsFromManifests(manifests, readFile) : undefined;
-	const reports = [...chosen].sort().map((g) => formatReport(analyze(records.filter((r) => r.grid === g), level, truth)));
+	const reports = [...chosen].sort().map((g) => formatReport(analyze(records.filter((r) => r.grid === g), level, truth, arms)));
 	return { code: 0, out: `${reports.join("\n\n")}\n` };
 }
 
