@@ -5,7 +5,7 @@ import {
 	accountUsage, APPROVAL_DECISION, childRecordIds, compareMatchedRuns, contentText, createBreaker, DEFAULT_BREAKER, findLeaks, isOfficialGrid,
 	leakTermsFor, nextPairAction, normalizePiUsage, observationsFromChildSession, observationsFromPiEvents, OFFICIAL_PASSES, OFFICIAL_TARGET_IDS,
 	parseBreakerPolicy, piCostUsd, PIRED_BUDGET_STOP, planSchedule, QUALITY_MARGIN, reconcileChildSession, reconcileSubagentCalls,
-	type ArmResult, type BreakerEvent, type ChildSessionExtraction, type ExpectedCell, type RequeueContext, type RunMetric, type SubagentChild,
+	type ArmResult, type BreakerEvent, type ChildSessionExtraction, type ExpectedCell, type PairRules, type RunMetric, type SubagentChild,
 	type UsageObservation,
 } from "./delegation-compare-lib.ts";
 
@@ -1165,7 +1165,7 @@ describe("parseBreakerPolicy", () => {
 	// Resume compares policies with JSON.stringify, so a policy written with its
 	// fields in another order must come back in the one fixed order.
 	it("returns the policy in one fixed field order", () => {
-		const shuffled = { maxAttempts: 4, cooldownMs: 60_000, window: 8, rate: 0.5, consecutive: 3 };
+		const shuffled = { attemptCeiling: 16, maxAttempts: 4, cooldownMs: 60_000, window: 8, rate: 0.5, consecutive: 3 };
 		expect(JSON.stringify(parseBreakerPolicy(shuffled))).toBe(JSON.stringify(DEFAULT_BREAKER));
 	});
 
@@ -1177,6 +1177,7 @@ describe("parseBreakerPolicy", () => {
 		expect(() => parseBreakerPolicy({ ...DEFAULT_BREAKER, rate: 0 })).toThrow(/rate/);
 		expect(() => parseBreakerPolicy({ ...DEFAULT_BREAKER, consecutive: 2.5 })).toThrow(/consecutive/);
 		expect(() => parseBreakerPolicy({ ...DEFAULT_BREAKER, cooldownMs: -1 })).toThrow(/cooldownMs/);
+		expect(() => parseBreakerPolicy({ ...DEFAULT_BREAKER, attemptCeiling: 0 })).toThrow(/attemptCeiling/);
 		expect(() => parseBreakerPolicy([])).toThrow(/not an object/);
 	});
 });
@@ -1188,7 +1189,7 @@ describe("nextPairAction", () => {
 	const dropped: ArmResult = { valid: false, infra: true };
 	const broken: ArmResult = { valid: false, infra: false };
 	const noon = Date.UTC(2026, 8, 26, 12, 0);
-	const runner = (attemptsThisRun: number): RequeueContext => ({ policy: DEFAULT_BREAKER, atMs: noon, attemptsThisRun });
+	const runner = (attemptsThisRun: number): PairRules => ({ attemptCeiling: DEFAULT_BREAKER.attemptCeiling, requeue: { policy: DEFAULT_BREAKER, atMs: noon, attemptsThisRun } });
 
 	it("keeps a pair whose two arms are valid at the same attempt", () => {
 		expect(nextPairAction(2, [valid, valid], runner(2))).toEqual({ kind: "keep" });
@@ -1225,6 +1226,20 @@ describe("nextPairAction", () => {
 				kind: "blocked", reason: "attempt 1: an arm is invalid for a non-infrastructure reason; it stays invalid",
 			});
 		}
+	});
+
+	// Without a ceiling an auto-resumer could re-run one pair forever. At K the
+	// pair is abandoned for the runner and for planResume alike, so the loop ends.
+	it("abandons a pair still failing at the attempt ceiling, with or without a requeue context", () => {
+		expect(nextPairAction(15, [dropped, valid], runner(1))).toMatchObject({ kind: "rerun", attempt: 16 });
+		const atCeiling = nextPairAction(16, [dropped, valid], runner(1));
+		expect(atCeiling.kind).toBe("abandoned");
+		expect(atCeiling.kind === "abandoned" ? atCeiling.reason : "").toMatch(/16 is the attempt ceiling of 16, so the pair is abandoned and the grid cannot approve$/);
+		expect(nextPairAction(16, [valid, undefined], { attemptCeiling: 16 }).kind).toBe("abandoned");
+		// The ceiling decides before the per-runner cap, and never touches a kept or blocked pair.
+		expect(nextPairAction(16, [dropped, valid], runner(4)).kind).toBe("abandoned");
+		expect(nextPairAction(16, [valid, valid], runner(1)).kind).toBe("keep");
+		expect(nextPairAction(16, [broken, valid], runner(1)).kind).toBe("blocked");
 	});
 
 	// planResume asks without a context: the resume is itself the decision to

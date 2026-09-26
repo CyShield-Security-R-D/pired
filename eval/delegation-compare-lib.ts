@@ -1226,11 +1226,19 @@ export interface BreakerPolicy {
 	cooldownMs: number;
 	/** The most attempts one runner makes at a pair; past it only a --resume re-runs the pair. */
 	maxAttempts: number;
+	/**
+	 * K: the highest attempt number a pair may reach, across every resume. A pair
+	 * still failing at K is abandoned, and an official grid holding one cannot
+	 * approve. Without it an auto-resumer could re-run one pair forever. 16
+	 * because v5c Luna's worst pair needed 14 attempts; a ceiling of 4 would have
+	 * abandoned 7 of its 15 pairs.
+	 */
+	attemptCeiling: number;
 }
 
-export const DEFAULT_BREAKER: Readonly<BreakerPolicy> = { consecutive: 3, rate: 0.5, window: 8, cooldownMs: 60_000, maxAttempts: 4 };
+export const DEFAULT_BREAKER: Readonly<BreakerPolicy> = { consecutive: 3, rate: 0.5, window: 8, cooldownMs: 60_000, maxAttempts: 4, attemptCeiling: 16 };
 
-const BREAKER_FIELDS = ["consecutive", "rate", "window", "cooldownMs", "maxAttempts"] as const;
+const BREAKER_FIELDS = ["consecutive", "rate", "window", "cooldownMs", "maxAttempts", "attemptCeiling"] as const;
 
 /**
  * Validate a breaker policy read back from a manifest or built from the command
@@ -1254,6 +1262,7 @@ export function parseBreakerPolicy(value: unknown): BreakerPolicy {
 		window: field("window", whole(1), "an integer of at least 1"),
 		cooldownMs: field("cooldownMs", whole(0), "a non-negative integer of milliseconds"),
 		maxAttempts: field("maxAttempts", whole(1), "an integer of at least 1"),
+		attemptCeiling: field("attemptCeiling", whole(1), "an integer of at least 1"),
 	};
 }
 
@@ -1327,7 +1336,16 @@ export type PairAction =
 	| { kind: "keep" }
 	| { kind: "blocked"; reason: string }
 	| { kind: "rerun"; attempt: number; notBeforeMs: number; reason: string }
-	| { kind: "give-up"; reason: string };
+	| { kind: "give-up"; reason: string }
+	| { kind: "abandoned"; reason: string };
+
+/** The rules a grid with a breaker adds to the pairing rule. */
+export interface PairRules {
+	/** K, the policy's attemptCeiling. Absent for a grid without a breaker, which has no ceiling. */
+	attemptCeiling?: number;
+	/** The runner's own re-queue. Absent for planResume. */
+	requeue?: RequeueContext;
+}
 
 /** What a runner that re-queues pairs itself adds: its policy, the time, and how often it has launched this pair. */
 export interface RequeueContext {
@@ -1349,12 +1367,14 @@ export interface RequeueContext {
  *   re-run: that would chase a candidate defect with more tokens, and select
  *   the arm by its survival.
  * - An arm missing, or invalid for an infrastructure reason, re-runs the pair
- *   at attempt + 1. With a requeue context it first waits cooldownMs × the
- *   runner's attempt count, and stops at maxAttempts: in v5 one pair took 14
- *   attempts, and a pair that keeps failing while the rest of the grid passes
- *   is a question for the operator, answered by a --resume.
+ *   at attempt + 1, unless the attempt is already the ceiling K: then the pair
+ *   is abandoned, for planResume and the runner alike, so an auto-resume loop
+ *   ends. With a requeue context the runner first waits cooldownMs × its own
+ *   attempt count, and gives up at maxAttempts, leaving the pair for --resume:
+ *   in v5 one pair took 14 attempts, and a pair that keeps failing while the
+ *   rest of the grid passes is a question for the operator.
  */
-export function nextPairAction(attempt: number, arms: ReadonlyArray<ArmResult | undefined>, requeue?: RequeueContext): PairAction {
+export function nextPairAction(attempt: number, arms: ReadonlyArray<ArmResult | undefined>, rules: PairRules = {}): PairAction {
 	if (arms.some((r) => r && !r.valid && !r.infra)) {
 		return { kind: "blocked", reason: `attempt ${attempt}: an arm is invalid for a non-infrastructure reason; it stays invalid` };
 	}
@@ -1363,6 +1383,10 @@ export function nextPairAction(attempt: number, arms: ReadonlyArray<ArmResult | 
 	const reason = missing
 		? (attempt === 0 ? "the pair has no run yet" : `attempt ${attempt}: an arm has no run at that attempt`)
 		: `attempt ${attempt}: an arm failed for an infrastructure reason`;
+	if (rules.attemptCeiling !== undefined && attempt >= rules.attemptCeiling) {
+		return { kind: "abandoned", reason: `${reason}; ${attempt} is the attempt ceiling of ${rules.attemptCeiling}, so the pair is abandoned and the grid cannot approve` };
+	}
+	const { requeue } = rules;
 	if (!requeue) return { kind: "rerun", attempt: attempt + 1, notBeforeMs: 0, reason };
 	if (requeue.attemptsThisRun >= requeue.policy.maxAttempts) {
 		return { kind: "give-up", reason: `${reason}; this runner has launched it ${requeue.attemptsThisRun} time(s), the cap of ${requeue.policy.maxAttempts}, so only a --resume re-runs it` };

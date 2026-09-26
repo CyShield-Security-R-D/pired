@@ -322,7 +322,8 @@ Options:
   --auth-horizon-hours <h>
                         How long the provider's OAuth token must stay valid
                         (default: the grid's worst case, passes x
-                        ceil(targets/concurrency) x 2 arms x timeout, capped at
+                        ceil(targets/concurrency) x 2 arms x timeout, and with
+                        --breaker x maxAttempts plus the cooldowns, capped at
                         ${AUTH_HORIZON_CAP_MS / 3_600_000} h, plus ${AUTH_MARGIN_MS / 60_000} min)
   --candidate-max-agents <n>
                         Worker cap the candidate's scope states; the
@@ -331,8 +332,10 @@ Options:
                         run, and re-queue pairs that fail for infrastructure.
                         <spec> is "default", or comma-separated k=v pairs
                         over the defaults: consecutive=${DEFAULT_BREAKER.consecutive} rate=${DEFAULT_BREAKER.rate}
-                        window=${DEFAULT_BREAKER.window} cooldownMs=${DEFAULT_BREAKER.cooldownMs} maxAttempts=${DEFAULT_BREAKER.maxAttempts}.
-                        Pinned in the manifest; off unless given
+                        window=${DEFAULT_BREAKER.window} cooldownMs=${DEFAULT_BREAKER.cooldownMs} maxAttempts=${DEFAULT_BREAKER.maxAttempts}
+                        attemptCeiling=${DEFAULT_BREAKER.attemptCeiling}. Pinned in the manifest; off
+                        unless given. It lengthens the worst case the
+                        OAuth check sizes (see --auth-horizon-hours)
   --out <dir>           New or empty directory; must not contain an advisory ID
   --resume <out-dir>    Continue a stopped grid in place; takes no other option
   --dry-run             Run the preflight only, with no model calls
@@ -425,7 +428,10 @@ run of an official grid, and otherwise after <consecutive> launched runs fail in
 a row, or when at least a <rate> share of the last <window> launched runs failed
 (read once that many are in), counting every failure, infrastructure or not; a
 valid run ends the streak.
-A pair still counts only when both arms are valid at the same attempt.
+A pair still counts only when both arms are valid at the same attempt. A pair
+still failing at attempt <attemptCeiling>, counted across resumes, is abandoned:
+no resume re-runs it, the grid cannot approve, and an official grid stops, and
+its resume is refused, as for a blocked pair.
 SIGINT/SIGTERM/SIGHUP stops new launches, terminates only process groups and
 scopes this runner started (a second signal kills them), reaps their strays,
 records each arm it stopped as a runner interruption (infrastructure, re-run by
@@ -2962,6 +2968,8 @@ export interface ResumePlan {
 	blockedKeys: string[];
 	/** Pair keys whose two arms are both valid at the pair's highest attempt; those records are carried unchanged. */
 	keepKeys: string[];
+	/** Pair keys still failing at the breaker's attempt ceiling. Never re-run; the grid cannot approve. Always empty without a ceiling. */
+	abandonedKeys: string[];
 	/** The attempt number the next run of a rerun pair gets. */
 	nextAttempt: Record<string, number>;
 	/** `${pairKey}\u0000${arm}` -> that arm's record at its pair's highest attempt (absent when the arm has none there). */
@@ -2983,7 +2991,7 @@ export interface ResumePlan {
  * the next attempt. Two rows for one arm at one attempt resolve to the last line
  * written. Pure: takes the schedule and the run records, touches no disk.
  */
-export function planResume(pairs: ScheduledPair[], runs: JsonRecord[]): ResumePlan {
+export function planResume(pairs: ScheduledPair[], runs: JsonRecord[], attemptCeiling?: number): ResumePlan {
 	const maxAttempt: Record<string, number> = {};
 	const rows: Array<{ key: string; arm: Arm; attempt: number; run: JsonRecord }> = [];
 	for (const run of runs) {
@@ -2996,18 +3004,22 @@ export function planResume(pairs: ScheduledPair[], runs: JsonRecord[]): ResumePl
 	}
 	const latest: Record<string, JsonRecord> = {};
 	for (const row of rows) if (row.attempt === maxAttempt[row.key]) latest[`${row.key}\u0000${row.arm}`] = row.run;
-	const plan: ResumePlan = { rerunKeys: [], blockedKeys: [], keepKeys: [], nextAttempt: {}, latest, reasons: {} };
+	const plan: ResumePlan = { rerunKeys: [], blockedKeys: [], keepKeys: [], abandonedKeys: [], nextAttempt: {}, latest, reasons: {} };
 	for (const pair of pairs) {
 		const arms = (["baseline", "candidate"] as const).map((arm) => latest[`${pair.key}\u0000${arm}`])
 			.map((r) => r && { valid: r.valid === true, infra: r.infraFailure === true });
 		const attempt = maxAttempt[pair.key] ?? 0;
 		// No requeue context: a resume is the operator's decision to spend more on
 		// the pair, so it waits no cooldown and applies no per-runner attempt cap.
-		const action = nextPairAction(attempt, arms);
+		// The ceiling does apply, or an auto-resumer could re-run a pair forever.
+		const action = nextPairAction(attempt, arms, attemptCeiling === undefined ? {} : { attemptCeiling });
 		if (action.kind === "keep") {
 			plan.keepKeys.push(pair.key);
 		} else if (action.kind === "blocked") {
 			plan.blockedKeys.push(pair.key);
+			plan.reasons[pair.key] = action.reason;
+		} else if (action.kind === "abandoned") {
+			plan.abandonedKeys.push(pair.key);
 			plan.reasons[pair.key] = action.reason;
 		} else {
 			plan.rerunKeys.push(pair.key);
@@ -3361,10 +3373,11 @@ async function driveGrid(options: Options, manifest: JsonRecord, resume: ResumeI
 			gridFinished = true;
 			return;
 		}
-		const plan = resume ? planResume(planSchedule(pre.targets.map((t) => t.id), options.passes), resume.priorRuns) : undefined;
+		const plan = resume ? planResume(planSchedule(pre.targets.map((t) => t.id), options.passes), resume.priorRuns, options.breaker?.attemptCeiling) : undefined;
 		if (plan && resume) {
-			console.log(`resume: ${plan.rerunKeys.length} pair(s) to re-run, ${plan.keepKeys.length} kept, ${plan.blockedKeys.length} blocked (invalid, non-infra)`);
+			console.log(`resume: ${plan.rerunKeys.length} pair(s) to re-run, ${plan.keepKeys.length} kept, ${plan.blockedKeys.length} blocked (invalid, non-infra)${options.breaker ? `, ${plan.abandonedKeys.length} abandoned (attempt ceiling ${options.breaker.attemptCeiling})` : ""}`);
 			for (const key of plan.blockedKeys) console.log(`  blocked ${key}: ${plan.reasons[key] ?? ""}`);
+			for (const key of plan.abandonedKeys) console.log(`  abandoned ${key}: ${plan.reasons[key] ?? ""}`);
 			// A blocked pair already fixes an official grid's decision at
 			// incomplete_or_invalid; fail-fast only watched new outcomes, so a resume
 			// used to spend every remaining pair (up to ~50 two-hour sessions) anyway.
@@ -3373,17 +3386,24 @@ async function driveGrid(options: Options, manifest: JsonRecord, resume: ResumeI
 					`--resume refused: ${plan.blockedKeys.length} pair(s) of this official grid are invalid for a non-infrastructure reason (${plan.blockedKeys.map((k) => `${k}: ${plan.reasons[k] ?? ""}`).join("; ")}), so its decision is already incomplete_or_invalid and launching the remaining pairs would spend tokens on a fixed outcome.`,
 					{ blocked: plan.blockedKeys });
 			}
-			manifest.resumeDecision = { status: "accepted", rerun: plan.rerunKeys, kept: plan.keepKeys, blocked: plan.blockedKeys };
+			// An abandoned pair fixes the decision the same way, and refusing is what
+			// ends an auto-resume loop that would otherwise re-run it forever.
+			if (plan.abandonedKeys.length && pre.official) {
+				await refuseResume(manifest, saveManifest,
+					`--resume refused: ${plan.abandonedKeys.length} pair(s) of this official grid reached the attempt ceiling (${plan.abandonedKeys.map((k) => `${k}: ${plan.reasons[k] ?? ""}`).join("; ")}), so its decision is already incomplete_or_invalid.`,
+					{ abandoned: plan.abandonedKeys });
+			}
+			manifest.resumeDecision = { status: "accepted", rerun: plan.rerunKeys, kept: plan.keepKeys, blocked: plan.blockedKeys, ...(options.breaker ? { abandoned: plan.abandonedKeys } : {}) };
 			await saveManifest();
-			await reportStatus({ status: "accepted", rerun: plan.rerunKeys.length, kept: plan.keepKeys.length, blocked: plan.blockedKeys.length });
+			await reportStatus({ status: "accepted", rerun: plan.rerunKeys.length, kept: plan.keepKeys.length, blocked: plan.blockedKeys.length, ...(options.breaker ? { abandoned: plan.abandonedKeys.length } : {}) });
 			await appendJsonl(join(output, "resumes.jsonl"), {
 				n: resume.n, id: manifest.id, manifest: relative(output, paths.manifestPath), acceptedAt: new Date().toISOString(),
-				rerun: plan.rerunKeys, kept: plan.keepKeys, blocked: plan.blockedKeys,
+				rerun: plan.rerunKeys, kept: plan.keepKeys, blocked: plan.blockedKeys, ...(options.breaker ? { abandoned: plan.abandonedKeys } : {}),
 			});
 			// Accepted: from here the resume is the grid's runner and reports in progress.json.
 			statusFile.path = join(output, "progress.json");
 		}
-		await runGrid(pre, options, manifest, plan);
+		await runGrid(pre, options, manifest, plan, resume?.priorRuns ?? []);
 		gridFinished = true;
 	} finally {
 		stopHeartbeat();
@@ -3432,6 +3452,60 @@ export function atHighestAttempt<T extends { metric: { key: string }; record: Js
 	return outcomes.filter((o) => attemptOf(o) === top.get(o.metric.key));
 }
 
+/** One arm's run at one attempt, as the attempt report shows it. */
+export type AttemptArm = { launched: boolean; valid: boolean; infra: boolean; reason: string | null; seconds: number | null; tokens: number | null };
+
+export interface AttemptReport {
+	/** Each pair's highest attempt over the grid's rows. */
+	attemptsByPair: Record<string, number>;
+	/** Launched runs invalid for infrastructure, per arm, by infraReason. A partner that was not launched is not counted. */
+	launchedInfraFailures: Record<Arm, Record<string, number>>;
+	/** Every attempt of each abandoned pair, per arm; null where the arm has no row at that attempt. */
+	abandoned: Array<{ key: string; attempts: Array<{ attempt: number; baseline: AttemptArm | null; candidate: AttemptArm | null }> }>;
+}
+
+/**
+ * What a grid with a breaker spent on attempts, from every row it has written
+ * (a resume passes the rows of the runners before it). The per-arm failure
+ * counts are reported, not assumed: which arm drops more has differed by grid
+ * (launched infrastructure failures, baseline/candidate: 31/16 on v5c Luna,
+ * 22/8 on v5 GLM, 10/14 on cc GLM). An abandoned pair lists each attempt, so
+ * the reason a pair never counted can be read without opening runs.jsonl.
+ */
+export function attemptReport(rows: JsonRecord[], abandonedKeys: string[]): AttemptReport {
+	const attemptOf = (r: JsonRecord): number => typeof r.attempt === "number" ? r.attempt : 1;
+	const armOf = (r: JsonRecord): Arm | undefined => r.arm === "baseline" || r.arm === "candidate" ? r.arm : undefined;
+	const report: AttemptReport = { attemptsByPair: {}, launchedInfraFailures: { baseline: {}, candidate: {} }, abandoned: [] };
+	for (const r of rows) {
+		if (typeof r.key !== "string") continue;
+		report.attemptsByPair[r.key] = Math.max(report.attemptsByPair[r.key] ?? 0, attemptOf(r));
+		const arm = armOf(r);
+		if (arm && r.notLaunched !== true && r.valid !== true && r.infraFailure === true) {
+			const reason = typeof r.infraReason === "string" && r.infraReason ? r.infraReason : "unstated";
+			report.launchedInfraFailures[arm][reason] = (report.launchedInfraFailures[arm][reason] ?? 0) + 1;
+		}
+	}
+	const armRow = (r: JsonRecord): AttemptArm => ({
+		launched: r.notLaunched !== true, valid: r.valid === true, infra: r.infraFailure === true,
+		reason: r.valid === true ? null : typeof r.infraReason === "string" && r.infraReason ? r.infraReason : Array.isArray(r.errors) && r.errors.length ? String(r.errors[0]) : null,
+		seconds: typeof r.seconds === "number" ? r.seconds : null,
+		tokens: typeof r.totalTokens === "number" ? r.totalTokens : null,
+	});
+	for (const key of abandonedKeys) {
+		const byAttempt = new Map<number, { baseline: AttemptArm | null; candidate: AttemptArm | null }>();
+		for (const r of rows) {
+			const arm = armOf(r);
+			if (r.key !== key || !arm) continue;
+			const slot = byAttempt.get(attemptOf(r)) ?? { baseline: null, candidate: null };
+			// Two rows for one arm at one attempt resolve to the last written, as in planResume.
+			slot[arm] = armRow(r);
+			byAttempt.set(attemptOf(r), slot);
+		}
+		report.abandoned.push({ key, attempts: [...byAttempt.entries()].sort(([a], [b]) => a - b).map(([attempt, arms]) => ({ attempt, ...arms })) });
+	}
+	return report;
+}
+
 /** The record of an arm whose launch threw inside the runner: a harness fault, never infrastructure. */
 function runnerFaultOutcome(pair: ScheduledPair, arm: Arm, attempt: number, error: unknown): RunOutcome {
 	const record: JsonRecord = { key: pair.key, target: pair.target, pass: pair.pass, arm, attempt, valid: false, infraFailure: false, errors: [`runner fault: ${message(error)}`] };
@@ -3474,6 +3548,10 @@ export interface PairLoopResult {
 	breaker: BreakerVerdict | null;
 	requeued: Array<{ key: string; attempt: number; notBefore: string; reason: string }>;
 	gaveUp: Array<{ key: string; attempt: number; reason: string }>;
+	/** Pairs this runner saw end blocked; in an exploratory grid the breaker lets the grid go on past them. */
+	blocked: Array<{ key: string; attempt: number; reason: string }>;
+	/** Pairs that failed at the attempt ceiling. */
+	abandoned: Array<{ key: string; attempt: number; reason: string }>;
 }
 
 /** The longest an idle pair-worker sleeps before it looks again, so a signal or a trip is seen within a second while it waits out a cooldown. */
@@ -3499,7 +3577,7 @@ export async function runPairs(loop: PairLoop): Promise<PairLoopResult> {
 	const { state } = loop;
 	const policy = loop.breaker;
 	const breaker = policy ? createBreaker(policy) : undefined;
-	const result: PairLoopResult = { breaker: null, requeued: [], gaveUp: [] };
+	const result: PairLoopResult = { breaker: null, requeued: [], gaveUp: [], blocked: [], abandoned: [] };
 	type Queued = { pair: ScheduledPair; attempt: number; firstAttempt: number; notBeforeMs: number };
 	const queue: Queued[] = loop.pairs.map((pair) => {
 		const attempt = loop.firstAttempt(pair);
@@ -3576,18 +3654,30 @@ export async function runPairs(loop: PairLoop): Promise<PairLoopResult> {
 				loop.warn(`bookkeeping failure for ${pair.target} pass ${pair.pass} ${arm}: ${message(error)}`);
 			}
 		}
-		// A stopped grid re-queues nothing: its resume re-runs the pair from runs.jsonl.
-		if (!policy || state.aborted || state.stopInvalid) return;
+		// A signal leaves the pair as it is; its resume decides from runs.jsonl.
+		if (!policy || state.aborted) return;
 		const now = loop.nowMs();
 		const arms = [byArm.baseline, byArm.candidate].map((o) => o && { valid: o.metric.valid, infra: o.infraFailure });
-		const action = nextPairAction(attempt, arms, { policy, atMs: now, attemptsThisRun: attempt - firstAttempt + 1 });
-		if (action.kind === "rerun") {
-			queue.push({ pair, attempt: action.attempt, firstAttempt, notBeforeMs: action.notBeforeMs });
-			result.requeued.push({ key: pair.key, attempt: action.attempt, notBefore: new Date(action.notBeforeMs).toISOString(), reason: action.reason });
-			loop.log(`RE-QUEUED ${pair.target} pass ${pair.pass} as attempt ${action.attempt} after a ${Math.round((action.notBeforeMs - now) / 1000)} s cooldown · ${action.reason}`);
+		const action = nextPairAction(attempt, arms, { attemptCeiling: policy.attemptCeiling, requeue: { policy, atMs: now, attemptsThisRun: attempt - firstAttempt + 1 } });
+		if (action.kind === "blocked") {
+			result.blocked.push({ key: pair.key, attempt, reason: action.reason });
+		} else if (action.kind === "abandoned") {
+			result.abandoned.push({ key: pair.key, attempt, reason: action.reason });
+			loop.log(`ABANDONED ${pair.target} pass ${pair.pass} · ${action.reason}`);
+			// Like a blocked run, an abandoned pair fixes an official grid's decision,
+			// so the pairs after it would spend tokens on a known outcome.
+			if (loop.official && !state.stopInvalid) {
+				state.stopInvalid = true;
+				state.stopReason = `${pair.key} failed at the attempt ceiling of ${policy.attemptCeiling}, so this official grid's decision is already incomplete_or_invalid`;
+			}
 		} else if (action.kind === "give-up") {
 			result.gaveUp.push({ key: pair.key, attempt, reason: action.reason });
 			loop.log(`ATTEMPT CAP ${pair.target} pass ${pair.pass} · ${action.reason}`);
+		} else if (action.kind === "rerun" && !state.stopInvalid) {
+			// A stopped grid re-queues nothing: its resume re-runs the pair from runs.jsonl.
+			queue.push({ pair, attempt: action.attempt, firstAttempt, notBeforeMs: action.notBeforeMs });
+			result.requeued.push({ key: pair.key, attempt: action.attempt, notBefore: new Date(action.notBeforeMs).toISOString(), reason: action.reason });
+			loop.log(`RE-QUEUED ${pair.target} pass ${pair.pass} as attempt ${action.attempt} after a ${Math.round((action.notBeforeMs - now) / 1000)} s cooldown · ${action.reason}`);
 		}
 	};
 	const worker = async (): Promise<void> => {
@@ -3609,7 +3699,7 @@ export async function runPairs(loop: PairLoop): Promise<PairLoopResult> {
 	return result;
 }
 
-async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, plan: ResumePlan | undefined): Promise<void> {
+async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, plan: ResumePlan | undefined, priorRuns: JsonRecord[]): Promise<void> {
 	const { ctx, expectedCells, official } = pre;
 	const output = ctx.out;
 	const targetById = new Map(pre.targets.map((t) => [t.id, t]));
@@ -3630,9 +3720,14 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 		}
 	}
 	const launchPairs = plan ? pairs.filter((p) => plan.rerunKeys.includes(p.key)) : pairs;
+	// The rows this runner appends to runs.jsonl, every attempt included.
+	const fresh: JsonRecord[] = [];
 	// reportStatus keeps the last record, so the heartbeat rewrites this same state.
+	// completedRuns counts arms at their pair's highest attempt, so a grid that
+	// re-queued never reads as more than complete; attempts counts every row.
 	const progress = (status: string, extra: JsonRecord = {}): Promise<void> => reportStatus({
-		status, official, expectedArms, completedRuns: outcomes.length, ...extra,
+		status, official, expectedArms, completedRuns: atHighestAttempt(outcomes).length,
+		...(options.breaker ? { attempts: fresh.length } : {}), ...extra,
 	});
 	await progress("running");
 	const loop = await runPairs({
@@ -3644,6 +3739,7 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 		launch: (pair, arm, attempt) => runOne(ctx, targetById.get(pair.target)!, pair.pass, arm, attempt),
 		settle: async (outcome) => {
 			outcomes.push(outcome);
+			fresh.push(outcome.record);
 			await appendJsonl(join(output, "runs.jsonl"), outcome.record);
 		},
 		report: async (outcome, pair, arm, attempt) => {
@@ -3660,6 +3756,7 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 	});
 	const interrupted = runState.aborted;
 	const stoppedInvalid = runState.stopInvalid;
+	const abandonedKeys = [...new Set([...(plan?.abandonedKeys ?? []), ...loop.abandoned.map((a) => a.key)])];
 	const compared = atHighestAttempt(outcomes);
 	const comparison = compareMatchedRuns(
 		compared.filter((o) => o.arm === "baseline").map((o) => o.metric),
@@ -3683,6 +3780,7 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 		...(stoppedInvalid && !interrupted ? [`stopped early: ${runState.stopReason ?? "an invalid run"}`] : []),
 		...(runState.quotaExhausted ? [`provider quota exhausted (${runState.quotaExhausted}); it must reset before --resume`] : []),
 		...(loop.gaveUp.length ? [`${loop.gaveUp.length} pair(s) reached the attempt cap (${loop.gaveUp.map((g) => g.key).join(", ")}); --resume re-runs them`] : []),
+		...(abandonedKeys.length ? [`${abandonedKeys.length} pair(s) abandoned at the attempt ceiling (${abandonedKeys.join(", ")}); no resume re-runs them`] : []),
 		...(!runtimeStable ? ["the pi runtime changed during the grid"] : []),
 		...(!comparison.complete ? [`grid incomplete or invalid: ${comparison.missingOrInvalid.slice(0, 4).join("; ") || "missing pairs"}`] : []),
 		...(comparison.complete && comparison.decision !== APPROVAL ? [`comparison decision: ${comparison.decision}`] : []),
@@ -3697,7 +3795,12 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 		stoppedInvalid, stopReason: runState.stopReason ?? null, quotaExhausted: runState.quotaExhausted ?? null, runtimeStable,
 		// Only a grid run with --breaker has this block, so a fail-fast grid's summary is what it always was.
 		...(options.breaker === undefined ? {} : {
-			breaker: { policy: options.breaker, tripped: loop.breaker?.tripped ?? false, reason: loop.breaker?.reason ?? null, requeued: loop.requeued, gaveUp: loop.gaveUp },
+			breaker: {
+				policy: options.breaker, tripped: loop.breaker?.tripped ?? false, reason: loop.breaker?.reason ?? null,
+				requeued: loop.requeued, gaveUp: loop.gaveUp,
+				blocked: [...(plan?.blockedKeys ?? []).map((key) => ({ key, reason: plan?.reasons[key] ?? null })), ...loop.blocked],
+				...attemptReport([...priorRuns, ...fresh], abandonedKeys),
+			},
 		}),
 		completeRunGrid: comparison.complete,
 		// One grid measures one model; acceptance needs both priority models. This
@@ -3728,6 +3831,7 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 	if (stoppedInvalid && !interrupted) console.log(`STOPPED EARLY — ${runState.stopReason ?? "an invalid run"}`);
 	if (runState.quotaExhausted) console.log(`QUOTA EXHAUSTED — wait for the reset, then: node --experimental-strip-types eval/delegation-compare.ts --resume ${output}`);
 	if (loop.gaveUp.length) console.log(`ATTEMPT CAP — ${loop.gaveUp.length} pair(s) left for --resume: ${loop.gaveUp.map((g) => g.key).join(", ")}`);
+	if (abandonedKeys.length) console.log(`ABANDONED — ${abandonedKeys.length} pair(s) failed at the attempt ceiling and will not be re-run: ${abandonedKeys.join(", ")}`);
 	console.log(`pass-mean TP ${comparison.baseline.truePositives.mean.toFixed(2)} → ${comparison.candidate.truePositives.mean.toFixed(2)}; precision ${comparison.baseline.precision.mean.toFixed(3)} → ${comparison.candidate.precision.mean.toFixed(3)}`);
 	const fmt = (x: number | null) => x === null ? "n/a" : x.toFixed(3);
 	// A stopped or partial grid is not evaluated, which is not the same as failed:
