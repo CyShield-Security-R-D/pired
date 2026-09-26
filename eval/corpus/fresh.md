@@ -145,8 +145,92 @@ different pool, and so a different draw. `materialise` writes `<corpus>/<name>.p
 commit as a plain tree with history and release notes stripped under every credited advisory's ids,
 which is what the runner copies from. The manifests use the official `PLACEHOLDER/corpus` paths.
 
+## Results
+
+*Added after the draw (`63fe54a`) and the truth step. Nothing above this heading was changed by them.*
+
+### Counts at each filter
+
+| filter (whole pool) | advisories | repositories |
+|---|---:|---:|
+| pool: CVE record with a FIX-typed GitHub commit | 23,279 | 6,642 |
+| fix commits in one repository | 23,088 | 6,479 |
+| exactly one fix commit | 20,178 | 6,086 |
+| publication date recorded | 20,178 | 6,086 |
+| repository not excluded | 16,115 | 5,342 |
+| published on or after 2026-01-01 | 6,387 | 2,107 |
+
+The walk examined 345 of the 2,107 candidate repositories, trying 571 advisories. Advisories that
+failed, by the first rule they failed:
+
+| rule | failed |
+|---|---:|
+| source obtainable at the parent commit | 1 |
+| size within the official range | 459 |
+| served application | 83 |
+| language in the scorer's list | 2 |
+| labellable fix | 1 |
+| fix not diffuse | 9 |
+| labels survive leak stripping | 0 |
+
+16 repositories were eligible: 12 admitted, 2 skipped because JavaScript/TypeScript already held 6
+places, 2 admitted as controls, both on their first candidate. Size is the filter that matters: the
+pool is dominated by projects far larger (or smaller) than the official targets.
+
+**Date rule:** 16 eligible of 345 examined, Wilson 95% lower bound 2.87%, times 2,107 candidates
+gives an estimated 60 eligible repositories against the 42 required. The cutoff held, so every
+drawn advisory was published in 2026 (January 1, February 1, April 1, May 2, June 1, July 2, August
+1, September 3; controls March and September). All 6,387 candidates after the cutoff are from 2026.
+
+### Drawn targets
+
+| name | repository | advisory | language | CWE | published | loc | labels | advisories | classed |
+|---|---|---|---|---|---|---:|---:|---:|---|
+| Quenary_tugtainer-f4dh8w | Quenary/tugtainer | CVE-2026-23846 | Python | CWE-598 | 2026-01-19 | 10,054 | 2 | 1 | yes |
+| wooey_Wooey-rzhxdt | wooey/Wooey | CVE-2026-7142 | Python | CWE-266, CWE-285 | 2026-04-27 | 7,642 | 1 | 1 | yes |
+| go-shiori_shiori-f6jaq5 | go-shiori/shiori | CVE-2026-61463 | JavaScript/TypeScript | CWE-269 | 2026-07-13 | 30,565 | 1 | 1 | yes |
+| geopython_pygeoapi-f5gbrd | geopython/pygeoapi | CVE-2026-42352 | Python | CWE-918 | 2026-05-08 | 32,155 | 9 | 1 | yes |
+| juice-shop_multi-juicer-f5k72n | juice-shop/multi-juicer | CVE-2026-48518 | JavaScript/TypeScript | CWE-352 | 2026-06-15 | 13,572 | 4 | 1 | yes |
+| argos-ci_argos-javascript-f64pqe | argos-ci/argos-javascript | CVE-2026-59960 | JavaScript/TypeScript | CWE-78 | 2026-09-14 | 13,166 | 5 | 1 | yes |
+| vmDeshpande_ai-agent-automation-f61fpx | vmDeshpande/ai-agent-automation | CVE-2026-54519 | JavaScript/TypeScript | CWE-862 | 2026-09-17 | 23,644 | 15 | 2 | yes |
+| hyperledger_fabric-ca-f60tki | hyperledger/fabric-ca | CVE-2026-53658 | Go | CWE-90 | 2026-09-15 | 35,397 | 5 | 1 | yes |
+| hitarth-gg_zenshin-f4zpfi | hitarth-gg/zenshin | CVE-2026-37281 | JavaScript/TypeScript | — | 2026-05-19 | 19,411 | 9 | 1 | no |
+| feathersjs_feathers-f4fw4b | feathersjs/feathers | CVE-2026-27191 | JavaScript/TypeScript | CWE-601 | 2026-02-21 | 15,246 | 4 | 2 | yes |
+| zhenorzz_goploy-f60sto | zhenorzz/goploy | CVE-2026-53553 | Go | CWE-200, CWE-22 | 2026-08-31 | 24,931 | 9 | 1 | yes |
+| vastsa_FileCodeBox-f6l91z | vastsa/FileCodeBox | CVE-2026-64619 | Python | CWE-348 | 2026-07-20 | 5,899 | 9 | 1 | yes |
+
+Languages: JavaScript/TypeScript 6 (the cap), Python 4, Go 2. "loc" is `scope_loc` at the reviewed
+commit; the scope is the whole tree, as for the official targets.
+
+**Clean-code controls** (fixed tree reviewed, empty truth, fixed regions in `controls.json`):
+
+| name | repository | advisory | language | CWE | published | loc | fixed regions |
+|---|---|---|---|---|---|---:|---:|
+| mesop-dev_mesop-f87yds | mesop-dev/mesop | CVE-2026-93421 | Python | CWE-117, CWE-150 | 2026-09-23 | 28,801 | 2 |
+| toxicbishop_DSA-with-tsx-f4gmrs | toxicbishop/DSA-with-tsx | CVE-2026-28678 | JavaScript/TypeScript | CWE-311, CWE-522 | 2026-03-07 | 10,060 | 7 |
+
+### Truth
+
+Derived for all 12 targets by rule, with no per-target judgement: **73 labels** (the official five
+carry 24). Every label is 31 lines or fewer — the widest is 20, the median 1 — and none needed
+capping; a structural check found every label inside its file at the reviewed commit. 11 targets are
+classed; `zenshin` is classless because its advisory has no CWE. Two targets gained labels from a
+second advisory still open in the reviewed tree (`ai-agent-automation`, `feathers`), and `feathers`
+shares its fix commit with two further advisories. One open advisory of `FileCodeBox` was dropped:
+its fix yields 18 labels (diffuse), 4 of which had also changed since the reviewed tree. Building
+all 14 trees with `materialise` stripped 0 to 28 leak files per tree and lost no labelled file.
+
+After the draw, one line of the truth step was corrected to match the pre-registered text: the
+12-label bound on another open advisory now counts what its fix yields, not what survives mapping.
+Rerun, the truth files are byte-identical; only the reason recorded in `labels.json` changed.
+
 ## Limitations
 
+- **What the application rule admitted.** Read after the draw: `feathers` and the control `mesop`
+  are frameworks for building web applications rather than applications deployed as they are, and
+  `shiori`, a Go application, counts as JavaScript/TypeScript because its frontend has more lines.
+  The heuristic admits them and the no-re-draw rule keeps them. A stricter rule would be a variant,
+  logged beside this draw.
 - **Training data.** Publication after a model's training cutoff makes it less likely the fix was
   seen, and none of the three v6 models publishes its cutoff. The date rule reduces the risk; it does
   not remove it. The network seal stops retrieval over the wire, not from weights.

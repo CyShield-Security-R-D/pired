@@ -1,0 +1,334 @@
+[
+  {
+    "id": "CVE-2026-23846",
+    "package": "Quenary/tugtainer",
+    "repo": "Quenary/tugtainer",
+    "entries": 2,
+    "scope": [
+      "."
+    ],
+    "cwe": [
+      "CWE-598"
+    ],
+    "severity": "high",
+    "published": "2026-01-19",
+    "fix_commit": "9d23bf40ac1d39005582abfcf0a84753a4e29d52",
+    "scope_files": 167,
+    "scope_loc": 10054,
+    "name": "Quenary_tugtainer-f4dh8w",
+    "reviewed_commit": "896847e53c9ebd4ec520609b5af5abbbb719d05b",
+    "language": "Python",
+    "classed": true,
+    "advisories": [
+      "CVE-2026-23846"
+    ],
+    "aliases": [
+      "GHSA-f2qf-f544-xm4p"
+    ]
+  },
+  {
+    "id": "CVE-2026-7142",
+    "package": "wooey/Wooey",
+    "repo": "wooey/Wooey",
+    "entries": 1,
+    "scope": [
+      "."
+    ],
+    "cwe": [
+      "CWE-266",
+      "CWE-285"
+    ],
+    "severity": "",
+    "published": "2026-04-27",
+    "fix_commit": "f7846fc0c323da8325422cab32623491757f1b88",
+    "scope_files": 112,
+    "scope_loc": 7642,
+    "name": "wooey_Wooey-rzhxdt",
+    "reviewed_commit": "dc457291cf3d976f5cfbc15fce71c95a733d3699",
+    "language": "Python",
+    "classed": true,
+    "advisories": [
+      "CVE-2026-7142"
+    ],
+    "aliases": [
+      "GHSA-w65c-cmxj-qrhm",
+      "PYSEC-2026-3427"
+    ]
+  },
+  {
+    "id": "CVE-2026-61463",
+    "package": "go-shiori/shiori",
+    "repo": "go-shiori/shiori",
+    "entries": 1,
+    "scope": [
+      "."
+    ],
+    "cwe": [
+      "CWE-269"
+    ],
+    "severity": "",
+    "published": "2026-07-13",
+    "fix_commit": "6c8a7dbc11b131609bfda736b14d61c51f9027b2",
+    "scope_files": 138,
+    "scope_loc": 30565,
+    "name": "go-shiori_shiori-f6jaq5",
+    "reviewed_commit": "899b4ee417a99d0b89c85625a265e79c27e82aba",
+    "language": "JavaScript/TypeScript",
+    "classed": true,
+    "advisories": [
+      "CVE-2026-61463"
+    ],
+    "aliases": []
+  },
+  {
+    "id": "CVE-2026-42352",
+    "package": "geopython/pygeoapi",
+    "repo": "geopython/pygeoapi",
+    "entries": 9,
+    "scope": [
+      "."
+    ],
+    "cwe": [
+      "CWE-918"
+    ],
+    "severity": "high",
+    "published": "2026-05-08",
+    "fix_commit": "3a63f5b0cc6275e3ae0edb47726b13a43cdd90ef",
+    "scope_files": 92,
+    "scope_loc": 32155,
+    "name": "geopython_pygeoapi-f5gbrd",
+    "reviewed_commit": "bf25b8695edbdd5476eeffc102b633d1d3e45f52",
+    "language": "Python",
+    "classed": true,
+    "advisories": [
+      "CVE-2026-42352"
+    ],
+    "aliases": [
+      "GHSA-jgvc-94c8-3chc",
+      "PYSEC-2026-2986"
+    ]
+  },
+  {
+    "id": "CVE-2026-48518",
+    "package": "juice-shop/multi-juicer",
+    "repo": "juice-shop/multi-juicer",
+    "entries": 4,
+    "scope": [
+      "."
+    ],
+    "cwe": [
+      "CWE-352"
+    ],
+    "severity": "medium",
+    "published": "2026-06-15",
+    "fix_commit": "75b08c3fdda410781d421bfdf041fb1e913d6b49",
+    "scope_files": 118,
+    "scope_loc": 13572,
+    "name": "juice-shop_multi-juicer-f5k72n",
+    "reviewed_commit": "afff9a3874bc924bca6e04ebe50b4a05e5a0c5e7",
+    "language": "JavaScript/TypeScript",
+    "classed": true,
+    "advisories": [
+      "CVE-2026-48518"
+    ],
+    "aliases": [
+      "GHSA-h759-hf7w-j6m6"
+    ]
+  },
+  {
+    "id": "CVE-2026-59960",
+    "package": "argos-ci/argos-javascript",
+    "repo": "argos-ci/argos-javascript",
+    "entries": 5,
+    "scope": [
+      "."
+    ],
+    "cwe": [
+      "CWE-78"
+    ],
+    "severity": "high",
+    "published": "2026-09-14",
+    "fix_commit": "8355f3af3be3f4fe361d58a688d21535cf672717",
+    "scope_files": 143,
+    "scope_loc": 13166,
+    "name": "argos-ci_argos-javascript-f64pqe",
+    "reviewed_commit": "1787fe78cba46f408493e02114150f2d73f47fa4",
+    "language": "JavaScript/TypeScript",
+    "classed": true,
+    "advisories": [
+      "CVE-2026-59960"
+    ],
+    "aliases": [
+      "GHSA-4x45-gxvp-6283"
+    ]
+  },
+  {
+    "id": "CVE-2026-54519",
+    "package": "vmDeshpande/ai-agent-automation",
+    "repo": "vmDeshpande/ai-agent-automation",
+    "entries": 15,
+    "scope": [
+      "."
+    ],
+    "cwe": [
+      "CWE-862"
+    ],
+    "severity": "high",
+    "published": "2026-09-17",
+    "fix_commit": "96b31c216f6f670e64584f3623c07ac54461e703",
+    "scope_files": 188,
+    "scope_loc": 23644,
+    "name": "vmDeshpande_ai-agent-automation-f61fpx",
+    "reviewed_commit": "a3eae9810ddb2483234c1f95230049cd4b64de62",
+    "language": "JavaScript/TypeScript",
+    "classed": true,
+    "advisories": [
+      "CVE-2026-54519",
+      "CVE-2026-54520"
+    ],
+    "aliases": [
+      "CVE-2026-54520",
+      "GHSA-cm8g-8jfq-887p",
+      "GHSA-qv97-83w4-ff86"
+    ]
+  },
+  {
+    "id": "CVE-2026-53658",
+    "package": "hyperledger/fabric-ca",
+    "repo": "hyperledger/fabric-ca",
+    "entries": 5,
+    "scope": [
+      "."
+    ],
+    "cwe": [
+      "CWE-90"
+    ],
+    "severity": "",
+    "published": "2026-09-15",
+    "fix_commit": "d379df823534d56dec0166a6da8f0415e3beee24",
+    "scope_files": 133,
+    "scope_loc": 35397,
+    "name": "hyperledger_fabric-ca-f60tki",
+    "reviewed_commit": "489a658619140e5332c8e72632037728564a3173",
+    "language": "Go",
+    "classed": true,
+    "advisories": [
+      "CVE-2026-53658"
+    ],
+    "aliases": [
+      "GHSA-xghw-p77p-3r7x",
+      "GO-2026-6234"
+    ]
+  },
+  {
+    "id": "CVE-2026-37281",
+    "package": "hitarth-gg/zenshin",
+    "repo": "hitarth-gg/zenshin",
+    "entries": 9,
+    "scope": [
+      "."
+    ],
+    "cwe": [],
+    "severity": "critical",
+    "published": "2026-05-19",
+    "fix_commit": "7d31c6edfbac978f0ad44c66d761bab9dcd2fa27",
+    "scope_files": 177,
+    "scope_loc": 19411,
+    "name": "hitarth-gg_zenshin-f4zpfi",
+    "reviewed_commit": "b0a92dbb212b77f7f4223e10ec70e8754cbe8125",
+    "language": "JavaScript/TypeScript",
+    "classed": false,
+    "advisories": [
+      "CVE-2026-37281"
+    ],
+    "aliases": []
+  },
+  {
+    "id": "CVE-2026-27191",
+    "package": "feathersjs/feathers",
+    "repo": "feathersjs/feathers",
+    "entries": 4,
+    "scope": [
+      "."
+    ],
+    "cwe": [
+      "CWE-601"
+    ],
+    "severity": "",
+    "published": "2026-02-21",
+    "fix_commit": "ee19a0ae9bc2ebf23b1fe598a1f7361981b65401",
+    "scope_files": 154,
+    "scope_loc": 15246,
+    "name": "feathersjs_feathers-f4fw4b",
+    "reviewed_commit": "e4c0dac68b00615c7bc4724871375a14863a2447",
+    "language": "JavaScript/TypeScript",
+    "classed": true,
+    "advisories": [
+      "CVE-2026-27191",
+      "CVE-2026-54335"
+    ],
+    "aliases": [
+      "CVE-2026-27192",
+      "CVE-2026-27193",
+      "CVE-2026-54335",
+      "GHSA-28xv-ph75-77wh",
+      "GHSA-9m9c-vpv5-9g85",
+      "GHSA-mp4x-c34x-wv3x",
+      "GHSA-ppf9-4ffw-hh4p"
+    ]
+  },
+  {
+    "id": "CVE-2026-53553",
+    "package": "zhenorzz/goploy",
+    "repo": "zhenorzz/goploy",
+    "entries": 9,
+    "scope": [
+      "."
+    ],
+    "cwe": [
+      "CWE-200",
+      "CWE-22"
+    ],
+    "severity": "high",
+    "published": "2026-08-31",
+    "fix_commit": "d51aa15ebc0a474d9d71d6c453a0fe798dd5e007",
+    "scope_files": 190,
+    "scope_loc": 24931,
+    "name": "zhenorzz_goploy-f60sto",
+    "reviewed_commit": "5438ef05777e1d3b1e1ed2fa0892a39b4cb3161a",
+    "language": "Go",
+    "classed": true,
+    "advisories": [
+      "CVE-2026-53553"
+    ],
+    "aliases": [
+      "GHSA-4g5x-hcwm-82jw",
+      "GO-2026-5938"
+    ]
+  },
+  {
+    "id": "CVE-2026-64619",
+    "package": "vastsa/FileCodeBox",
+    "repo": "vastsa/FileCodeBox",
+    "entries": 9,
+    "scope": [
+      "."
+    ],
+    "cwe": [
+      "CWE-348"
+    ],
+    "severity": "",
+    "published": "2026-07-20",
+    "fix_commit": "1b6d8e7277d3cfa34dc7a85803731d927b2147da",
+    "scope_files": 28,
+    "scope_loc": 5899,
+    "name": "vastsa_FileCodeBox-f6l91z",
+    "reviewed_commit": "eb6fc627aece0ee3543c57af942e4f8f5e3e1aa6",
+    "language": "Python",
+    "classed": true,
+    "advisories": [
+      "CVE-2026-64619"
+    ],
+    "aliases": []
+  }
+]

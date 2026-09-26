@@ -1,0 +1,28 @@
+[
+  {
+    "id": "CVE-2026-23846-1",
+    "title": "CVE-2026-23846",
+    "cwe": "CWE-598",
+    "severity": "high",
+    "file": "backend/core/auth/auth_password_provider.py",
+    "line": 17,
+    "line_range": [
+      17,
+      17
+    ],
+    "vuln_class": "CWE-598"
+  },
+  {
+    "id": "CVE-2026-23846-2",
+    "title": "CVE-2026-23846",
+    "cwe": "CWE-598",
+    "severity": "high",
+    "file": "frontend/src/app/features/auth-page/auth-page.ts",
+    "line": 127,
+    "line_range": [
+      127,
+      127
+    ],
+    "vuln_class": "CWE-598"
+  }
+]

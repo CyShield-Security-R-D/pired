@@ -1,0 +1,67 @@
+[
+  {
+    "id": "CVE-2026-59960-1",
+    "title": "CVE-2026-59960",
+    "cwe": "CWE-78",
+    "severity": "high",
+    "file": "packages/core/src/ci-environment/git.ts",
+    "line": 1,
+    "line_range": [
+      1,
+      1
+    ],
+    "vuln_class": "CWE-78"
+  },
+  {
+    "id": "CVE-2026-59960-2",
+    "title": "CVE-2026-59960",
+    "cwe": "CWE-78",
+    "severity": "high",
+    "file": "packages/core/src/ci-environment/git.ts",
+    "line": 67,
+    "line_range": [
+      67,
+      67
+    ],
+    "vuln_class": "CWE-78"
+  },
+  {
+    "id": "CVE-2026-59960-3",
+    "title": "CVE-2026-59960",
+    "cwe": "CWE-78",
+    "severity": "high",
+    "file": "packages/core/src/ci-environment/git.ts",
+    "line": 88,
+    "line_range": [
+      88,
+      90
+    ],
+    "vuln_class": "CWE-78"
+  },
+  {
+    "id": "CVE-2026-59960-4",
+    "title": "CVE-2026-59960",
+    "cwe": "CWE-78",
+    "severity": "high",
+    "file": "packages/core/src/ci-environment/git.ts",
+    "line": 153,
+    "line_range": [
+      153,
+      154
+    ],
+    "vuln_class": "CWE-78"
+  },
+  {
+    "id": "CVE-2026-59960-5",
+    "title": "CVE-2026-59960",
+    "cwe": "CWE-78",
+    "severity": "high",
+    "file": "packages/core/src/ci-environment/git.ts",
+    "line": 162,
+    "line_range": [
+      162,
+      162
+    ],
+    "vuln_class": "CWE-78"
+  }
+]

@@ -1531,6 +1531,9 @@ async function cmdTruth(argv: string[]): Promise<void> {
 			.sort((a, b) => (a.published ?? "").localeCompare(b.published ?? "") || a.id.localeCompare(b.id));
 		for (const a of others) {
 			const own: Label[] = [];
+			// The bound is on what the fix yields, as for a drawn advisory, not on
+			// what survives mapping: a diffuse fix is diffuse wherever it lands.
+			let yielded = 0;
 			let shares = false;
 			for (const f of a.fixes.filter((x) => repoKey(repoOf(x)) === repoKey(repo))) {
 				const full = await resolveInHistory(dir, repo, shaOf(f));
@@ -1543,6 +1546,7 @@ async function cmdTruth(argv: string[]): Promise<void> {
 				if (!(await isAncestor(dir, parent, `${full}^1`))) continue;
 				const fixParent = (await git(dir, ["rev-parse", `${full}^1`])).trim();
 				const { labels } = labelsFromHunks(a.id, parseZeroContextDiff(await diffOf(fixParent, full)));
+				yielded += labels.length;
 				// Rules 2 and 3: the same code in the reviewed tree, at lines that translate.
 				const diffs = new Map<string, string>();
 				for (const file of new Set(labels.map((l) => l.file))) diffs.set(file, await diffOf(parent, fixParent, file));
@@ -1551,7 +1555,7 @@ async function cmdTruth(argv: string[]): Promise<void> {
 				own.push(...kept);
 			}
 			if (shares) credited.push(a.id);
-			if (own.length > MAX_LABELS_PER_ADVISORY) { dropped.push({ advisory: a.id, why: `diffuse: ${own.length} labels` }); continue; }
+			if (yielded > MAX_LABELS_PER_ADVISORY) { dropped.push({ advisory: a.id, why: `diffuse: its fix yields ${yielded} labels` }); continue; }
 			if (own.length > 0) { collected.push(...own); if (!credited.includes(a.id)) credited.push(a.id); }
 		}
 		let labels = dedupeLabels(collected);

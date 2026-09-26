@@ -1,0 +1,197 @@
+[
+  {
+    "id": "CVE-2026-54519-1",
+    "title": "CVE-2026-54519",
+    "cwe": "CWE-862",
+    "severity": "high",
+    "file": "backend/src/controllers/memory.controller.js",
+    "line": 1,
+    "line_range": [
+      1,
+      13
+    ],
+    "vuln_class": "CWE-862"
+  },
+  {
+    "id": "CVE-2026-54519-2",
+    "title": "CVE-2026-54519",
+    "cwe": "CWE-862",
+    "severity": "high",
+    "file": "backend/src/controllers/memory.controller.js",
+    "line": 29,
+    "line_range": [
+      29,
+      29
+    ],
+    "vuln_class": "CWE-862"
+  },
+  {
+    "id": "CVE-2026-54519-3",
+    "title": "CVE-2026-54519",
+    "cwe": "CWE-862",
+    "severity": "high",
+    "file": "backend/src/controllers/memory.controller.js",
+    "line": 38,
+    "line_range": [
+      38,
+      38
+    ],
+    "vuln_class": "CWE-862"
+  },
+  {
+    "id": "CVE-2026-54519-4",
+    "title": "CVE-2026-54519",
+    "cwe": "CWE-862",
+    "severity": "high",
+    "file": "backend/src/controllers/memory.controller.js",
+    "line": 52,
+    "line_range": [
+      52,
+      54
+    ],
+    "vuln_class": "CWE-862"
+  },
+  {
+    "id": "CVE-2026-54519-5",
+    "title": "CVE-2026-54519",
+    "cwe": "CWE-862",
+    "severity": "high",
+    "file": "backend/src/controllers/memory.controller.js",
+    "line": 63,
+    "line_range": [
+      63,
+      63
+    ],
+    "vuln_class": "CWE-862"
+  },
+  {
+    "id": "CVE-2026-54519-6",
+    "title": "CVE-2026-54519",
+    "cwe": "CWE-862",
+    "severity": "high",
+    "file": "backend/src/controllers/memory.controller.js",
+    "line": 72,
+    "line_range": [
+      72,
+      72
+    ],
+    "vuln_class": "CWE-862"
+  },
+  {
+    "id": "CVE-2026-54519-7",
+    "title": "CVE-2026-54519",
+    "cwe": "CWE-862",
+    "severity": "high",
+    "file": "backend/src/controllers/memory.controller.js",
+    "line": 85,
+    "line_range": [
+      85,
+      93
+    ],
+    "vuln_class": "CWE-862"
+  },
+  {
+    "id": "CVE-2026-54519-8",
+    "title": "CVE-2026-54519",
+    "cwe": "CWE-862",
+    "severity": "high",
+    "file": "backend/src/controllers/memory.controller.js",
+    "line": 101,
+    "line_range": [
+      101,
+      101
+    ],
+    "vuln_class": "CWE-862"
+  },
+  {
+    "id": "CVE-2026-54519-9",
+    "title": "CVE-2026-54519",
+    "cwe": "CWE-862",
+    "severity": "high",
+    "file": "backend/src/controllers/memory.controller.js",
+    "line": 114,
+    "line_range": [
+      114,
+      122
+    ],
+    "vuln_class": "CWE-862"
+  },
+  {
+    "id": "CVE-2026-54519-10",
+    "title": "CVE-2026-54519",
+    "cwe": "CWE-862",
+    "severity": "high",
+    "file": "backend/src/controllers/memory.controller.js",
+    "line": 130,
+    "line_range": [
+      130,
+      130
+    ],
+    "vuln_class": "CWE-862"
+  },
+  {
+    "id": "CVE-2026-54519-11",
+    "title": "CVE-2026-54519",
+    "cwe": "CWE-862",
+    "severity": "high",
+    "file": "backend/src/controllers/memory.controller.js",
+    "line": 142,
+    "line_range": [
+      142,
+      142
+    ],
+    "vuln_class": "CWE-862"
+  },
+  {
+    "id": "CVE-2026-54520-1",
+    "title": "CVE-2026-54520",
+    "cwe": "CWE-22",
+    "severity": "high",
+    "file": "backend/src/agents/executor.js",
+    "line": 10,
+    "line_range": [
+      10,
+      10
+    ],
+    "vuln_class": "CWE-22"
+  },
+  {
+    "id": "CVE-2026-54520-2",
+    "title": "CVE-2026-54520",
+    "cwe": "CWE-22",
+    "severity": "high",
+    "file": "backend/src/agents/executor.js",
+    "line": 214,
+    "line_range": [
+      214,
+      218
+    ],
+    "vuln_class": "CWE-22"
+  },
+  {
+    "id": "CVE-2026-54520-3",
+    "title": "CVE-2026-54520",
+    "cwe": "CWE-22",
+    "severity": "high",
+    "file": "backend/src/agents/executor.js",
+    "line": 545,
+    "line_range": [
+      545,
+      545
+    ],
+    "vuln_class": "CWE-22"
+  },
+  {
+    "id": "CVE-2026-54520-4",
+    "title": "CVE-2026-54520",
+    "cwe": "CWE-22",
+    "severity": "high",
+    "file": "backend/src/agents/executor.js",
+    "line": 718,
+    "line_range": [
+      718,
+      718
+    ],
+    "vuln_class": "CWE-22"
+  }
+]

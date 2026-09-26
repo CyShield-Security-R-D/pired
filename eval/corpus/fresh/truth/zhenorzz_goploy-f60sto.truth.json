@@ -1,0 +1,119 @@
+[
+  {
+    "id": "CVE-2026-53553-1",
+    "title": "CVE-2026-53553",
+    "cwe": "CWE-200",
+    "severity": "high",
+    "file": "cmd/server/api/deploy/handler.go",
+    "line": 300,
+    "line_range": [
+      300,
+      300
+    ],
+    "vuln_class": "CWE-200"
+  },
+  {
+    "id": "CVE-2026-53553-2",
+    "title": "CVE-2026-53553",
+    "cwe": "CWE-200",
+    "severity": "high",
+    "file": "cmd/server/api/deploy/handler.go",
+    "line": 399,
+    "line_range": [
+      399,
+      399
+    ],
+    "vuln_class": "CWE-200"
+  },
+  {
+    "id": "CVE-2026-53553-3",
+    "title": "CVE-2026-53553",
+    "cwe": "CWE-200",
+    "severity": "high",
+    "file": "cmd/server/api/project/handler.go",
+    "line": 359,
+    "line_range": [
+      359,
+      359
+    ],
+    "vuln_class": "CWE-200"
+  },
+  {
+    "id": "CVE-2026-53553-4",
+    "title": "CVE-2026-53553",
+    "cwe": "CWE-200",
+    "severity": "high",
+    "file": "cmd/server/api/repository/handler.go",
+    "line": 11,
+    "line_range": [
+      11,
+      11
+    ],
+    "vuln_class": "CWE-200"
+  },
+  {
+    "id": "CVE-2026-53553-5",
+    "title": "CVE-2026-53553",
+    "cwe": "CWE-200",
+    "severity": "high",
+    "file": "cmd/server/api/repository/handler.go",
+    "line": 181,
+    "line_range": [
+      181,
+      181
+    ],
+    "vuln_class": "CWE-200"
+  },
+  {
+    "id": "CVE-2026-53553-6",
+    "title": "CVE-2026-53553",
+    "cwe": "CWE-200",
+    "severity": "high",
+    "file": "cmd/server/api/repository/handler.go",
+    "line": 222,
+    "line_range": [
+      222,
+      222
+    ],
+    "vuln_class": "CWE-200"
+  },
+  {
+    "id": "CVE-2026-53553-7",
+    "title": "CVE-2026-53553",
+    "cwe": "CWE-200",
+    "severity": "high",
+    "file": "cmd/server/api/repository/handler.go",
+    "line": 243,
+    "line_range": [
+      243,
+      243
+    ],
+    "vuln_class": "CWE-200"
+  },
+  {
+    "id": "CVE-2026-53553-8",
+    "title": "CVE-2026-53553",
+    "cwe": "CWE-200",
+    "severity": "high",
+    "file": "cmd/server/api/repository/handler.go",
+    "line": 263,
+    "line_range": [
+      263,
+      263
+    ],
+    "vuln_class": "CWE-200"
+  },
+  {
+    "id": "CVE-2026-53553-9",
+    "title": "CVE-2026-53553",
+    "cwe": "CWE-200",
+    "severity": "high",
+    "file": "internal/pkg/util.go",
+    "line": 7,
+    "line_range": [
+      7,
+      12
+    ],
+    "vuln_class": "CWE-200"
+  }
+]

@@ -1,0 +1,119 @@
+[
+  {
+    "id": "CVE-2026-64619-1",
+    "title": "CVE-2026-64619",
+    "cwe": "CWE-348",
+    "severity": "unknown",
+    "file": "apps/base/dependencies.py",
+    "line": 1,
+    "line_range": [
+      1,
+      4
+    ],
+    "vuln_class": "CWE-348"
+  },
+  {
+    "id": "CVE-2026-64619-2",
+    "title": "CVE-2026-64619",
+    "cwe": "CWE-348",
+    "severity": "unknown",
+    "file": "apps/base/dependencies.py",
+    "line": 38,
+    "line_range": [
+      38,
+      42
+    ],
+    "vuln_class": "CWE-348"
+  },
+  {
+    "id": "CVE-2026-64619-3",
+    "title": "CVE-2026-64619",
+    "cwe": "CWE-348",
+    "severity": "unknown",
+    "file": "apps/base/utils.py",
+    "line": 79,
+    "line_range": [
+      79,
+      80
+    ],
+    "vuln_class": "CWE-348"
+  },
+  {
+    "id": "CVE-2026-64619-4",
+    "title": "CVE-2026-64619",
+    "cwe": "CWE-348",
+    "severity": "unknown",
+    "file": "apps/base/utils.py",
+    "line": 94,
+    "line_range": [
+      94,
+      96
+    ],
+    "vuln_class": "CWE-348"
+  },
+  {
+    "id": "CVE-2026-64619-5",
+    "title": "CVE-2026-64619",
+    "cwe": "CWE-348",
+    "severity": "unknown",
+    "file": "core/settings.py",
+    "line": 45,
+    "line_range": [
+      45,
+      45
+    ],
+    "vuln_class": "CWE-348"
+  },
+  {
+    "id": "CVE-2026-64619-6",
+    "title": "CVE-2026-64619",
+    "cwe": "CWE-348",
+    "severity": "unknown",
+    "file": "core/settings.py",
+    "line": 75,
+    "line_range": [
+      75,
+      75
+    ],
+    "vuln_class": "CWE-348"
+  },
+  {
+    "id": "CVE-2026-64619-7",
+    "title": "CVE-2026-64619",
+    "cwe": "CWE-348",
+    "severity": "unknown",
+    "file": "core/utils.py",
+    "line": 8,
+    "line_range": [
+      8,
+      9
+    ],
+    "vuln_class": "CWE-348"
+  },
+  {
+    "id": "CVE-2026-64619-8",
+    "title": "CVE-2026-64619",
+    "cwe": "CWE-348",
+    "severity": "unknown",
+    "file": "core/utils.py",
+    "line": 21,
+    "line_range": [
+      21,
+      21
+    ],
+    "vuln_class": "CWE-348"
+  },
+  {
+    "id": "CVE-2026-64619-9",
+    "title": "CVE-2026-64619",
+    "cwe": "CWE-348",
+    "severity": "unknown",
+    "file": "core/utils.py",
+    "line": 32,
+    "line_range": [
+      32,
+      32
+    ],
+    "vuln_class": "CWE-348"
+  }
+]
