@@ -126,3 +126,24 @@ describe("counting spend", () => {
 		expect(renderBudgetLine(reading)).toBe("Budget: 6.1M of 20M tokens · 52 of 240 min — a ceiling, not a target.");
 	});
 });
+
+describe("a deadline the harness enforces (3.2 review)", () => {
+	it("keeps a valid ISO deadline and drops one it cannot read", () => {
+		expect(parseBudget(scope({ minutes: 120, deadline: "2026-09-26T12:00:00.000Z" }))).toEqual({ minutes: 120, deadline: "2026-09-26T12:00:00.000Z" });
+		expect(parseBudget(scope({ deadline: "2026-09-26T12:00:00.000Z" }))).toEqual({ deadline: "2026-09-26T12:00:00.000Z" });
+		expect(parseBudget(scope({ minutes: 5, deadline: "soon" }))).toEqual({ minutes: 5 });
+	});
+
+	it("reads minutes from the deadline, so a session that started late does not undercount the clock that stops it", () => {
+		const deadline = Date.parse("2026-09-26T12:00:00.000Z");
+		// pired's session started two minutes after the harness's timer.
+		const meter = new SpendMeter(deadline - 118 * 60_000);
+		const atStart = meter.reading({ minutes: 120, deadline: "2026-09-26T12:00:00.000Z" }, deadline - 118 * 60_000);
+		expect(atStart?.spent.minutes).toBe(2);
+		expect(meter.reading({ minutes: 120, deadline: "2026-09-26T12:00:00.000Z" }, deadline + 60_000)?.spent.minutes).toBe(120);
+		// A deadline alone makes its own ceiling, from session start.
+		const own = meter.reading({ deadline: "2026-09-26T12:00:00.000Z" }, deadline - 18 * 60_000);
+		expect(own?.ceiling.minutes).toBe(118);
+		expect(own?.spent.minutes).toBe(100);
+	});
+});

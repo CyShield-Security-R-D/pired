@@ -1758,18 +1758,19 @@ export function workerCapReason(pinned: number | null, requested: number | undef
  * snapshot defaults to is what it measures. An undefined cap (a manifest that
  * predates the option) writes no field, as those grids' cells did.
  *
- * Both arms' scopes state the ceilings the harness enforces (3.2), as `budget`:
- * `minutes` is the run's time limit, whole minutes, rounded down so the stated
- * ceiling is never later than the kill. `tokens` is written only when a token
- * ceiling is enforced, and none is yet: a ceiling the harness does not enforce
- * is never stated. A snapshot that predates 3.2 ignores the field, so the
- * baseline reads its scope as it always has.
+ * The candidate's scope states the ceilings the harness enforces (3.2), as
+ * `budget`: `minutes` is the run's time limit, whole minutes, rounded down, and
+ * `deadline` the absolute time it runs out — computed before launch, so it is
+ * never later than the kill. `tokens` is written only when a token ceiling is
+ * enforced, and none is yet: a ceiling the harness does not enforce is never
+ * stated. The baseline's scope carries no budget and stays byte-identical to
+ * earlier grids'.
  */
-export function reviewScope(engagement: string, workspace: string, arm: Arm, candidateMaxAgents: number | undefined, timeoutMs?: number): Record<string, unknown> {
+export function reviewScope(engagement: string, workspace: string, arm: Arm, candidateMaxAgents: number | undefined, timeoutMs?: number, nowMs: number = Date.now()): Record<string, unknown> {
 	const scope: Record<string, unknown> = { engagement, workspace, mode: "off", authorized: false, targets: {} };
 	if (arm === "candidate" && candidateMaxAgents !== undefined) scope.maxAgents = candidateMaxAgents;
 	const minutes = timeoutMs !== undefined && Number.isFinite(timeoutMs) ? Math.floor(timeoutMs / 60_000) : 0;
-	if (minutes >= 1) scope.budget = { minutes };
+	if (arm === "candidate" && minutes >= 1) scope.budget = { minutes, deadline: new Date(nowMs + timeoutMs!).toISOString() };
 	return scope;
 }
 

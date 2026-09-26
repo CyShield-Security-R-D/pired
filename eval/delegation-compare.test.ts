@@ -977,8 +977,11 @@ describe("the candidate's worker cap", () => {
 		expect(reviewScope("e", "/w", "candidate", 0).maxAgents).toBe(0);
 	});
 
-	it("leaves the baseline's scope exactly as it was, naming no cap", () => {
-		expect(reviewScope("e", "/w", "baseline", 8)).toEqual({ engagement: "e", workspace: "/w", mode: "off", authorized: false, targets: {} });
+	it("leaves the baseline's scope exactly as it was, naming no cap and no budget", () => {
+		// Byte-identical to earlier grids' baseline scopes, run limit or not.
+		const expected = { engagement: "e", workspace: "/w", mode: "off", authorized: false, targets: {} };
+		expect(reviewScope("e", "/w", "baseline", 8)).toEqual(expected);
+		expect(JSON.stringify(reviewScope("e", "/w", "baseline", 8, 2 * 60 * 60 * 1000))).toBe(JSON.stringify(expected));
 	});
 
 	// A grid whose manifest predates the option wrote no maxAgents; its resume
@@ -988,12 +991,12 @@ describe("the candidate's worker cap", () => {
 	});
 
 	// 3.2: the budget line states only a ceiling the harness enforces. The run
-	// limit is one, in both arms; no token ceiling is enforced yet, so none is written.
-	it("states the run limit as each arm's minutes ceiling, rounded down, and no token ceiling", () => {
+	// limit is one; no token ceiling is enforced yet, so none is written.
+	it("states the run limit and its deadline in the candidate's scope, rounded down, and no token ceiling", () => {
 		const twoHours = 2 * 60 * 60 * 1000;
-		expect(reviewScope("e", "/w", "candidate", 8, twoHours).budget).toEqual({ minutes: 120 });
-		expect(reviewScope("e", "/w", "baseline", 8, twoHours)).toEqual({ engagement: "e", workspace: "/w", mode: "off", authorized: false, targets: {}, budget: { minutes: 120 } });
-		expect(reviewScope("e", "/w", "candidate", 8, 90_500).budget).toEqual({ minutes: 1 });
+		const now = Date.parse("2026-09-26T10:00:00.000Z");
+		expect(reviewScope("e", "/w", "candidate", 8, twoHours, now).budget).toEqual({ minutes: 120, deadline: "2026-09-26T12:00:00.000Z" });
+		expect(reviewScope("e", "/w", "candidate", 8, 90_500, now).budget).toEqual({ minutes: 1, deadline: "2026-09-26T10:01:30.500Z" });
 		// Under a minute states nothing rather than a zero ceiling that reads as spent on the first request.
 		expect(reviewScope("e", "/w", "candidate", 8, 59_999)).not.toHaveProperty("budget");
 		expect(reviewScope("e", "/w", "candidate", 8, Number.NaN)).not.toHaveProperty("budget");

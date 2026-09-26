@@ -166,7 +166,7 @@ Single JSON object — the authorized engagement scope. Canonical copy of the
     "enabled": true,
     "lenses": ["route", "file", "invariant", "adversarial"]
   },
-  "budget": { "tokens": 20000000, "minutes": 240 },   // optional; see below
+  "budget": { "tokens": 20000000, "minutes": 240 },   // optional (+ "deadline"); see below
   "maxVerifiers": 2                                   // optional; see below
 }
 ```
@@ -189,9 +189,13 @@ line, which is the default. When one is set, pired states it on every request, i
 it refreshes after the cached prompt (never in the system prompt), as one line: "Budget: 6.1M of
 20M tokens · 52 of 240 min — a ceiling, not a target." From 80% of either ceiling the line says to
 record what is established; at a ceiling it says to settle (§8.6). pired enforces nothing: the
-ceiling is stated, and whoever set it enforces it. The benchmark harness writes the ceilings it
-enforces — the run's time limit as `minutes` — and never one it does not. `recall status` repeats
-the line. See the 3.2 ADR.
+ceiling is stated, and whoever set it enforces it. An optional `deadline` (ISO 8601) is an
+absolute stop time: when present, minutes spent are read as the ceiling less the minutes left
+before it, so the count follows the clock that stops the session; with no `minutes`, the ceiling
+is session start to the deadline. The benchmark harness writes the ceilings it enforces into the
+candidate's scope only — the run's time limit as `minutes` and the launch time plus that limit as
+`deadline` — and never one it does not; the baseline's scope carries no `budget`. `recall status`
+repeats the line. See the 3.2 ADR.
 
 `maxVerifiers` is declared by the Phase 3 groundwork and given its semantics by 3.1. It caps
 verifier launches separately from `maxAgents`, takes a non-negative integer, and one that is not

@@ -32,13 +32,15 @@ function count(v: unknown): number | undefined {
 export function parseBudget(scope: EngagementScope | undefined): ScopeBudget | undefined {
 	const raw: unknown = scope?.budget;
 	if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
-	const { tokens, minutes } = raw as Record<string, unknown>;
+	const { tokens, minutes, deadline } = raw as Record<string, unknown>;
 	const out: ScopeBudget = {};
 	const t = count(tokens);
 	const m = count(minutes);
+	const d = typeof deadline === "string" && Number.isFinite(Date.parse(deadline)) ? deadline : undefined;
 	if (t !== undefined) out.tokens = t;
 	if (m !== undefined) out.minutes = m;
-	return t === undefined && m === undefined ? undefined : out;
+	if (d !== undefined) out.deadline = d;
+	return t === undefined && m === undefined && d === undefined ? undefined : out;
 }
 
 /** The share of a ceiling past which the line says to record what is established. */
@@ -199,9 +201,22 @@ export class SpendMeter {
 		return Math.max(0, nowMs - this.startMs) / 60_000;
 	}
 
-	/** The reading for `ToolDeps.budget` and the tail block, or undefined when there is no ceiling. */
+	/**
+	 * The reading for `ToolDeps.budget` and the tail block, or undefined when
+	 * there is no ceiling.
+	 *
+	 * With a `deadline`, time is read from it: minutes spent are the ceiling less
+	 * the minutes left before it, so the count agrees with the clock that stops
+	 * the session rather than trailing it by however long the host took to start
+	 * pired. A deadline with no `minutes` makes its own ceiling, from session
+	 * start to the deadline, rounded down.
+	 */
 	reading(ceiling: ScopeBudget | undefined, nowMs: number): BudgetReading | undefined {
 		if (!ceiling) return undefined;
-		return { ceiling, spent: { tokens: this.tokens(), minutes: this.minutes(nowMs) } };
+		const deadline = ceiling.deadline === undefined ? Number.NaN : Date.parse(ceiling.deadline);
+		if (!Number.isFinite(deadline)) return { ceiling, spent: { tokens: this.tokens(), minutes: this.minutes(nowMs) } };
+		const left = Math.max(0, deadline - nowMs) / 60_000;
+		const minutes = ceiling.minutes ?? Math.max(0, Math.floor((deadline - this.startMs) / 60_000));
+		return { ceiling: { ...ceiling, minutes }, spent: { tokens: this.tokens(), minutes: Math.max(0, minutes - left) } };
 	}
 }
