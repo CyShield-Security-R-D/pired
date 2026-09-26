@@ -262,3 +262,70 @@ describe("separating what was verified from what was not", () => {
 		expect(g.closed.map((f) => f.id)).toEqual(["f"]);
 	});
 });
+
+describe("the report says who recorded a finding and who verified it (3.1)", () => {
+	const verified = (by: string, over: Partial<NonNullable<FindingRecord["verification"]>> = {}) =>
+		({ verdict: "stands" as const, at: "2026-09-26T10:00:00Z", by, control: "a digit returned 200, a quote a 500", tier: "static" as const, ...over });
+
+	it("exports a finder-confirmed finding as not independently verified", () => {
+		const md = exportFindingsMarkdown({ findings: [finding({ id: "f1", by: "lead", verification: verified("lead") })] });
+		expect(md).toContain("- Status: confirmed (verified by its finder)");
+		expect(md).toContain("- Verified by: lead — the finder itself");
+		expect(md).not.toContain("independently verified)");
+		expect(md).toContain("1 confirmed (challenged: control case run; 0 independently verified, 1 verified by its finder)");
+	});
+
+	it("marks a confirmation by someone other than the finder as independently verified, with its tier and quoted path", () => {
+		const md = exportFindingsMarkdown({
+			findings: [finding({
+				id: "f1", by: "pired-investigate",
+				verification: verified("pired-verify", {
+					path: [{ at: "app/search.py:20", quote: "term = request.args.get(\"q\")" }, { at: "app/search.py:21", quote: "db.execute(\"... '\" + term + \"'\")" }],
+				}),
+			})],
+		});
+		expect(md).toContain("- Status: confirmed (independently verified)");
+		expect(md).toContain("- Recorded by: pired-investigate\n");
+		expect(md).toContain("- Verified by: pired-verify — independently verified");
+		expect(md).toContain("- Tier: static (quoted source)");
+		expect(md).toContain("  - app/search.py:20: `term = request.args.get(\"q\")`");
+	});
+
+	it("keeps an unverified worker finding in Suspected, marked as recorded by a worker", () => {
+		const md = exportFindingsMarkdown({ findings: [finding({ id: "w1", status: "suspected", by: "pired-escalate", title: "Chained SSRF" })] });
+		const suspected = md.slice(md.indexOf("### Suspected"));
+		expect(suspected).toContain("Chained SSRF");
+		expect(suspected).toContain("- Recorded by: pired-escalate (a delegated worker; nobody else has verified it)");
+		expect(md).toContain("1 suspected (recorded as leads, not yet verified; 1 recorded by a delegated worker)");
+	});
+
+	it("prints a refuted finding with its quoted guard", () => {
+		const md = exportFindingsMarkdown({
+			findings: [finding({
+				id: "f2", status: "refuted", by: "pired-investigate",
+				verification: {
+					verdict: "refuted", at: "2026-09-26T10:00:00Z", by: "pired-verify", tier: "static",
+					basis: ["app/notes.py:13: if note.owner_id != current_user().id:"],
+					guards: [{ at: "app/notes.py:13", quote: "if note.owner_id != current_user().id:" }],
+				},
+			})],
+		});
+		const refuted = md.slice(md.indexOf("### Challenged and refuted"));
+		expect(refuted).toContain("- Refuted by: pired-verify — not its finder");
+		expect(refuted).toContain("- Guard:\n  - app/notes.py:13: `if note.owner_id != current_user().id:`");
+		expect(refuted).toContain("- Status: refuted\n");
+	});
+
+	it("claims no independence when the ledger does not say who recorded or verified", () => {
+		const md = exportFindingsMarkdown({ findings: [finding({ id: "f1", verification: verified("pired-verify", { tier: "executed" }) }), finding({ id: "f2" })] });
+		expect(md).toContain("- Status: confirmed\n");
+		expect(md).toContain("- Verified by: pired-verify\n");
+		expect(md).toContain("- Tier: executed (a live check or tool output)");
+		expect(md).toContain("2 confirmed (challenged: control case run)");
+		// A look that settled nothing is an examination, not a verification.
+		const look = exportFindingsMarkdown({ findings: [finding({ id: "f3", status: "suspected", by: "lead", verification: { verdict: "unresolved", at: "t", by: "pired-verify", basis: ["a.py:1"] } })] });
+		expect(look).toContain("- Examined by: pired-verify\n");
+		const guards = exportFindingsMarkdown({ findings: [finding({ id: "f4", status: "refuted", verification: { verdict: "refuted", at: "t", guards: [{ at: "a.py:1", quote: "x" }, { at: "a.py:9", quote: "y" }] } })] });
+		expect(guards).toContain("- Guards:\n");
+	});
+});

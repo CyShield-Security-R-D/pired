@@ -7,6 +7,7 @@
  * Pure module: values in, string out. No ports, no I/O.
  */
 
+import { isEarned, isIndependent, isWorkerAuthor } from "./challenge.ts";
 import type { CoverageBrief } from "./coverage.ts";
 import type { FindingRecord, LootRecord, Severity } from "./ontology.ts";
 import { buildRedactor } from "./redaction.ts";
@@ -167,9 +168,18 @@ export function exportFindingsMarkdown(rawInput: ExportInput): string {
 	// The line that would have caught the shipped IDOR. A severity tally answers
 	// "how bad", never "how sure", and a reader who is told 12 findings and not
 	// told that 9 of them are unverified leads has been told the wrong thing.
+	// Who confirmed them, when the ledger says. A finder's own check is a claim
+	// about its claim; the reader is told how many of the confirmed were checked
+	// by someone else, and how many only by the finder (3.1).
+	const independent = groups.confirmed.filter((f) => isIndependent(f) === true).length;
+	const byFinder = groups.confirmed.filter((f) => isIndependent(f) === false).length;
+	const whoConfirmed = independent + byFinder > 0
+		? `; ${independent} independently verified, ${byFinder} verified by ${byFinder === 1 ? "its" : "their"} finder`
+		: "";
+	const fromWorkers = groups.suspected.filter((f) => isWorkerAuthor(f.by)).length;
 	out.push(
-		`\n- ${groups.confirmed.length} confirmed (challenged: control case run)` +
-		`\n- ${groups.suspected.length} suspected (recorded as leads, not yet verified)` +
+		`\n- ${groups.confirmed.length} confirmed (challenged: control case run${whoConfirmed})` +
+		`\n- ${groups.suspected.length} suspected (recorded as leads, not yet verified${fromWorkers > 0 ? `; ${fromWorkers} recorded by a delegated worker` : ""})` +
 		`\n- ${groups.refuted.length} refuted` +
 		(groups.closed.length > 0 ? `\n- ${groups.closed.length} closed by the operator` : ""),
 	);
@@ -232,7 +242,8 @@ function renderFinding(f: FindingRecord, input: ExportInput): string[] {
 	// is legitimately a raw label when nothing was mapped for it, so the id is
 	// never dropped — it is only translated when there is a translation.
 	const target = (typeof f.target === "string" ? input.labelFor?.(f.target) : undefined) ?? f.target;
-	const meta = [`- Target: ${target}`, `- Status: ${f.status}`];
+	const meta = [`- Target: ${target}`, `- Status: ${f.status}${statusNote(f)}`];
+	if (f.by) meta.push(`- Recorded by: ${f.by}${isWorkerAuthor(f.by) && !isEarned(f.verification) ? " (a delegated worker; nobody else has verified it)" : ""}`);
 	if (f.class) meta.push(`- Class: ${f.class}`);
 	if (f.cwe) meta.push(`- CWE: ${f.cwe}`);
 	if (f.cvss) meta.push(`- CVSS: ${f.cvss}`);
@@ -258,14 +269,42 @@ function renderFinding(f: FindingRecord, input: ExportInput): string[] {
 	const v = f.verification;
 	if (v) {
 		const lines = [`- Verdict: ${v.verdict}${v.live === false ? " (target was not reachable)" : ""}`, `- Challenged: ${v.at}`];
+		if (v.by) lines.push(`- ${v.verdict === "refuted" ? "Refuted" : isEarned(v) ? "Verified" : "Examined"} by: ${v.by}${independenceNote(f)}`);
+		// Static is quoted source; executed ran against something (3.1). Said
+		// because the two read identically as "confirmed" otherwise.
+		if (v.tier) lines.push(`- Tier: ${v.tier === "executed" ? "executed (a live check or tool output)" : "static (quoted source)"}`);
 		if (v.control) lines.push(`- Control case: ${v.control}`);
 		if (v.entitlement) lines.push(`- Entitlement: ${v.entitlement}`);
+		if (v.path?.length) lines.push(`- Path:\n${v.path.map((q) => `  - ${q.at}: \`${q.quote}\``).join("\n")}`);
+		// A refutation is printed with the guard it rests on, quoted, so a wrong
+		// one can be checked against the line rather than taken on trust.
+		if (v.guards?.length) lines.push(`- ${v.guards.length === 1 ? "Guard" : "Guards"}:\n${v.guards.map((q) => `  - ${q.at}: \`${q.quote}\``).join("\n")}`);
 		if (v.basis?.length) lines.push(`- Grounds: ${v.basis.join(", ")}`);
 		if (v.notes) lines.push(`- Notes: ${v.notes}`);
 		out.push(`\n**Verification**\n${lines.join("\n")}`);
 	}
 	out.push("");
 	return out;
+}
+
+/**
+ * Beside a settled status: whether anyone other than the finder settled it.
+ * Nothing when the ledger does not say who did either.
+ */
+function statusNote(f: FindingRecord): string {
+	if (!isEarned(f.verification) || f.status === "refuted") return "";
+	const independent = isIndependent(f);
+	if (independent === true) return " (independently verified)";
+	if (independent === false) return " (verified by its finder)";
+	return "";
+}
+
+/** After "Verified by: <who>": whether that was the finder. */
+function independenceNote(f: FindingRecord): string {
+	const independent = isIndependent(f);
+	if (!isEarned(f.verification) || independent === undefined) return "";
+	if (!independent) return " — the finder itself";
+	return f.verification?.verdict === "refuted" ? " — not its finder" : " — independently verified";
 }
 
 /**
