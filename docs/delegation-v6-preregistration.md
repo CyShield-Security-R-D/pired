@@ -73,8 +73,17 @@ as much per pair.
   each as its own grid. A later model cannot change the Luna verdict.
 - **Harness:** the v6 harness at the freeze, with `--retry` (ADR-033) and `--breaker default`
   (ADR-031; attempt ceiling 16).
-  - The run limit is 4 h, as in v5c. It is written into every arm's scope as `budget.minutes`
-    (3.2).
+  - The run limit is 4 h, as in v5c. It is written as `budget.minutes`, with a deadline, into the scope of
+    every arm that runs the candidate snapshot (S, D, M). Arm A runs exactly as users get `main`
+    today, with no budget in its scope; the budget line is one of the candidate's changes (3.2).
+  - The thinking level is pinned at `medium` in both stage kinds.
+  - The internal pilot is blind: until the pass count is fixed, a stage grid prints and stores
+    only the pooled paired SD. The comparison itself is sealed for `eval/v6-decision.ts`.
+  - Passes are extended exactly once on stage 1, by a recorded amendment (who, why, and what
+    existed at the time), to at most 10. Stage 2 adopts stage 1's pass count.
+  - The harness refuses a stage grid whose worst case exceeds the login-token horizon unless the
+    horizon is given. Before each launch it stops resumably when the token would expire
+    mid-run.
   - The candidate cap is pinned (ADR-032).
   - The stop reason is recorded for every run (ADR-030).
 
