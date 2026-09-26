@@ -1955,9 +1955,17 @@ const loadsSubagents = (arm: Arm): boolean => arm !== "baseline";
  * gate that never armed would pass it silently; this one is enforced and lists
  * only loopback, so the probe's out-of-scope command must be refused by pired's
  * own gate inside the worker. Used by that probe cell alone.
+ *
+ * It states a worker cap (plan item 2.8). It named none, which the v3/v4
+ * snapshots read as their default of 8; a v5 candidate cut after ADR-029 reads
+ * it as 0, refuses both of the probe's launches and hides the launcher, so a
+ * v6 dry run would fail here (read from core/subagents.ts's workerCap and
+ * hiddenParentTools; not run, since 2.8 ran no probe). The probe proves the pinned pi-subagents
+ * path, not the arm's own cap, so it states the v3/v4 default whatever the
+ * grid's candidate cap: stage 1's candidate, at 0, still loads pi-subagents.
  */
-function probeDelegationScope(engagement: string, workspace: string): Record<string, unknown> {
-	return { engagement, workspace, mode: "enforce", authorized: true, targets: { ips: ["127.0.0.1"] } };
+export function probeDelegationScope(engagement: string, workspace: string): Record<string, unknown> {
+	return { engagement, workspace, mode: "enforce", authorized: true, targets: { ips: ["127.0.0.1"] }, maxAgents: DEFAULT_CANDIDATE_MAX_AGENTS };
 }
 
 /** Re-checked before every launch: a grid must not straddle an edit to what it measures. */

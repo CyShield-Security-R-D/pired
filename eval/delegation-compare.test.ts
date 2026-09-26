@@ -6,7 +6,7 @@ import {
 	accountCellUsage, atHighestAttempt, attemptReport, AUTH_HORIZON_CAP_MS, AUTH_MARGIN_MS, benchmarkRuntimeOf, checkAuthHorizon, childProviderFailure, classifyInfra,
 	credentialExpiry, decideInfra, DEFAULT_CANDIDATE_MAX_AGENTS, fetchErrorsFromStderr, gridWorstCaseMs, isBrokerEnvVar, loadTargets, metricFromRecord, notLaunchedOutcome, ownerIsLive,
 	newManifest, optionsFromManifest, parseBreakerSpec, parseComparePins, parseOptions, parseOwnerRecord, planResume, providerFailureTexts, requestLogFromStderr,
-	armOptionsFromManifest, resumeMismatches, retryPolicyFromManifest, reviewScope, runPairs, runStop, runtimeMismatch, scopedSealCommand, startTimeFromStat, subagentConfigFor,
+	armOptionsFromManifest, probeDelegationScope, resumeMismatches, retryPolicyFromManifest, reviewScope, runPairs, runStop, runtimeMismatch, scopedSealCommand, startTimeFromStat, subagentConfigFor,
 	toolSurfaceErrors, trackStream, workerCapReason,
 	ceilingOf, ceilingProbeErrors, latestMatchedSessions, planMatchedResume, sessionRunOf, verifyCeiling,
 	type GridStopState, type MatchedSessionSpec, type ProviderFailures, type RunOutcome,
@@ -1968,5 +1968,16 @@ describe("per-arm configuration (plan 2.8)", () => {
 		expect(toolSurfaceErrors("candidate", [...base, "subagents_enable"], true)).toEqual([]);
 		expect(toolSurfaceErrors("candidate", base)).toEqual(["candidate arm does not expose subagents_enable"]);
 		expect(toolSurfaceErrors("candidate", [...base, "bg_wait"], true)).toEqual(["candidate arm exposes bg_wait, which pired hides"]);
+	});
+});
+
+describe("the delegation probe's scope", () => {
+	// It named no cap. A v5 candidate cut after ADR-029 reads that as 0, refuses
+	// the probe's launches and hides the launcher, so a v6 dry run would fail at
+	// the probe before a single cell ran.
+	it("states the v3/v4 default cap, so a snapshot whose own default is 0 can still launch the probe's workers", () => {
+		expect(probeDelegationScope("e", "/w")).toEqual({
+			engagement: "e", workspace: "/w", mode: "enforce", authorized: true, targets: { ips: ["127.0.0.1"] }, maxAgents: DEFAULT_CANDIDATE_MAX_AGENTS,
+		});
 	});
 });
