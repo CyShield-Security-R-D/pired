@@ -27,7 +27,7 @@ import { DVBANK, dedupe, engagementTelemetry, fromLedger, scoreFindings, type Fi
 import { scopeClause, stripLeakage } from "./corpus/lib.ts";
 import { BENCHMARK_SETTINGS, PROBE_FAUX_MODEL, PROBE_FAUX_PROVIDER, type CompareEntryConfig, type ProbeConfig } from "./delegation-compare-entry.ts";
 import {
-	accountUsage, APPROVAL_DECISION, compareMatchedRuns, findLeaks, isOfficialGrid, leakTermsFor, observationsFromChildSession,
+	accountUsage, APPROVAL_DECISION, compareMatchedRuns, findLeaks, isOfficialGrid, leakTermsFor, nextPairAction, observationsFromChildSession,
 	observationsFromPiEvents, OFFICIAL_PASSES, OFFICIAL_TARGET_IDS, planSchedule, reconcileChildSession, reconcileSubagentCalls,
 	SUBAGENT_TOOL,
 	type Arm, type ChildSessionExtraction, type ChildVerdict, type ExpectedCell, type PiUsageExtraction, type RunMetric,
@@ -2906,22 +2906,21 @@ export function planResume(pairs: ScheduledPair[], runs: JsonRecord[]): ResumePl
 	for (const row of rows) if (row.attempt === maxAttempt[row.key]) latest[`${row.key}\u0000${row.arm}`] = row.run;
 	const plan: ResumePlan = { rerunKeys: [], blockedKeys: [], keepKeys: [], nextAttempt: {}, latest, reasons: {} };
 	for (const pair of pairs) {
-		const arms = (["baseline", "candidate"] as const).map((arm) => latest[`${pair.key}\u0000${arm}`]);
-		const missing = arms.some((r) => !r);
-		const nonInfraInvalid = arms.some((r) => r && r.valid !== true && r.infraFailure !== true);
-		const infraInvalid = arms.some((r) => r && r.valid !== true && r.infraFailure === true);
+		const arms = (["baseline", "candidate"] as const).map((arm) => latest[`${pair.key}\u0000${arm}`])
+			.map((r) => r && { valid: r.valid === true, infra: r.infraFailure === true });
 		const attempt = maxAttempt[pair.key] ?? 0;
-		if (nonInfraInvalid) {
+		// No requeue context: a resume is the operator's decision to spend more on
+		// the pair, so it waits no cooldown and applies no per-runner attempt cap.
+		const action = nextPairAction(attempt, arms);
+		if (action.kind === "keep") {
+			plan.keepKeys.push(pair.key);
+		} else if (action.kind === "blocked") {
 			plan.blockedKeys.push(pair.key);
-			plan.reasons[pair.key] = `attempt ${attempt}: an arm is invalid for a non-infrastructure reason; it stays invalid`;
-		} else if (missing || infraInvalid) {
+			plan.reasons[pair.key] = action.reason;
+		} else {
 			plan.rerunKeys.push(pair.key);
 			plan.nextAttempt[pair.key] = attempt + 1;
-			plan.reasons[pair.key] = missing
-				? (attempt === 0 ? "the pair has no run yet" : `attempt ${attempt}: an arm has no run at that attempt`)
-				: `attempt ${attempt}: an arm failed for an infrastructure reason`;
-		} else {
-			plan.keepKeys.push(pair.key);
+			plan.reasons[pair.key] = action.reason;
 		}
 	}
 	return plan;

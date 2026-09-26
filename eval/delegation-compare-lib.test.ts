@@ -2,9 +2,10 @@ import { describe, expect, it } from "vitest";
 import { createChildGuard, HANDOFF_GRACE_TURNS } from "../core/child.ts";
 import { agentMarker, PIRED_AGENTS } from "../core/subagents.ts";
 import {
-	accountUsage, APPROVAL_DECISION, childRecordIds, compareMatchedRuns, contentText, findLeaks, isOfficialGrid, leakTermsFor, normalizePiUsage,
-	observationsFromChildSession, observationsFromPiEvents, OFFICIAL_PASSES, OFFICIAL_TARGET_IDS, piCostUsd, PIRED_BUDGET_STOP, planSchedule, QUALITY_MARGIN,
-	reconcileChildSession, reconcileSubagentCalls, type ChildSessionExtraction, type ExpectedCell, type RunMetric, type SubagentChild,
+	accountUsage, APPROVAL_DECISION, childRecordIds, compareMatchedRuns, contentText, createBreaker, DEFAULT_BREAKER, findLeaks, isOfficialGrid,
+	leakTermsFor, nextPairAction, normalizePiUsage, observationsFromChildSession, observationsFromPiEvents, OFFICIAL_PASSES, OFFICIAL_TARGET_IDS,
+	parseBreakerPolicy, piCostUsd, PIRED_BUDGET_STOP, planSchedule, QUALITY_MARGIN, reconcileChildSession, reconcileSubagentCalls,
+	type ArmResult, type BreakerEvent, type ChildSessionExtraction, type ExpectedCell, type RequeueContext, type RunMetric, type SubagentChild,
 	type UsageObservation,
 } from "./delegation-compare-lib.ts";
 
@@ -1073,6 +1074,154 @@ describe("planSchedule", () => {
 		for (const pair of plan) expect(new Set(pair.order)).toEqual(new Set(["baseline", "candidate"]));
 		const baselineFirst = plan.filter((p) => p.order[0] === "baseline").length;
 		expect(Math.abs(baselineFirst - (plan.length - baselineFirst))).toBeLessThanOrEqual(1);
+	});
+});
+
+describe("createBreaker", () => {
+	// Builders: one launched run as the breaker sees it, a minute apart, so a
+	// trip's reason carries the time of the run that tripped it.
+	let minute = 0;
+	const event = (kind: "valid" | "drop" | "timeout" | "quota" | "blocked"): BreakerEvent => ({
+		atMs: Date.UTC(2026, 8, 26, 12, minute++), valid: kind === "valid",
+		infra: kind === "drop" || kind === "quota", exhausted: kind === "quota", blocked: kind === "blocked",
+	});
+	const feed = (kinds: Array<Parameters<typeof event>[0]>, policy = DEFAULT_BREAKER) => {
+		const breaker = createBreaker(policy);
+		const verdicts = kinds.map((kind) => breaker.record(event(kind)));
+		return { breaker, verdicts, trippedAt: verdicts.findIndex((v) => v.tripped) };
+	};
+
+	// An outage at the start of a grid: every run drops. Three in a row is the
+	// pre-registered C, and the third is where the grid must stop launching.
+	it("trips after three consecutive infrastructure failures", () => {
+		const { verdicts, trippedAt } = feed(["valid", "drop", "drop", "drop"]);
+		expect(trippedAt).toBe(3);
+		expect(verdicts[3]!.reason).toMatch(/^3 consecutive infrastructure failures \(at 2026-09-26T\d\d:\d\d:00\.000Z\)$/);
+	});
+
+	// v5 stopped a whole grid on one dropped stream (research/12). Scattered drops
+	// among valid runs are what re-queuing is for, not a reason to stop.
+	it("does not trip on isolated drops among valid runs", () => {
+		const { breaker, trippedAt } = feed(["drop", "valid", "valid", "drop", "valid", "valid", "valid", "drop", "valid", "valid", "drop", "valid"]);
+		expect(trippedAt).toBe(-1);
+		expect(breaker.verdict).toEqual({ tripped: false });
+	});
+
+	// Two drops in the first three runs are a 67% rate that says nothing yet; the
+	// rate is read only over a full window of N runs.
+	it("trips on the window failure rate only once the window is full", () => {
+		expect(feed(["drop", "valid", "drop"]).trippedAt).toBe(-1);
+		// Four drops in eight, never three in a row: the eighth run fills the window at exactly R.
+		const { verdicts, trippedAt } = feed(["drop", "valid", "drop", "drop", "valid", "valid", "valid", "drop"]);
+		expect(trippedAt).toBe(7);
+		expect(verdicts[7]!.reason).toMatch(/^4 infrastructure failures in the last 8 runs, at or above the 0\.5 rate/);
+		// The window slides: old drops fall out, and three in the last eight is under R.
+		expect(feed(["drop", "drop", "valid", "valid", "valid", "valid", "drop", "valid", "valid", "drop"]).trippedAt).toBe(-1);
+	});
+
+	// Nothing launched before a quota or usage window resets can succeed, so the
+	// first spent-quota run stops the grid without waiting for a streak.
+	it("trips at once on a quota stop", () => {
+		const { verdicts, trippedAt } = feed(["valid", "quota"]);
+		expect(trippedAt).toBe(1);
+		expect(verdicts[1]!.reason).toMatch(/quota or usage window is spent/);
+	});
+
+	// A blocked pair already fixes an official grid at incomplete_or_invalid;
+	// every further pair would spend up to two hours per arm on a known outcome.
+	it("trips at once on a non-infrastructure invalid run of an official grid", () => {
+		expect(feed(["blocked"]).trippedAt).toBe(0);
+	});
+
+	// A timeout between two drops is not evidence the provider recovered.
+	it("neither extends nor ends the streak on a non-infrastructure failure of an exploratory grid", () => {
+		expect(feed(["drop", "drop", "timeout", "drop"]).trippedAt).toBe(3);
+		expect(feed(["timeout", "timeout", "timeout", "timeout"]).trippedAt).toBe(-1);
+	});
+
+	it("stays tripped, keeping the reason of the run that tripped it", () => {
+		const { breaker, verdicts } = feed(["quota", "valid", "valid"]);
+		expect(verdicts[2]).toEqual(verdicts[0]);
+		expect(breaker.verdict.tripped).toBe(true);
+	});
+
+	it("reads its numbers from the policy it was given", () => {
+		expect(feed(["drop"], parseBreakerPolicy({ ...DEFAULT_BREAKER, consecutive: 1 })).trippedAt).toBe(0);
+	});
+});
+
+describe("parseBreakerPolicy", () => {
+	// Resume compares policies with JSON.stringify, so a policy written with its
+	// fields in another order must come back in the one fixed order.
+	it("returns the policy in one fixed field order", () => {
+		const shuffled = { maxAttempts: 4, cooldownMs: 60_000, window: 8, rate: 0.5, consecutive: 3 };
+		expect(JSON.stringify(parseBreakerPolicy(shuffled))).toBe(JSON.stringify(DEFAULT_BREAKER));
+	});
+
+	// A misspelt field read as "use the default" would change the rule unseen.
+	it("refuses an unknown field, a missing one and an out-of-range value", () => {
+		expect(() => parseBreakerPolicy({ ...DEFAULT_BREAKER, maxAttempt: 4 })).toThrow(/unknown field: maxAttempt/);
+		const { window: _dropped, ...noWindow } = DEFAULT_BREAKER;
+		expect(() => parseBreakerPolicy(noWindow)).toThrow(/window/);
+		expect(() => parseBreakerPolicy({ ...DEFAULT_BREAKER, rate: 0 })).toThrow(/rate/);
+		expect(() => parseBreakerPolicy({ ...DEFAULT_BREAKER, consecutive: 2.5 })).toThrow(/consecutive/);
+		expect(() => parseBreakerPolicy({ ...DEFAULT_BREAKER, cooldownMs: -1 })).toThrow(/cooldownMs/);
+		expect(() => parseBreakerPolicy([])).toThrow(/not an object/);
+	});
+});
+
+describe("nextPairAction", () => {
+	// Builders: an arm's run at one attempt, and the requeue context a runner with
+	// the default policy passes as a pair ends at 12:00.
+	const valid: ArmResult = { valid: true, infra: false };
+	const dropped: ArmResult = { valid: false, infra: true };
+	const broken: ArmResult = { valid: false, infra: false };
+	const noon = Date.UTC(2026, 8, 26, 12, 0);
+	const runner = (attemptsThisRun: number): RequeueContext => ({ policy: DEFAULT_BREAKER, atMs: noon, attemptsThisRun });
+
+	it("keeps a pair whose two arms are valid at the same attempt", () => {
+		expect(nextPairAction(2, [valid, valid], runner(2))).toEqual({ kind: "keep" });
+	});
+
+	// Both arms re-run, so a valid partner is never paired with an arm measured
+	// in another provider window; the wait grows with each failed attempt.
+	it("re-queues at the next attempt after the cooldown", () => {
+		expect(nextPairAction(1, [valid, dropped], runner(1))).toEqual({
+			kind: "rerun", attempt: 2, notBeforeMs: noon + 60_000, reason: "attempt 1: an arm failed for an infrastructure reason",
+		});
+		expect(nextPairAction(3, [dropped, dropped], runner(3))).toMatchObject({ kind: "rerun", attempt: 4, notBeforeMs: noon + 180_000 });
+	});
+
+	// v5 spent 14 attempts on one pair. Past the cap the runner moves on, and the
+	// pair waits for the operator's --resume.
+	it("stops re-queuing at the attempt cap", () => {
+		const action = nextPairAction(4, [dropped, valid], runner(4));
+		expect(action.kind).toBe("give-up");
+		expect(action.kind === "give-up" ? action.reason : "").toMatch(/the cap of 4, so only a --resume re-runs it$/);
+	});
+
+	// The cap counts this runner's attempts: a resumed pair at attempt 5 gets its
+	// own, or the first drop after a resume would stall it as fail-fast did.
+	it("counts the cap from the attempt this runner started the pair at", () => {
+		expect(nextPairAction(5, [dropped, valid], runner(1))).toMatchObject({ kind: "rerun", attempt: 6, notBeforeMs: noon + 60_000 });
+	});
+
+	// Re-running a harness or candidate failure would chase a defect with tokens
+	// and select the arm by its survival.
+	it("never re-queues a non-infrastructure failure", () => {
+		for (const arms of [[broken, valid], [dropped, broken], [broken, undefined]]) {
+			expect(nextPairAction(1, arms, runner(1))).toEqual({
+				kind: "blocked", reason: "attempt 1: an arm is invalid for a non-infrastructure reason; it stays invalid",
+			});
+		}
+	});
+
+	// planResume asks without a context: the resume is itself the decision to
+	// spend more, so there is no wait and no cap.
+	it("re-runs at the next attempt with no wait and no cap when asked without a requeue context", () => {
+		expect(nextPairAction(9, [dropped, valid])).toEqual({ kind: "rerun", attempt: 10, notBeforeMs: 0, reason: "attempt 9: an arm failed for an infrastructure reason" });
+		expect(nextPairAction(0, [undefined, undefined])).toMatchObject({ kind: "rerun", attempt: 1, reason: "the pair has no run yet" });
+		expect(nextPairAction(2, [valid, undefined])).toMatchObject({ kind: "rerun", attempt: 3, reason: "attempt 2: an arm has no run at that attempt" });
 	});
 });
 

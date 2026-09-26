@@ -1208,6 +1208,162 @@ export function planSchedule(targetIds: string[], passes: number): ScheduledPair
 	return pairs;
 }
 
+/**
+ * The circuit breaker's numbers (v6 item 2.3), pinned into the manifest as
+ * `breaker` so a resume runs under the rule its grid started with. Without one
+ * the runner keeps its fail-fast rule: the first invalid run stops new launches.
+ * In the v5 trial that rule let one dropped stream stop a grid, and one pair
+ * took 14 attempts across resumes (research/12, *The benchmark's own cost*).
+ */
+export interface BreakerPolicy {
+	/** C: this many infrastructure failures in a row trip the breaker. */
+	consecutive: number;
+	/** R: an infrastructure failure share at or above this, over the last `window` runs, trips it. */
+	rate: number;
+	/** N: the runs the rate is read over. It is read only once N runs are in. */
+	window: number;
+	/** A pair re-queued after its n-th failed attempt in this runner waits n × cooldownMs. */
+	cooldownMs: number;
+	/** The most attempts one runner makes at a pair; past it only a --resume re-runs the pair. */
+	maxAttempts: number;
+}
+
+export const DEFAULT_BREAKER: Readonly<BreakerPolicy> = { consecutive: 3, rate: 0.5, window: 8, cooldownMs: 60_000, maxAttempts: 4 };
+
+const BREAKER_FIELDS = ["consecutive", "rate", "window", "cooldownMs", "maxAttempts"] as const;
+
+/**
+ * Validate a breaker policy read back from a manifest or built from the command
+ * line, and return it with its fields in one fixed order, so two manifests
+ * holding the same policy compare byte for byte. An unknown field is refused:
+ * a misspelt `maxAttempt` read as "use the default" would change the rule
+ * without anyone having chosen to.
+ */
+export function parseBreakerPolicy(value: unknown): BreakerPolicy {
+	if (!isRow(value)) throw new Error("the breaker policy is not an object");
+	for (const key of Object.keys(value)) if (!(BREAKER_FIELDS as readonly string[]).includes(key)) throw new Error(`the breaker policy has an unknown field: ${key}`);
+	const field = (key: typeof BREAKER_FIELDS[number], ok: (n: number) => boolean, what: string): number => {
+		const n = value[key];
+		if (typeof n !== "number" || !Number.isFinite(n) || !ok(n)) throw new Error(`the breaker policy's ${key} must be ${what}`);
+		return n;
+	};
+	const whole = (min: number) => (n: number): boolean => Number.isSafeInteger(n) && n >= min;
+	return {
+		consecutive: field("consecutive", whole(1), "an integer of at least 1"),
+		rate: field("rate", (n) => n > 0 && n <= 1, "a share above 0 and at most 1"),
+		window: field("window", whole(1), "an integer of at least 1"),
+		cooldownMs: field("cooldownMs", whole(0), "a non-negative integer of milliseconds"),
+		maxAttempts: field("maxAttempts", whole(1), "an integer of at least 1"),
+	};
+}
+
+/** One launched run, as the breaker sees it. A partner that was not launched is not an event: nothing reached the provider. */
+export interface BreakerEvent {
+	/** When the run ended; it only dates the trip. */
+	atMs: number;
+	valid: boolean;
+	/** Invalid for an infrastructure reason (the run record's infraFailure). */
+	infra: boolean;
+	/** A provider quota or usage window is spent. */
+	exhausted: boolean;
+	/** Invalid for a non-infrastructure reason in an official grid: that pair stays invalid, so the grid cannot approve. */
+	blocked: boolean;
+}
+
+export interface BreakerVerdict { tripped: boolean; reason?: string }
+
+/**
+ * The circuit breaker that replaces fail-fast when a grid names a policy. It
+ * trips at once on a spent quota, since nothing launched before the reset can
+ * succeed, and on a blocked run, since the official decision is then already
+ * incomplete_or_invalid and every further pair would spend tokens on a fixed
+ * outcome. Otherwise it trips on `consecutive` infrastructure failures in a
+ * row, or on an infrastructure share of at least `rate` over the last `window`
+ * runs, read only once the window is full: two drops in the first three runs
+ * are a 67% rate that says nothing yet. A valid run ends the streak. A run
+ * invalid for another reason in an exploratory grid neither extends nor ends
+ * it, so a timeout between two drops does not hide an outage. Once tripped it
+ * stays tripped. Pure: it keeps its own counts and reads no clock.
+ */
+export function createBreaker(policy: BreakerPolicy): { record(event: BreakerEvent): BreakerVerdict; readonly verdict: BreakerVerdict } {
+	let streak = 0;
+	const recent: boolean[] = [];
+	let verdict: BreakerVerdict = { tripped: false };
+	const trip = (why: string, atMs: number): BreakerVerdict => {
+		verdict = { tripped: true, reason: Number.isFinite(atMs) ? `${why} (at ${new Date(atMs).toISOString()})` : why };
+		return verdict;
+	};
+	return {
+		get verdict() { return verdict; },
+		record(event: BreakerEvent): BreakerVerdict {
+			if (verdict.tripped) return verdict;
+			if (event.exhausted) return trip("the provider's quota or usage window is spent", event.atMs);
+			if (event.blocked) return trip("a run of this official grid is invalid for a non-infrastructure reason, so its decision is already incomplete_or_invalid", event.atMs);
+			const failed = !event.valid && event.infra;
+			recent.push(failed);
+			if (recent.length > policy.window) recent.shift();
+			if (event.valid) streak = 0;
+			else if (failed) streak++;
+			if (streak >= policy.consecutive) return trip(`${streak} consecutive infrastructure failures`, event.atMs);
+			const failures = recent.filter(Boolean).length;
+			if (recent.length === policy.window && failures / policy.window >= policy.rate) {
+				return trip(`${failures} infrastructure failures in the last ${policy.window} runs, at or above the ${policy.rate} rate`, event.atMs);
+			}
+			return verdict;
+		},
+	};
+}
+
+/** One arm's run at a pair's attempt, as the pairing rule reads it. */
+export interface ArmResult { valid: boolean; infra: boolean }
+
+export type PairAction =
+	| { kind: "keep" }
+	| { kind: "blocked"; reason: string }
+	| { kind: "rerun"; attempt: number; notBeforeMs: number; reason: string }
+	| { kind: "give-up"; reason: string };
+
+/** What a runner that re-queues pairs itself adds: its policy, the time, and how often it has launched this pair. */
+export interface RequeueContext {
+	policy: Pick<BreakerPolicy, "cooldownMs" | "maxAttempts">;
+	atMs: number;
+	/** Attempts at this pair launched by this runner, the one that just ended included. */
+	attemptsThisRun: number;
+}
+
+/**
+ * What happens to a pair after its `attempt` (0 when it has no run), judged
+ * from both arms' runs at that attempt only. Shared by planResume, which asks
+ * between runners, and by the runner, which asks as each pair ends when the
+ * grid has a breaker. The pairing rule is the same for both: a pair counts
+ * only when both arms are valid at the same attempt, so anything else re-runs
+ * both arms.
+ *
+ * - An arm invalid for a non-infrastructure reason blocks the pair. It is never
+ *   re-run: that would chase a candidate defect with more tokens, and select
+ *   the arm by its survival.
+ * - An arm missing, or invalid for an infrastructure reason, re-runs the pair
+ *   at attempt + 1. With a requeue context it first waits cooldownMs × the
+ *   runner's attempt count, and stops at maxAttempts: in v5 one pair took 14
+ *   attempts, and a pair that keeps failing while the rest of the grid passes
+ *   is a question for the operator, answered by a --resume.
+ */
+export function nextPairAction(attempt: number, arms: ReadonlyArray<ArmResult | undefined>, requeue?: RequeueContext): PairAction {
+	if (arms.some((r) => r && !r.valid && !r.infra)) {
+		return { kind: "blocked", reason: `attempt ${attempt}: an arm is invalid for a non-infrastructure reason; it stays invalid` };
+	}
+	const missing = arms.some((r) => !r);
+	if (!missing && arms.every((r) => r?.valid)) return { kind: "keep" };
+	const reason = missing
+		? (attempt === 0 ? "the pair has no run yet" : `attempt ${attempt}: an arm has no run at that attempt`)
+		: `attempt ${attempt}: an arm failed for an infrastructure reason`;
+	if (!requeue) return { kind: "rerun", attempt: attempt + 1, notBeforeMs: 0, reason };
+	if (requeue.attemptsThisRun >= requeue.policy.maxAttempts) {
+		return { kind: "give-up", reason: `${reason}; this runner has launched it ${requeue.attemptsThisRun} time(s), the cap of ${requeue.policy.maxAttempts}, so only a --resume re-runs it` };
+	}
+	return { kind: "rerun", attempt: attempt + 1, notBeforeMs: requeue.atMs + requeue.policy.cooldownMs * requeue.attemptsThisRun, reason };
+}
+
 /** Advisory identifiers for one target. The project name is not a label: the source already says it. */
 export function leakTermsFor(target: { id: string; aliases?: unknown }): string[] {
 	const aliases = Array.isArray(target.aliases) ? target.aliases.map(String) : [];
