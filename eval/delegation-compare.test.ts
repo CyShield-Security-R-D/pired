@@ -3,13 +3,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-	accountCellUsage, AUTH_HORIZON_CAP_MS, AUTH_MARGIN_MS, benchmarkRuntimeOf, checkAuthHorizon, childProviderFailure, classifyInfra,
+	accountCellUsage, atHighestAttempt, AUTH_HORIZON_CAP_MS, AUTH_MARGIN_MS, benchmarkRuntimeOf, checkAuthHorizon, childProviderFailure, classifyInfra,
 	credentialExpiry, decideInfra, DEFAULT_CANDIDATE_MAX_AGENTS, fetchErrorsFromStderr, gridWorstCaseMs, isBrokerEnvVar, metricFromRecord, notLaunchedOutcome, ownerIsLive,
-	newManifest, optionsFromManifest, parseComparePins, parseOptions, parseOwnerRecord, planResume, providerFailureTexts, resumeMismatches, reviewScope, runtimeMismatch, scopedSealCommand,
-	startTimeFromStat, subagentConfigFor, toolSurfaceErrors, trackStream, type ProviderFailures,
+	newManifest, optionsFromManifest, parseBreakerSpec, parseComparePins, parseOptions, parseOwnerRecord, planResume, providerFailureTexts, resumeMismatches, reviewScope,
+	runPairs, runtimeMismatch, scopedSealCommand, startTimeFromStat, subagentConfigFor, toolSurfaceErrors, trackStream,
+	type GridStopState, type ProviderFailures, type RunOutcome,
 } from "./delegation-compare.ts";
 import { BENCHMARK_SETTINGS } from "./delegation-compare-entry.ts";
-import { planSchedule } from "./delegation-compare-lib.ts";
+import { DEFAULT_BREAKER, planSchedule, type Arm, type BreakerPolicy, type ScheduledPair } from "./delegation-compare-lib.ts";
 
 // Per-file builders: a run record as the runner appends it to runs.jsonl, a
 // manifest fragment as resume reads it back, pi's transcript events, and the
@@ -818,5 +819,216 @@ describe("the candidate's worker cap", () => {
 		expect(resumeMismatches(prior, { candidateMaxAgents: 4 })).toEqual(["candidateMaxAgents"]);
 		expect(resumeMismatches(prior, {})).toEqual(["candidateMaxAgents"]);
 		expect(resumeMismatches({}, {})).toEqual([]);
+	});
+});
+
+describe("runPairs", () => {
+	// Builders: a scripted run outcome as runOne returns it, and a pair loop over
+	// fake launches and a fake clock. Each launched arm takes ten minutes; a sleep
+	// moves the clock by what it was asked for.
+	type Kind = "valid" | "drop" | "broken" | "quota";
+	const outcome = (pair: ScheduledPair, arm: Arm, attempt: number, kind: Kind): RunOutcome => {
+		const valid = kind === "valid";
+		const infraFailure = kind === "drop" || kind === "quota";
+		return {
+			metric: { key: pair.key, target: pair.target, pass: pair.pass, valid, truePositives: valid ? 1 : 0, precision: valid ? 0.5 : 0, totalClaims: valid ? 2 : 0, totalTokens: valid ? 1000 : Number.NaN },
+			arm, cellId: `cell-${pair.key}-${arm}-${attempt}`, seconds: 600, infraFailure, ...(kind === "quota" ? { quotaExhausted: true } : {}),
+			record: {
+				key: pair.key, target: pair.target, pass: pair.pass, arm, attempt, valid, infraFailure,
+				infraReason: kind === "drop" ? "transient provider error" : kind === "quota" ? "provider quota exhausted" : null,
+				...(kind === "quota" ? { infraEvidence: "usage limit reached" } : {}),
+			},
+		};
+	};
+	const grid = (targets: string[], script: (key: string, arm: Arm, attempt: number) => Kind | "throw", opts: { breaker?: BreakerPolicy; official?: boolean } = {}) => {
+		let clock = Date.UTC(2026, 8, 26, 12, 0);
+		const launched: string[] = [];
+		const settled: RunOutcome[] = [];
+		const lines: string[] = [];
+		const sleeps: number[] = [];
+		const state: GridStopState = { aborted: false, stopInvalid: false, stopReason: undefined, quotaExhausted: undefined };
+		const run = () => runPairs({
+			pairs: planSchedule(targets, 1), firstAttempt: () => 1, concurrency: 1, official: opts.official ?? false,
+			...(opts.breaker ? { breaker: opts.breaker } : {}),
+			state,
+			launch: async (pair, arm, attempt) => {
+				launched.push(`${pair.key} ${arm} ${attempt}`);
+				clock += 10 * 60_000;
+				const kind = script(pair.key, arm, attempt);
+				if (kind === "throw") throw new Error("cell staging failed");
+				return outcome(pair, arm, attempt, kind);
+			},
+			settle: async (o) => { settled.push(o); },
+			report: async () => undefined,
+			nowMs: () => clock,
+			sleep: async (ms) => { sleeps.push(ms); clock += ms; },
+			log: (line) => lines.push(line), warn: (line) => lines.push(line), out: "/grid",
+		});
+		return { run, launched, settled, lines, sleeps, state };
+	};
+	const allValid = (): Kind => "valid";
+
+	// The rule every grid before --breaker ran under, kept exactly: no re-queue,
+	// no breaker, and the first invalid run stops every later pair.
+	it("without a breaker policy the grid still stops on the first invalid run", async () => {
+		const g = grid(["A", "B", "C"], (key, arm) => key === "A#1" && arm === "baseline" ? "drop" : "valid");
+		const result = await g.run();
+		expect(g.launched).toEqual(["A#1 baseline 1"]);
+		expect(g.settled.map((o) => [o.metric.key, o.arm, o.record.notLaunched === true])).toEqual([["A#1", "baseline", false], ["A#1", "candidate", true]]);
+		expect(g.state.stopInvalid).toBe(true);
+		expect(g.state.stopReason).toBe("stopped after an invalid baseline run of A pass 1 (infra: transient provider error)");
+		expect(result).toEqual({ breaker: null, requeued: [], gaveUp: [] });
+		expect(g.sleeps).toEqual([]);
+	});
+
+	// v5 lost a night to one dropped stream. With a breaker the dropped pair runs
+	// again, both arms at attempt 2, once its cooldown has passed, and a pair of
+	// the schedule that is ready goes first rather than the worker idling.
+	it("re-queues an infrastructure-failed pair at the next attempt and finishes the grid", async () => {
+		const g = grid(["A", "B", "C"], (key, arm, attempt) => key === "A#1" && arm === "candidate" && attempt === 1 ? "drop" : "valid", { breaker: DEFAULT_BREAKER });
+		const result = await g.run();
+		expect(g.launched).toEqual([
+			"A#1 baseline 1", "A#1 candidate 1", "B#1 candidate 1", "B#1 baseline 1", "A#1 baseline 2", "A#1 candidate 2", "C#1 baseline 1", "C#1 candidate 1",
+		]);
+		expect(g.state.stopInvalid).toBe(false);
+		expect(result.requeued).toEqual([{ key: "A#1", attempt: 2, notBefore: "2026-09-26T12:21:00.000Z", reason: "attempt 1: an arm failed for an infrastructure reason" }]);
+		expect(result.breaker).toEqual({ tripped: false });
+		// The valid attempt-1 baseline is not paired with the attempt-2 candidate.
+		expect(atHighestAttempt(g.settled).filter((o) => o.metric.key === "A#1").map((o) => o.record.attempt)).toEqual([2, 2]);
+	});
+
+	// A cooldown with nothing else to run is waited out in short slices, so a
+	// signal or another pair's trip is seen within a second.
+	it("waits out the cooldown in one-second slices when only a re-queued pair is left", async () => {
+		const g = grid(["A"], (_key, arm, attempt) => arm === "candidate" && attempt === 1 ? "drop" : "valid", { breaker: DEFAULT_BREAKER });
+		await g.run();
+		expect(g.launched.slice(-2)).toEqual(["A#1 baseline 2", "A#1 candidate 2"]);
+		expect(g.sleeps.every((ms) => ms > 0 && ms <= 1000)).toBe(true);
+		expect(g.sleeps.reduce((a, b) => a + b, 0)).toBe(60_000);
+	});
+
+	// At the start of an outage the breaker spends C runs before it trips; a
+	// partner never launched is not counted, or it would trip on half the evidence.
+	it("stops launching once three consecutive infrastructure failures trip the breaker", async () => {
+		const g = grid(["A", "B", "C", "D"], () => "drop", { breaker: DEFAULT_BREAKER });
+		const result = await g.run();
+		expect(g.launched).toEqual(["A#1 baseline 1", "B#1 candidate 1", "A#1 baseline 2"]);
+		expect(g.state.stopInvalid).toBe(true);
+		expect(g.state.stopReason).toMatch(/^circuit breaker tripped on the baseline run of A pass 1 attempt 2: 3 consecutive infrastructure failures/);
+		expect(result.breaker?.tripped).toBe(true);
+		expect(g.lines.some((l) => l.startsWith("BREAKER TRIPPED — ") && l.includes("--resume /grid"))).toBe(true);
+	});
+
+	it("gives up on a pair at the attempt cap and finishes the rest of the grid", async () => {
+		const g = grid(["A", "B", "C"], (key, arm) => key === "A#1" && arm === "candidate" ? "drop" : "valid", { breaker: { ...DEFAULT_BREAKER, maxAttempts: 2 } });
+		const result = await g.run();
+		expect(g.launched.filter((l) => l.startsWith("A#1 candidate"))).toEqual(["A#1 candidate 1", "A#1 candidate 2"]);
+		expect(g.launched.at(-1)).toBe("C#1 candidate 1");
+		expect(result.gaveUp).toEqual([{ key: "A#1", attempt: 2, reason: expect.stringMatching(/the cap of 2, so only a --resume re-runs it$/) }]);
+		expect(g.state.stopInvalid).toBe(false);
+	});
+
+	// A runner fault is a harness failure: in an official grid it blocks the pair
+	// and fixes the decision, so the breaker stops the grid at once, as fail-fast did.
+	it("stops an official grid at once on a runner fault and never re-queues it", async () => {
+		const g = grid(["A", "B"], (key) => key === "A#1" ? "throw" : "valid", { breaker: DEFAULT_BREAKER, official: true });
+		const result = await g.run();
+		expect(g.launched).toEqual(["A#1 baseline 1"]);
+		expect(g.settled[0]!.record.errors).toEqual(["runner fault: cell staging failed"]);
+		expect(g.state.stopReason).toMatch(/official grid is invalid for a non-infrastructure reason/);
+		expect(result.requeued).toEqual([]);
+	});
+
+	// An exploratory grid keeps going past a blocked pair, which is never re-run.
+	it("keeps an exploratory grid going past a non-infrastructure failure without re-running it", async () => {
+		const g = grid(["A", "B"], (key, arm) => key === "A#1" && arm === "baseline" ? "broken" : "valid", { breaker: DEFAULT_BREAKER });
+		const result = await g.run();
+		expect(g.launched).toEqual(["A#1 baseline 1", "B#1 candidate 1", "B#1 baseline 1"]);
+		expect(result).toMatchObject({ requeued: [], gaveUp: [], breaker: { tripped: false } });
+	});
+
+	it("stops the grid on a spent quota with the quota's own reason and resume advice", async () => {
+		const g = grid(["A", "B"], () => "quota", { breaker: DEFAULT_BREAKER });
+		await g.run();
+		expect(g.launched).toEqual(["A#1 baseline 1"]);
+		expect(g.state.quotaExhausted).toBe("provider quota exhausted: usage limit reached");
+		expect(g.state.stopReason).toMatch(/^provider quota exhausted on the baseline run of A pass 1 .*the quota must reset before --resume$/);
+		expect(g.lines.filter((l) => l.startsWith("BREAKER TRIPPED"))).toEqual([]);
+	});
+});
+
+describe("atHighestAttempt", () => {
+	const row = (key: string, arm: string, attempt?: number) => ({ metric: { key }, record: { key, arm, ...(attempt === undefined ? {} : { attempt }) } });
+
+	// compareMatchedRuns reads a repeated key as a duplicate run and the grid as
+	// incomplete; a re-queued pair is compared at its last attempt only.
+	it("keeps each pair's highest attempt only, in order", () => {
+		const rows = [row("A#1", "baseline", 1), row("A#1", "candidate", 1), row("B#1", "baseline", 1), row("A#1", "baseline", 2), row("A#1", "candidate", 2)];
+		expect(atHighestAttempt(rows).map((r) => `${r.metric.key} ${r.record.arm} ${String(r.record.attempt)}`)).toEqual(["B#1 baseline 1", "A#1 baseline 2", "A#1 candidate 2"]);
+	});
+
+	it("passes a fail-fast grid's outcomes through unchanged, rows without an attempt included", () => {
+		const rows = [row("A#1", "baseline"), row("A#1", "candidate"), row("B#1", "candidate", 3), row("B#1", "baseline", 3)];
+		expect(atHighestAttempt(rows)).toEqual(rows);
+	});
+});
+
+describe("the breaker policy", () => {
+	// Builders: the required command line, and the manifest a fresh grid writes
+	// from it, with the inputs block optionsFromManifest reads back on a resume.
+	const argv = (...extra: string[]): string[] => [
+		"--baseline", "/b", "--candidate", "/c", "--corpus", "/corpus", "--truth", "/truth", "--out", "/out",
+		"--provider", "openai-codex", "--model", "gpt-6-luna", ...extra,
+	];
+	const options = (...extra: string[]) => {
+		const parsed = parseOptions(argv(...extra));
+		if (parsed === "help" || parsed.kind !== "run") throw new Error("expected a run");
+		return parsed.options;
+	};
+	const stored = (opts: ReturnType<typeof options>): Record<string, unknown> => ({
+		...newManifest(opts, "official"),
+		inputs: { corpus: opts.corpus, truth: opts.truth, corpusManifest: { path: opts.manifestPath }, baseline: { path: opts.baseline }, candidate: { path: opts.candidate } },
+		pins: { landlockWrapper: opts.fsSeal },
+	});
+
+	// A resume that forgot the policy would fall back to fail-fast half-way
+	// through a grid, and re-queue nothing.
+	it("the policy survives a resume from the manifest", () => {
+		const manifest = stored(options("--breaker", "consecutive=2,maxAttempts=3"));
+		expect(manifest.breaker).toEqual({ ...DEFAULT_BREAKER, consecutive: 2, maxAttempts: 3 });
+		expect(optionsFromManifest("/out", manifest).breaker).toEqual({ ...DEFAULT_BREAKER, consecutive: 2, maxAttempts: 3 });
+		expect(optionsFromManifest("/out", stored(options("--breaker", "default"))).breaker).toEqual(DEFAULT_BREAKER);
+	});
+
+	// Every grid before the option ran fail-fast; its manifest must still load,
+	// and a grid run without the option must write the manifest it always did.
+	it("leaves a grid without --breaker, and an old manifest, on fail-fast", () => {
+		expect(options()).not.toHaveProperty("breaker");
+		expect(newManifest(options(), "official")).not.toHaveProperty("breaker");
+		expect(optionsFromManifest("/out", stored(options()))).not.toHaveProperty("breaker");
+	});
+
+	it("refuses to resume from a manifest whose breaker is malformed rather than reading it as absent", () => {
+		expect(() => optionsFromManifest("/out", { ...stored(options()), breaker: { ...DEFAULT_BREAKER, window: 0 } })).toThrow(/invalid breaker: .*window/);
+	});
+
+	it("refuses a resume whose breaker differs from the one the grid started with", () => {
+		expect(resumeMismatches({ breaker: DEFAULT_BREAKER }, { breaker: { ...DEFAULT_BREAKER, rate: 0.25 } })).toEqual(["breaker"]);
+		expect(resumeMismatches({ breaker: DEFAULT_BREAKER }, {})).toEqual(["breaker"]);
+	});
+
+	it("refuses a --breaker spec it cannot read, naming the option", () => {
+		for (const bad of ["on", "rate=2", "window=8,window=9", "maxAttempt=4", "cooldownMs=", "rate=0.5=1"]) {
+			expect(() => parseBreakerSpec(bad)).toThrow(/^--breaker: /);
+		}
+		expect(() => parseOptions(argv("--breaker"))).toThrow(/Missing value for --breaker/);
+	});
+
+	// A grid that re-queues runs longer than one attempt per pair; a horizon sized
+	// for one attempt would let its OAuth token be refreshed inside a cell.
+	it("sizes the auth horizon for every attempt and cooldown the breaker allows", () => {
+		const official = { passes: 3, targets: 5, concurrency: 2, timeoutMs: 2 * 3_600_000 };
+		expect(gridWorstCaseMs({ ...official, breaker: DEFAULT_BREAKER })).toBe(9 * (4 * 2 * 2 * 3_600_000 + 6 * 60_000));
+		expect(gridWorstCaseMs(official)).toBe(36 * 3_600_000);
 	});
 });

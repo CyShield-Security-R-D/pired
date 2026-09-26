@@ -27,10 +27,10 @@ import { DVBANK, dedupe, engagementTelemetry, fromLedger, scoreFindings, type Fi
 import { scopeClause, stripLeakage } from "./corpus/lib.ts";
 import { BENCHMARK_SETTINGS, PROBE_FAUX_MODEL, PROBE_FAUX_PROVIDER, type CompareEntryConfig, type ProbeConfig } from "./delegation-compare-entry.ts";
 import {
-	accountUsage, APPROVAL_DECISION, compareMatchedRuns, findLeaks, isOfficialGrid, leakTermsFor, nextPairAction, observationsFromChildSession,
-	observationsFromPiEvents, OFFICIAL_PASSES, OFFICIAL_TARGET_IDS, planSchedule, reconcileChildSession, reconcileSubagentCalls,
-	SUBAGENT_TOOL,
-	type Arm, type ChildSessionExtraction, type ChildVerdict, type ExpectedCell, type PiUsageExtraction, type RunMetric,
+	accountUsage, APPROVAL_DECISION, compareMatchedRuns, createBreaker, DEFAULT_BREAKER, findLeaks, isOfficialGrid, leakTermsFor, nextPairAction,
+	observationsFromChildSession, observationsFromPiEvents, OFFICIAL_PASSES, OFFICIAL_TARGET_IDS, parseBreakerPolicy, planSchedule,
+	reconcileChildSession, reconcileSubagentCalls, SUBAGENT_TOOL,
+	type Arm, type BreakerPolicy, type BreakerVerdict, type ChildSessionExtraction, type ChildVerdict, type ExpectedCell, type PiUsageExtraction, type RunMetric,
 	type ScheduledPair, type SubagentChild, type SubagentReconciliation, type UsageAccounting, type UsageObservation,
 } from "./delegation-compare-lib.ts";
 // The staging, target-copy and tree-hash helpers moved to their own module so
@@ -234,6 +234,12 @@ type Options = {
 	 * whose resume must write the scope it started with: no `maxAgents`.
 	 */
 	candidateMaxAgents?: number;
+	/**
+	 * --breaker: re-queue infrastructure-failed pairs and stop on the circuit
+	 * breaker instead of on the first invalid run. Absent: fail-fast, exactly as
+	 * every grid before the option ran.
+	 */
+	breaker?: BreakerPolicy;
 };
 
 type JsonRecord = Record<string, unknown>;
@@ -313,6 +319,12 @@ Options:
   --candidate-max-agents <n>
                         Worker cap the candidate's scope states; the
                         baseline's scope names none (default: ${DEFAULT_CANDIDATE_MAX_AGENTS})
+  --breaker <spec>      Stop on a circuit breaker instead of the first invalid
+                        run, and re-queue pairs that fail for infrastructure.
+                        <spec> is "default", or comma-separated k=v pairs
+                        over the defaults: consecutive=${DEFAULT_BREAKER.consecutive} rate=${DEFAULT_BREAKER.rate}
+                        window=${DEFAULT_BREAKER.window} cooldownMs=${DEFAULT_BREAKER.cooldownMs} maxAttempts=${DEFAULT_BREAKER.maxAttempts}.
+                        Pinned in the manifest; off unless given
   --out <dir>           New or empty directory; must not contain an advisory ID
   --resume <out-dir>    Continue a stopped grid in place; takes no other option
   --dry-run             Run the preflight only, with no model calls
@@ -391,15 +403,24 @@ resume refuses across an edit to it). To freeze a candidate:
   4. Run a full-grid --dry-run for each priority model: it must pass and print
      no EXPLORATORY line.
 
-Pairs run pass-major with the arm order counterbalanced. After any invalid run
-the runner stops launching new pairs; in-flight pairs finish, except that a
-pair whose first arm was invalid does not launch its second arm (recorded as not
-launched). A provider quota or usage-window failure also stops the grid, and the
-quota must reset before --resume. SIGINT/SIGTERM/SIGHUP stops new launches,
-terminates only process groups and scopes this runner started (a second signal
-kills them), reaps their strays, records each arm it stopped as a runner
-interruption (infrastructure, re-run by --resume) with the signal time, and still
-writes summary.json marked interrupted. The runner claims <out> exclusively in
+Pairs run pass-major with the arm order counterbalanced. Without --breaker,
+after any invalid run the runner stops launching new pairs; in-flight pairs
+finish, except that a pair whose first arm was invalid does not launch its second
+arm (recorded as not launched). A provider quota or usage-window failure also
+stops the grid, and the quota must reset before --resume.
+With --breaker, a pair with an arm invalid for infrastructure is re-queued, both
+arms at attempt + 1, after cooldownMs x the attempts this runner made at it, up
+to maxAttempts; one invalid for any other reason is never re-queued. The breaker
+stops new launches at once on a spent quota or on a non-infrastructure invalid
+run of an official grid, and otherwise after <consecutive> infrastructure
+failures in a row, or an infrastructure share of at least <rate> over the last
+<window> launched runs (read once that many are in); a valid run ends the streak.
+A pair still counts only when both arms are valid at the same attempt.
+SIGINT/SIGTERM/SIGHUP stops new launches, terminates only process groups and
+scopes this runner started (a second signal kills them), reaps their strays,
+records each arm it stopped as a runner interruption (infrastructure, re-run by
+--resume) with the signal time, and still writes summary.json marked
+interrupted. The runner claims <out> exclusively in
 ${OWNER_FILE} and refreshes progress.json updatedAt every ${HEARTBEAT_MS / 1000} s while it
 runs, so a stale timestamp means a dead runner.
 
@@ -421,7 +442,7 @@ export function parseOptions(argv: string[]): Parsed {
 	const valueFlags = new Set([
 		"--baseline", "--candidate", "--corpus", "--truth", "--out", "--provider", "--model",
 		"--thinking", "--passes", "--only", "--concurrency", "--timeout", "--manifest", "--fs-seal", "--auth-horizon-hours",
-		"--candidate-max-agents",
+		"--candidate-max-agents", "--breaker",
 	]);
 	const values = new Map<string, string>();
 	let dryRun = false;
@@ -454,6 +475,8 @@ export function parseOptions(argv: string[]): Parsed {
 	if (authHorizonHours !== undefined && (!Number.isFinite(authHorizonHours) || authHorizonHours <= 0)) throw new Error("--auth-horizon-hours must be a positive number of hours");
 	const candidateMaxAgents = Number(values.get("--candidate-max-agents") ?? String(DEFAULT_CANDIDATE_MAX_AGENTS));
 	if (!isWorkerCap(candidateMaxAgents)) throw new Error("--candidate-max-agents must be a non-negative integer");
+	const breakerText = values.get("--breaker");
+	const breaker = breakerText === undefined ? undefined : parseBreakerSpec(breakerText);
 	return {
 		kind: "run",
 		options: {
@@ -465,8 +488,33 @@ export function parseOptions(argv: string[]): Parsed {
 			manifestPath: resolve(values.get("--manifest") ?? DEFAULT_MANIFEST), dryRun,
 			...(authHorizonHours === undefined ? {} : { authHorizonHours }),
 			candidateMaxAgents,
+			...(breaker === undefined ? {} : { breaker }),
 		},
 	};
+}
+
+/**
+ * --breaker's value: "default", or k=v pairs over the defaults, with the
+ * manifest's field names. Validated by the same rule the manifest is read back
+ * with, so a grid cannot start under a policy its own resume would refuse.
+ */
+export function parseBreakerSpec(spec: string): BreakerPolicy {
+	const policy: Record<string, unknown> = { ...DEFAULT_BREAKER };
+	if (spec.trim() !== "default") {
+		const seen = new Set<string>();
+		for (const part of spec.split(",")) {
+			const [key, value, extra] = part.split("=").map((x) => x.trim());
+			if (!key || value === undefined || value === "" || extra !== undefined) throw new Error(`--breaker: expected "default" or k=v pairs, got "${part}"`);
+			if (seen.has(key)) throw new Error(`--breaker: ${key} is given twice`);
+			seen.add(key);
+			policy[key] = Number(value);
+		}
+	}
+	try {
+		return parseBreakerPolicy(policy);
+	} catch (error) {
+		throw new Error(`--breaker: ${message(error)}`);
+	}
 }
 
 /**
@@ -503,6 +551,12 @@ export function optionsFromManifest(dir: string, manifest: JsonRecord): Options 
 	// is refused rather than read as "absent", which would silently change the arm.
 	if (manifest.candidateMaxAgents !== undefined && !isWorkerCap(manifest.candidateMaxAgents)) throw new Error("--resume manifest has an invalid candidateMaxAgents");
 	const candidateMaxAgents = manifest.candidateMaxAgents as number | undefined;
+	// Absent: the grid ran fail-fast, and so does its resume. A present policy is
+	// read strictly, for the same reason as the cap above.
+	let breaker: BreakerPolicy | undefined;
+	if (manifest.breaker !== undefined) {
+		try { breaker = parseBreakerPolicy(manifest.breaker); } catch (error) { throw new Error(`--resume manifest has an invalid breaker: ${message(error)}`); }
+	}
 	return {
 		baseline: need(baseline.path, "the baseline snapshot path"), candidate: need(candidate.path, "the candidate snapshot path"),
 		corpus: need(inputs.corpus, "the corpus path"), truth: need(inputs.truth, "the truth path"), out: dir,
@@ -512,6 +566,7 @@ export function optionsFromManifest(dir: string, manifest: JsonRecord): Options 
 		manifestPath: need(corpusManifest.path, "the corpus manifest path"), dryRun: false,
 		...(authHorizonHours === undefined ? {} : { authHorizonHours }),
 		...(candidateMaxAgents === undefined ? {} : { candidateMaxAgents }),
+		...(breaker === undefined ? {} : { breaker }),
 	};
 }
 
@@ -593,9 +648,17 @@ export const AUTH_MARGIN_MS = 35 * 60 * 1000;
  */
 export const AUTH_HORIZON_CAP_MS = 7 * 24 * 60 * 60 * 1000;
 
-/** Every pass, every wave of `concurrency` pairs, both arms of each pair, each to its full timeout. */
-export function gridWorstCaseMs(grid: { passes: number; targets: number; concurrency: number; timeoutMs: number }): number {
-	return grid.passes * Math.ceil(grid.targets / grid.concurrency) * 2 * grid.timeoutMs;
+/**
+ * Every pass, every wave of `concurrency` pairs, both arms of each pair, each to
+ * its full timeout. With a breaker each pair may run maxAttempts times and wait
+ * its cooldowns in between: a horizon sized for one attempt would let a grid
+ * that re-queues outlive its OAuth token and refresh it inside a cell.
+ */
+export function gridWorstCaseMs(grid: { passes: number; targets: number; concurrency: number; timeoutMs: number; breaker?: Pick<BreakerPolicy, "maxAttempts" | "cooldownMs"> }): number {
+	if (!grid.breaker) return grid.passes * Math.ceil(grid.targets / grid.concurrency) * 2 * grid.timeoutMs;
+	const { maxAttempts, cooldownMs } = grid.breaker;
+	const pairMs = maxAttempts * 2 * grid.timeoutMs + cooldownMs * (maxAttempts * (maxAttempts - 1)) / 2;
+	return grid.passes * Math.ceil(grid.targets / grid.concurrency) * pairMs;
 }
 
 /**
@@ -1344,9 +1407,11 @@ type OwnedResult = {
 const activeGroups = new Map<number, (hard: boolean) => void>();
 /**
  * `aborted` is a signal (stop launching, terminate our groups). `stopInvalid`
- * is fail-fast: after any invalid run the runner stops pulling new pairs while
- * in-flight pairs finish, because one invalid arm already prevents approval and
- * launching the rest would spend hours of tokens for a decision already fixed.
+ * stops new pairs while in-flight pairs finish. Without a breaker it is
+ * fail-fast, set by any invalid run, because one invalid arm already prevents
+ * approval and launching the rest would spend hours of tokens for a decision
+ * already fixed. With one, the breaker sets it (runPairs), since an
+ * infrastructure failure is re-queued in the same runner instead.
  */
 const runState = {
 	aborted: false, signals: 0, stopInvalid: false, stopReason: undefined as string | undefined,
@@ -1966,7 +2031,7 @@ async function cellConfigErrors(cell: PreparedCell): Promise<string[]> {
 	return errors;
 }
 
-type RunOutcome = { metric: RunMetric; arm: Arm; cellId: string; seconds: number; record: JsonRecord; infraFailure: boolean; quotaExhausted?: boolean };
+export type RunOutcome = { metric: RunMetric; arm: Arm; cellId: string; seconds: number; record: JsonRecord; infraFailure: boolean; quotaExhausted?: boolean };
 
 /**
  * Kill everything this cell left running. pi's bash tool detaches every command
@@ -2626,7 +2691,10 @@ async function runPreflight(options: Options, manifest: JsonRecord, saveManifest
 			if (error.code === "ENOENT") return undefined;
 			throw error;
 		});
-		const worstCaseMs = gridWorstCaseMs({ passes: options.passes, targets: inputs.targets.length, concurrency: options.concurrency, timeoutMs: options.timeoutMs });
+		const worstCaseMs = gridWorstCaseMs({
+			passes: options.passes, targets: inputs.targets.length, concurrency: options.concurrency, timeoutMs: options.timeoutMs,
+			...(options.breaker === undefined ? {} : { breaker: options.breaker }),
+		});
 		const verdict = checkAuthHorizon({
 			provider: options.provider, credential: credentialExpiry(authText, options.provider), worstCaseMs,
 			...(options.authHorizonHours === undefined ? {} : { requestedHours: options.authHorizonHours }),
@@ -2949,6 +3017,9 @@ export function resumeMismatches(prior: JsonRecord, fresh: JsonRecord): string[]
 	// The cap is half of what the candidate arm is; pairs run under two caps
 	// would be two candidates pooled into one comparison.
 	eq("candidateMaxAgents", prior.candidateMaxAgents, fresh.candidateMaxAgents);
+	// A grid that re-queued and stopped under one policy, then resumed under
+	// another, would be one grid run under two stopping rules.
+	eq("breaker", prior.breaker, fresh.breaker);
 	const pr = (prior.requested ?? {}) as JsonRecord;
 	const fr = (fresh.requested ?? {}) as JsonRecord;
 	for (const k of ["provider", "model", "thinking", "passes", "only"]) eq(`requested.${k}`, pr[k], fr[k]);
@@ -3137,6 +3208,7 @@ export function newManifest(options: Options, mode: string): JsonRecord {
 		requested: { provider: options.provider, model: options.model, thinking: options.thinking, passes: options.passes, only: options.selected, authHorizonHours: options.authHorizonHours ?? null },
 		thinking: options.thinking, passes: options.passes, concurrency: options.concurrency, timeoutMs: options.timeoutMs,
 		...(options.candidateMaxAgents === undefined ? {} : { candidateMaxAgents: options.candidateMaxAgents }),
+		...(options.breaker === undefined ? {} : { breaker: options.breaker }),
 		prompt: REVIEW_PROMPT, resumePolicy: RESUME_POLICY,
 		runtimeConfiguration: {
 			globalExtensions: false, globalSkills: false, promptTemplates: false, contextFiles: false, theme: false, forcedDelegation: false, scribe: "off",
@@ -3322,6 +3394,197 @@ export function notLaunchedOutcome(pair: ScheduledPair, arm: Arm, attempt: numbe
 	};
 }
 
+/**
+ * The outcomes at each pair's highest attempt, in their order. A pair counts
+ * only when both arms are valid at the same attempt, and a re-queued pair
+ * leaves its earlier attempts in the outcomes: passed whole, the comparison
+ * would read them as duplicate runs and the grid as incomplete. A fail-fast
+ * grid holds one attempt per pair, so for it this is the identity.
+ */
+export function atHighestAttempt<T extends { metric: { key: string }; record: JsonRecord }>(outcomes: T[]): T[] {
+	const attemptOf = (o: T): number => typeof o.record.attempt === "number" ? o.record.attempt : 1;
+	const top = new Map<string, number>();
+	for (const o of outcomes) top.set(o.metric.key, Math.max(top.get(o.metric.key) ?? 0, attemptOf(o)));
+	return outcomes.filter((o) => attemptOf(o) === top.get(o.metric.key));
+}
+
+/** The record of an arm whose launch threw inside the runner: a harness fault, never infrastructure. */
+function runnerFaultOutcome(pair: ScheduledPair, arm: Arm, attempt: number, error: unknown): RunOutcome {
+	const record: JsonRecord = { key: pair.key, target: pair.target, pass: pair.pass, arm, attempt, valid: false, infraFailure: false, errors: [`runner fault: ${message(error)}`] };
+	return {
+		metric: { key: pair.key, target: pair.target, pass: pair.pass, valid: false, truePositives: 0, precision: 0, totalClaims: 0, totalTokens: Number.NaN },
+		arm, cellId: "", seconds: 0, record, infraFailure: false,
+	};
+}
+
+/** The part of runState the pair loop reads and sets; the signal handlers share the same object. */
+export type GridStopState = { aborted: boolean; stopInvalid: boolean; stopReason: string | undefined; quotaExhausted: string | undefined };
+
+/** What the pair loop needs from the grid around it. runGrid passes the real runner; the tests pass fakes and a fake clock. */
+export interface PairLoop {
+	/** The pairs to launch, in schedule order. */
+	pairs: ScheduledPair[];
+	/** The attempt a pair's first launch by this runner gets: 1, or a resume's next attempt. */
+	firstAttempt: (pair: ScheduledPair) => number;
+	concurrency: number;
+	official: boolean;
+	/** Absent: fail-fast. The first invalid run stops new launches, and nothing is re-queued. */
+	breaker?: BreakerPolicy;
+	state: GridStopState;
+	/** Launch one arm. A throw is a runner fault, recorded as a non-infrastructure invalid run. */
+	launch: (pair: ScheduledPair, arm: Arm, attempt: number) => Promise<RunOutcome>;
+	/** Keep an outcome (the outcomes list, runs.jsonl). A throw is a bookkeeping failure, and stops new launches. */
+	settle: (outcome: RunOutcome) => Promise<void>;
+	/** After the stop decision: progress.json and the console line. */
+	report: (outcome: RunOutcome, pair: ScheduledPair, arm: Arm, attempt: number) => Promise<void>;
+	nowMs: () => number;
+	sleep: (ms: number) => Promise<void>;
+	log: (line: string) => void;
+	warn: (line: string) => void;
+	/** The grid's directory, named in the resume command the messages print. */
+	out: string;
+}
+
+export interface PairLoopResult {
+	/** The breaker's last verdict; null for a fail-fast grid. */
+	breaker: BreakerVerdict | null;
+	requeued: Array<{ key: string; attempt: number; notBefore: string; reason: string }>;
+	gaveUp: Array<{ key: string; attempt: number; reason: string }>;
+}
+
+/** The longest an idle pair-worker sleeps before it looks again, so a signal or a trip is seen within a second while it waits out a cooldown. */
+const IDLE_SLICE_MS = 1000;
+
+/**
+ * The pool of pair-workers runGrid drives. Workers take pairs in schedule
+ * order, and each pair runs its two arms one after the other, so the arms of
+ * one pair never share a provider window.
+ *
+ * Without a breaker this is the fail-fast loop every earlier grid ran: the
+ * first invalid run stops new launches and in-flight pairs finish. In v5 that
+ * let one dropped stream stop a grid for the night (research/12). With a
+ * breaker, each launched run feeds it instead, and a pair that ends invalid for
+ * infrastructure is re-queued by nextPairAction, both arms at attempt + 1 after
+ * its cooldown. A ready re-queued pair goes before later pairs of the schedule,
+ * so a stopped grid still leaves whole passes where it can. A worker with
+ * nothing ready waits for the first cooldown to end; a worker with nothing
+ * queued stops, which loses no pair, because only the worker that ran a pair
+ * can re-queue it, and it is still running.
+ */
+export async function runPairs(loop: PairLoop): Promise<PairLoopResult> {
+	const { state } = loop;
+	const policy = loop.breaker;
+	const breaker = policy ? createBreaker(policy) : undefined;
+	const result: PairLoopResult = { breaker: null, requeued: [], gaveUp: [] };
+	type Queued = { pair: ScheduledPair; attempt: number; firstAttempt: number; notBeforeMs: number };
+	const queue: Queued[] = loop.pairs.map((pair) => {
+		const attempt = loop.firstAttempt(pair);
+		return { pair, attempt, firstAttempt: attempt, notBeforeMs: 0 };
+	});
+	const takeReady = (): Queued | undefined => {
+		const now = loop.nowMs();
+		let pick = -1;
+		for (const [i, q] of queue.entries()) if (q.notBeforeMs <= now && (pick < 0 || q.pair.index < queue[pick]!.pair.index)) pick = i;
+		return pick < 0 ? undefined : queue.splice(pick, 1)[0];
+	};
+	const quotaStop = (arm: Arm, pair: ScheduledPair): string =>
+		`provider quota exhausted on the ${arm} run of ${pair.target} pass ${pair.pass} (${state.quotaExhausted ?? ""}); the quota must reset before --resume`;
+	const runPair = async ({ pair, attempt, firstAttempt }: Queued): Promise<void> => {
+		let first: RunOutcome | undefined;
+		const byArm: Partial<Record<Arm, RunOutcome>> = {};
+		for (const arm of pair.order) {
+			// Nothing of this pair ran yet: leave it without a row, which a resume
+			// reads as a pair with no run at this attempt.
+			if (state.aborted && !first) break;
+			// Every write for this arm is inside one try: a bookkeeping failure
+			// (ENOSPC on runs.jsonl) then stops new launches and drains the pool with
+			// the signal handlers still installed, rather than rejecting Promise.all.
+			try {
+				let outcome: RunOutcome;
+				let launched = false;
+				if (first && (!first.metric.valid || state.aborted)) {
+					// The partner is not launched: a first arm invalid for a non-infra
+					// reason blocks the pair and one invalid for infra re-runs both arms,
+					// so up to two hours of this arm could never be compared. It is
+					// recorded, as infra exactly when the first arm was.
+					outcome = notLaunchedOutcome(pair, arm, attempt, first, state.aborted);
+				} else {
+					launched = true;
+					try {
+						outcome = await loop.launch(pair, arm, attempt);
+					} catch (error) {
+						outcome = runnerFaultOutcome(pair, arm, attempt, error);
+					}
+				}
+				first ??= outcome;
+				byArm[arm] = outcome;
+				await loop.settle(outcome);
+				if (outcome.quotaExhausted && !state.quotaExhausted) {
+					state.quotaExhausted = `${String(outcome.record.infraReason ?? "provider quota exhausted")}: ${String(outcome.record.infraEvidence ?? "")}`;
+					loop.log(`QUOTA EXHAUSTED — ${state.quotaExhausted}. No further pair will launch; wait for the provider's quota or usage window to reset, then run --resume ${loop.out}.`);
+				}
+				if (!breaker) {
+					if (!outcome.metric.valid && !state.stopInvalid && !state.aborted) {
+						state.stopInvalid = true;
+						state.stopReason = outcome.quotaExhausted
+							? quotaStop(arm, pair)
+							: `stopped after an invalid ${arm} run of ${pair.target} pass ${pair.pass}${outcome.infraFailure ? ` (infra: ${String(outcome.record.infraReason ?? "")})` : ""}`;
+					}
+				} else if (launched) {
+					// A partner that was not launched reached no provider, so it is not
+					// evidence of an outage; counting it would trip on half the failures.
+					const verdict = breaker.record({
+						atMs: loop.nowMs(), valid: outcome.metric.valid, infra: outcome.infraFailure, exhausted: outcome.quotaExhausted === true,
+						blocked: loop.official && !outcome.metric.valid && !outcome.infraFailure,
+					});
+					if (verdict.tripped && !state.stopInvalid && !state.aborted) {
+						state.stopInvalid = true;
+						state.stopReason = outcome.quotaExhausted
+							? quotaStop(arm, pair)
+							: `circuit breaker tripped on the ${arm} run of ${pair.target} pass ${pair.pass} attempt ${attempt}: ${verdict.reason ?? ""}`;
+						if (!outcome.quotaExhausted) loop.log(`BREAKER TRIPPED — ${state.stopReason}. No further pair will launch; pairs in flight finish, then --resume ${loop.out} re-runs what is left.`);
+					}
+				}
+				await loop.report(outcome, pair, arm, attempt);
+			} catch (error) {
+				// The bookkeeping itself failed; stop launching and keep draining.
+				if (!state.stopInvalid) { state.stopInvalid = true; state.stopReason = `bookkeeping write failed: ${message(error)}`; }
+				loop.warn(`bookkeeping failure for ${pair.target} pass ${pair.pass} ${arm}: ${message(error)}`);
+			}
+		}
+		// A stopped grid re-queues nothing: its resume re-runs the pair from runs.jsonl.
+		if (!policy || state.aborted || state.stopInvalid) return;
+		const now = loop.nowMs();
+		const arms = [byArm.baseline, byArm.candidate].map((o) => o && { valid: o.metric.valid, infra: o.infraFailure });
+		const action = nextPairAction(attempt, arms, { policy, atMs: now, attemptsThisRun: attempt - firstAttempt + 1 });
+		if (action.kind === "rerun") {
+			queue.push({ pair, attempt: action.attempt, firstAttempt, notBeforeMs: action.notBeforeMs });
+			result.requeued.push({ key: pair.key, attempt: action.attempt, notBefore: new Date(action.notBeforeMs).toISOString(), reason: action.reason });
+			loop.log(`RE-QUEUED ${pair.target} pass ${pair.pass} as attempt ${action.attempt} after a ${Math.round((action.notBeforeMs - now) / 1000)} s cooldown · ${action.reason}`);
+		} else if (action.kind === "give-up") {
+			result.gaveUp.push({ key: pair.key, attempt, reason: action.reason });
+			loop.log(`ATTEMPT CAP ${pair.target} pass ${pair.pass} · ${action.reason}`);
+		}
+	};
+	const worker = async (): Promise<void> => {
+		for (;;) {
+			// Stop taking pairs once the grid is stopped or a signal arrived; a pair
+			// already in flight runs its second arm only when its first arm was valid.
+			if (state.aborted || state.stopInvalid || !queue.length) return;
+			const next = takeReady();
+			if (next) {
+				await runPair(next);
+				continue;
+			}
+			const waitMs = Math.min(...queue.map((q) => q.notBeforeMs)) - loop.nowMs();
+			await loop.sleep(Math.min(Math.max(waitMs, 0), IDLE_SLICE_MS));
+		}
+	};
+	await Promise.all(Array.from({ length: Math.min(loop.concurrency, Math.max(1, loop.pairs.length)) }, worker));
+	result.breaker = breaker ? breaker.verdict : null;
+	return result;
+}
+
 async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, plan: ResumePlan | undefined): Promise<void> {
 	const { ctx, expectedCells, official } = pre;
 	const output = ctx.out;
@@ -3343,81 +3606,40 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 		}
 	}
 	const launchPairs = plan ? pairs.filter((p) => plan.rerunKeys.includes(p.key)) : pairs;
-	let cursor = 0;
 	// reportStatus keeps the last record, so the heartbeat rewrites this same state.
 	const progress = (status: string, extra: JsonRecord = {}): Promise<void> => reportStatus({
 		status, official, expectedArms, completedRuns: outcomes.length, ...extra,
 	});
 	await progress("running");
-	// A pool of pair-workers pulls pairs in schedule order; each pair runs its two
-	// arms one after the other, so the arms of one pair never share a provider window.
-	await Promise.all(Array.from({ length: Math.min(options.concurrency, Math.max(1, launchPairs.length)) }, async () => {
-		for (;;) {
-			// Fail-fast: stop pulling new pairs once a run is invalid or a signal
-			// arrived; a pair already in flight runs its second arm below only when
-			// its first arm was valid.
-			if (runState.aborted || runState.stopInvalid) return;
-			const pair = launchPairs[cursor++];
-			if (!pair) return;
-			const target = targetById.get(pair.target)!;
-			const attempt = plan ? (plan.nextAttempt[pair.key] ?? 1) : 1;
-			let first: RunOutcome | undefined;
-			for (const arm of pair.order) {
-				// Nothing of this pair ran yet: leave it without a row, which a resume
-				// reads as a pair with no run at this attempt.
-				if (runState.aborted && !first) break;
-				// Every write for this arm is inside one try: a bookkeeping failure
-				// (ENOSPC on runs.jsonl) then sets fail-fast and drains the pool with the
-				// signal handlers still installed, rather than rejecting Promise.all.
-				try {
-					let outcome: RunOutcome;
-					if (first && (!first.metric.valid || runState.aborted)) {
-						// The partner is not launched: a first arm invalid for a non-infra
-						// reason blocks the pair and one invalid for infra makes a resume
-						// re-run both arms, so up to two hours of this arm could never be
-						// compared. It is recorded, as infra exactly when the first arm was.
-						outcome = notLaunchedOutcome(pair, arm, attempt, first, runState.aborted);
-					} else {
-						try {
-							outcome = await runOne(ctx, target, pair.pass, arm, attempt);
-						} catch (error) {
-							const record: JsonRecord = { key: pair.key, target: pair.target, pass: pair.pass, arm, attempt, valid: false, infraFailure: false, errors: [`runner fault: ${message(error)}`] };
-							outcome = {
-								metric: { key: pair.key, target: pair.target, pass: pair.pass, valid: false, truePositives: 0, precision: 0, totalClaims: 0, totalTokens: Number.NaN },
-								arm, cellId: "", seconds: 0, record, infraFailure: false,
-							};
-						}
-					}
-					first ??= outcome;
-					outcomes.push(outcome);
-					await appendJsonl(join(output, "runs.jsonl"), outcome.record);
-					if (outcome.quotaExhausted && !runState.quotaExhausted) {
-						runState.quotaExhausted = `${String(outcome.record.infraReason ?? "provider quota exhausted")}: ${String(outcome.record.infraEvidence ?? "")}`;
-						console.log(`QUOTA EXHAUSTED — ${runState.quotaExhausted}. No further pair will launch; wait for the provider's quota or usage window to reset, then run --resume ${output}.`);
-					}
-					if (!outcome.metric.valid && !runState.stopInvalid && !runState.aborted) {
-						runState.stopInvalid = true;
-						runState.stopReason = outcome.quotaExhausted
-							? `provider quota exhausted on the ${arm} run of ${pair.target} pass ${pair.pass} (${runState.quotaExhausted ?? ""}); the quota must reset before --resume`
-							: `stopped after an invalid ${arm} run of ${pair.target} pass ${pair.pass}${outcome.infraFailure ? ` (infra: ${String(outcome.record.infraReason ?? "")})` : ""}`;
-					}
-					await progress(runState.aborted ? "interrupted" : runState.stopInvalid ? "stopped-invalid" : "running", { lastCell: outcome.cellId, stopReason: runState.stopReason ?? null });
-					const tokens = Number.isFinite(outcome.metric.totalTokens) ? String(outcome.metric.totalTokens) : "n/a";
-					const state = outcome.metric.valid ? "valid" : outcome.record.notLaunched === true ? "NOT LAUNCHED" : "INVALID";
-					console.log(`${state} ${arm} ${pair.target} pass ${pair.pass} attempt ${attempt} · ${outcome.seconds.toFixed(0)}s · tokens ${tokens}${outcome.infraFailure ? ` · infra: ${String(outcome.record.infraReason ?? "")}` : ""}`);
-				} catch (error) {
-					// The bookkeeping itself failed; stop launching and keep draining.
-					if (!runState.stopInvalid) { runState.stopInvalid = true; runState.stopReason = `bookkeeping write failed: ${message(error)}`; }
-					console.error(`bookkeeping failure for ${pair.target} pass ${pair.pass} ${arm}: ${message(error)}`);
-				}
-			}
-		}
-	}));
+	const loop = await runPairs({
+		pairs: launchPairs,
+		firstAttempt: (pair) => plan ? (plan.nextAttempt[pair.key] ?? 1) : 1,
+		concurrency: options.concurrency, official,
+		...(options.breaker === undefined ? {} : { breaker: options.breaker }),
+		state: runState,
+		launch: (pair, arm, attempt) => runOne(ctx, targetById.get(pair.target)!, pair.pass, arm, attempt),
+		settle: async (outcome) => {
+			outcomes.push(outcome);
+			await appendJsonl(join(output, "runs.jsonl"), outcome.record);
+		},
+		report: async (outcome, pair, arm, attempt) => {
+			await progress(runState.aborted ? "interrupted" : runState.stopInvalid ? "stopped-invalid" : "running", { lastCell: outcome.cellId, stopReason: runState.stopReason ?? null });
+			const tokens = Number.isFinite(outcome.metric.totalTokens) ? String(outcome.metric.totalTokens) : "n/a";
+			const state = outcome.metric.valid ? "valid" : outcome.record.notLaunched === true ? "NOT LAUNCHED" : "INVALID";
+			console.log(`${state} ${arm} ${pair.target} pass ${pair.pass} attempt ${attempt} · ${outcome.seconds.toFixed(0)}s · tokens ${tokens}${outcome.infraFailure ? ` · infra: ${String(outcome.record.infraReason ?? "")}` : ""}`);
+		},
+		nowMs: () => Date.now(),
+		sleep: (ms) => new Promise((done) => { setTimeout(done, ms); }),
+		log: (line) => console.log(line),
+		warn: (line) => console.error(line),
+		out: output,
+	});
 	const interrupted = runState.aborted;
 	const stoppedInvalid = runState.stopInvalid;
+	const compared = atHighestAttempt(outcomes);
 	const comparison = compareMatchedRuns(
-		outcomes.filter((o) => o.arm === "baseline").map((o) => o.metric),
-		outcomes.filter((o) => o.arm === "candidate").map((o) => o.metric),
+		compared.filter((o) => o.arm === "baseline").map((o) => o.metric),
+		compared.filter((o) => o.arm === "candidate").map((o) => o.metric),
 		expectedCells,
 	);
 	// Each cell loads node_modules afresh, and hashing it (~25k files) per launch
@@ -3436,6 +3658,7 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 		...(interrupted ? ["interrupted before the grid finished"] : []),
 		...(stoppedInvalid && !interrupted ? [`stopped early: ${runState.stopReason ?? "an invalid run"}`] : []),
 		...(runState.quotaExhausted ? [`provider quota exhausted (${runState.quotaExhausted}); it must reset before --resume`] : []),
+		...(loop.gaveUp.length ? [`${loop.gaveUp.length} pair(s) reached the attempt cap (${loop.gaveUp.map((g) => g.key).join(", ")}); --resume re-runs them`] : []),
 		...(!runtimeStable ? ["the pi runtime changed during the grid"] : []),
 		...(!comparison.complete ? [`grid incomplete or invalid: ${comparison.missingOrInvalid.slice(0, 4).join("; ") || "missing pairs"}`] : []),
 		...(comparison.complete && comparison.decision !== APPROVAL ? [`comparison decision: ${comparison.decision}`] : []),
@@ -3448,6 +3671,10 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 		official, decisionScope: official ? "official" : "exploratory", exploratoryReasons: pre.exploratoryReasons,
 		interrupted, interruptedAt: runState.abortedAtMs === undefined ? null : new Date(runState.abortedAtMs).toISOString(),
 		stoppedInvalid, stopReason: runState.stopReason ?? null, quotaExhausted: runState.quotaExhausted ?? null, runtimeStable,
+		// Only a grid run with --breaker has this block, so a fail-fast grid's summary is what it always was.
+		...(options.breaker === undefined ? {} : {
+			breaker: { policy: options.breaker, tripped: loop.breaker?.tripped ?? false, reason: loop.breaker?.reason ?? null, requeued: loop.requeued, gaveUp: loop.gaveUp },
+		}),
 		completeRunGrid: comparison.complete,
 		// One grid measures one model; acceptance needs both priority models. This
 		// name and flag keep a single-model summary from reading as final acceptance.
@@ -3476,6 +3703,7 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 	if (interrupted) console.log("INTERRUPTED — grid incomplete");
 	if (stoppedInvalid && !interrupted) console.log(`STOPPED EARLY — ${runState.stopReason ?? "an invalid run"}`);
 	if (runState.quotaExhausted) console.log(`QUOTA EXHAUSTED — wait for the reset, then: node --experimental-strip-types eval/delegation-compare.ts --resume ${output}`);
+	if (loop.gaveUp.length) console.log(`ATTEMPT CAP — ${loop.gaveUp.length} pair(s) left for --resume: ${loop.gaveUp.map((g) => g.key).join(", ")}`);
 	console.log(`pass-mean TP ${comparison.baseline.truePositives.mean.toFixed(2)} → ${comparison.candidate.truePositives.mean.toFixed(2)}; precision ${comparison.baseline.precision.mean.toFixed(3)} → ${comparison.candidate.precision.mean.toFixed(3)}`);
 	const fmt = (x: number | null) => x === null ? "n/a" : x.toFixed(3);
 	// A stopped or partial grid is not evaluated, which is not the same as failed:
