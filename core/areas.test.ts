@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deriveAreas, dirOf, MAX_AREAS, normalizePath, renderAreas, renderAreasLine, UNPLACED } from "./areas.ts";
+import { deriveAreas, dirOf, MAX_AREAS, normalizePath, OUTSIDE, renderAreas, renderAreasLine, UNPLACED } from "./areas.ts";
 import type { CoverageCell, CoverageStatus, FindingRecord, InventoryRecord } from "./ontology.ts";
 
 // Synthetic trees only. The grouping rule is fixed here, on layouts written for
@@ -34,7 +34,11 @@ describe("normalizePath", () => {
 		expect(normalizePath("./src/routes/users.ts:42")).toBe("src/routes/users.ts");
 		expect(normalizePath("src\\admin\\panel.py:10-30")).toBe("src/admin/panel.py");
 		expect(normalizePath("/work/app/src//lib/x.go", "/work/app/")).toBe("src/lib/x.go");
-		expect(normalizePath("/elsewhere/x.go", "/work/app")).toBe("elsewhere/x.go");
+		expect(normalizePath("src/a/../b/./c.ts")).toBe("src/b/c.ts");
+		// Outside the root is not the listed tree's.
+		expect(normalizePath("/elsewhere/x.go", "/work/app")).toBeUndefined();
+		expect(normalizePath("../sibling/x.go")).toBeUndefined();
+		expect(normalizePath("/elsewhere/x.go")).toBe("elsewhere/x.go");
 		expect(dirOf("main.go")).toBe(".");
 		expect(dirOf("src/a/b.ts")).toBe("src/a");
 	});
@@ -108,6 +112,30 @@ describe("deriveAreas", () => {
 		// subdirectory is not. src/admin/views is said by src/admin.
 		expect(view.unmapped).toEqual(["docs", "scripts", "src/admin", "src/routes/sub"]);
 		expect(deriveAreas({ inventory: [], surfaceKinds: [...SURFACE], cells: [], findings: [] }).unmapped).toEqual([]);
+	});
+
+	it("lists nothing as unmapped until some surface names a file in the tree", () => {
+		// A live target mapped by host: its source tree, if the cwd is one, is not
+		// what was reviewed, and every directory in it would read as unmapped.
+		const view = deriveAreas({
+			inventory: [host("h1", "app.test"), endpoint("e1", "/a", { host: "h1" })],
+			surfaceKinds: [...SURFACE], cells: [], findings: [], root: "/repo", dirs: ["clients", "src"],
+		});
+		expect(view.unmapped).toEqual([]);
+	});
+
+	it("groups a file outside the source root apart and never lets it mark a listed directory as mapped", () => {
+		const view = deriveAreas({
+			inventory: [
+				endpoint("e1", "/a", { file: "/repo/src/a.ts" }),
+				endpoint("e2", "/b", { file: "/other/lib/b.ts" }),
+				endpoint("e3", "/c", { file: "../lib/c.ts" }),
+			],
+			surfaceKinds: [...SURFACE], cells: [], root: "/repo", dirs: ["src", "lib", "other"],
+			findings: [finding("f1", "/other/lib/b.ts", ["/other/lib/b.ts:3"])],
+		});
+		expect(view.areas.map((a) => [a.by, a.key, a.elements, a.findings])).toEqual([["directory", "src", 1, 0], ["outside", OUTSIDE, 2, 0]]);
+		expect(view.unmapped).toEqual(["lib", "other"]);
 	});
 
 	it("cuts directories to a shallower depth, deterministically, when there are more than the cap", () => {

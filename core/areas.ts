@@ -27,12 +27,15 @@ export const MAX_AREAS = 20;
 /** The key for surface that names neither a file nor a host. */
 export const UNPLACED = "(no file or host)";
 
+/** The key for surface whose file resolves outside the source root. */
+export const OUTSIDE = "(outside the source root)";
+
 export type AreaStatus = "untested" | "in progress" | "settled" | "blocked";
 
 export interface Area {
 	/** A directory ("src/routes", "." for the root), a host, or UNPLACED. */
 	key: string;
-	by: "directory" | "host" | "none";
+	by: "directory" | "host" | "outside" | "none";
 	/** Surface elements in the area. */
 	elements: number;
 	/** Askable cells (n/a excluded) and how they stand. */
@@ -66,15 +69,30 @@ export interface AreasInput {
 }
 
 /**
- * A path as the listing spells it: forward slashes, no `./`, no trailing slash,
- * no `:line` or `:lo-hi` suffix, relative to `root` when it was absolute under it.
+ * A path as the listing spells it: forward slashes, no `.` or `..` segments, no
+ * trailing slash, no `:line` or `:lo-hi` suffix, relative to `root` when it was
+ * absolute under it. Undefined when it resolves outside the root: an absolute
+ * path elsewhere (when the root is known) or one that climbs out with `..`.
+ * Such a path is not the listed tree's, and read as if it were it could mark a
+ * listed directory as mapped that nobody recorded anything in.
  */
-export function normalizePath(raw: string, root?: string): string {
+export function normalizePath(raw: string, root?: string): string | undefined {
 	let p = raw.trim().replace(/\\/g, "/").replace(/:\d+(?:-\d+)?$/, "");
 	const base = root?.replace(/\\/g, "/").replace(/\/+$/, "");
-	if (base && (p === base || p.startsWith(`${base}/`))) p = p.slice(base.length);
-	p = p.replace(/\/{2,}/g, "/").replace(/^(?:\.\/)+/, "").replace(/^\/+/, "").replace(/\/+$/, "");
-	return p;
+	const absolute = p.startsWith("/") || /^[A-Za-z]:\//.test(p);
+	if (base && absolute) {
+		if (p !== base && !p.startsWith(`${base}/`)) return undefined;
+		p = p.slice(base.length);
+	}
+	const out: string[] = [];
+	for (const seg of p.split("/")) {
+		if (seg === "" || seg === ".") continue;
+		if (seg === "..") {
+			if (out.length === 0) return undefined;
+			out.pop();
+		} else out.push(seg);
+	}
+	return out.join("/");
 }
 
 /** The directory a file lives in, "." for the root. */
@@ -122,7 +140,7 @@ function statusOf(cells: Area["cells"]): AreaStatus {
 	return "in progress";
 }
 
-const BY_ORDER: Record<Area["by"], number> = { directory: 0, host: 1, none: 2 };
+const BY_ORDER: Record<Area["by"], number> = { directory: 0, host: 1, outside: 2, none: 3 };
 
 export function deriveAreas(input: AreasInput): AreasView {
 	const byId = new Map(input.inventory.map((r) => [r.id, r]));
@@ -138,6 +156,7 @@ export function deriveAreas(input: AreasInput): AreasView {
 		const file = str((rec as { file?: unknown }).file);
 		if (file) {
 			const norm = normalizePath(file, input.root);
+			if (norm === undefined) return { by: "outside", key: OUTSIDE };
 			if (norm) return { by: "directory", key: dirOf(norm) };
 		}
 		if (rec.kind === "param" && rec.endpoint) {
@@ -187,7 +206,9 @@ export function deriveAreas(input: AreasInput): AreasView {
 		if (direct) { direct.findings += 1; continue; }
 		const where = [...(f.locations ?? []), ...(target ? [target] : [])].find(pathLike);
 		if (!where) continue;
-		const dir = dirOf(normalizePath(where, input.root));
+		const norm = normalizePath(where, input.root);
+		if (norm === undefined) continue;
+		const dir = dirOf(norm);
 		// The narrowest area holding it: after a cut, "src" and "src/api" cannot
 		// both exist, but before one they can.
 		const home = dirAreas.filter((a) => within(dir, a.key)).sort((a, b) => b.key.length - a.key.length)[0];
@@ -198,7 +219,11 @@ export function deriveAreas(input: AreasInput): AreasView {
 	for (const a of list) a.status = statusOf(a.cells);
 	list.sort((a, b) => BY_ORDER[a.by] - BY_ORDER[b.by] || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
 
-	return { areas: list, unmapped: unmappedDirs(input.dirs, rawDirs, input.root), ...(depth !== undefined ? { depth } : {}) };
+	// Unmapped only once some surface names a file in the tree: before that every
+	// directory is unmapped, which says nothing, and a review of a live target
+	// that records no files has no source tree to be unmapped against.
+	const unmapped = rawDirs.size > 0 ? unmappedDirs(input.dirs, rawDirs, input.root) : [];
+	return { areas: list, unmapped, ...(depth !== undefined ? { depth } : {}) };
 }
 
 /**
@@ -208,7 +233,7 @@ export function deriveAreas(input: AreasInput): AreasView {
  */
 function unmappedDirs(listing: string[] | undefined, mapped: Set<string>, root?: string): string[] {
 	if (!listing) return [];
-	const dirs = [...new Set(listing.map((d) => normalizePath(d, root)).filter((d) => d && d !== "."))].sort();
+	const dirs = [...new Set(listing.map((d) => normalizePath(d, root)).filter((d): d is string => !!d))].sort();
 	const has = (dir: string): boolean => [...mapped].some((m) => within(m, dir));
 	const out: string[] = [];
 	for (const dir of dirs) {

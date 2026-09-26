@@ -430,7 +430,11 @@ session could still do, `blocked` that what remains needs the operator.
   status`, the benchmark telemetry) take the newest settle whose `by` is `lead` and ignore any other.
 - **Superseded:** a settle followed by ledger writes by anyone but `scribe` or `operator` —
   created, or updated (`updatedAt`) after it — no longer describes where the session stopped. The
-  benchmark's stop classifier reads it that way; the file itself is not changed.
+  benchmark's stop classifier reads it that way; the file itself is not changed. *An
+  approximation:* a row keeps its creator's `by` through updates, and there is no `updatedBy`, so
+  a scribe's or the operator's update to a row the lead created counts as work after the settle,
+  and a lead's update to a scribe-created row does not. The benchmark runs the scribe off, and the
+  operator does not write during a benchmark run.
 
 An engagement written before this store existed has no `sessions.jsonl`, and reads
 as having no settles.
@@ -487,8 +491,13 @@ Login uses a legacy session cookie without SameSite. Worth an CSRF pass on state
   somewhere. Each area's status comes from its coverage cells, `n/a` excluded: `settled` when every
   cell is clear or vulnerable, `untested` when none has been touched, `blocked` when what is not
   settled is all blocked, else `in progress`; with a count of the findings (not disposed) whose
-  target or location falls in it. Given a directory-only listing of the source tree, the listed
-  directories with no recorded surface in or below them are **unmapped**, outermost only. Areas are
+  target or location falls in it. A `file` that resolves outside the source root (an absolute path
+  elsewhere, or one climbing out with `..`) goes to one area of its own and marks nothing in the
+  tree as mapped. Given a directory-only listing of the source tree, the listed directories with no
+  recorded surface in or below them are **unmapped**, outermost only — and only once some surface
+  names a file in the tree. pired takes that listing (of the session's cwd, skipping hidden,
+  dependency, build and runtime-state directories) only for a source-only engagement, or once a
+  `file` is recorded: on a live target the cwd is not what is reviewed. Areas are
   shown bounded in the tail block, in full in a settle's reply, and in `recall status`; they rank
   nothing and are never stored.
 - **`recall` summaries** (coverage, gaps, next, …) are projections over these files, not stored artifacts.

@@ -337,10 +337,26 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	 * turns (turn_end), its workers and verifiers (the `subagent` tool's results)
 	 * and the scribe (its own complete() calls); the listing is taken once, in the
 	 * background, and read from this cache — undefined until it lands.
+	 *
+	 * The listing is taken only when the cwd is the thing under review: a
+	 * source-only engagement, or one whose surface names a `file`. On a live
+	 * target the cwd is just where the shell started, and its folder names —
+	 * other clients' among them — would go to the provider on every request.
 	 */
 	let spend = new SpendMeter(Date.now());
 	let sourceDirs: { root: string; list: string[] } | undefined;
+	let sourceRoot: string | undefined;
+	let listingStarted = false;
 	const budgetNow = () => spend.reading(parseBudget(scope), Date.now());
+	const startListing = (): void => {
+		if (listingStarted || !sourceRoot) return;
+		listingStarted = true;
+		// A listing that lands after the next session has started belongs to the
+		// last one: the meter is this session's identity, so it is checked.
+		const root = sourceRoot;
+		const session = spend;
+		void listSourceDirs(root).then((list) => { if (spend === session) sourceDirs = { root, list }; }, () => {});
+	};
 
 	/**
 	 * The pass ladder this engagement runs, and where it has got to.
@@ -1474,11 +1490,9 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		// lead's; the scribe, writing through the same tool, says so on its call.
 		spend = new SpendMeter(Date.now());
 		sourceDirs = undefined;
-		// A listing that lands after the next session has started belongs to the
-		// last one: the meter is this session's identity, so it is checked.
-		const root = ctx.cwd;
-		const session = spend;
-		void listSourceDirs(root).then((list) => { if (spend === session) sourceDirs = { root, list }; }, () => {});
+		sourceRoot = ctx.cwd;
+		listingStarted = false;
+		if (isSourceOnly(scope)) startListing();
 		for (const tool of createCoreTools({ workspace, pass: passNow, sourceOnly: () => isSourceOnly(scope), author: () => LEAD_AUTHOR, budget: budgetNow, sourceDirs: () => sourceDirs?.list })) {
 			const presentation = tool.name === "record" ? { renderResult: renderRecordResult } : undefined;
 			// Held so phase two can write through the same tool the model would have
@@ -1638,8 +1652,10 @@ export default function piredExtension(pi: ExtensionAPI): void {
 			// Where the budget stands and which areas are open (3.2). Here, in the
 			// tail, and never in the system prompt: both move every request, and a
 			// moving line in the prefix would break the prompt cache it sits in.
+			const inventory = await ws.read("inventory");
+			if (!listingStarted && inventory.some((r) => typeof (r as { file?: unknown }).file === "string")) startListing();
 			const areas = renderAreasLine(deriveAreas({
-				inventory: await ws.read("inventory"),
+				inventory,
 				surfaceKinds: ["endpoint", "host"],
 				cells: view?.matrix.cells ?? [],
 				findings: (await ws.read("findings")).filter((f) => !isDisposed(f.status)),
@@ -2167,6 +2183,8 @@ export default function piredExtension(pi: ExtensionAPI): void {
 			gate.settle({ id: event.toolCallId, name: event.toolName, isError: event.isError, result: event.result });
 			// What the workers spent, from pi-subagents' own per-child usage. Once
 			// per call id, so a repeated end cannot count a worker twice.
+			// Foreground children only: pired's gate refuses async launches, so no
+			// worker can finish outside this event and nothing reads subagent_wait.
 			spend.once(event.toolCallId, "worker", subagentTokens(event.result));
 			// A worker writes to the ledger as it works, and parks its questions as
 			// blockers because contact_supervisor is refused — this is where the

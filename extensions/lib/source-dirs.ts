@@ -18,10 +18,10 @@ import type { Dirent } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 
-/** Directory names that hold dependencies or build output, not the target's own source. */
+/** Directory names that hold dependencies, build output or runtime state, not the target's own source. */
 export const SKIPPED_DIRS: ReadonlySet<string> = new Set([
 	"node_modules", "bower_components", "vendor", "third_party", "dist", "build", "out", "target", "coverage",
-	"__pycache__", "venv", "site-packages",
+	"__pycache__", "venv", "site-packages", "tmp", "log", "logs", "storage",
 ]);
 
 export interface ListingOptions {

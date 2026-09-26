@@ -1,8 +1,16 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { listSourceDirs } from "./lib/source-dirs.ts";
 import piredExtension from "./pired.ts";
+
+// The real listing, watched: whether pired lists the cwd at all is the point
+// of one test below.
+vi.mock("./lib/source-dirs.ts", async (original) => {
+	const real = await original<typeof import("./lib/source-dirs.ts")>();
+	return { ...real, listSourceDirs: vi.fn(real.listSourceDirs) };
+});
 
 /**
  * The budget line and the areas line in a live session (3.2): where they go,
@@ -112,7 +120,7 @@ describe("the budget in a live session", () => {
 	});
 
 	it("adds a bounded areas line once surface is recorded, naming an unlisted source directory as unmapped", async () => {
-		h = host({});
+		h = host({ targets: {} });
 		await h.fire("session_start", { type: "session_start" });
 		await listingLands();
 		expect(await h.tail()).toBe("");
@@ -120,5 +128,24 @@ describe("the budget in a live session", () => {
 		const tail = await h.tail();
 		expect(tail).toContain("Areas: 1 from the recorded surface, 0 settled.");
 		expect(tail).toContain("Source directories with no recorded surface: src/admin.");
+	});
+
+	it("never lists the cwd on a live-target engagement until the surface names a file", async () => {
+		// The cwd of a live-target review is only where the shell started; its
+		// folder names can be other clients' and would reach the provider.
+		const listing = vi.mocked(listSourceDirs);
+		listing.mockClear();
+		h = host({});
+		await h.fire("session_start", { type: "session_start" });
+		await h.call("record", { kind: "endpoint", path: "/api/users" });
+		expect(await h.tail()).toContain("Areas: 1 from the recorded surface");
+		await listingLands();
+		expect(listing).not.toHaveBeenCalled();
+		expect(await h.tail()).not.toContain("Source directories");
+		await h.call("record", { kind: "endpoint", path: "/login", file: "src/routes/login.ts" });
+		await h.tail();
+		await listingLands();
+		expect(listing).toHaveBeenCalledTimes(1);
+		expect(await h.tail()).toContain("Source directories with no recorded surface: src/admin.");
 	});
 });

@@ -19,8 +19,8 @@ function tree(dirs: string[], files: string[] = []): string {
 }
 
 describe("listSourceDirs", () => {
-	it("lists directories only, relative and sorted, skipping hidden, dependency and build directories", async () => {
-		const r = tree(["src/api/v1", "src/web", "lib", ".git/objects", "node_modules/x", "vendor/y", "dist"], ["src/api/a.ts", "README.md"]);
+	it("lists directories only, relative and sorted, skipping hidden, dependency, build and runtime-state directories", async () => {
+		const r = tree(["src/api/v1", "src/web", "lib", ".git/objects", "node_modules/x", "vendor/y", "dist", "tmp", "log", "logs", "storage/app"], ["src/api/a.ts", "README.md"]);
 		expect(await listSourceDirs(r)).toEqual(["lib", "src", "src/api", "src/api/v1", "src/web"]);
 	});
 
