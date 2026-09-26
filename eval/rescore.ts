@@ -459,44 +459,34 @@ const sessionOf = (r: Row): { index: number; sessionAttempt: number } | undefine
 };
 
 /**
- * The matched arm's runs folded into one row per pair (plan item 2.5): its k
- * sessions' ledgers unioned, as the harness unions them, at the pair's highest
- * attempt, each session at its own highest attempt. A pair whose k sessions are
- * not all valid there has no row, as an invalid run has none.
+ * The matched arm's runs folded into one row per pair (plan item 2.5): the
+ * sessions each union in summary.json names, by cell, their ledgers unioned as
+ * the harness unions them. The union's session list is the one the harness
+ * scored, so a pair that ran extra sessions on rolled-over budget is read with
+ * all of them. A union that is not valid, or one naming a session whose run is
+ * missing or not valid, has no row, as an invalid run has none.
  *
  * `officialTp` is the pinned scorer's union number from summary.json's matched
  * block, and the mirror is run on the concatenated claims (officialMatches
  * dedupes them on file:line, as the union did), so the control still checks
- * this file against the official path. A pair summary.json has no union for
- * (a grid still running) has no row either: there is no official number yet.
+ * this file against the official path. A grid still running has no summary.json
+ * and so no matched rows: there is no official number yet.
  */
-export function matchedUnionRows(gridDir: string, runs: Row[], k: number, truths: Map<string, Truth[]>, unions: Row[], cap = DEFAULT_WIDTH_CAP): RescoreRow[] {
-	const top = new Map<string, number>();
-	const at = (r: Row) => `${String(r.target)}#${String(r.pass)}`;
-	for (const r of runs) top.set(at(r), Math.max(top.get(at(r)) ?? -Infinity, Number(r.attempt ?? 0)));
-	const groups = new Map<string, Map<number, Row>>();
-	for (const r of runs) {
-		const session = sessionOf(r);
-		if (!session || Number(r.attempt ?? 0) !== top.get(at(r))) continue;
-		const group = groups.get(at(r)) ?? new Map<number, Row>();
-		const held = group.get(session.index);
-		if (!held || session.sessionAttempt >= sessionOf(held)!.sessionAttempt) group.set(session.index, r);
-		groups.set(at(r), group);
-	}
+export function matchedUnionRows(gridDir: string, runs: Row[], truths: Map<string, Truth[]>, unions: Row[], cap = DEFAULT_WIDTH_CAP): RescoreRow[] {
+	const byCell = new Map(runs.map((r) => [String(r.__cell), r]));
 	const rows: RescoreRow[] = [];
-	for (const group of groups.values()) {
-		const sessions = [...group.entries()].sort(([a], [b]) => a - b).map(([, r]) => r);
-		if (sessions.length !== k || sessions.some((r, i) => sessionOf(r)!.index !== i + 1 || r.valid !== true)) continue;
-		const first = sessions[0]!;
-		const union = unions.find((u) => String(u.target) === String(first.target) && Number(u.pass) === Number(first.pass) && Number(u.attempt) === Number(first.attempt ?? 0));
-		if (!union || union.valid !== true) continue;
-		const dirs = sessions.map((r) => join(gridDir, "runs", r.__cell as string));
-		const truth = truths.get(String(first.target)) ?? [];
+	for (const union of unions) {
+		if (union.valid !== true || !Array.isArray(union.sessions) || union.sessions.length === 0) continue;
+		const sessions = (union.sessions as Row[]).map((s) => byCell.get(String(s.cellId)));
+		if (sessions.some((r) => !r || r.valid !== true || r.arm !== "matched")) continue;
+		const cells = (sessions as Row[]).map((r) => r.__cell as string);
+		const dirs = cells.map((cell) => join(gridDir, "runs", cell));
+		const truth = truths.get(String(union.target)) ?? [];
 		const findings = dirs.flatMap(findingsFromLedger);
 		const claims = dirs.flatMap(claimsFromLedger);
 		const scored = typeof union.scorePath === "string" ? scoredClaimKeysAt(`${union.scorePath}.findings.json`) : null;
 		rows.push({
-			grid: gridDir, cell: sessions.map((r) => r.__cell as string).join("+"), target: String(first.target), pass: Number(first.pass), arm: "matched", attempt: Number(first.attempt ?? 0),
+			grid: gridDir, cell: cells.join("+"), target: String(union.target), pass: Number(union.pass), arm: "matched", attempt: Number(union.attempt ?? 0),
 			officialTp: Number(union.truePositives), claims: Number(union.totalClaims), tokens: Number(union.totalTokens),
 			mirroredTp: officialMatches(claims, truth).size,
 			segmentsTp: officialMatches(claims, truth, { fileRule: "segments" }).size,
@@ -504,14 +494,14 @@ export function matchedUnionRows(gridDir: string, runs: Row[], k: number, truths
 			strictLocationTp: officialMatches(claims, truth, { classRule: false, fileRule: "segments" }).size,
 			claimsIdentical: scored === null ? null : scored.join("\n") === claimKeys(claims).join("\n"),
 			matched: Object.fromEntries(LEVELS.map((l) => [l, [...matchUnique(findings, truth, l, cap)].sort()])) as Record<Level, string[]>,
-			sessions: sessions.map((r) => r.__cell as string),
+			sessions: cells,
 		});
 	}
 	return rows;
 }
 
 export function rescoreGrid(gridDir: string, cap = DEFAULT_WIDTH_CAP): { rows: RescoreRow[]; truths: Map<string, Truth[]> } {
-	const manifest = JSON.parse(readFileSync(join(gridDir, "manifest.json"), "utf8")) as { targets: Array<{ id: string; name: string }>; inputs: { truth: string }; matched?: { k?: unknown } };
+	const manifest = JSON.parse(readFileSync(join(gridDir, "manifest.json"), "utf8")) as { targets: Array<{ id: string; name: string }>; inputs: { truth: string }; matched?: unknown };
 	const truths = new Map<string, Truth[]>();
 	for (const t of manifest.targets) truths.set(t.id, loadTruth(join(manifest.inputs.truth, `${t.name}.truth.json`)));
 	const runsDir = join(gridDir, "runs");
@@ -539,11 +529,10 @@ export function rescoreGrid(gridDir: string, cap = DEFAULT_WIDTH_CAP): { rows: R
 			matched,
 		};
 	});
-	const k = manifest.matched?.k;
-	if (typeof k === "number") {
+	if (manifest.matched !== undefined) {
 		const summaryPath = join(gridDir, "summary.json");
 		const summary = existsSync(summaryPath) ? JSON.parse(readFileSync(summaryPath, "utf8")) as { matched?: { unions?: Row[] } } : {};
-		rows.push(...matchedUnionRows(gridDir, runs.filter((r) => r.arm === "matched"), k, truths, summary.matched?.unions ?? [], cap));
+		rows.push(...matchedUnionRows(gridDir, runs.filter((r) => r.arm === "matched"), truths, summary.matched?.unions ?? [], cap));
 	}
 	return { rows, truths };
 }
@@ -572,8 +561,12 @@ export function pairedRows(rows: RescoreRow[]): RescoreRow[] {
 }
 
 /** The aggregate table the CLI prints: counts and ids only, never finding text. */
-export function formatReport(rows: RescoreRow[], truths: Truth[], cap = DEFAULT_WIDTH_CAP): string {
+export function formatReport(all: RescoreRow[], truths: Truth[], cap = DEFAULT_WIDTH_CAP): string {
 	const lines: string[] = [];
+	// A matched union is k or more sessions, not a run: the run totals below count
+	// runs only, and the unions get their own control line (review).
+	const rows = all.filter((r) => !r.sessions);
+	const unions = all.filter((r) => r.sessions);
 	const control = rows.filter((r) => r.mirroredTp === r.officialTp).length;
 	const pointControl = rows.filter((r) => r.matched["line±3"].length === r.officialTp).length;
 	lines.push(`control: official mirror ${control} of ${rows.length} runs agree; line±3 level ${pointControl} of ${rows.length}`);
@@ -590,7 +583,12 @@ export function formatReport(rows: RescoreRow[], truths: Truth[], cap = DEFAULT_
 	const assignment = rows.filter((r) => r.matched["line±3"].length !== r.strictLocationTp);
 	lines.push(`line±3 against the mirror without class or basename rules: ${rows.length - assignment.length} of ${rows.length} runs agree`);
 	for (const r of assignment) lines.push(`  ASSIGNMENT ${r.grid} ${r.cell} mirror ${r.strictLocationTp} line±3 ${r.matched["line±3"].length}`);
-	const paired = pairedRows(rows);
+	if (unions.length) {
+		const unionScored = unions.filter((r) => r.claimsIdentical !== null);
+		lines.push(`matched unions: official mirror ${unions.filter((r) => r.mirroredTp === r.officialTp).length} of ${unions.length} agree; claims parse identically ${unionScored.filter((r) => r.claimsIdentical).length} of ${unionScored.length}`);
+		for (const r of unions) if (r.mirroredTp !== r.officialTp) lines.push(`  DISAGREE ${r.grid} ${r.cell} official ${r.officialTp} mirrored ${r.mirroredTp}`);
+	}
+	const paired = pairedRows(all);
 	const grids = [...new Set(paired.map((r) => r.grid))];
 	lines.push(`grid\tarm\tpairs\tofficialTp\t${LEVELS.join("\t")}\tclaims\ttokens`);
 	for (const g of grids) {
