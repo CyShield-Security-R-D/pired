@@ -461,3 +461,115 @@ export function mapRangeBack(diff: string, range: [number, number]): [number, nu
 	const mapped: [number, number] = [lo + offset, hi + offset];
 	return mapped[0] >= 1 ? mapped : undefined;
 }
+
+// --- classifier -------------------------------------------------------------
+//
+// Moved here from fetch-apps.ts when a second selector (select-fresh.ts) needed
+// the same admission rule. Two copies of "what counts as a served application"
+// would drift, and a drifted rule changes which projects a corpus can contain
+// without anyone deciding it should.
+
+/**
+ * A route registration is the one signal a library cannot fake.
+ *
+ * jinja2 has templates, sqlparse has a parser, requests has sessions — none of
+ * them register a URL against a handler, because none of them serve anything.
+ * That makes route density the discriminator, and everything else corroboration.
+ */
+// A quote of any kind. Route paths are string literals and the opening quote is
+// half of what separates a route registration from an ordinary method call.
+const Q = "[\"'`]";
+
+export const ROUTE_RE = [
+	// Flask/FastAPI/Sanic/Quart decorators. The variable is whatever the project
+	// named it — `@auth_bp.route`, `@v2.post` — so matching literal `app` or
+	// `router` finds nothing in real code. DVBank, a web application built for
+	// this evaluation, scored 0 route files against the literal version.
+	String.raw`@\w+\.route\(`,
+	// The verb forms need the path literal as corroboration, or `@mock.patch(`
+	// and every other decorator whose name collides with an HTTP method counts as
+	// a route.
+	String.raw`@\w+\.(get|post|put|delete|patch|websocket)\(\s*` + Q + "/",
+	String.raw`urlpatterns\s*=`,
+	// Express/Koa/Nest and friends. Same rule: a leading slash in the first
+	// argument is what tells `router.get("/users")` apart from `config.get("key")`
+	// and `session.get("https://...")`, which otherwise turn every library that
+	// makes an HTTP request into an "application".
+	String.raw`\b\w+\.(get|post|put|delete|patch|all|use)\(\s*` + Q + "/",
+	String.raw`@(Get|Post|Put|Delete|Patch|Controller)\(`,
+	// Go: uppercase verbs plus a quoted path.
+	String.raw`\b\w+\.(GET|POST|PUT|DELETE|PATCH|Any|Handle|HandleFunc)\(\s*"/`,
+	// Rails config/routes.rb
+	String.raw`^\s*(get|post|put|delete|patch|resources|namespace)\s+["':]`,
+	// Laravel, CodeIgniter, Symfony
+	String.raw`Route::(get|post|put|delete|any|resource|group|middleware)`,
+	String.raw`\$routes->(get|post|put|delete|add)`,
+	String.raw`#\[Route\(`,
+	String.raw`@Route\(`,
+	// Spring / Servlet / ASP.NET
+	String.raw`@(RestController|Controller|RequestMapping|GetMapping|PostMapping|WebServlet)`,
+	String.raw`\[(HttpGet|HttpPost|HttpPut|Route)\(`,
+].join("|");
+
+export const TEMPLATE_RE = /(^|\/)(templates?|views?|layouts)(\/|$)|\.(html|htm|j2|jinja2?|tmpl|gohtml|erb|blade\.php|twig|hbs|ejs)$/i;
+export const MIGRATION_RE = /(^|\/)(migrations?|migrate|alembic|Migrations)(\/|$)/i;
+// A compose file at or near the root is what makes a target a candidate for the
+// *dynamic* corpus — the same checkout, but stood up and tested through HTTP
+// rather than read. Recorded here so that corpus can be selected from clones
+// this build already paid for, instead of fetching everything a second time.
+export const COMPOSE_RE = /^(docker-)?compose([-.][\w.-]+)?\.ya?ml$/i;
+
+export const SERVER_RE = /(^|\/)(manage\.py|wsgi\.py|asgi\.py|routes\.rb|server\.(js|ts|go)|main\.go|Dockerfile|docker-compose\.ya?ml|index\.php|artisan)$/i;
+
+export interface Classification {
+	app: boolean; routes: number; templates: boolean; migrations: boolean; server: boolean; compose: string[]; why: string;
+	/** Route files that are also source files (walk().source): a README's usage example is not a routing table. */
+	routeSources: number;
+}
+
+export async function classify(dir: string, w: Walk): Promise<Classification> {
+	// grep exits 1 on "no match", which execFile reports as a failure; that is a
+	// zero, not an error.
+	let routes = 0;
+	let routeSources = 0;
+	try {
+		const { stdout } = await run(
+			"grep",
+			["-rlE", "--binary-files=without-match",
+				"--exclude-dir=node_modules", "--exclude-dir=vendor", "--exclude-dir=.git",
+				"--exclude-dir=third_party", "--exclude-dir=dist", "--exclude-dir=test",
+				"--exclude-dir=tests", "--exclude-dir=docs", "--exclude-dir=doc",
+				"--exclude-dir=examples", "--exclude-dir=example", ROUTE_RE, "."],
+			{ cwd: dir, maxBuffer: 1 << 26, timeout: 300_000 },
+		);
+		const files = stdout.split("\n").filter(Boolean).map((f) => f.replace(/^\.\//, ""));
+		routes = files.length;
+		const source = new Set(w.source);
+		routeSources = files.filter((f) => source.has(f)).length;
+	} catch { /* no match, or grep gave up: treated as no evidence */ }
+
+	const templates = w.all.some((f) => TEMPLATE_RE.test(f));
+	const migrations = w.all.some((f) => MIGRATION_RE.test(f));
+	const server = w.all.some((f) => SERVER_RE.test(f));
+	// Root and one level down: a compose file buried in an integration-test
+	// directory does not stand the application up.
+	const compose = w.all.filter((f) => f.split("/").length <= 2 && COMPOSE_RE.test(f.split("/").pop() ?? ""));
+	const corroborated = [templates, migrations, server].filter(Boolean).length;
+
+	// Three route files, not one: a library can carry a single incidental match in
+	// an example or a dev helper. Three is a routing table.
+	const app = routes >= 3 && corroborated >= 1;
+	const why = app
+		? `${routes} route file(s)` + (templates ? ", templates" : "") + (migrations ? ", migrations" : "") + (server ? ", server entry" : "")
+		: routes < 3 ? `only ${routes} route file(s) — not a served application` : "routes but no templates/migrations/server entry";
+	return { app, routes, templates, migrations, server, compose, why, routeSources };
+}
+
+export async function countLines(root: string, files: string[]): Promise<number> {
+	let total = 0;
+	for (const f of files) {
+		const text = await readFile(join(root, f), "utf8").catch(() => "");
+		total += text.length === 0 ? 0 : text.split("\n").length;
+	}
+	return total;
+}
