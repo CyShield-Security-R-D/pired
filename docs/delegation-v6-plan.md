@@ -60,6 +60,8 @@ its ADR.
 
 ## Phase 3 — Product changes (candidate snapshot v5; each its own ADR)
 
+Design for 3.1 and 3.2: [`delegation-v6-phase3-design.md`](delegation-v6-phase3-design.md). Built on branch `p3/candidate-v5`, which stays off `main` until the Phase 4 trial passes.
+
 | # | item | mechanism (source) |
 |---|---|---|
 | 3.1 | **Independent, grounded verification tier.** Worker findings enter the ledger as *unverified*, tagged with who recorded them. A verifier with a fresh context checks the source-to-sink path and the guards against quoted code before promoting a finding. "Confirmed" requires an evidence field. Execution-backed proof is the top tier, not a gate. Optionally the verifier uses another model family. Every true positive the verifier rejects is measured. | Parallel generators without a verifier lower precision; grounded checks, not self-critique, raise it; judges favour their own outputs. |
