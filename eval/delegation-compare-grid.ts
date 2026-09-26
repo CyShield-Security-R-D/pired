@@ -13,7 +13,8 @@
  * Everything here is pure: the runner reads the files, hashes them and passes
  * the results in.
  */
-import type { Arm, OfficialShape, PairArm } from "./delegation-compare-lib.ts";
+import { parseBreakerPolicy, type Arm, type BreakerPolicy, type OfficialShape, type PairArm } from "./delegation-compare-lib.ts";
+import { parseMatchedPolicy, type MatchedPolicy } from "./delegation-compare-matched.ts";
 
 /** An official corpus as eval/delegation-compare.pins.json pins it under `corpora`. */
 export interface PinnedCorpus {
@@ -376,4 +377,158 @@ export function summarizeTwins(arms: readonly PairArm[], twins: ReadonlyArray<{ 
 			gate: "twin runs never enter the gate comparison, the matched arm or the approval; they count toward progress and the breaker like any run",
 		},
 	};
+}
+
+/**
+ * A named grid kind (plan item 2.8), as the pins file's `gridKinds` fixes it:
+ * the corpus, the snapshots, every arm's configuration, and whether the grid
+ * runs with retries and the breaker. The fields mirror the command line, so a
+ * grid matches its kind exactly when its options are the kind's.
+ */
+export interface GridKind {
+	corpus: string;
+	/** The baseline: a git commit (checked file by file, as the v5 baseline was) or a snapshot digest; null until frozen. */
+	baseline: { commit: string | null } | { digest: string | null };
+	candidate: { digest: string | null };
+	/** --baseline-max-agents; null: the baseline's scope states none. */
+	baselineMaxAgents: number | null;
+	/** --candidate-max-agents (ADR-032). */
+	candidateMaxAgents: number;
+	/** --max-verifiers; {} states none. */
+	maxVerifiers: Partial<Record<PairArm, number>>;
+	/** --budget-arms, in ARM_ORDER. */
+	budgetArms: Arm[];
+	/** --twin-arms, in ARM_ORDER; [] runs no twin. */
+	twinArms: PairArm[];
+	/** --matched, as the manifest stores it; null runs no matched arm. */
+	matched: MatchedPolicy | null;
+	/** --retry (ADR-033). */
+	retry: boolean;
+	/** --breaker (ADR-031): false for fail-fast, true for any policy, or the exact policy. */
+	breaker: boolean | BreakerPolicy;
+	/** --timeout; null leaves the run limit open. */
+	timeoutMs: number | null;
+}
+
+const hexCommit = (value: unknown): boolean => typeof value === "string" && /^[0-9a-f]{40}$/.test(value);
+
+/**
+ * `gridKinds` from the pins file, read strictly: a kind that names an unknown
+ * corpus or a malformed value would otherwise make every grid launched under
+ * it exploratory for a reason nobody reads until the grid has run. Keys
+ * starting with "_" are comments.
+ */
+export function parseGridKinds(value: unknown, corpora: Record<string, PinnedCorpus>): Record<string, GridKind> {
+	if (value === undefined) return {};
+	if (!isRecord(value)) throw new Error("pins: gridKinds must be an object");
+	const out: Record<string, GridKind> = {};
+	for (const [name, raw] of Object.entries(value)) {
+		if (name.startsWith("_")) continue;
+		const where = `pins: gridKinds.${name}`;
+		if (!isRecord(raw)) throw new Error(`${where} must be an object`);
+		if (typeof raw.corpus !== "string" || !corpora[raw.corpus]) throw new Error(`${where}.corpus must name a corpus of the pins file`);
+		const baseline = raw.baseline;
+		if (!isRecord(baseline) || Object.keys(baseline).length !== 1 || !("commit" in baseline || "digest" in baseline)) throw new Error(`${where}.baseline must be {commit} or {digest}`);
+		if ("commit" in baseline && baseline.commit !== null && !hexCommit(baseline.commit)) throw new Error(`${where}.baseline.commit must be null or a full git commit id`);
+		if ("digest" in baseline && baseline.digest !== null && !hex64(baseline.digest)) throw new Error(`${where}.baseline.digest must be null or a sha256 hex digest`);
+		const candidate = raw.candidate;
+		if (!isRecord(candidate) || Object.keys(candidate).length !== 1 || !("digest" in candidate) || (candidate.digest !== null && !hex64(candidate.digest))) {
+			throw new Error(`${where}.candidate must be {digest: null or a sha256 hex digest}`);
+		}
+		if (raw.baselineMaxAgents !== null && !isCap(raw.baselineMaxAgents)) throw new Error(`${where}.baselineMaxAgents must be null or a non-negative integer`);
+		if (!isCap(raw.candidateMaxAgents)) throw new Error(`${where}.candidateMaxAgents must be a non-negative integer`);
+		const verifiers = raw.maxVerifiers;
+		if (!isRecord(verifiers) || Object.entries(verifiers).some(([arm, n]) => (arm !== "baseline" && arm !== "candidate") || !isCap(n))) throw new Error(`${where}.maxVerifiers must map baseline or candidate to a non-negative integer`);
+		const arms = (key: "budgetArms" | "twinArms", allowed: readonly Arm[]): Arm[] => {
+			const list = raw[key];
+			if (!Array.isArray(list) || list.some((arm) => !allowed.includes(arm as Arm)) || new Set(list).size !== list.length) throw new Error(`${where}.${key} must be a list of distinct arms among ${allowed.join(", ")}`);
+			return ARM_ORDER.filter((arm) => list.includes(arm));
+		};
+		let matched: MatchedPolicy | null = null;
+		if (raw.matched !== null) {
+			try { matched = parseMatchedPolicy(raw.matched); } catch (error) { throw new Error(`${where}.matched: ${error instanceof Error ? error.message : String(error)}`); }
+			if (matched.snapshot !== undefined) throw new Error(`${where}.matched runs the candidate snapshot; it names no other`);
+		}
+		if (typeof raw.retry !== "boolean") throw new Error(`${where}.retry must be a boolean`);
+		let breaker: boolean | BreakerPolicy;
+		if (typeof raw.breaker === "boolean") breaker = raw.breaker;
+		else {
+			try { breaker = parseBreakerPolicy(raw.breaker); } catch (error) { throw new Error(`${where}.breaker: ${error instanceof Error ? error.message : String(error)}`); }
+		}
+		if (raw.timeoutMs !== null && !(typeof raw.timeoutMs === "number" && Number.isSafeInteger(raw.timeoutMs) && raw.timeoutMs > 0)) throw new Error(`${where}.timeoutMs must be null or a positive integer`);
+		out[name] = {
+			corpus: raw.corpus, baseline: { ...baseline } as GridKind["baseline"], candidate: { digest: candidate.digest as string | null },
+			baselineMaxAgents: raw.baselineMaxAgents as number | null, candidateMaxAgents: raw.candidateMaxAgents,
+			maxVerifiers: { ...verifiers } as Partial<Record<PairArm, number>>, budgetArms: arms("budgetArms", ARM_ORDER), twinArms: arms("twinArms", ["baseline", "candidate"]) as PairArm[],
+			matched, retry: raw.retry, breaker, timeoutMs: raw.timeoutMs as number | null,
+		};
+	}
+	return out;
+}
+
+/** What a grid was launched with, as its kind is checked against it. */
+export interface GridOptions extends ArmOptions {
+	twinArms?: readonly PairArm[];
+	matched?: MatchedPolicy;
+	retry: boolean;
+	breaker?: BreakerPolicy;
+	timeoutMs: number;
+}
+
+const stated = (n: number | undefined | null): string => n === undefined || n === null ? "unstated" : String(n);
+const armList = (arms: readonly Arm[]): string => arms.length ? arms.join(",") : "no arm";
+const policyText = (p: MatchedPolicy | BreakerPolicy): string => JSON.stringify(p);
+
+/**
+ * Why a grid launched as `name` is not that kind's grid, or [] when every
+ * option matches. Each reason says what the grid ran and what the kind fixes,
+ * the way a mismatched candidate digest is reported, so an exploratory grid
+ * reads as one before its first token.
+ */
+export function gridKindReasons(name: string, kind: GridKind, grid: GridOptions): string[] {
+	const reasons: string[] = [];
+	const say = (text: string): void => { reasons.push(`grid kind ${name}: ${text}`); };
+	if ((grid.baselineMaxAgents ?? null) !== kind.baselineMaxAgents) say(`the baseline's maxAgents is ${stated(grid.baselineMaxAgents)}, not ${stated(kind.baselineMaxAgents)}`);
+	if (grid.candidateMaxAgents !== kind.candidateMaxAgents) say(`the candidate's maxAgents is ${stated(grid.candidateMaxAgents)}, not ${stated(kind.candidateMaxAgents)}`);
+	for (const arm of ["baseline", "candidate"] as const) {
+		if (grid.maxVerifiers?.[arm] !== kind.maxVerifiers[arm]) say(`the ${arm}'s maxVerifiers is ${stated(grid.maxVerifiers?.[arm])}, not ${stated(kind.maxVerifiers[arm])}`);
+	}
+	const budget = grid.budgetArms ?? DEFAULT_BUDGET_ARMS;
+	if (!sameArms(budget, kind.budgetArms)) say(`the budget line is on ${armList(budget)}, not ${armList(kind.budgetArms)}`);
+	const twins = grid.twinArms ?? [];
+	if (!sameArms(twins, kind.twinArms)) say(`patched twins run in ${armList(twins)}, not ${armList(kind.twinArms)}`);
+	if (!grid.matched !== !kind.matched) say(`the matched arm is ${grid.matched ? "on" : "off"}, not ${kind.matched ? "on" : "off"}`);
+	else if (grid.matched && kind.matched) {
+		const { snapshot: _snapshot, ...ran } = grid.matched;
+		if (policyText(ran) !== policyText(kind.matched)) say(`the matched policy is ${policyText(ran)}, not ${policyText(kind.matched)}`);
+	}
+	if (grid.retry !== kind.retry) say(kind.retry ? "it requires --retry" : "it runs without --retry");
+	if (typeof kind.breaker === "boolean") {
+		if (!!grid.breaker !== kind.breaker) say(kind.breaker ? "it requires --breaker" : "it runs without --breaker");
+	} else if (!grid.breaker || policyText(grid.breaker) !== policyText(kind.breaker)) {
+		say(`the breaker policy is ${grid.breaker ? policyText(grid.breaker) : "off"}, not ${policyText(kind.breaker)}`);
+	}
+	if (kind.timeoutMs !== null && grid.timeoutMs !== kind.timeoutMs) say(`--timeout ${grid.timeoutMs} is not ${kind.timeoutMs}`);
+	return reasons;
+}
+
+/**
+ * Why a kind's snapshots do not match the grid's, or [] when both are its
+ * frozen ones. The baseline is either a git commit, checked by the caller's
+ * file-by-file rule, or a snapshot digest: stage 2's baseline is the
+ * candidate snapshot S, which has no commit.
+ */
+export function kindSnapshotReasons(name: string, kind: GridKind, measured: { baselineDigest: string; candidateDigest: string; commitReason: (commit: string) => string | undefined }): string[] {
+	const reasons: string[] = [];
+	if ("commit" in kind.baseline) {
+		if (kind.baseline.commit === null) reasons.push(`grid kind ${name}: no baseline is frozen (its baseline.commit is null)`);
+		else {
+			const why = measured.commitReason(kind.baseline.commit);
+			if (why) reasons.push(`grid kind ${name}: ${why}`);
+		}
+	} else if (kind.baseline.digest === null) reasons.push(`grid kind ${name}: no baseline is frozen (its baseline.digest is null)`);
+	else if (measured.baselineDigest !== kind.baseline.digest) reasons.push(`grid kind ${name}: baseline input digest ${measured.baselineDigest.slice(0, 12)} is not the pinned ${kind.baseline.digest.slice(0, 12)}`);
+	if (kind.candidate.digest === null) reasons.push(`grid kind ${name}: no candidate is frozen (its candidate.digest is null)`);
+	else if (measured.candidateDigest !== kind.candidate.digest) reasons.push(`grid kind ${name}: candidate input digest ${measured.candidateDigest.slice(0, 12)} is not the pinned ${kind.candidate.digest.slice(0, 12)}`);
+	return reasons;
 }

@@ -12,6 +12,7 @@ import {
 	type GridStopState, type MatchedSessionSpec, type ProviderFailures, type RunOutcome,
 } from "./delegation-compare.ts";
 import { sessionBudget, type MatchedPolicy, type SessionState } from "./delegation-compare-matched.ts";
+import { gridKindReasons } from "./delegation-compare-grid.ts";
 import { BENCHMARK_SETTINGS, DEFAULT_RETRY_POLICY } from "./delegation-compare-entry.ts";
 import { compareMatchedRuns, DEFAULT_BREAKER, observationsFromChildSession, planSchedule, type Arm, type BreakerPolicy, type ScheduledPair } from "./delegation-compare-lib.ts";
 
@@ -2161,5 +2162,48 @@ describe("patched twins (plan 2.8)", () => {
 		expect(gridWorstCaseMs({ ...base, matchedSessions: 6, twins: 12, twinArms: 2 })).toBe(6 * 12 * 8 * 4 * HOUR);
 		const breaker = { maxAttempts: 4, cooldownMs: 60_000 };
 		expect(gridWorstCaseMs({ ...base, breaker, twins: 12, twinArms: 2 })).toBe(6 * 12 * (4 * 2 * 4 * HOUR + 60_000 * 6));
+	});
+});
+
+describe("grid kinds on the command line (plan 2.8)", () => {
+	const argv = (...extra: string[]): string[] => [
+		"--baseline", "/b", "--candidate", "/c", "--corpus", "/corpus", "--truth", "/truth", "--out", "/out",
+		"--provider", "openai-codex", "--model", "gpt-6-luna", ...extra,
+	];
+	const options = (...extra: string[]) => {
+		const parsed = parseOptions(argv(...extra));
+		if (parsed === "help" || parsed.kind !== "run") throw new Error("expected a run");
+		return parsed.options;
+	};
+	const shippedPins = async () => parseComparePins(await readFile(new URL("./delegation-compare.pins.json", import.meta.url), "utf8"));
+	const STAGE1 = ["--candidate-max-agents", "0", "--max-verifiers", "candidate=0", "--twins", "/twins.json", "--twin-arms", "baseline,candidate",
+		"--retry", "--breaker", "default", "--timeout", "14400000", "--passes", "6", "--grid-kind", "v6-stage1"];
+	const STAGE2 = ["--baseline-max-agents", "0", "--max-verifiers", "baseline=0,candidate=2", "--budget-arms", "baseline,candidate,matched",
+		"--matched", "follow", "--retry", "--breaker", "default", "--auth-horizon-hours", "200", "--timeout", "14400000", "--passes", "6", "--grid-kind", "v6-stage2"];
+
+	// The command lines the operator will type for the two stages must be the
+	// kinds' own, or both stages would run exploratory for a flag nobody noticed.
+	it("reads the stage command lines as exactly their kinds", async () => {
+		const pins = await shippedPins();
+		for (const [name, flags] of [["v6-stage1", STAGE1], ["v6-stage2", STAGE2]] as const) {
+			const opts = options(...flags);
+			expect(opts.gridKind).toBe(name);
+			expect(gridKindReasons(name, pins.gridKinds[name]!, { ...opts, retry: opts.retryPolicy !== undefined })).toEqual([]);
+		}
+		// Stage 2 without its matched arm is another grid.
+		const partial = options(...STAGE2.filter((f, i, all) => f !== "--matched" && all[i - 1] !== "--matched" && f !== "--auth-horizon-hours" && all[i - 1] !== "--auth-horizon-hours"));
+		expect(gridKindReasons("v6-stage2", pins.gridKinds["v6-stage2"]!, { ...partial, retry: true })).toEqual(["grid kind v6-stage2: the matched arm is off, not on"]);
+	});
+
+	it("pins the kind in the manifest, restores it on resume, and refuses a resume under another", () => {
+		const opts = options("--grid-kind", "v6-stage1");
+		const manifest: Record<string, unknown> = { ...newManifest(opts, "live"), inputs: { corpus: "/corpus", truth: "/truth", corpusManifest: { path: "/m.json" }, baseline: { path: "/b" }, candidate: { path: "/c" } }, pins: { landlockWrapper: "/seal" } };
+		expect(manifest.gridKind).toBe("v6-stage1");
+		expect(optionsFromManifest("/out", manifest).gridKind).toBe("v6-stage1");
+		expect(newManifest(options(), "live")).not.toHaveProperty("gridKind");
+		expect(resumeMismatches({ gridKind: "v6-stage1" }, { gridKind: "v6-stage2" })).toEqual(["gridKind"]);
+		expect(resumeMismatches({ gridKind: "v6-stage1" }, {})).toEqual(["gridKind"]);
+		expect(() => optionsFromManifest("/out", { ...manifest, gridKind: 3 })).toThrow(/gridKind/);
+		expect(() => parseOptions(argv("--grid-kind", "v6 stage1"))).toThrow(/--grid-kind/);
 	});
 });

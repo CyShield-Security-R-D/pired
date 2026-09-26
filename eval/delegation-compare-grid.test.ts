@@ -2,9 +2,9 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import {
 	corpusReasons, DEFAULT_BUDGET_ARMS, delegationOff, kindlessArmReasons, kindlessCorpus, parseArmList, parseCorpora, parseMaxVerifiers, scopeFor, scopeSettingsFor, shapeOf,
-	summarizeTwins, twinTargets, type CorpusInput, type PinnedCorpus,
+	gridKindReasons, kindSnapshotReasons, parseGridKinds, summarizeTwins, twinTargets, type CorpusInput, type GridKind, type GridOptions, type PinnedCorpus,
 } from "./delegation-compare-grid.ts";
-import { armsOfPair, isOfficialGrid, OFFICIAL_PASSES, OFFICIAL_TARGET_IDS, planSchedule, type ExpectedCell } from "./delegation-compare-lib.ts";
+import { armsOfPair, DEFAULT_BREAKER, isOfficialGrid, OFFICIAL_PASSES, OFFICIAL_TARGET_IDS, planSchedule, type ExpectedCell } from "./delegation-compare-lib.ts";
 
 // Per-file builders, by house rule: a pinned corpus, the runner's measurement
 // of a grid's inputs, and the gate cells a grid expects.
@@ -272,5 +272,115 @@ describe("patched twins", () => {
 		// An invalid run's claims are not counted: its ledger is not a finished review.
 		expect(summary.byArm.candidate).toMatchObject({ runs: 1, valid: 0, claims: 0 });
 		expect(summary.interpretation.gate).toMatch(/never enter the gate/);
+	});
+});
+
+describe("grid kinds", () => {
+	const shippedKinds = async (): Promise<Record<string, GridKind>> => {
+		const pins = await shipped();
+		return parseGridKinds(pins.gridKinds, parseCorpora(pins.corpora));
+	};
+	// A kind and the options that match it exactly, as a builder pair.
+	const kind = (over: Partial<GridKind> = {}): GridKind => ({
+		corpus: "c", baseline: { digest: sha("b") }, candidate: { digest: sha("c") }, baselineMaxAgents: 0, candidateMaxAgents: 8,
+		maxVerifiers: { baseline: 0, candidate: 2 }, budgetArms: ["baseline", "candidate", "matched"], twinArms: [],
+		matched: { mode: "follow", k: 3, kMax: 6, floorShare: 0.05 }, retry: true, breaker: { ...DEFAULT_BREAKER }, timeoutMs: 14_400_000, ...over,
+	});
+	const ran = (over: Partial<GridOptions> = {}): GridOptions => ({
+		candidateMaxAgents: 8, baselineMaxAgents: 0, maxVerifiers: { baseline: 0, candidate: 2 }, budgetArms: ["baseline", "candidate", "matched"],
+		matched: { mode: "follow", k: 3, kMax: 6, floorShare: 0.05 }, retry: true, breaker: { ...DEFAULT_BREAKER }, timeoutMs: 14_400_000, ...over,
+	});
+
+	// The pre-registration's draft: stage 1 is A against S, stage 2 is S against
+	// D with the matched arm; both on the fresh corpus, retry and breaker on.
+	it("ships the two v6 stages as drafts of the pre-registration, unfrozen", async () => {
+		const kinds = await shippedKinds();
+		expect(kinds["v6-stage1"]).toMatchObject({
+			corpus: "v6-fresh", baseline: { commit: null }, candidate: { digest: null }, baselineMaxAgents: null, candidateMaxAgents: 0,
+			maxVerifiers: { candidate: 0 }, budgetArms: ["candidate", "matched"], twinArms: ["baseline", "candidate"], matched: null, retry: true, timeoutMs: 14_400_000,
+		});
+		expect(kinds["v6-stage2"]).toMatchObject({
+			corpus: "v6-fresh", baseline: { digest: null }, candidate: { digest: null }, baselineMaxAgents: 0, candidateMaxAgents: 8,
+			maxVerifiers: { baseline: 0, candidate: 2 }, budgetArms: ["baseline", "candidate", "matched"], twinArms: [], matched: { mode: "follow", k: 3 }, retry: true,
+		});
+		expect(kinds["v6-stage1"]!.breaker).toEqual(DEFAULT_BREAKER);
+		expect(kinds["v6-stage2"]!.breaker).toEqual(DEFAULT_BREAKER);
+	});
+
+	// Stage 2 compares D with the S that stage 1 measured. The kinds must give S
+	// the same scope bytes in both roles, or stage 2's baseline is another arm.
+	it("gives S the same scope as stage 1's candidate and as stage 2's baseline", async () => {
+		const kinds = await shippedKinds();
+		const armOptions = (k: GridKind) => ({ candidateMaxAgents: k.candidateMaxAgents, ...(k.baselineMaxAgents === null ? {} : { baselineMaxAgents: k.baselineMaxAgents }), maxVerifiers: k.maxVerifiers, budgetArms: k.budgetArms });
+		const now = Date.parse("2026-09-26T10:00:00.000Z");
+		const s1 = scopeFor("e", "/w", scopeSettingsFor("candidate", armOptions(kinds["v6-stage1"]!)), kinds["v6-stage1"]!.timeoutMs!, now);
+		const s2 = scopeFor("e", "/w", scopeSettingsFor("baseline", armOptions(kinds["v6-stage2"]!)), kinds["v6-stage2"]!.timeoutMs!, now);
+		expect(JSON.stringify(s2)).toBe(JSON.stringify(s1));
+		expect(delegationOff(scopeSettingsFor("baseline", armOptions(kinds["v6-stage2"]!)))).toBe(true);
+		// Stage 1's baseline A runs at its own defaults, as every v5 baseline did.
+		expect(JSON.stringify(scopeFor("e", "/w", scopeSettingsFor("baseline", armOptions(kinds["v6-stage1"]!)), 14_400_000, now)))
+			.toBe(JSON.stringify({ engagement: "e", workspace: "/w", mode: "off", authorized: false, targets: {} }));
+	});
+
+	it("gives no reason for a grid whose every option is its kind's", () => {
+		expect(gridKindReasons("k", kind(), ran())).toEqual([]);
+		// A matched snapshot override is judged by its digest elsewhere, not as a policy change.
+		expect(gridKindReasons("k", kind(), ran({ matched: { mode: "follow", k: 3, kMax: 6, floorShare: 0.05, snapshot: "/s" } }))).toEqual([]);
+		expect(gridKindReasons("k", kind({ breaker: true }), ran())).toEqual([]);
+	});
+
+	// A mismatched option keeps the grid exploratory and says what differs, the
+	// way a candidate digest that is not the pinned one does.
+	it("lists every option that differs from the kind", () => {
+		const reasons = gridKindReasons("v6-stage2", kind(), {
+			candidateMaxAgents: 4, maxVerifiers: { candidate: 1 }, twinArms: ["baseline"], retry: false, timeoutMs: 7_200_000,
+		});
+		expect(reasons).toEqual([
+			"grid kind v6-stage2: the baseline's maxAgents is unstated, not 0",
+			"grid kind v6-stage2: the candidate's maxAgents is 4, not 8",
+			"grid kind v6-stage2: the baseline's maxVerifiers is unstated, not 0",
+			"grid kind v6-stage2: the candidate's maxVerifiers is 1, not 2",
+			"grid kind v6-stage2: the budget line is on candidate,matched, not baseline,candidate,matched",
+			"grid kind v6-stage2: patched twins run in baseline, not no arm",
+			"grid kind v6-stage2: the matched arm is off, not on",
+			"grid kind v6-stage2: it requires --retry",
+			`grid kind v6-stage2: the breaker policy is off, not ${JSON.stringify(DEFAULT_BREAKER)}`,
+			"grid kind v6-stage2: --timeout 7200000 is not 14400000",
+		]);
+		expect(gridKindReasons("k", kind({ breaker: false, retry: false }), ran())).toEqual(["grid kind k: it runs without --retry", "grid kind k: it runs without --breaker"]);
+		expect(gridKindReasons("k", kind(), ran({ matched: { mode: "follow", k: 2, kMax: 4, floorShare: 0.05 } }))[0]).toMatch(/the matched policy is \{"mode":"follow","k":2/);
+		expect(gridKindReasons("k", kind({ matched: null }), ran())).toEqual(["grid kind k: the matched arm is on, not off"]);
+	});
+
+	it("holds a kind's snapshots to its own pins: a commit, a digest, or not frozen", () => {
+		const measured = { baselineDigest: sha("b"), candidateDigest: sha("c"), commitReason: (commit: string) => commit === "1".repeat(40) ? "" : `baseline snapshot differs from git ${commit.slice(0, 7)}` };
+		expect(kindSnapshotReasons("k", kind(), measured)).toEqual([]);
+		expect(kindSnapshotReasons("k", kind({ baseline: { commit: "1".repeat(40) } }), measured)).toEqual([]);
+		expect(kindSnapshotReasons("k", kind({ baseline: { commit: "2".repeat(40) } }), measured)).toEqual(["grid kind k: baseline snapshot differs from git 2222222"]);
+		expect(kindSnapshotReasons("k", kind({ baseline: { commit: null }, candidate: { digest: null } }), measured)).toEqual([
+			"grid kind k: no baseline is frozen (its baseline.commit is null)", "grid kind k: no candidate is frozen (its candidate.digest is null)",
+		]);
+		expect(kindSnapshotReasons("k", kind({ baseline: { digest: sha("x") }, candidate: { digest: sha("y") } }), measured)).toEqual([
+			`grid kind k: baseline input digest ${"b".repeat(12)} is not the pinned ${"x".repeat(12)}`,
+			`grid kind k: candidate input digest ${"c".repeat(12)} is not the pinned ${"y".repeat(12)}`,
+		]);
+	});
+
+	it("refuses a malformed kind rather than letting every grid under it read as exploratory", () => {
+		const corpora = { c: corpus() };
+		const raw = (over: Record<string, unknown>) => ({ k: { ...kind(), ...over } });
+		expect(parseGridKinds(undefined, corpora)).toEqual({});
+		expect(parseGridKinds({ _comment: "x", ...raw({}) }, corpora).k).toEqual(kind());
+		expect(() => parseGridKinds(raw({ corpus: "nope" }), corpora)).toThrow(/corpus/);
+		expect(() => parseGridKinds(raw({ baseline: { commit: "abc" } }), corpora)).toThrow(/baseline.commit/);
+		expect(() => parseGridKinds(raw({ baseline: { tag: "v1" } }), corpora)).toThrow(/baseline must be/);
+		expect(() => parseGridKinds(raw({ candidate: {} }), corpora)).toThrow(/candidate must be/);
+		expect(() => parseGridKinds(raw({ candidateMaxAgents: null }), corpora)).toThrow(/candidateMaxAgents/);
+		expect(() => parseGridKinds(raw({ maxVerifiers: { matched: 1 } }), corpora)).toThrow(/maxVerifiers/);
+		expect(() => parseGridKinds(raw({ twinArms: ["matched"] }), corpora)).toThrow(/twinArms/);
+		expect(() => parseGridKinds(raw({ matched: { mode: "follow" } }), corpora)).toThrow(/matched/);
+		expect(() => parseGridKinds(raw({ breaker: { consecutive: 0 } }), corpora)).toThrow(/breaker/);
+		expect(() => parseGridKinds(raw({ retry: "yes" }), corpora)).toThrow(/retry/);
+		expect(() => parseGridKinds(raw({ timeoutMs: 0 }), corpora)).toThrow(/timeoutMs/);
 	});
 });

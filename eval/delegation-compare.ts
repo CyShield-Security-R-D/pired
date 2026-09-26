@@ -39,8 +39,8 @@ import {
 } from "./delegation-compare-lib.ts";
 // The grid's shape and identity (plan item 2.8): the pinned official corpora.
 import {
-	ARM_ORDER, corpusReasons, DEFAULT_BUDGET_ARMS, delegationOff, kindlessArmReasons, kindlessCorpus, parseArmList, parseCorpora, parseMaxVerifiers,
-	sameArms, scopeFor, scopeSettingsFor, shapeOf, summarizeTwins, twinTargets, type PinnedCorpus, type ScopeSettings,
+	ARM_ORDER, corpusReasons, DEFAULT_BUDGET_ARMS, delegationOff, gridKindReasons, kindlessArmReasons, kindlessCorpus, kindSnapshotReasons, parseArmList, parseCorpora,
+	parseGridKinds, parseMaxVerifiers, sameArms, scopeFor, scopeSettingsFor, shapeOf, summarizeTwins, twinTargets, type GridKind, type PinnedCorpus, type ScopeSettings,
 } from "./delegation-compare-grid.ts";
 // The staging, target-copy and tree-hash helpers moved to their own module so
 // the same digest rule draws the panel here, in the preflight and in tests.
@@ -178,6 +178,8 @@ export interface ComparePins {
 	piSubagents: { dir: string; version: string; digest: string };
 	/** The official corpora (plan item 2.8), by name; none when the file has no `corpora`, so every grid is exploratory. */
 	corpora: Record<string, PinnedCorpus>;
+	/** The named grid kinds (plan item 2.8) a grid can be launched as with --grid-kind. */
+	gridKinds: Record<string, GridKind>;
 }
 
 export function parseComparePins(text: string): ComparePins {
@@ -186,6 +188,7 @@ export function parseComparePins(text: string): ComparePins {
 	if (!hex(raw.baselineCommit)) throw new Error("pins: baselineCommit must be a full git commit id");
 	if (raw.candidateDigest !== null && !hex(raw.candidateDigest)) throw new Error("pins: candidateDigest must be a sha256 hex digest or null");
 	if (raw.candidateMaxAgents !== undefined && raw.candidateMaxAgents !== null && !isWorkerCap(raw.candidateMaxAgents)) throw new Error("pins: candidateMaxAgents must be a non-negative integer or null");
+	const corpora = parseCorpora(raw.corpora);
 	const sub = (raw.piSubagents ?? {}) as Record<string, unknown>;
 	if (typeof sub.dir !== "string" || !sub.dir || typeof sub.version !== "string" || !sub.version || !hex(sub.digest)) {
 		throw new Error("pins: piSubagents needs dir, version and a sha256 digest");
@@ -196,7 +199,8 @@ export function parseComparePins(text: string): ComparePins {
 		candidateFrozenAt: typeof raw.candidateFrozenAt === "string" ? raw.candidateFrozenAt : null,
 		candidateMaxAgents: isWorkerCap(raw.candidateMaxAgents) ? raw.candidateMaxAgents : null,
 		piSubagents: { dir: sub.dir, version: sub.version, digest: sub.digest as string },
-		corpora: parseCorpora(raw.corpora),
+		corpora,
+		gridKinds: parseGridKinds(raw.gridKinds, corpora),
 	};
 }
 
@@ -285,6 +289,12 @@ type Options = {
 	 * no twin runs and every output is what it was before the option.
 	 */
 	twinArms?: PairArm[];
+	/**
+	 * --grid-kind (plan item 2.8): the pinned grid kind this grid claims to be.
+	 * Official only when every option matches it; absent, the grid is judged
+	 * against the kindless (v5) corpus exactly as before.
+	 */
+	gridKind?: string;
 	/**
 	 * --breaker: re-queue infrastructure-failed pairs and stop on the circuit
 	 * breaker instead of on the first invalid run. Absent: fail-fast, exactly as
@@ -418,6 +428,11 @@ Options:
                         never enter the gate or the matched arm; they count
                         toward progress and the breaker, and summary.json lists
                         them per arm with their cells. Pinned in the manifest
+  --grid-kind <name>    Claim a grid kind of the pins file (gridKinds): its
+                        corpus, snapshots, arm options, twin arms, matched
+                        policy, retry, breaker and timeout. Official only when
+                        every one matches; each difference is listed as an
+                        exploratory reason. Pinned in the manifest
   --breaker <spec>      Stop on a circuit breaker instead of the first invalid
                         run, and re-queue pairs that fail for infrastructure.
                         <spec> is "default", or comma-separated k=v pairs
@@ -500,9 +515,10 @@ network check refuses if DNS or TLS to the provider fails.
 
 Official vs exploratory: only a pinned corpus's targets x its passes is an
 acceptance decision (the pins file's corpora; without --grid-kind, the v5 five
-research targets x 3 passes), and only when the manifest, every truth key, the
-baseline, the candidate snapshot, its worker cap and the pi-subagents tree
-match their pins:
+research targets x 3 passes; with it, the kind's corpus, snapshots and arm
+options), and only when the manifest, every truth key, the baseline, the
+candidate snapshot, its worker cap and the pi-subagents tree match their pins.
+Without --grid-kind:
   baseline:  git ${baseline}
   candidate: ${candidate}
   cap:       ${pins ? (pins.candidateMaxAgents === null ? "NOT PINNED (every grid is exploratory)" : `--candidate-max-agents ${pins.candidateMaxAgents}`) : "(pins unreadable)"}
@@ -571,7 +587,7 @@ export function parseOptions(argv: string[]): Parsed {
 		"--baseline", "--candidate", "--corpus", "--truth", "--out", "--provider", "--model",
 		"--thinking", "--passes", "--only", "--concurrency", "--timeout", "--manifest", "--fs-seal", "--auth-horizon-hours",
 		"--candidate-max-agents", "--breaker", "--matched", "--matched-snapshot",
-		"--baseline-max-agents", "--max-verifiers", "--budget-arms", "--twins", "--twin-arms",
+		"--baseline-max-agents", "--max-verifiers", "--budget-arms", "--twins", "--twin-arms", "--grid-kind",
 	]);
 	const values = new Map<string, string>();
 	let dryRun = false;
@@ -621,6 +637,8 @@ export function parseOptions(argv: string[]): Parsed {
 	// Either alone would be a grid that loads twins it never runs, or runs twins it never loaded.
 	if (twinList.length && twinsText === undefined) throw new Error("--twin-arms needs --twins <file>, the patched twins to run");
 	if (twinsText !== undefined && !twinList.length) throw new Error("--twins needs --twin-arms <arm,...>: no arm would run the twins");
+	const gridKind = values.get("--grid-kind");
+	if (gridKind !== undefined && !/^[A-Za-z0-9._-]+$/.test(gridKind)) throw new Error("--grid-kind must be a pinned kind's name");
 	const breakerText = values.get("--breaker");
 	const breaker = breakerText === undefined ? undefined : parseBreakerSpec(breakerText);
 	const matchedText = values.get("--matched");
@@ -650,6 +668,7 @@ export function parseOptions(argv: string[]): Parsed {
 			...(maxVerifiers === undefined ? {} : { maxVerifiers }),
 			...(budgetArms === undefined ? {} : { budgetArms }),
 			...(twinsText === undefined ? {} : { twinsPath: resolve(twinsText), twinArms: twinList }),
+			...(gridKind === undefined ? {} : { gridKind }),
 			...(breaker === undefined ? {} : { breaker }),
 			...(retry ? { retryPolicy: { ...DEFAULT_RETRY_POLICY } } : {}),
 			...(matched === undefined ? {} : { matched }),
@@ -729,6 +748,8 @@ export function optionsFromManifest(dir: string, manifest: JsonRecord): Options 
 	const candidateMaxAgents = manifest.candidateMaxAgents as number | undefined;
 	const arms = armOptionsFromManifest(manifest);
 	const twins = twinOptionsFromManifest(manifest);
+	if (manifest.gridKind !== undefined && (typeof manifest.gridKind !== "string" || !manifest.gridKind)) throw new Error("--resume manifest has an invalid gridKind");
+	const gridKind = manifest.gridKind as string | undefined;
 	// Absent: the grid ran fail-fast, and so does its resume. A present policy is
 	// read strictly, for the same reason as the cap above.
 	let breaker: BreakerPolicy | undefined;
@@ -752,6 +773,7 @@ export function optionsFromManifest(dir: string, manifest: JsonRecord): Options 
 		...(candidateMaxAgents === undefined ? {} : { candidateMaxAgents }),
 		...arms,
 		...twins,
+		...(gridKind === undefined ? {} : { gridKind }),
 		...(breaker === undefined ? {} : { breaker }),
 		...(retryPolicy === undefined ? {} : { retryPolicy }),
 		...(matched === undefined ? {} : { matched }),
@@ -3301,9 +3323,21 @@ async function runPreflight(options: Options, manifest: JsonRecord, saveManifest
 		// against the corpus its identity names, and read as official only when its
 		// cells are exactly that corpus's shape and every pinned input matches.
 		const comparePins = loadComparePins();
-		const judged = kindlessCorpus(comparePins.corpora, ids);
+		// A grid launched as a kind is judged against that kind's corpus and
+		// options; one without a kind, against the kindless (v5) corpus as before.
+		let kind: GridKind | undefined;
+		if (options.gridKind !== undefined) {
+			kind = comparePins.gridKinds[options.gridKind];
+			if (!kind) throw new Error(`--grid-kind ${options.gridKind} is not a grid kind of eval/delegation-compare.pins.json (known: ${Object.keys(comparePins.gridKinds).join(", ") || "none"})`);
+		}
+		const judged: [string, PinnedCorpus] | undefined = kind ? [kind.corpus, comparePins.corpora[kind.corpus]!] : kindlessCorpus(comparePins.corpora, ids);
 		const officialShapes: OfficialShape[] = judged && shapeOf(judged[1]) ? [shapeOf(judged[1])!] : [];
 		const gridOfficial = isOfficialGrid(expectedCells, officialShapes);
+		if (kind) {
+			exploratoryReasons.push(...gridKindReasons(options.gridKind!, kind, {
+				...options, retry: options.retryPolicy !== undefined,
+			}));
+		}
 		if (!judged) exploratoryReasons.push("eval/delegation-compare.pins.json pins no corpus a grid without --grid-kind can be official on");
 		else {
 			exploratoryReasons.push(...corpusReasons(judged[0], judged[1], {
@@ -3324,7 +3358,7 @@ async function runPreflight(options: Options, manifest: JsonRecord, saveManifest
 			sourceSha256: info.sourceHashes, truthSha256: info.truthHashes,
 		};
 		return {
-			value: { ...info, provider, expectedCells, gridOfficial, officialShapes, comparePins, twinIds },
+			value: { ...info, provider, expectedCells, gridOfficial, officialShapes, comparePins, twinIds, kind },
 			record: { targets: ids.length, ...(twinIds.length ? { twins: twinIds.length } : {}), gridOfficial },
 		};
 	});
@@ -3386,18 +3420,32 @@ async function runPreflight(options: Options, manifest: JsonRecord, saveManifest
 		if (!sameSnapshot && staged.baseline.stagedDigest === staged.candidate.stagedDigest) throw new Error("Redacted baseline and candidate snapshots are identical.");
 		// Pin identity: the baseline must be git 496b190's staged content and the
 		// candidate the frozen handoff snapshot, or the grid is exploratory.
-		const baselineReason = baselineMismatchReason(source.baseline.rows, comparePins.baselineCommit);
-		if (baselineReason) exploratoryReasons.push(baselineReason);
-		if (comparePins.candidateDigest === null) exploratoryReasons.push("no candidate is frozen: eval/delegation-compare.pins.json has candidateDigest null");
-		else if (source.candidate.digest !== comparePins.candidateDigest) exploratoryReasons.push(`candidate input digest ${source.candidate.digest.slice(0, 12)} is not the pinned ${comparePins.candidateDigest.slice(0, 12)}`);
-		const capReason = workerCapReason(comparePins.candidateMaxAgents, options.candidateMaxAgents);
-		if (capReason) exploratoryReasons.push(capReason);
-		exploratoryReasons.push(...kindlessArmReasons(options));
+		const { kind } = inputs;
+		let baselineReason = "";
+		let baselineCommitPin: string | null = comparePins.baselineCommit;
+		const candidateDigestPin = kind ? kind.candidate.digest : comparePins.candidateDigest;
+		if (kind) {
+			// The kind pins its own snapshots and caps (plan item 2.8); its arm
+			// options were checked with the inputs.
+			baselineCommitPin = "commit" in kind.baseline ? kind.baseline.commit : null;
+			exploratoryReasons.push(...kindSnapshotReasons(options.gridKind!, kind, {
+				baselineDigest: source.baseline.digest, candidateDigest: source.candidate.digest,
+				commitReason: (commit) => (baselineReason = baselineMismatchReason(source.baseline.rows, commit)),
+			}));
+		} else {
+			baselineReason = baselineMismatchReason(source.baseline.rows, comparePins.baselineCommit);
+			if (baselineReason) exploratoryReasons.push(baselineReason);
+			if (comparePins.candidateDigest === null) exploratoryReasons.push("no candidate is frozen: eval/delegation-compare.pins.json has candidateDigest null");
+			else if (source.candidate.digest !== comparePins.candidateDigest) exploratoryReasons.push(`candidate input digest ${source.candidate.digest.slice(0, 12)} is not the pinned ${comparePins.candidateDigest.slice(0, 12)}`);
+			const capReason = workerCapReason(comparePins.candidateMaxAgents, options.candidateMaxAgents);
+			if (capReason) exploratoryReasons.push(capReason);
+			exploratoryReasons.push(...kindlessArmReasons(options));
+		}
 		const piSubagents = await measurePiSubagents(comparePins);
 		exploratoryReasons.push(...piSubagents.reasons);
 		const inputsRecord = manifest.inputs as JsonRecord;
-		inputsRecord.baseline = { path: options.baseline, sha256: source.baseline.digest, files: source.baseline.files, stagedDigest: staged.baseline.stagedDigest, redactions: staged.baseline.redactions, stagedPath: stagePaths.baseline, matchesCommit: comparePins.baselineCommit, baselineMismatch: baselineReason || null };
-		inputsRecord.candidate = { path: options.candidate, sha256: source.candidate.digest, files: source.candidate.files, stagedDigest: staged.candidate.stagedDigest, redactions: staged.candidate.redactions, stagedPath: stagePaths.candidate, pinnedDigest: comparePins.candidateDigest, matchesPin: source.candidate.digest === comparePins.candidateDigest };
+		inputsRecord.baseline = { path: options.baseline, sha256: source.baseline.digest, files: source.baseline.files, stagedDigest: staged.baseline.stagedDigest, redactions: staged.baseline.redactions, stagedPath: stagePaths.baseline, matchesCommit: baselineCommitPin, baselineMismatch: baselineReason || null };
+		inputsRecord.candidate = { path: options.candidate, sha256: source.candidate.digest, files: source.candidate.files, stagedDigest: staged.candidate.stagedDigest, redactions: staged.candidate.redactions, stagedPath: stagePaths.candidate, pinnedDigest: candidateDigestPin, matchesPin: source.candidate.digest === candidateDigestPin };
 		// Written only for a grid that runs one snapshot in both arms, so every other manifest keeps its bytes.
 		if (sameSnapshot) inputsRecord.sameSnapshotInBothArms = true;
 		inputsRecord.piSubagents = { ...piSubagents.install, pinnedVersion: comparePins.piSubagents.version, pinnedDigest: comparePins.piSubagents.digest, matchesPin: piSubagents.reasons.length === 0 };
@@ -3758,6 +3806,8 @@ export function resumeMismatches(prior: JsonRecord, fresh: JsonRecord): string[]
 	eq("budgetArms", prior.budgetArms, fresh.budgetArms);
 	// Twin runs under two sets of arms, or of two twins files, would not add up to one control.
 	eq("twinArms", prior.twinArms, fresh.twinArms);
+	// A grid that claimed a kind is judged by it; resumed as another it would be two grids.
+	eq("gridKind", prior.gridKind, fresh.gridKind);
 	// A grid that re-queued and stopped under one policy, then resumed under
 	// another, would be one grid run under two stopping rules.
 	eq("breaker", prior.breaker, fresh.breaker);
@@ -3962,6 +4012,7 @@ export function newManifest(options: Options, mode: string): JsonRecord {
 		...(options.maxVerifiers === undefined ? {} : { maxVerifiers: options.maxVerifiers }),
 		...(options.budgetArms === undefined ? {} : { budgetArms: options.budgetArms }),
 		...(options.twinArms === undefined ? {} : { twinArms: options.twinArms }),
+		...(options.gridKind === undefined ? {} : { gridKind: options.gridKind }),
 		...(options.breaker === undefined ? {} : { breaker: options.breaker }),
 		// Only a grid that asked for retries records a policy, so a grid without
 		// one writes the v5 manifest, and a v5 manifest resumes with retries off.
@@ -4888,6 +4939,8 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 	const summary = {
 		id: manifest.id, mode: manifest.mode, provider: options.provider, model: options.model, thinking: options.thinking,
 		official, decisionScope: official ? "official" : "exploratory", exploratoryReasons: pre.exploratoryReasons,
+		// Only a grid launched as a kind names one.
+		...(options.gridKind === undefined ? {} : { gridKind: options.gridKind }),
 		interrupted, interruptedAt: runState.abortedAtMs === undefined ? null : new Date(runState.abortedAtMs).toISOString(),
 		stoppedInvalid, stopReason: runState.stopReason ?? null, quotaExhausted: runState.quotaExhausted ?? null, runtimeStable,
 		// Only a grid run with --breaker has this block, so a fail-fast grid's summary is what it always was.
@@ -4919,6 +4972,7 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 			passes: "ranges are across complete five-target pooled passes; three passes are coarse and are not a significance test",
 			approval: "one grid is one model; approvedForThisModel requires the official five-target, three-pass grid with matched pins and every run valid; candidate pass-mean pooled TP and grid-pooled precision each at least 85% of baseline (ADR-026); no target whose candidate TP range lies wholly below its baseline range; and lower mean total parent+worker+compaction tokens. Corpus acceptance additionally requires the same for the second priority model.",
 			tokens: "an invalid run carries no token count; it is excluded from the comparison and the grid is then incomplete",
+			...(options.gridKind === undefined ? {} : { gridKind: "official here means the grid ran as its pinned kind; approvedForThisModel is still ADR-026's rule, and the v6 pre-registration's decision rule is computed from these runs by eval/rescore.ts and eval/paired.ts" }),
 			...(options.retryPolicy ? { retryTokens: "the comparison's tokens are metered tokens plus a lower-bound estimate for failed attempts pi retried that reported no usage (the previous reply's prompt plus output); meteredOnlyComparison reads metered tokens alone" } : {}),
 		},
 		// The gate targets' runs only: a patched twin's are in the twins block.
