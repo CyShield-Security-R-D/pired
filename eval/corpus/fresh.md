@@ -90,6 +90,17 @@ Parameters: seed **20260926** (the date the procedure was committed), N = 12 (`-
 takes any N and the v6 power analysis sets the final count), 2 controls, 3 tries per repository,
 6 per language.
 
+### One implementation change after pre-registration
+
+The draw was started at `5cac587` and stopped by hand after 102 repositories, before it had written
+anything, because a full checkout was downloading files no rule reads — one project's card images
+held a single checkout for over eleven minutes. Every rule reads a path or a code file, so the walk
+now takes paths from `git ls-tree` and checks out code only. The rules did not change and
+`RULES_VERSION` did not move. `select-fresh.ts recheck` re-evaluated a seeded sample of 40 cached
+verdicts from scratch with the new code — the one eligible verdict and 39 ineligible ones across
+five filters — and all 40 came back identical, detail strings included. The draw then resumed from
+the verdict cache; the walk's decisions depend only on those verdicts.
+
 ## Label hygiene
 
 - **Width.** A label spans at most 31 lines. Hunks of one file merge when at most 6 lines apart and

@@ -1,11 +1,14 @@
-import { readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
 	LABEL_MAX_LINES, SCORER_EXT, advisoryOrder, canonical, cvss3Rating, cvss3Score, dateRuleHolds, dedupeLabels,
 	appWhy, dominantLanguage, drawSequential, isCodeLine, isLabelFile, isServedApp, labelsFromHunks, languageOf, mapLabelsBack, mentionIndex,
-	mentions, metadataFilter, mulberry32, namePhrases, parseZeroContextDiff, poolAdvisory, poolHash, repoOrder,
-	seededShuffle, targetName, toTruth, wilsonLower, wouldStrip, yearHistogram,
+	mentions, metadataFilter, mulberry32, namePhrases, parseLsTree, parseZeroContextDiff, poolAdvisory, poolHash, repoOrder,
+	seededShuffle, sparsePatterns, targetName, toTruth, walkFromListing, wilsonLower, wouldStrip, yearHistogram,
 } from "./select-fresh.ts";
+import { walk } from "./lib.ts";
 import type { Candidate, DrawPorts, Eligible, Hunk, Label, OsvRecord, PoolAdvisory, Verdict } from "./select-fresh.ts";
 
 // --- builders -------------------------------------------------------------------
@@ -424,6 +427,55 @@ describe("language", () => {
 		const pinned = /\\\.\(\?:([a-z|]+)\)/.exec(scorer)?.[1];
 		expect(pinned).toBeDefined();
 		expect(SCORER_EXT.source).toBe(`\\.(?:${pinned})$`);
+	});
+});
+
+describe("the code-only checkout", () => {
+	/** A sparse-checkout pattern as the test reads it: `*` then a literal tail with [xX] classes. */
+	const matches = (pattern: string, path: string): boolean => {
+		const tail = pattern.slice(1).replace(/\./g, "\\.");
+		return new RegExp(`${tail}$`).test(path.split("/").pop() ?? "");
+	};
+
+	it("checks out every file the language count reads, whatever the case of its extension", () => {
+		const patterns = sparsePatterns();
+		expect(patterns).toContain("*.[pP][yY]");
+		for (const path of ["a/b.py", "C.PHP", "x/y.Tsx", "lib/z.cpp", "App.vue", "run.sh", "m.MM"]) {
+			expect(languageOf(path)).toBeDefined();
+			expect(patterns.some((p) => matches(p, path))).toBe(true);
+		}
+		for (const path of ["logo.png", "index.html", "package.json"]) {
+			expect(languageOf(path)).toBeUndefined();
+			expect(patterns.some((p) => matches(p, path))).toBe(false);
+		}
+	});
+
+	it("reads a NUL-separated tree listing, paths with spaces and tabs intact", () => {
+		const out = "100644 blob aaaa\tapp/main.py\0" + "160000 commit bbbb\tthird/sub\0" + "100644 blob cccc\tdocs/my file.md\0";
+		expect(parseLsTree(out)).toEqual([
+			{ mode: "100644", path: "app/main.py" }, { mode: "160000", path: "third/sub" }, { mode: "100644", path: "docs/my file.md" },
+		]);
+	});
+
+	it("sees the same files from a tree listing as walk() sees in a full checkout of it", async () => {
+		const files = [
+			"app/routes.py", "app/templates/index.html", "app/static/logo.png", "manage.py", "Dockerfile",
+			"tests/test_app.py", "node_modules/x/index.js", "vendor/lib.php", ".github/workflows/ci.py", "web/src/App.tsx",
+			"db/migrations/0001.py", "README.md", "app/.env", "dist/bundle.js",
+		];
+		const root = await mkdtemp(join(tmpdir(), "fresh-walk-"));
+		try {
+			for (const f of files) {
+				await mkdir(dirname(join(root, f)), { recursive: true });
+				await writeFile(join(root, f), "x\n");
+			}
+			const fromDisk = await walk(root);
+			const fromListing = walkFromListing([...files.map((path) => ({ mode: "100644", path })), { mode: "160000", path: "ext/submodule.py" }]);
+			expect([...fromListing.all].sort()).toEqual([...fromDisk.all].sort());
+			expect([...fromListing.source].sort()).toEqual([...fromDisk.source].sort());
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
 	});
 });
 

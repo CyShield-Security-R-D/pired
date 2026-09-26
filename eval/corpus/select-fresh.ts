@@ -680,39 +680,80 @@ export function appWhy(f: AppFacts): string {
 
 // --- language -----------------------------------------------------------------
 
-const LANGUAGES: ReadonlyArray<readonly [RegExp, string]> = [
-	[/\.(?:py|pyi)$/i, "Python"],
-	[/\.(?:js|jsx|mjs|cjs|ts|tsx)$/i, "JavaScript/TypeScript"],
-	[/\.go$/i, "Go"],
-	[/\.rb$/i, "Ruby"],
-	[/\.php$/i, "PHP"],
-	[/\.java$/i, "Java"],
-	[/\.(?:kt|kts)$/i, "Kotlin"],
-	[/\.scala$/i, "Scala"],
-	[/\.cs$/i, "C#"],
-	[/\.rs$/i, "Rust"],
-	// Outside the scorer's list. Named so a project written in them is seen as
-	// such, rather than as the few thousand lines of Python in its tooling.
-	[/\.(?:c|h|cc|cpp|cxx|hpp|hh)$/i, "C/C++"],
-	[/\.(?:vue|svelte)$/i, "Vue/Svelte"],
-	[/\.swift$/i, "Swift"],
-	[/\.(?:m|mm)$/i, "Objective-C"],
-	[/\.(?:ex|exs)$/i, "Elixir"],
-	[/\.(?:erl|hrl)$/i, "Erlang"],
-	[/\.lua$/i, "Lua"],
-	[/\.(?:pl|pm)$/i, "Perl"],
-	[/\.dart$/i, "Dart"],
-	[/\.hs$/i, "Haskell"],
-	[/\.(?:clj|cljs)$/i, "Clojure"],
-	[/\.groovy$/i, "Groovy"],
-	[/\.(?:sh|bash)$/i, "Shell"],
+/**
+ * Code extensions by language. The scorer's languages first; the rest are
+ * outside its list and are named so a project written in them is seen as
+ * such, rather than as the few thousand lines of Python in its tooling.
+ */
+const LANGUAGE_EXTENSIONS: ReadonlyArray<readonly [string, readonly string[]]> = [
+	["Python", ["py", "pyi"]],
+	["JavaScript/TypeScript", ["js", "jsx", "mjs", "cjs", "ts", "tsx"]],
+	["Go", ["go"]],
+	["Ruby", ["rb"]],
+	["PHP", ["php"]],
+	["Java", ["java"]],
+	["Kotlin", ["kt", "kts"]],
+	["Scala", ["scala"]],
+	["C#", ["cs"]],
+	["Rust", ["rs"]],
+	["C/C++", ["c", "h", "cc", "cpp", "cxx", "hpp", "hh"]],
+	["Vue/Svelte", ["vue", "svelte"]],
+	["Swift", ["swift"]],
+	["Objective-C", ["m", "mm"]],
+	["Elixir", ["ex", "exs"]],
+	["Erlang", ["erl", "hrl"]],
+	["Lua", ["lua"]],
+	["Perl", ["pl", "pm"]],
+	["Dart", ["dart"]],
+	["Haskell", ["hs"]],
+	["Clojure", ["clj", "cljs"]],
+	["Groovy", ["groovy"]],
+	["Shell", ["sh", "bash"]],
 ];
+
+const LANGUAGES: ReadonlyArray<readonly [RegExp, string]> = LANGUAGE_EXTENSIONS.map(([lang, exts]) => [new RegExp(`\\.(?:${exts.join("|")})$`, "i"), lang] as const);
 
 /** Languages whose files the scorer reads. JavaScript and TypeScript are one stratum. */
 export const SCORER_LANGUAGES: ReadonlySet<string> = new Set(["Python", "JavaScript/TypeScript", "Go", "Ruby", "PHP", "Java", "Kotlin", "Scala", "C#", "Rust"]);
 
 export function languageOf(path: string): string | undefined {
 	return LANGUAGES.find(([re]) => re.test(path))?.[1];
+}
+
+/**
+ * Sparse-checkout patterns for every code file languageOf() recognises, case
+ * folded by character class because the extension tests are case-insensitive.
+ *
+ * Every eligibility rule reads either a path or a code file: size and the
+ * route test read source, the language count reads code, templates,
+ * migrations and server entries are decided from paths alone. Checking out
+ * only code keeps the walk from downloading what no rule reads — one game's
+ * card images held a single checkout for more than eleven minutes.
+ */
+export function sparsePatterns(): string[] {
+	const fold = (ext: string): string => [...ext].map((c) => (/[a-z]/.test(c) ? `[${c}${c.toUpperCase()}]` : c)).join("");
+	return LANGUAGE_EXTENSIONS.flatMap(([, exts]) => exts.map((e) => `*.${fold(e)}`));
+}
+
+/** One line of `git ls-tree -r -z` output, parsed. */
+export interface TreeEntry { mode: string; path: string }
+
+export function parseLsTree(out: string): TreeEntry[] {
+	return out.split("\0").filter(Boolean).map((row) => {
+		const tab = row.indexOf("\t");
+		return { mode: row.slice(0, row.indexOf(" ")), path: row.slice(tab + 1) };
+	});
+}
+
+/**
+ * What lib.ts walk() would return for a clean checkout of the tree, computed
+ * from its listing instead of the disk: the same vendored and hidden paths
+ * skipped, the same source test. Submodules (mode 160000) are directories
+ * with nothing in them in a checkout, so they are not files here either.
+ */
+export function walkFromListing(entries: readonly TreeEntry[]): { all: string[]; source: string[] } {
+	const all = entries.filter((e) => e.mode !== "160000" && !VENDORED.test(`/${e.path}`)).map((e) => e.path);
+	return { all, source: all.filter((p) => SOURCE_EXT.test(p) && !NON_SOURCE.test(p)) };
 }
 
 /** The language with the most lines; ties go to name order so the answer never depends on file order. */
@@ -1177,13 +1218,35 @@ async function languageLines(dir: string, all: string[]): Promise<Map<string, nu
 
 interface TreeFacts { scopeFiles: number; scopeLoc: number; routes: number; app: boolean; why: string; language: string | undefined }
 
-/** Check out `commit` and measure it the way the corpus measures a target. */
-async function treeFacts(dir: string, commit: string): Promise<TreeFacts | { tooMany: number }> {
-	const listing = (await git(dir, ["ls-tree", "-r", "-z", "--name-only", commit])).split("\0").filter(Boolean);
-	const source = listing.filter(isWalkSource).length;
-	if (source > MAX_SOURCE_FILES) return { tooMany: source };
+/** Only code in the working tree from here on (see sparsePatterns). */
+async function sparseOn(dir: string): Promise<void> {
+	await git(dir, ["config", "core.sparseCheckout", "true"]);
+	await git(dir, ["config", "core.sparseCheckoutCone", "false"]);
+	await mkdir(join(dir, ".git", "info"), { recursive: true });
+	await writeFile(join(dir, ".git", "info", "sparse-checkout"), `${sparsePatterns().join("\n")}\n`);
+}
+
+/** The whole tree again, for truth and for materialising a target. */
+async function fullCheckout(dir: string, commit: string): Promise<void> {
+	if ((await git(dir, ["config", "--get", "core.sparseCheckout"]).catch(() => "")).trim() === "true") {
+		await git(dir, ["sparse-checkout", "disable"], 1_800_000);
+	}
 	await git(dir, ["checkout", "--quiet", "--force", "--detach", commit], 1_800_000);
-	const w = await walk(dir);
+}
+
+/**
+ * Check out `commit` and measure it the way the corpus measures a target.
+ *
+ * The paths come from the tree's listing and only code is checked out; the
+ * measurements are the ones walk() over a full checkout gives, because every
+ * file they read is code and every other test reads a path. `recheck`
+ * compares the two on a sample of verdicts.
+ */
+async function treeFacts(dir: string, commit: string): Promise<TreeFacts | { tooMany: number }> {
+	const w = walkFromListing(parseLsTree(await git(dir, ["ls-tree", "-r", "-z", "--full-tree", commit])));
+	if (w.source.length > MAX_SOURCE_FILES) return { tooMany: w.source.length };
+	await sparseOn(dir);
+	await git(dir, ["checkout", "--quiet", "--force", "--detach", commit], 1_800_000);
 	const scopeLoc = await countLines(dir, w.source);
 	const cls = await classify(dir, w);
 	const language = dominantLanguage(await languageLines(dir, w.all));
@@ -1192,11 +1255,15 @@ async function treeFacts(dir: string, commit: string): Promise<TreeFacts | { too
 
 const inRange = (loc: number): boolean => loc >= SIZE_RANGE[0] && loc <= SIZE_RANGE[1];
 
-async function evaluateCandidate(work: string, repo: string, c: Candidate): Promise<Verdict> {
+function cacheFileOf(work: string, repo: string, c: Candidate): string {
+	return `${workPaths(work, repo).verdict}.${c.advisory.id}.${c.sha.slice(0, 12)}.v${RULES_VERSION}`;
+}
+
+async function evaluateCandidate(work: string, repo: string, c: Candidate, useCache = true): Promise<Verdict> {
 	const id = c.advisory.id;
 	const paths = workPaths(work, repo);
-	const cacheFile = `${paths.verdict}.${id}.${c.sha.slice(0, 12)}.v${RULES_VERSION}`;
-	if (existsSync(cacheFile)) return readJson<Verdict>(cacheFile);
+	const cacheFile = cacheFileOf(work, repo, c);
+	if (useCache && existsSync(cacheFile)) return readJson<Verdict>(cacheFile);
 	const fail = (filter: WalkFilter, detail: string): Ineligible => ({ ok: false, advisory: id, filter, detail });
 	const verdict = await (async (): Promise<Verdict> => {
 		let fix: string;
@@ -1230,7 +1297,7 @@ async function evaluateCandidate(work: string, repo: string, c: Candidate): Prom
 	})();
 	// A network failure is not a fact about the candidate; everything else is.
 	const transient = !verdict.ok && verdict.filter === "source obtainable at the parent commit" && /timed out|ETIMEDOUT|ECONNRESET|rate limit|403|429|5\d\d/i.test(verdict.detail);
-	if (!transient) {
+	if (!transient && useCache) {
 		await mkdir(dirname(cacheFile), { recursive: true });
 		await writeFile(cacheFile, JSON.stringify(verdict));
 	}
@@ -1491,7 +1558,7 @@ async function cmdTruth(argv: string[]): Promise<void> {
 		// Every advisory credited to this target is stripped when it is built, so
 		// every label is checked against all of their ids.
 		const ids = credited.flatMap((c) => [c, ...(byId.get(c)?.aliases ?? [])]);
-		await git(dir, ["checkout", "--quiet", "--force", "--detach", parent], 1_800_000);
+		await fullCheckout(dir, parent);
 		const survivors: Label[] = [];
 		for (const l of labels) {
 			const text = await readFile(join(dir, l.file), "utf8").catch(() => undefined);
@@ -1562,7 +1629,7 @@ async function cmdMaterialise(argv: string[]): Promise<void> {
 		const name = String(m.name);
 		const dir = workPaths(work, keyOf.get(name) ?? String(m.repo)).git;
 		await ensureHistory(dir, String(m.repo), [String(m.reviewed_commit)]);
-		await git(dir, ["checkout", "--quiet", "--force", "--detach", String(m.reviewed_commit)], 1_800_000);
+		await fullCheckout(dir, String(m.reviewed_commit));
 		const dest = join(out, `${name}.pristine`);
 		await rm(dest, { recursive: true, force: true });
 		await cp(dir, dest, { recursive: true, filter: (src) => !src.split("/").includes(".git") });
@@ -1573,6 +1640,39 @@ async function cmdMaterialise(argv: string[]): Promise<void> {
 	}
 }
 
+/**
+ * Re-evaluate a seeded sample of cached verdicts from scratch, in a separate
+ * work directory and without the cache, and report any that differ. Every
+ * eligible verdict is always in the sample. This is how an implementation
+ * change that must not change a rule is shown not to have.
+ */
+async function cmdRecheck(argv: string[]): Promise<void> {
+	const work = resolve(argOf(argv, "work", "/tmp/pired-fresh-work") as string);
+	const scratch = resolve(argOf(argv, "scratch", join(work, "recheck")) as string);
+	const sample = Number(argOf(argv, "sample", "30"));
+	const seed = Number(argOf(argv, "seed", "1"));
+	const pool = await readJson<PoolFile>(argOf(argv, "pool", join(FRESH, "pool.json")) as string);
+	const byId = new Map(pool.advisories.map((a) => [a.id, a]));
+	const files = (await readdir(join(work, "verdicts"))).filter((f) => f.endsWith(`.v${RULES_VERSION}`)).sort();
+	const rows = await Promise.all(files.map(async (f) => ({ f, v: await readJson<Verdict>(join(work, "verdicts", f)) })));
+	const ok = rows.filter((r) => r.v.ok);
+	const rest = seededShuffle(rows.filter((r) => !r.v.ok), mulberry32(seed)).slice(0, Math.max(0, sample - ok.length));
+	let mismatches = 0;
+	for (const { f, v } of [...ok, ...rest]) {
+		const repo = (f.split(".json.")[0] as string).replace("__", "/");
+		const a = byId.get(v.advisory);
+		const fix = a?.fixes.find((x) => repoKey(repoOf(x)) === repo);
+		if (!a || !fix) { process.stdout.write(`?  ${f}: not in the pool\n`); mismatches += 1; continue; }
+		const again = await evaluateCandidate(scratch, repo, { advisory: a, repo: repoOf(fix), sha: shaOf(fix) }, false);
+		await rm(workPaths(scratch, repo).git, { recursive: true, force: true });
+		const same = canonical(again) === canonical(v);
+		if (!same) mismatches += 1;
+		process.stdout.write(`${same ? "=" : "≠"}  ${repo} ${v.advisory} ${v.ok ? "eligible" : v.filter}${same ? "" : `  →  ${again.ok ? "eligible" : `${again.filter}: ${again.detail}`}`}\n`);
+	}
+	process.stdout.write(`recheck: ${ok.length + rest.length} verdicts, ${mismatches} differ\n`);
+	if (mismatches > 0) process.exitCode = 1;
+}
+
 async function main(): Promise<void> {
 	const [cmd, ...argv] = process.argv.slice(2);
 	if (cmd === "pool") return cmdPool(argv);
@@ -1580,7 +1680,8 @@ async function main(): Promise<void> {
 	if (cmd === "draw") return cmdDraw(argv);
 	if (cmd === "truth") return cmdTruth(argv);
 	if (cmd === "materialise") return cmdMaterialise(argv);
-	process.stderr.write("usage: select-fresh.ts pool|exclusions|draw|truth|materialise [options]\n");
+	if (cmd === "recheck") return cmdRecheck(argv);
+	process.stderr.write("usage: select-fresh.ts pool|exclusions|draw|truth|materialise|recheck [options]\n");
 	process.exitCode = 2;
 }
 
