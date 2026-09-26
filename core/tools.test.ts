@@ -4,6 +4,7 @@ import type { ToolContext, ToolDefinition } from "./ports.ts";
 import { makeFakeServices, type FakeServices } from "./testing/fakes.ts";
 import { computeEngagementStats } from "./stats.ts";
 import { createRecallTool, createRecordTool } from "./tools.ts";
+import { isIndependent } from "./challenge.ts";
 import { Workspace } from "./workspace.ts";
 
 async function setup(): Promise<{ svc: FakeServices; ws: Workspace; ctx: ToolContext; record: ToolDefinition; recall: ToolDefinition }> {
@@ -2617,8 +2618,8 @@ describe("where a quote's file is found (3.1)", () => {
 	});
 
 	it("says so when the tree is too large to be sure a basename names one file", async () => {
-		const files: Record<string, string> = { "zz/export.go": EXPORT_GO };
-		for (let i = 0; i < 2001; i++) files[`d${i}/README`] = "x";
+		// Deeper than the search descends: the one match it finds cannot be the only one.
+		const files: Record<string, string> = { "zz/export.go": EXPORT_GO, [`${Array.from({ length: 13 }, (_, i) => `l${i}`).join("/")}/README`]: "x" };
 		const { out, f } = await (await tree(files)).refute(`export.go:31: ${GUARD}`);
 		expect(f?.status).toBe("suspected");
 		expect(out).toMatch(/too large to be sure 'export\.go' names one file/);
@@ -2648,5 +2649,57 @@ describe("a route sent as a path hop on a live engagement (3.1)", () => {
 		const out = textOf(await record.execute({ kind: "finding", id, status: "confirmed", control: "x", path: ["/api/login", "/api/home"] }, ctx));
 		expect((await ws.read("findings")).find((x) => x.id === id)?.status).toBe("suspected");
 		expect(out).toMatch(/not in the form 'file:line: verbatim text'/);
+	});
+});
+
+describe("a verdict someone earned is not undone by its finder or by a merge (3.1 review)", () => {
+	async function ledger() {
+		const svc = makeFakeServices();
+		const ws = await Workspace.open("/ws/acme", "acme", svc);
+		const ctx: ToolContext = { cwd: "/target", services: svc };
+		const as = (author: string) => createRecordTool({ workspace: ws, author: () => author });
+		const claim = { kind: "finding", title: "SQL injection in report search", severity: "high", target: "app/reports.py:88", class: "sqli" };
+		const id = ((await as("pired-investigate").execute(claim, ctx)).details as { id: string }).id;
+		await as("pired-verify").execute({ kind: "finding", id, status: "confirmed", control: "a quote in q returned a 500", live: true }, ctx);
+		const row = async () => (await ws.read("findings")).find((f) => f.id === id);
+		return { ws, ctx, as, claim, id, row };
+	}
+
+	it("refuses the finder's status and claim edits by id once its finding is verified, and leaves the write-up open", async () => {
+		const { ctx, as, id, row } = await ledger();
+		for (const edit of [{ status: "suspected" }, { target: "app/other.py:3" }, { severity: "low" }]) {
+			await expect(as("pired-investigate").execute({ kind: "finding", id, ...edit }, ctx)).rejects.toThrow(/has been verified by pired-verify, and its finder \(pired-investigate\) may not change/);
+		}
+		expect((await row())?.status).toBe("confirmed");
+		await as("pired-investigate").execute({ kind: "finding", id, impact: "every report is readable" }, ctx);
+		expect((await row())?.impact).toBe("every report is readable");
+		// A grounded look moves nothing and is not refused.
+		await as("pired-investigate").execute({ kind: "finding", id, status: "suspected", basis: ["app/reports.py:88"] }, ctx);
+		expect((await row())?.status).toBe("confirmed");
+		// The lead may still correct it by id: the escape hatch is the lead's.
+		await as("lead").execute({ kind: "finding", id, severity: "medium" }, ctx);
+		expect((await row())?.severity).toBe("medium");
+	});
+
+	it("keeps an earned verdict when the lead's merge carries another status, and says how to change it", async () => {
+		const { ctx, as, claim, id, row } = await ledger();
+		const out = textOf(await as("lead").execute({ ...claim, status: "suspected", description: "q is formatted into the WHERE clause" }, ctx));
+		expect((await row())?.status).toBe("confirmed");
+		expect((await row())?.verification).toMatchObject({ verdict: "stands", by: "pired-verify" });
+		expect(out).toContain(`${id} carries a stands verdict, so this merge kept its status (confirmed)`);
+	});
+
+	it("records a co-finder on merge, and does not call its verification independent", async () => {
+		const { ctx, as, claim, row } = await ledger();
+		await as("pired-escalate").execute({ ...claim, description: "the same sink reached from the export route" }, ctx);
+		await as("pired-escalate").execute({ ...claim, description: "the same sink reached from the export route, and from the API" }, ctx);
+		const f = await row();
+		expect(f?.contributors).toEqual(["pired-escalate"]);
+		expect(isIndependent(f!)).toBe(true);
+		expect(isIndependent({ ...f!, verification: { ...f!.verification!, by: "pired-escalate" } })).toBe(false);
+		// A merge that changes nothing makes nobody a contributor.
+		const again = await ledger();
+		await again.as("pired-scout").execute(again.claim, again.ctx);
+		expect((await again.row())?.contributors).toBeUndefined();
 	});
 });

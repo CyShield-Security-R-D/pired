@@ -12,7 +12,7 @@
 
 import { buildBrowserModel, recordLabel } from "./browser.ts";
 import { workerContext } from "./delegation.ts";
-import { auditFinding, challengeBrief, groundQuotes, hasGrounds, hypothesisBrief, isExaminedUnsettled, isWorkerAuthor, judge, parseQuote, provenanceLabel, type QuoteReader, SEVERITY_RANK, unchallengedQueue, unsettledLabel, verdictPatch } from "./challenge.ts";
+import { auditFinding, challengeBrief, EARNED_LOCKED_FIELDS, groundQuotes, hasGrounds, hypothesisBrief, isEarned, isExaminedUnsettled, isFinder, isWorkerAuthor, judge, parseQuote, provenanceLabel, type QuoteReader, SEVERITY_RANK, unchallengedQueue, unsettledLabel, verdictPatch } from "./challenge.ts";
 import { computeCoverage, coveragePercent, findGaps, selectNext } from "./coverage.ts";
 import { CVSS_DEFAULT_VERSION, CVSS_EXAMPLE, cvssVersion, validateCvss } from "./cvss.ts";
 import { type Fields, findDuplicate, findNearDuplicate, holdsLeadOpen, type IdentityKind, isNoOp, leadMeetsClearance, mergeRecord, reopensLead, updateById } from "./identity.ts";
@@ -1329,6 +1329,25 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 				delete a.verification;
 				const wanted = oneOf(a.status, FINDING_STATUSES);
 				const existing = str(a.id) ? (await deps.workspace.read("findings")).find((f) => f.id === str(a.id)) : undefined;
+				// A worker's finding, settled by someone else's check, is not its
+				// finder's to unsettle: not the status, not the claim the verdict is
+				// about. The child gate refuses the same call; this is the write path
+				// holding the line on its own, for a worker whatever its name.
+				const writer = authorOf(deps, ctx);
+				if (existing !== undefined && isWorkerAuthor(writer) && isEarned(existing.verification) && isFinder(existing, writer)) {
+					const locked = EARNED_LOCKED_FIELDS.filter((key) => sent(a[key]));
+					// A look (status=suspected with grounds, nothing about the claim) is
+					// judged below and moves no settled status; it is not an undo.
+					const look = wanted === "suspected" && locked.every((key) => key === "status") &&
+						hasGrounds({ basis: [...(strArr(a.basis) ?? []), ...quoteList(a.path), ...quoteList(a.guards)], control: str(a.control) });
+					if (locked.length > 0 && !look) {
+						throw new Error(
+							`record finding: ${existing.id} has been ${existing.verification?.verdict === "refuted" ? "refuted" : "verified"}` +
+							`${existing.verification?.by ? ` by ${existing.verification.by}` : ""}, and its finder (${writer}) may not change ` +
+							`${locked.join(", ")} on it. Impact, remediation, repro and evidence are still open; if the verdict is wrong, say why in your handoff.`,
+						);
+					}
+				}
 				// A challenge that looked and could not settle the claim, said on the
 				// finding's id. Without a way to write that down a verifier had two
 				// choices — force a verdict it had not earned, or leave no trace. On the
@@ -1697,6 +1716,7 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 			let heldOpen: string[] = [];
 			let reopened: string[] = [];
 			let kept: KeptClearance[] = [];
+			let heldVerdict = "";
 			await deps.workspace.upsert(store, (current) => {
 				const byId = existingId ? current.find((r) => r.id === existingId) : undefined;
 				if (byId) {
@@ -1727,12 +1747,19 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 					if (kind === "hypothesis" && reopensLead(stored, patch)) reopened = [dup.id as string];
 					else if (kind === "hypothesis" && leadMeetsClearance(stored, patch)) kept = [{ id: dup.id as string, statement: str(stored.statement) }];
 					const fields = mergeRecord(kind as IdentityKind, stored, patch, { reopen: true });
-					// A worker's merge adds to the claim — a second location, a longer
-					// description — and never moves the verdict on it. Without this an
-					// investigator re-recording a verified bug with status=suspected
-					// would undo the verifier's confirmation by merge, the rewrite the
-					// child gate refuses by id (3.1).
-					if (kind === "finding" && isWorkerAuthor(authorOf(deps, ctx))) {
+					const merger = authorOf(deps, ctx);
+					// A merge adds to the claim — a second location, a longer
+					// description — and does not move a verdict someone earned on it,
+					// whoever merges: a verdict is recorded on the row by id, where it
+					// is judged against the one standing. A worker's merge moves no
+					// status at all. Without this an investigator re-recording a
+					// verified bug with status=suspected undid the verifier's
+					// confirmation by merge, the rewrite the child gate refuses by id.
+					if (kind === "finding" && (isWorkerAuthor(merger) || isEarned(stored.verification as FindingRecord["verification"]))) {
+						if (isEarned(stored.verification as FindingRecord["verification"]) && patch.status !== undefined && patch.status !== stored.status) {
+							heldVerdict = `\n${dup.id} carries a ${String((stored.verification as FindingRecord["verification"])?.verdict)} verdict, so this merge kept its status (${String(stored.status)}). ` +
+								`To change it, record the verdict on it by id: record id=${String(dup.id)} status=… with its grounds.`;
+						}
 						fields.status = stored.status;
 						fields.verification = stored.verification;
 					}
@@ -1744,6 +1771,12 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 						outcome = "unchanged";
 						record = dup as unknown as LedgerRecord;
 						return undefined;
+					}
+					// Who else wrote this claim: a merge that changed it makes its
+					// author a co-finder, whose verification of it is not independent.
+					if (kind === "finding" && merger !== undefined && merger !== stored.by) {
+						const before = Array.isArray(stored.contributors) ? (stored.contributors as string[]) : [];
+						if (!before.includes(merger)) (merged as FindingRecord).contributors = [...before, merger];
 					}
 					outcome = "merged";
 					record = merged;
@@ -1843,7 +1876,7 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 			}
 			const digest = await macroDigest(deps, deps.surfaceKinds ?? DEFAULT_SURFACE_KINDS);
 			return text((downgrade !== "" && (outcome as WriteOutcome) === "unchanged" && existingId !== undefined ? `Nothing was written on ${kind} ${written.id}.` : recordSummary(kind, written, outcome, existingId !== undefined)) + leadsLeftOpen(heldOpen) + leadsReopened(reopened) +
-				clearancesKept(kept, "it was re-checked by id with a basis, and a lead that does not name it by id does not undo that") + warning + unlocated + pulled + incomplete + linkage + downgrade + unverified + digest, recordDetails(written, outcome));
+				clearancesKept(kept, "it was re-checked by id with a basis, and a lead that does not name it by id does not undo that") + warning + unlocated + pulled + incomplete + linkage + downgrade + heldVerdict + unverified + digest, recordDetails(written, outcome));
 		},
 	};
 }

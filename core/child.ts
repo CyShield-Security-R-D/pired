@@ -17,7 +17,7 @@
  * Pure module: core imports only, the filesystem arrives on the `Fs` port.
  */
 
-import { hasGrounds } from "./challenge.ts";
+import { EARNED_LOCKED_FIELDS, hasGrounds, isEarned } from "./challenge.ts";
 import { type Fields, findDuplicate } from "./identity.ts";
 import { type EngagementScope, type FindingRecord, type HypothesisRecord, type StoreName, type StoreRecordMap, UNNAMED_WORKER_AUTHOR } from "./ontology.ts";
 import { parseLenses, passState, resolveLadder } from "./passes.ts";
@@ -663,14 +663,18 @@ async function roleRefusal(agent: PiredAgent | undefined, rawArgs: unknown, ledg
 			reason: `pired: ${agent?.name ?? "a worker"} does not settle the session — that is the lead's record of how the session ended. Your task ends with your handoff: name what you recorded and what you left open.`,
 		};
 	}
-	if (args.kind !== "finding" || !agent) return undefined;
+	if (args.kind !== "finding") return undefined;
+	// A worker whose role could not be read is still a worker: it stamps its rows
+	// `worker` (UNNAMED_WORKER_AUTHOR) and is held to the finder's rules, never
+	// waved through as though it were the lead.
+	if (!agent) return finderRefusal(UNNAMED_WORKER_AUTHOR, args, ledger);
 	if (agent.role === "scout") {
 		return {
 			allow: false,
 			reason: `pired: ${agent.name} does not record findings — scouts map surface and propose hypotheses. Record what you saw as kind=hypothesis outcome=proposed against the element and its class, and an investigator or verifier settles it.`,
 		};
 	}
-	if (agent.role === "investigate" || agent.role === "escalate") return finderRefusal(agent, args, ledger);
+	if (agent.role === "investigate" || agent.role === "escalate") return finderRefusal(agent.name, args, ledger);
 	if (agent.role !== "verify") return undefined;
 	return verifierRefusal(agent, args, ledger);
 }
@@ -693,26 +697,48 @@ async function roleRefusal(agent: PiredAgent | undefined, rawArgs: unknown, ledg
  * stored status on a worker's merge.
  *
  * Two launches of one worker share its agent name, so the second may edit the
- * first one's finding; `by` records the agent, not the launch.
+ * first one's finding; `by` records the agent, not the launch. Once a
+ * verification has settled the finding (`isEarned`), even its finder may not
+ * change its status or its claim (EARNED_LOCKED_FIELDS): the review found an
+ * investigator undoing a verifier's confirmation by id. A worker whose role
+ * could not be read is held to these rules under UNNAMED_WORKER_AUTHOR.
  */
-async function finderRefusal(agent: PiredAgent, args: Record<string, unknown>, ledger: ChildLedger): Promise<GateDecision | undefined> {
+async function finderRefusal(name: string, args: Record<string, unknown>, ledger: ChildLedger): Promise<GateDecision | undefined> {
 	if (passed(args, "status") && !(typeof args.status === "string" && FINDER_STATUSES.has(args.status))) {
 		const got = typeof args.status === "string" ? args.status : JSON.stringify(args.status);
 		const verdict = got === "confirmed" || got === "refuted";
 		return {
 			allow: false,
 			reason: verdict
-				? `pired: ${agent.name} records findings and does not settle them — status=${got} is for an independent verifier (pired-verify, launched by the lead) or the lead, because a finder that checks its own claim agrees with it. Record the finding without a status: it lands suspected. Put the control case you ran and the path you traced in its description or evidence, and name its id in your handoff as ready to verify.`
-				: `pired: ${agent.name} does not set a finding's status to '${got}' — that is the operator's disposition. Record the finding without a status (it lands suspected), and say in your handoff why you think it is ${got}.`,
+				? `pired: ${name} records findings and does not settle them — status=${got} is for an independent verifier (pired-verify, launched by the lead) or the lead, because a finder that checks its own claim agrees with it. Record the finding without a status: it lands suspected. Put the control case you ran and the path you traced in its description or evidence, and name its id in your handoff as ready to verify.`
+				: `pired: ${name} does not set a finding's status to '${got}' — that is the operator's disposition. Record the finding without a status (it lands suspected), and say in your handoff why you think it is ${got}.`,
 		};
 	}
 	if (!passed(args, "id")) return undefined;
 	const stored = (await ledger.findings()).find((f) => f.id === args.id);
-	if (stored === undefined || stored.by === agent.name) return undefined;
-	return {
-		allow: false,
-		reason: `pired: finding ${stored.id} was recorded by ${stored.by ?? "someone else (no author on the row)"}, not ${agent.name}, and a worker changes only the findings it recorded. To add a location or detail, record it again without an id — the same bug merges into ${stored.id} and keeps its status — or name ${stored.id} and what you found in your handoff.`,
-	};
+	if (stored === undefined) return undefined;
+	if (stored.by !== name) {
+		return {
+			allow: false,
+			reason: `pired: finding ${stored.id} was recorded by ${stored.by ?? "someone else (no author on the row)"}, not ${name}, and a worker changes only the findings it recorded. To add a location or detail, record it again without an id — the same bug merges into ${stored.id} and keeps its status — or name ${stored.id} and what you found in your handoff.`,
+		};
+	}
+	// Its own finding, already settled by someone's check. The finder may add to
+	// the write-up but not undo the verdict, or move the claim out from under the
+	// quotes it rested on — a second launch of the same worker included, since
+	// it carries the same name.
+	// A look — status=suspected with what was checked and nothing about the
+	// claim — moves no status on a settled finding (the record tool keeps the
+	// earned verdict and adds the look to its notes), so it is not an undo.
+	const locked = EARNED_LOCKED_FIELDS.filter((key) => passed(args, key));
+	const look = args.status === "suspected" && grounded(args) && locked.every((key) => key === "status");
+	if (isEarned(stored.verification) && locked.length > 0 && !look) {
+		return {
+			allow: false,
+			reason: `pired: finding ${stored.id} has been ${stored.verification?.verdict === "refuted" ? "refuted" : "verified"}${stored.verification?.by ? ` by ${stored.verification.by}` : ""}, and its finder may not change ${locked.map((k) => `'${k}'`).join(", ")} on it now — that would undo the check it could not make itself. Impact, remediation, repro and evidence are still yours to add. If the verdict is wrong, say why in your handoff for the lead.`,
+		};
+	}
+	return undefined;
 }
 
 const VERDICT = "A verifier records a verdict, not a rewrite: status=confirmed with 'control' (and 'entitlement' where access is the question), status=refuted with 'basis' (and 'live' only when you tested a running target), or status=suspected with what you checked in 'basis' or 'control' when you could not settle it; its reasoning goes in 'reason'. On a review of source the proof is quoted as 'file:line: verbatim text': 'path' from the source hop to the sink hop to confirm, the guard in 'basis' or 'guards' to refute. Cite the output you saved — record kind=evidence returns its path — in 'control' or 'basis'. The finding's title, description, locations, severity and evidence stay as recorded; if they are wrong, say so in 'reason' and in your handoff, and the operator amends it.";

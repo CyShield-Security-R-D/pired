@@ -2,7 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
 	auditFinding, challengeBrief, type ChallengeReport, CLASS_ALIASES, CONTRACTS, contractFor,
-	challengeCommand, deriveTier, describeUngrounded, evidenceShape, GENERIC_CONTROL, type GroundedQuote, groundQuotes, hasGrounds,
+	challengeCommand, deriveTier, describeUngrounded, EARNED_LOCKED_FIELDS, isFinder, evidenceShape, GENERIC_CONTROL, type GroundedQuote, groundQuotes, hasGrounds,
 	hypothesisBrief, isEarned, isExaminedUnsettled, isIndependent, isUnchallenged, isWorkerAuthor, judge, MIN_QUOTE_CHARS,
 	isCommentOnly, MAX_QUOTE_OCCURRENCES, MAX_QUOTE_SPAN, modelAnswersEntitlement, parseQuote, provenanceLabel, QUOTE_WINDOW, type QuoteReader, unchallengedBrief, unchallengedQueue, unsettledLabel, verdictPatch,
 } from "./challenge.ts";
@@ -1256,5 +1256,16 @@ describe("what the lead is shown about who recorded and who judged (3.1)", () =>
 	it("carries the author onto the /challenge list", () => {
 		const view = challengeCommand({ findings: [finding({ id: "w1", by: "pired-investigate" })] });
 		expect(view.text).toContain("· w1 [high] IDOR on GET /api/notes/{id} · by pired-investigate");
+	});
+});
+
+describe("co-finders (3.1 review)", () => {
+	it("counts every contributor as a finder, so their verification is not independent", () => {
+		const v = (by: string) => ({ verdict: "stands" as const, at: NOW, by });
+		expect(isIndependent({ by: "lead", contributors: ["pired-verify"], verification: v("pired-verify") })).toBe(false);
+		expect(isIndependent({ by: "lead", contributors: ["pired-escalate"], verification: v("pired-verify") })).toBe(true);
+		expect(isFinder({ by: "scribe", contributors: ["pired-escalate"] }, "lead")).toBe(true);
+		expect(isFinder({ by: "lead" }, undefined)).toBe(false);
+		expect(EARNED_LOCKED_FIELDS).toEqual(["status", "title", "description", "target", "severity"]);
 	});
 });

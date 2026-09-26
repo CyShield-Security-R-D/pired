@@ -1217,3 +1217,40 @@ describe("who may settle a finding (3.1)", () => {
 		expect((await unnamed.check({ name: "record", args: { kind: "settle", outcome: "paused" } })).reason).toContain("a worker does not settle the session");
 	});
 });
+
+describe("a finder cannot undo the check it could not make (3.1 review)", () => {
+	const settled = findingRow({ id: "f-mine", by: "pired-investigate", status: "confirmed", verification: { verdict: "stands", at: AT, by: "pired-verify", control: "ran it" } });
+
+	it("refuses its status and claim fields by id once a verification settled its finding, a second launch of the same worker included", async () => {
+		const guard = worker("pired-investigate", 1, ledgerOf([settled]));
+		for (const args of [
+			{ kind: "finding", id: "f-mine", status: "suspected" },
+			{ kind: "finding", id: "f-mine", target: "src/other.ts:9" },
+			{ kind: "finding", id: "f-mine", title: "Not a bug after all", description: "d", severity: "low" },
+		]) {
+			const refused = await guard.check({ name: "record", args });
+			expect(refused.allow).toBe(false);
+			expect(refused.reason).toContain("has been verified by pired-verify, and its finder may not change");
+		}
+		// The write-up is still the finder's to add.
+		expect(await guard.check({ name: "record", args: { kind: "finding", id: "f-mine", impact: "every tenant's invoices", remediation: "check the owner" } })).toEqual({ allow: true });
+		// A refutation locks it the same way.
+		const refuted = worker("pired-investigate", 1, ledgerOf([{ ...settled, status: "refuted", verification: { verdict: "refuted", at: AT } }]));
+		expect((await refuted.check({ name: "record", args: { kind: "finding", id: "f-mine", status: "suspected" } })).reason).toContain("has been refuted, and its finder");
+		// An unresolved look settles nothing, so it locks nothing.
+		const looked = worker("pired-investigate", 1, ledgerOf([{ ...settled, status: "suspected", verification: { verdict: "unresolved", at: AT } }]));
+		expect(await looked.check({ name: "record", args: { kind: "finding", id: "f-mine", description: "a second sink" } })).toEqual({ allow: true });
+	});
+
+	it("holds a worker whose role could not be read to the finder's rules", async () => {
+		const guard = createChildGuard();
+		guard.arm(scope(), ledgerOf([findingRow({ id: "f-lead", by: "lead" }), { ...settled, id: "f-w", by: "worker" }]));
+		guard.turnStarted();
+		const confirm = await guard.check({ name: "record", args: { kind: "finding", title: "t", severity: "high", target: "a.py:1", status: "confirmed", control: "c" } });
+		expect(confirm.allow).toBe(false);
+		expect(confirm.reason).toContain("pired: worker records findings and does not settle them");
+		expect((await guard.check({ name: "record", args: { kind: "finding", id: "f-lead", description: "x" } })).reason).toContain("not worker");
+		expect((await guard.check({ name: "record", args: { kind: "finding", id: "f-w", status: "suspected" } })).reason).toContain("its finder may not change 'status'");
+		expect(await guard.check({ name: "record", args: { kind: "finding", title: "t", severity: "high", target: "a.py:1" } })).toEqual({ allow: true });
+	});
+});

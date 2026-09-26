@@ -1107,18 +1107,45 @@ function partyOf(by: string): string {
 }
 
 /**
- * Whether a finding's verification was made by someone other than its finder:
- * true or false when both authors are recorded, undefined when either is not.
+ * Everyone who wrote the claim: its creator and every author whose merge
+ * changed it (`contributors`), each as the party behind it. A verifier that
+ * merged a location into a finding before judging it helped write the claim.
+ */
+function findersOf(finding: Pick<FindingRecord, "by" | "contributors">): Set<string> {
+	return new Set([finding.by, ...(finding.contributors ?? [])].filter((b): b is string => b !== undefined).map(partyOf));
+}
+
+/** Whether `author` wrote this finding: its creator or a contributor, the scribe counted as the lead. */
+export function isFinder(finding: Pick<FindingRecord, "by" | "contributors">, author: string | undefined): boolean {
+	return author !== undefined && findersOf(finding).has(partyOf(author));
+}
+
+/**
+ * Whether a finding's verification was made by someone other than its finders:
+ * true or false when both the creator and the judge are recorded, undefined
+ * when either is not.
  *
- * Two launches of one worker share its agent name, so a second
+ * Finders are the creator and every contributor (a merge that changed the
+ * claim). Two launches of one worker share its agent name, so a second
  * `pired-investigate` reading the first one's finding counts as its finder.
  * That errs toward "not independent", which is the side a report can afford.
  */
-export function isIndependent(finding: Pick<FindingRecord, "by" | "verification">): boolean | undefined {
+export function isIndependent(finding: Pick<FindingRecord, "by" | "contributors" | "verification">): boolean | undefined {
 	const judgedBy = finding.verification?.by;
 	if (finding.by === undefined || judgedBy === undefined) return undefined;
-	return partyOf(finding.by) !== partyOf(judgedBy);
+	return !isFinder(finding, judgedBy);
 }
+
+/**
+ * What a finder may no longer change on its own finding by id once a
+ * verification has settled it: the verdict, and the claim the verdict is about.
+ *
+ * Without this the finder undid the check it could not make: an investigator
+ * re-recorded its confirmed finding with status=suspected, or rewrote the
+ * target the verifier had quoted its way to. Write-up fields (impact,
+ * remediation, repro, evidence) stay open — they are the report, not the claim.
+ */
+export const EARNED_LOCKED_FIELDS = ["status", "title", "description", "target", "severity"] as const;
 // ---------------------------------------------------------------------------
 // The verdict — and the burden of proof on each side of it
 // ---------------------------------------------------------------------------

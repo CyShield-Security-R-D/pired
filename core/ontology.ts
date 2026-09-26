@@ -288,6 +288,14 @@ export interface RecordBase {
 	 * classifier's fairness note (ADR-030) and the verification tier now do.
 	 */
 	by?: string;
+	/**
+	 * Authors other than the creator whose merge changed this row — a second
+	 * location, a longer description — in the order they first did. Stamped by
+	 * the record path on findings (3.1), so "who wrote this claim" includes
+	 * co-finders: a verification by any of them is not independent. Absent means
+	 * nobody but `by` has changed it through a merge.
+	 */
+	contributors?: string[];
 }
 
 /**
