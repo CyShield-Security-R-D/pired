@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { createChildGuard, HANDOFF_GRACE_TURNS } from "../core/child.ts";
 import { agentMarker, PIRED_AGENTS } from "../core/subagents.ts";
@@ -1581,4 +1582,31 @@ describe("summarizeRetries", () => {
 			{ id: "c", origin: "worker" },
 		])).toBe(1);
 	});
+});
+
+describe("the v5 reading, without a retry policy", () => {
+	// Inputs and outputs captured from the extractor at b8ba1e8, before any retry
+	// code existed. Comparing the option-off path with itself would pass however
+	// the retry work changed it; comparing with v5 pins what every old grid read.
+	const golden = JSON.parse(readFileSync(new URL("./fixtures/delegation-compare-lib.v5-golden.json", import.meta.url), "utf8")) as {
+		cases: Array<{ name: string; kind: "parent" | "worker"; events?: Array<Record<string, unknown>>; session?: string; childKey?: string; output: unknown }>;
+	};
+
+	it("covers parent streams and worker sessions with retries, overflows and context edits in them", () => {
+		expect(golden.cases.filter((c) => c.kind === "parent").length).toBeGreaterThanOrEqual(8);
+		expect(golden.cases.filter((c) => c.kind === "worker").length).toBeGreaterThanOrEqual(8);
+	});
+
+	for (const c of golden.cases) {
+		it(`reproduces the v5 output byte for byte, with no option and with retry off: ${c.kind} ${c.name}`, () => {
+			const expected = JSON.stringify(c.output);
+			if (c.kind === "parent") {
+				expect(JSON.stringify(observationsFromPiEvents(c.events!))).toBe(expected);
+				expect(JSON.stringify(observationsFromPiEvents(c.events!, { retry: false }))).toBe(expected);
+			} else {
+				expect(JSON.stringify(observationsFromChildSession(c.session, c.childKey!))).toBe(expected);
+				expect(JSON.stringify(observationsFromChildSession(c.session, c.childKey!, { retry: false }))).toBe(expected);
+			}
+		});
+	}
 });
