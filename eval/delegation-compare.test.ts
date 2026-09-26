@@ -6,7 +6,7 @@ import {
 	accountCellUsage, atHighestAttempt, attemptReport, AUTH_HORIZON_CAP_MS, AUTH_MARGIN_MS, benchmarkRuntimeOf, checkAuthHorizon, childProviderFailure, classifyInfra,
 	credentialExpiry, decideInfra, DEFAULT_CANDIDATE_MAX_AGENTS, fetchErrorsFromStderr, gridWorstCaseMs, isBrokerEnvVar, loadTargets, metricFromRecord, notLaunchedOutcome, ownerIsLive,
 	newManifest, optionsFromManifest, parseBreakerSpec, parseComparePins, parseOptions, parseOwnerRecord, planResume, providerFailureTexts, requestLogFromStderr,
-	resumeMismatches, retryPolicyFromManifest, reviewScope, runPairs, runStop, runtimeMismatch, scopedSealCommand, startTimeFromStat, subagentConfigFor,
+	armOptionsFromManifest, resumeMismatches, retryPolicyFromManifest, reviewScope, runPairs, runStop, runtimeMismatch, scopedSealCommand, startTimeFromStat, subagentConfigFor,
 	toolSurfaceErrors, trackStream, workerCapReason,
 	ceilingOf, ceilingProbeErrors, latestMatchedSessions, planMatchedResume, sessionRunOf, verifyCeiling,
 	type GridStopState, type MatchedSessionSpec, type ProviderFailures, type RunOutcome,
@@ -1880,5 +1880,93 @@ describe("the corpus manifest (plan 2.8)", () => {
 	it("refuses two targets under one id", async () => {
 		const files = await corpusOf([target(1), { ...target(2), id: "CVE-2030-1001" }]);
 		await expect(loadTargets({ ...files, selected: [] })).rejects.toThrow(/CVE-2030-1001 more than once/);
+	});
+});
+
+describe("per-arm configuration (plan 2.8)", () => {
+	// Builders: the required command line, and the manifest a fresh grid writes
+	// from it, with the inputs block optionsFromManifest reads back on a resume.
+	const argv = (...extra: string[]): string[] => [
+		"--baseline", "/b", "--candidate", "/c", "--corpus", "/corpus", "--truth", "/truth", "--out", "/out",
+		"--provider", "openai-codex", "--model", "gpt-6-luna", ...extra,
+	];
+	const options = (...extra: string[]) => {
+		const parsed = parseOptions(argv(...extra));
+		if (parsed === "help" || parsed.kind !== "run") throw new Error("expected a run");
+		return parsed.options;
+	};
+	const stored = (opts: ReturnType<typeof options>): Record<string, unknown> => ({
+		...newManifest(opts, "live"),
+		inputs: { corpus: opts.corpus, truth: opts.truth, corpusManifest: { path: opts.manifestPath }, baseline: { path: opts.baseline }, candidate: { path: opts.candidate } },
+		pins: { landlockWrapper: opts.fsSeal },
+	});
+	const volatile = (manifest: Record<string, unknown>): Record<string, unknown> => {
+		const { id: _id, createdAt: _at, ...rest } = manifest;
+		return rest;
+	};
+
+	// Behaviour with no new option must stay byte-identical: the manifest a grid
+	// writes, and so the pins its resume compares, gain no field.
+	it("writes the manifest every earlier grid wrote when no arm option is given", () => {
+		const plain = volatile(newManifest(options(), "live"));
+		expect(plain).not.toHaveProperty("baselineMaxAgents");
+		expect(plain).not.toHaveProperty("maxVerifiers");
+		expect(plain).not.toHaveProperty("budgetArms");
+		// Naming the default budget arms is the default, not a new configuration.
+		expect(volatile(newManifest(options("--budget-arms", "matched,candidate"), "live"))).toEqual(plain);
+	});
+
+	it("parses each arm option and refuses a malformed one", () => {
+		const opts = options("--baseline-max-agents", "0", "--max-verifiers", "baseline=0,candidate=2", "--budget-arms", "candidate,baseline");
+		expect(opts).toMatchObject({ baselineMaxAgents: 0, maxVerifiers: { baseline: 0, candidate: 2 }, budgetArms: ["baseline", "candidate"] });
+		expect(options("--budget-arms", "none").budgetArms).toEqual([]);
+		expect(() => parseOptions(argv("--baseline-max-agents", "-1"))).toThrow(/--baseline-max-agents/);
+		expect(() => parseOptions(argv("--max-verifiers", "matched=1"))).toThrow(/--max-verifiers/);
+		expect(() => parseOptions(argv("--max-verifiers", "candidate=1,candidate=2"))).toThrow(/given twice/);
+		expect(() => parseOptions(argv("--max-verifiers", "candidate=x"))).toThrow(/non-negative integer/);
+		expect(() => parseOptions(argv("--budget-arms", "candidate,candidate"))).toThrow(/more than once/);
+		expect(() => parseOptions(argv("--budget-arms", "worker"))).toThrow(/--budget-arms/);
+	});
+
+	it("pins every arm option in the manifest and restores it on resume", () => {
+		const opts = options("--baseline-max-agents", "0", "--max-verifiers", "baseline=0,candidate=2", "--budget-arms", "baseline,candidate,matched");
+		const restored = optionsFromManifest("/out", stored(opts));
+		expect(restored.baselineMaxAgents).toBe(0);
+		expect(restored.maxVerifiers).toEqual({ baseline: 0, candidate: 2 });
+		expect(restored.budgetArms).toEqual(["baseline", "candidate", "matched"]);
+	});
+
+	// An old (v5) manifest predates every 2.8 field and must load, and resume
+	// with the arms it ran.
+	it("loads a manifest that predates the options, with every arm as it ran", () => {
+		const old = stored(options());
+		delete old.candidateMaxAgents;
+		const restored = optionsFromManifest("/out", old);
+		for (const field of ["baselineMaxAgents", "maxVerifiers", "budgetArms", "candidateMaxAgents"]) expect(restored).not.toHaveProperty(field);
+	});
+
+	it("refuses a resume from a manifest whose arm option is malformed rather than reading it as absent", () => {
+		expect(() => armOptionsFromManifest({ baselineMaxAgents: "0" })).toThrow(/baselineMaxAgents/);
+		expect(() => armOptionsFromManifest({ maxVerifiers: { matched: 1 } })).toThrow(/maxVerifiers/);
+		expect(() => armOptionsFromManifest({ maxVerifiers: {} })).toThrow(/maxVerifiers/);
+		expect(() => armOptionsFromManifest({ budgetArms: ["candidate", "candidate"] })).toThrow(/budgetArms/);
+	});
+
+	// Pairs run under two configurations of one arm would be two arms pooled into one.
+	it("refuses a resume whose arm configuration changed", () => {
+		expect(resumeMismatches({ baselineMaxAgents: 0 }, {})).toEqual(["baselineMaxAgents"]);
+		expect(resumeMismatches({ maxVerifiers: { candidate: 2 } }, { maxVerifiers: { candidate: 3 } })).toEqual(["maxVerifiers"]);
+		expect(resumeMismatches({ budgetArms: ["baseline", "candidate", "matched"] }, {})).toEqual(["budgetArms"]);
+		expect(resumeMismatches({}, {})).toEqual([]);
+	});
+
+	// Stage 1 runs S as the candidate with delegation off; since ADR-029 pired
+	// hides the launcher there, and a probe that required it failed the dry run.
+	it("lets a candidate whose scope switches delegation off show no launcher, and still requires it otherwise", () => {
+		const base = ["read", "bash", "edit", "write", "record", "recall"];
+		expect(toolSurfaceErrors("candidate", base, true)).toEqual([]);
+		expect(toolSurfaceErrors("candidate", [...base, "subagents_enable"], true)).toEqual([]);
+		expect(toolSurfaceErrors("candidate", base)).toEqual(["candidate arm does not expose subagents_enable"]);
+		expect(toolSurfaceErrors("candidate", [...base, "bg_wait"], true)).toEqual(["candidate arm exposes bg_wait, which pired hides"]);
 	});
 });

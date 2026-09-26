@@ -38,7 +38,10 @@ import {
 	type UsageAccounting, type UsageObservation,
 } from "./delegation-compare-lib.ts";
 // The grid's shape and identity (plan item 2.8): the pinned official corpora.
-import { corpusReasons, kindlessCorpus, parseCorpora, shapeOf, type PinnedCorpus } from "./delegation-compare-grid.ts";
+import {
+	ARM_ORDER, corpusReasons, DEFAULT_BUDGET_ARMS, delegationOff, kindlessArmReasons, kindlessCorpus, parseArmList, parseCorpora, parseMaxVerifiers,
+	sameArms, scopeFor, scopeSettingsFor, shapeOf, type PinnedCorpus, type ScopeSettings,
+} from "./delegation-compare-grid.ts";
 // The staging, target-copy and tree-hash helpers moved to their own module so
 // the same digest rule draws the panel here, in the preflight and in tests.
 import { copyTargetTree, shouldIncludeSnapshotPath, stageSnapshot, treeManifest } from "./delegation-compare-stage.ts";
@@ -252,6 +255,22 @@ type Options = {
 	 */
 	candidateMaxAgents?: number;
 	/**
+	 * --baseline-max-agents (plan item 2.8): the worker cap the baseline's scope
+	 * states. Absent, it states none, as in every earlier grid.
+	 */
+	baselineMaxAgents?: number;
+	/**
+	 * --max-verifiers (plan item 2.8): the verifier cap the baseline's or the
+	 * candidate's scope states. Absent for an arm, its scope states none.
+	 */
+	maxVerifiers?: Partial<Record<PairArm, number>>;
+	/**
+	 * --budget-arms (plan item 2.8): which arms' scopes carry the budget line.
+	 * Absent means DEFAULT_BUDGET_ARMS (candidate, matched), what every earlier
+	 * grid wrote; it is set only when it differs, so the manifest keeps its bytes.
+	 */
+	budgetArms?: Arm[];
+	/**
 	 * --breaker: re-queue infrastructure-failed pairs and stop on the circuit
 	 * breaker instead of on the first invalid run. Absent: fail-fast, exactly as
 	 * every grid before the option ran.
@@ -363,6 +382,19 @@ Options:
   --candidate-max-agents <n>
                         Worker cap the candidate's scope states; the
                         baseline's scope names none (default: ${DEFAULT_CANDIDATE_MAX_AGENTS})
+  --baseline-max-agents <n>
+                        Worker cap the baseline's scope states (default: none,
+                        the baseline runs at its snapshot's default)
+  --max-verifiers <arm>=<n>[,<arm>=<n>]
+                        Verifier cap (maxVerifiers) the baseline's or the
+                        candidate's scope states (default: none)
+  --budget-arms <arm,...>|none
+                        Arms whose scope carries the budget line (default:
+                        ${DEFAULT_BUDGET_ARMS.join(",")}; the baseline's scope is then unchanged).
+                        These three are pinned in the manifest, restored on
+                        --resume, and without --grid-kind make a grid exploratory.
+                        One snapshot may run in both arms only when their
+                        scopes differ
   --breaker <spec>      Stop on a circuit breaker instead of the first invalid
                         run, and re-queue pairs that fail for infrastructure.
                         <spec> is "default", or comma-separated k=v pairs
@@ -516,6 +548,7 @@ export function parseOptions(argv: string[]): Parsed {
 		"--baseline", "--candidate", "--corpus", "--truth", "--out", "--provider", "--model",
 		"--thinking", "--passes", "--only", "--concurrency", "--timeout", "--manifest", "--fs-seal", "--auth-horizon-hours",
 		"--candidate-max-agents", "--breaker", "--matched", "--matched-snapshot",
+		"--baseline-max-agents", "--max-verifiers", "--budget-arms",
 	]);
 	const values = new Map<string, string>();
 	let dryRun = false;
@@ -550,6 +583,15 @@ export function parseOptions(argv: string[]): Parsed {
 	if (authHorizonHours !== undefined && (!Number.isFinite(authHorizonHours) || authHorizonHours <= 0)) throw new Error("--auth-horizon-hours must be a positive number of hours");
 	const candidateMaxAgents = Number(values.get("--candidate-max-agents") ?? String(DEFAULT_CANDIDATE_MAX_AGENTS));
 	if (!isWorkerCap(candidateMaxAgents)) throw new Error("--candidate-max-agents must be a non-negative integer");
+	const baselineCapText = values.get("--baseline-max-agents");
+	const baselineMaxAgents = baselineCapText === undefined ? undefined : Number(baselineCapText);
+	if (baselineMaxAgents !== undefined && !isWorkerCap(baselineMaxAgents)) throw new Error("--baseline-max-agents must be a non-negative integer");
+	const verifiersText = values.get("--max-verifiers");
+	const maxVerifiers = verifiersText === undefined ? undefined : parseMaxVerifiers(verifiersText);
+	const budgetText = values.get("--budget-arms");
+	const budgetList = budgetText === undefined ? undefined : parseArmList(budgetText, ARM_ORDER, "--budget-arms");
+	// The default set is stored as absent, so a grid that names it writes the manifest every earlier grid wrote.
+	const budgetArms = budgetList === undefined || sameArms(budgetList, DEFAULT_BUDGET_ARMS) ? undefined : budgetList;
 	const breakerText = values.get("--breaker");
 	const breaker = breakerText === undefined ? undefined : parseBreakerSpec(breakerText);
 	const matchedText = values.get("--matched");
@@ -575,6 +617,9 @@ export function parseOptions(argv: string[]): Parsed {
 			manifestPath: resolve(values.get("--manifest") ?? DEFAULT_MANIFEST), dryRun,
 			...(authHorizonHours === undefined ? {} : { authHorizonHours }),
 			candidateMaxAgents,
+			...(baselineMaxAgents === undefined ? {} : { baselineMaxAgents }),
+			...(maxVerifiers === undefined ? {} : { maxVerifiers }),
+			...(budgetArms === undefined ? {} : { budgetArms }),
 			...(breaker === undefined ? {} : { breaker }),
 			...(retry ? { retryPolicy: { ...DEFAULT_RETRY_POLICY } } : {}),
 			...(matched === undefined ? {} : { matched }),
@@ -652,6 +697,7 @@ export function optionsFromManifest(dir: string, manifest: JsonRecord): Options 
 	// is refused rather than read as "absent", which would silently change the arm.
 	if (manifest.candidateMaxAgents !== undefined && !isWorkerCap(manifest.candidateMaxAgents)) throw new Error("--resume manifest has an invalid candidateMaxAgents");
 	const candidateMaxAgents = manifest.candidateMaxAgents as number | undefined;
+	const arms = armOptionsFromManifest(manifest);
 	// Absent: the grid ran fail-fast, and so does its resume. A present policy is
 	// read strictly, for the same reason as the cap above.
 	let breaker: BreakerPolicy | undefined;
@@ -673,10 +719,37 @@ export function optionsFromManifest(dir: string, manifest: JsonRecord): Options 
 		manifestPath: need(corpusManifest.path, "the corpus manifest path"), dryRun: false,
 		...(authHorizonHours === undefined ? {} : { authHorizonHours }),
 		...(candidateMaxAgents === undefined ? {} : { candidateMaxAgents }),
+		...arms,
 		...(breaker === undefined ? {} : { breaker }),
 		...(retryPolicy === undefined ? {} : { retryPolicy }),
 		...(matched === undefined ? {} : { matched }),
 	};
+}
+
+/**
+ * The per-arm options (plan item 2.8) a grid pinned, read strictly: a manifest
+ * without a field predates it or left it at its default, and a present but
+ * malformed one refuses the resume rather than silently changing an arm.
+ */
+export function armOptionsFromManifest(manifest: JsonRecord): Pick<Options, "baselineMaxAgents" | "maxVerifiers" | "budgetArms"> {
+	const out: Pick<Options, "baselineMaxAgents" | "maxVerifiers" | "budgetArms"> = {};
+	if (manifest.baselineMaxAgents !== undefined) {
+		if (!isWorkerCap(manifest.baselineMaxAgents)) throw new Error("--resume manifest has an invalid baselineMaxAgents");
+		out.baselineMaxAgents = manifest.baselineMaxAgents;
+	}
+	if (manifest.maxVerifiers !== undefined) {
+		const raw = manifest.maxVerifiers;
+		if (!isJsonRecord(raw) || !Object.keys(raw).length || Object.entries(raw).some(([arm, n]) => (arm !== "baseline" && arm !== "candidate") || !isWorkerCap(n))) {
+			throw new Error("--resume manifest has an invalid maxVerifiers");
+		}
+		out.maxVerifiers = raw as Partial<Record<PairArm, number>>;
+	}
+	if (manifest.budgetArms !== undefined) {
+		const raw = manifest.budgetArms;
+		if (!Array.isArray(raw) || raw.some((arm) => !ARM_ORDER.includes(arm as Arm)) || new Set(raw).size !== raw.length) throw new Error("--resume manifest has an invalid budgetArms");
+		out.budgetArms = raw as Arm[];
+	}
+	return out;
 }
 
 function sha256(data: string | Buffer): string { return createHash("sha256").update(data).digest("hex"); }
@@ -1863,16 +1936,15 @@ export function workerCapReason(pinned: number | null, requested: number | undef
  * earlier grids'.
  */
 export function reviewScope(engagement: string, workspace: string, arm: Arm, candidateMaxAgents: number | undefined, timeoutMs?: number, nowMs: number = Date.now()): Record<string, unknown> {
-	const scope: Record<string, unknown> = { engagement, workspace, mode: "off", authorized: false, targets: {} };
-	if (arm === "candidate" && candidateMaxAgents !== undefined) scope.maxAgents = candidateMaxAgents;
-	// The matched arm is the candidate with delegation switched off the way an
-	// operator switches it off, so that it differs from the candidate in nothing else.
-	if (arm === "matched") scope.maxAgents = 0;
-	// The budget line belongs to the candidate snapshot, so the matched arm, which
-	// runs that snapshot, sees it too; the baseline's scope stays byte-identical.
-	const minutes = timeoutMs !== undefined && Number.isFinite(timeoutMs) ? Math.floor(timeoutMs / 60_000) : 0;
-	if ((arm === "candidate" || arm === "matched") && minutes >= 1) scope.budget = { minutes, deadline: new Date(nowMs + timeoutMs!).toISOString() };
-	return scope;
+	// The pre-2.8 call, kept so its tests hold the default arm settings to the
+	// bytes they always wrote: the matched arm is the candidate with delegation
+	// switched off, and the budget line belongs to the candidate snapshot's arms.
+	return scopeFor(engagement, workspace, scopeSettingsFor(arm, candidateMaxAgents === undefined ? {} : { candidateMaxAgents }), timeoutMs, nowMs);
+}
+
+/** The scope settings an arm runs under in this grid (plan item 2.8). */
+function armSettings(options: Options, arm: Arm): ScopeSettings {
+	return scopeSettingsFor(arm, options);
 }
 
 /** The arms that load the pinned pi-subagents tree: the candidate, and the matched arm that runs it with its cap at 0. */
@@ -1932,7 +2004,7 @@ async function prepareCell(ctx: Context, target: Target, pass: number, arm: Arm,
 	const engagement = `review-${opaqueToken()}`;
 	let probe: ProbeConfig | undefined;
 	if (probeFor) probe = await probeFor(paths);
-	const scope = probe?.mode === "delegation" ? probeDelegationScope(engagement, paths.workspaceDir) : reviewScope(engagement, paths.workspaceDir, arm, options.candidateMaxAgents, options.timeoutMs);
+	const scope = probe?.mode === "delegation" ? probeDelegationScope(engagement, paths.workspaceDir) : scopeFor(engagement, paths.workspaceDir, armSettings(options, arm), options.timeoutMs);
 	const scopeText = `${JSON.stringify(scope, null, 2)}\n`;
 	await writeFile(join(paths.targetDir, "pired.scope.json"), scopeText);
 	const prompt = probe?.mode === "delegation" ? "Map the attack surface of this codebase. Delegate the first area to a worker." : promptFor(target);
@@ -2838,9 +2910,13 @@ async function runOne(ctx: Context, target: Target, pass: number, arm: Arm, atte
  * which is what pi-subagents falls back to when it cannot find the host pi
  * package; and none of the tools pired hides.
  */
-export function toolSurfaceErrors(arm: Arm, tools: string[]): string[] {
+export function toolSurfaceErrors(arm: Arm, tools: string[], off = false): string[] {
 	const errors: string[] = [];
-	const expected: string[] = arm === "candidate" ? [...BASE_TOOLS, ENABLE_TOOL] : [...BASE_TOOLS];
+	// A candidate whose scope switches delegation off (plan item 2.8: stage 1's S,
+	// maxAgents 0 and maxVerifiers 0) is shown no launcher by pired since ADR-029;
+	// like the matched arm, the loader is then allowed, not required.
+	const optional = arm === "matched" || (arm === "candidate" && off);
+	const expected: string[] = arm === "candidate" && !optional ? [...BASE_TOOLS, ENABLE_TOOL] : [...BASE_TOOLS];
 	for (const name of expected) if (!tools.includes(name)) errors.push(`${arm} arm does not expose ${name}`);
 	if (loadsSubagents(arm)) {
 		for (const name of CANDIDATE_HIDDEN_TOOLS) if (tools.includes(name)) errors.push(`${arm} arm exposes ${name}, which pired hides`);
@@ -2850,7 +2926,7 @@ export function toolSurfaceErrors(arm: Arm, tools: string[]): string[] {
 	// keeps the lazy loader out of such a session, but a snapshot cut before that
 	// may still show it; it is allowed, not required, and a worker it launched
 	// would fail the run (accountCellUsage).
-	const known = new Set<string>([...expected, ...(loadsSubagents(arm) ? [...CANDIDATE_HIDDEN_TOOLS, SUBAGENT_TOOL] : []), ...(arm === "matched" ? [ENABLE_TOOL] : [])]);
+	const known = new Set<string>([...expected, ...(loadsSubagents(arm) ? [...CANDIDATE_HIDDEN_TOOLS, SUBAGENT_TOOL] : []), ...(optional ? [ENABLE_TOOL] : [])]);
 	const extra = tools.filter((name) => !known.has(name));
 	if (extra.length) errors.push(`${arm} arm exposes unexpected tool(s) ${[...new Set(extra)].join(", ")}`);
 	return errors;
@@ -2923,7 +2999,7 @@ async function inspectProbe(ctx: Context, cell: PreparedCell, launched: Launch):
 	if (report.workspace !== cell.workspaceDir) errors.push(`pired resolved workspace ${String(report.workspace)}, not the cell workspace`);
 	const tools = Array.isArray(report.extensionTools) ? report.extensionTools.map(String) : undefined;
 	if (!tools) errors.push("probe did not list active tools");
-	else errors.push(...toolSurfaceErrors(cell.arm, tools));
+	else errors.push(...toolSurfaceErrors(cell.arm, tools, delegationOff(armSettings(ctx.options, cell.arm))));
 	const unique = [...new Set(errors)];
 	const runtime = runtimes.length === 1 ? benchmarkRuntimeOf(runtimes[0]!) : undefined;
 	return {
@@ -3164,7 +3240,12 @@ async function runPreflight(options: Options, manifest: JsonRecord, saveManifest
 			baseline: await treeManifest(options.baseline, "snapshot"),
 			candidate: await treeManifest(options.candidate, "snapshot"),
 		};
-		if (source.baseline.digest === source.candidate.digest) throw new Error("Baseline and candidate snapshots are identical.");
+		// One snapshot in both arms is a mistake unless the arms differ in their
+		// scope (plan item 2.8): stage 2 runs the candidate snapshot as S in the
+		// baseline arm and as D in the candidate arm, apart only in delegation.
+		const sameSnapshot = source.baseline.digest === source.candidate.digest;
+		const configsDiffer = JSON.stringify(armSettings(options, "baseline")) !== JSON.stringify(armSettings(options, "candidate"));
+		if (sameSnapshot && !configsDiffer) throw new Error("Baseline and candidate snapshots are identical.");
 		const redactTerms = await redactTermsFor(inputs.targets, options.truth);
 		// One staged copy per arm at preflight, under opaque names, only to compute
 		// and record the redacted digest and the redaction list. Each cell later
@@ -3180,7 +3261,7 @@ async function runPreflight(options: Options, manifest: JsonRecord, saveManifest
 		for (const arm of ["baseline", "candidate"] as const) {
 			if (staged[arm].sourceDigest !== source[arm].digest) throw new Error(`Staged ${arm} snapshot's pre-redaction digest does not match its input.`);
 		}
-		if (staged.baseline.stagedDigest === staged.candidate.stagedDigest) throw new Error("Redacted baseline and candidate snapshots are identical.");
+		if (!sameSnapshot && staged.baseline.stagedDigest === staged.candidate.stagedDigest) throw new Error("Redacted baseline and candidate snapshots are identical.");
 		// Pin identity: the baseline must be git 496b190's staged content and the
 		// candidate the frozen handoff snapshot, or the grid is exploratory.
 		const baselineReason = baselineMismatchReason(source.baseline.rows, comparePins.baselineCommit);
@@ -3189,11 +3270,14 @@ async function runPreflight(options: Options, manifest: JsonRecord, saveManifest
 		else if (source.candidate.digest !== comparePins.candidateDigest) exploratoryReasons.push(`candidate input digest ${source.candidate.digest.slice(0, 12)} is not the pinned ${comparePins.candidateDigest.slice(0, 12)}`);
 		const capReason = workerCapReason(comparePins.candidateMaxAgents, options.candidateMaxAgents);
 		if (capReason) exploratoryReasons.push(capReason);
+		exploratoryReasons.push(...kindlessArmReasons(options));
 		const piSubagents = await measurePiSubagents(comparePins);
 		exploratoryReasons.push(...piSubagents.reasons);
 		const inputsRecord = manifest.inputs as JsonRecord;
 		inputsRecord.baseline = { path: options.baseline, sha256: source.baseline.digest, files: source.baseline.files, stagedDigest: staged.baseline.stagedDigest, redactions: staged.baseline.redactions, stagedPath: stagePaths.baseline, matchesCommit: comparePins.baselineCommit, baselineMismatch: baselineReason || null };
 		inputsRecord.candidate = { path: options.candidate, sha256: source.candidate.digest, files: source.candidate.files, stagedDigest: staged.candidate.stagedDigest, redactions: staged.candidate.redactions, stagedPath: stagePaths.candidate, pinnedDigest: comparePins.candidateDigest, matchesPin: source.candidate.digest === comparePins.candidateDigest };
+		// Written only for a grid that runs one snapshot in both arms, so every other manifest keeps its bytes.
+		if (sameSnapshot) inputsRecord.sameSnapshotInBothArms = true;
 		inputsRecord.piSubagents = { ...piSubagents.install, pinnedVersion: comparePins.piSubagents.version, pinnedDigest: comparePins.piSubagents.digest, matchesPin: piSubagents.reasons.length === 0 };
 		// The matched arm runs the candidate snapshot unless the operator names
 		// another, which is exploratory: matched vs candidate would then differ in
@@ -3533,6 +3617,11 @@ export function resumeMismatches(prior: JsonRecord, fresh: JsonRecord): string[]
 	// The cap is half of what the candidate arm is; pairs run under two caps
 	// would be two candidates pooled into one comparison.
 	eq("candidateMaxAgents", prior.candidateMaxAgents, fresh.candidateMaxAgents);
+	// The same for every arm's scope (plan item 2.8): pairs run under two
+	// configurations of one arm would be two arms pooled into one.
+	eq("baselineMaxAgents", prior.baselineMaxAgents, fresh.baselineMaxAgents);
+	eq("maxVerifiers", prior.maxVerifiers, fresh.maxVerifiers);
+	eq("budgetArms", prior.budgetArms, fresh.budgetArms);
 	// A grid that re-queued and stopped under one policy, then resumed under
 	// another, would be one grid run under two stopping rules.
 	eq("breaker", prior.breaker, fresh.breaker);
@@ -3730,6 +3819,11 @@ export function newManifest(options: Options, mode: string): JsonRecord {
 		requested: { provider: options.provider, model: options.model, thinking: options.thinking, passes: options.passes, only: options.selected, authHorizonHours: options.authHorizonHours ?? null },
 		thinking: options.thinking, passes: options.passes, concurrency: options.concurrency, timeoutMs: options.timeoutMs,
 		...(options.candidateMaxAgents === undefined ? {} : { candidateMaxAgents: options.candidateMaxAgents }),
+		// Each per-arm option (plan item 2.8) is written only when it is set, so a
+		// grid that uses none writes the manifest every earlier grid wrote.
+		...(options.baselineMaxAgents === undefined ? {} : { baselineMaxAgents: options.baselineMaxAgents }),
+		...(options.maxVerifiers === undefined ? {} : { maxVerifiers: options.maxVerifiers }),
+		...(options.budgetArms === undefined ? {} : { budgetArms: options.budgetArms }),
 		...(options.breaker === undefined ? {} : { breaker: options.breaker }),
 		// Only a grid that asked for retries records a policy, so a grid without
 		// one writes the v5 manifest, and a v5 manifest resumes with retries off.

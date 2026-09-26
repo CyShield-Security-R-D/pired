@@ -1,6 +1,9 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
-import { corpusReasons, kindlessCorpus, parseCorpora, shapeOf, type CorpusInput, type PinnedCorpus } from "./delegation-compare-grid.ts";
+import {
+	corpusReasons, DEFAULT_BUDGET_ARMS, delegationOff, kindlessArmReasons, kindlessCorpus, parseArmList, parseCorpora, parseMaxVerifiers, scopeFor, scopeSettingsFor, shapeOf,
+	type CorpusInput, type PinnedCorpus,
+} from "./delegation-compare-grid.ts";
 import { isOfficialGrid, OFFICIAL_PASSES, OFFICIAL_TARGET_IDS, planSchedule, type ExpectedCell } from "./delegation-compare-lib.ts";
 
 // Per-file builders, by house rule: a pinned corpus, the runner's measurement
@@ -117,5 +120,69 @@ describe("the official grid, judged against the pinned corpus", () => {
 		expect(kindlessCorpus(corpora, ["B", "A"])?.[0]).toBe("other");
 		expect(kindlessCorpus(corpora, ["Q"])?.[0]).toBe("v5");
 		expect(kindlessCorpus({ k: corpus() }, ["A", "B"])).toBeUndefined();
+	});
+});
+
+describe("each arm's scope", () => {
+	const now = Date.parse("2026-09-26T10:00:00.000Z");
+	const fourHours = 4 * 60 * 60 * 1000;
+	const research = { engagement: "e", workspace: "/w", mode: "off", authorized: false, targets: {} };
+
+	// Unconfigured, every arm writes what it wrote before 2.8: the baseline the
+	// bare research scope, the candidate its cap and the budget line, the
+	// matched arm a cap of zero and the budget line.
+	it("keeps the baseline's scope byte-identical when no option names it", () => {
+		const scope = scopeFor("e", "/w", scopeSettingsFor("baseline", { candidateMaxAgents: 8 }), fourHours, now);
+		expect(JSON.stringify(scope)).toBe(JSON.stringify(research));
+		expect(scopeSettingsFor("baseline", { candidateMaxAgents: 8, budgetArms: DEFAULT_BUDGET_ARMS })).toEqual({ budget: false });
+		expect(scopeSettingsFor("candidate", { candidateMaxAgents: 8 })).toEqual({ maxAgents: 8, budget: true });
+		expect(scopeSettingsFor("matched", { candidateMaxAgents: 8, maxVerifiers: { candidate: 2 } })).toEqual({ maxAgents: 0, budget: true });
+	});
+
+	it("writes the baseline's cap, each arm's verifier cap and the budget line only where they are configured", () => {
+		const options = { candidateMaxAgents: 8, baselineMaxAgents: 0, maxVerifiers: { candidate: 2 }, budgetArms: ["baseline" as const] };
+		expect(scopeFor("e", "/w", scopeSettingsFor("baseline", options), fourHours, now)).toEqual({ ...research, maxAgents: 0, budget: { minutes: 240, deadline: "2026-09-26T14:00:00.000Z" } });
+		expect(scopeFor("e", "/w", scopeSettingsFor("candidate", options), fourHours, now)).toEqual({ ...research, maxAgents: 8, maxVerifiers: 2 });
+		expect(scopeFor("e", "/w", scopeSettingsFor("matched", options), fourHours, now)).toEqual({ ...research, maxAgents: 0 });
+	});
+
+	// Stage 2 runs stage 1's candidate S as its baseline. If S's scope changed
+	// with its role, the two stages would measure two different S arms.
+	it("gives S the same scope bytes as the candidate in stage 1 and as the baseline in stage 2", () => {
+		const asCandidate = scopeSettingsFor("candidate", { candidateMaxAgents: 0, maxVerifiers: { candidate: 0 } });
+		const asBaseline = scopeSettingsFor("baseline", { candidateMaxAgents: 8, baselineMaxAgents: 0, maxVerifiers: { baseline: 0, candidate: 2 }, budgetArms: ["baseline", "candidate", "matched"] });
+		expect(JSON.stringify(scopeFor("e", "/w", asBaseline, fourHours, now))).toBe(JSON.stringify(scopeFor("e", "/w", asCandidate, fourHours, now)));
+		expect(scopeFor("e", "/w", asBaseline, fourHours, now)).toMatchObject({ maxAgents: 0, maxVerifiers: 0, budget: { minutes: 240 } });
+	});
+
+	it("reads delegation as off only when the scope states no workers and no verifiers", () => {
+		expect(delegationOff({ maxAgents: 0, budget: true })).toBe(true);
+		expect(delegationOff({ maxAgents: 0, maxVerifiers: 0, budget: true })).toBe(true);
+		expect(delegationOff({ maxAgents: 0, maxVerifiers: 2, budget: true })).toBe(false);
+		expect(delegationOff({ maxAgents: 8, budget: true })).toBe(false);
+		// No cap stated: the snapshot's default decides, which the harness does not know.
+		expect(delegationOff({ budget: false })).toBe(false);
+	});
+
+	it("parses arm lists into one order and verifier caps per arm", () => {
+		expect(parseArmList("matched, baseline", ["baseline", "candidate", "matched"], "--x")).toEqual(["baseline", "matched"]);
+		expect(parseArmList("none", ["baseline"], "--x")).toEqual([]);
+		expect(() => parseArmList("matched", ["baseline", "candidate"], "--twin-arms")).toThrow(/--twin-arms: "matched"/);
+		expect(parseMaxVerifiers("candidate=2")).toEqual({ candidate: 2 });
+		expect(() => parseMaxVerifiers("candidate")).toThrow(/<arm>=<n>/);
+		expect(() => parseMaxVerifiers("candidate=1=2")).toThrow(/<arm>=<n>/);
+	});
+
+	// The v5 official grid ran every arm at the configuration these options
+	// leave alone; a grid without a kind that changes one measures other arms.
+	it("makes a grid without a kind exploratory when it configures an arm, and names how", () => {
+		expect(kindlessArmReasons({ candidateMaxAgents: 8 })).toEqual([]);
+		expect(kindlessArmReasons({ candidateMaxAgents: 8, budgetArms: ["matched", "candidate"] })).toEqual([]);
+		expect(kindlessArmReasons({ baselineMaxAgents: 0, maxVerifiers: { baseline: 0, candidate: 2 }, budgetArms: [] })).toEqual([
+			"the baseline's scope states maxAgents 0; without --grid-kind the baseline runs at its snapshot's default",
+			"the baseline's scope states maxVerifiers 0; without --grid-kind no arm states a verifier cap",
+			"the candidate's scope states maxVerifiers 2; without --grid-kind no arm states a verifier cap",
+			"the budget line is on no arm, not candidate,matched; without --grid-kind the arms keep the default",
+		]);
 	});
 });
