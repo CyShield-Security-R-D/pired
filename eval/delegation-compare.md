@@ -387,6 +387,33 @@ native-worker snapshot from ADR-025, which the candidate probe refuses because i
     check) is never re-run. An official grid holding one refuses to resume, because it cannot
     approve.
 
+### v6 grids: N targets, patched twins, per-arm scopes, grid kinds (plan 2.8, ADR draft)
+
+- **Targets.** The manifest may list any number of targets, at least one. What makes a grid
+  official is the corpus pinned under `corpora` in `eval/delegation-compare.pins.json`: without
+  `--grid-kind` that is `v5-official`, judged exactly as above.
+- **Patched twins.** `--twins <twins.json> --twin-arms baseline,candidate` runs each target's
+  fix-commit tree in the named arms. A twin runs under its `name` as its id, its answer key is an
+  empty list, and its runs stay out of the gate and the matched arm; `summary.json`'s `twins` block
+  lists them per arm with their cells, and `eval/rescore.ts` scores them against the
+  `fixed_regions` the grid manifest carries.
+- **Per-arm scopes.** `--baseline-max-agents`, `--max-verifiers <arm>=<n>` and `--budget-arms`
+  configure each arm's scope; unset, every arm's scope is what it always was.
+- **Grid kinds.** `--grid-kind v6-stage1` or `v6-stage2` claims a kind pinned under `gridKinds`;
+  the grid is official only when its corpus, snapshots and every option match it, and each
+  difference is listed as an exploratory reason. Both kinds are drafts until the pre-registration
+  is frozen. The stage command lines, with the paths elided, are:
+
+  ```sh
+  # stage 1: A (main at the freeze) against S
+  --candidate-max-agents 0 --max-verifiers candidate=0 \
+  --twins <twins.json> --twin-arms baseline,candidate \
+  --retry --breaker default --timeout 14400000 --passes <n> --grid-kind v6-stage1
+  # stage 2: S against D, with the matched arm (--baseline and --candidate name the same snapshot)
+  --baseline-max-agents 0 --max-verifiers baseline=0,candidate=2 --budget-arms baseline,candidate,matched \
+  --matched follow --retry --breaker default --auth-horizon-hours <h> --timeout 14400000 --passes <n> --grid-kind v6-stage2
+  ```
+
 ## Results
 
 None yet. No scored session has run.
