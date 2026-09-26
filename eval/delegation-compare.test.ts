@@ -4,8 +4,8 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
 	accountCellUsage, AUTH_HORIZON_CAP_MS, AUTH_MARGIN_MS, benchmarkRuntimeOf, checkAuthHorizon, childProviderFailure, classifyInfra,
-	credentialExpiry, decideInfra, fetchErrorsFromStderr, gridWorstCaseMs, isBrokerEnvVar, metricFromRecord, notLaunchedOutcome, ownerIsLive,
-	parseComparePins, parseOwnerRecord, planResume, providerFailureTexts, resumeMismatches, runtimeMismatch, scopedSealCommand,
+	credentialExpiry, decideInfra, DEFAULT_CANDIDATE_MAX_AGENTS, fetchErrorsFromStderr, gridWorstCaseMs, isBrokerEnvVar, metricFromRecord, notLaunchedOutcome, ownerIsLive,
+	newManifest, optionsFromManifest, parseComparePins, parseOptions, parseOwnerRecord, planResume, providerFailureTexts, resumeMismatches, reviewScope, runtimeMismatch, scopedSealCommand,
 	startTimeFromStat, subagentConfigFor, toolSurfaceErrors, trackStream, type ProviderFailures,
 } from "./delegation-compare.ts";
 import { BENCHMARK_SETTINGS } from "./delegation-compare-entry.ts";
@@ -743,5 +743,80 @@ describe("sealed environment", () => {
 		expect(scoped.args.slice(6)).toEqual(["/usr/bin/env", "-u", "DBUS_SESSION_BUS_ADDRESS", "-u", "XDG_RUNTIME_DIR", "-u", "INVOCATION_ID", "/tmp/seal", "--read", "/usr", "--", "node", "entry.ts"]);
 		expect(scoped.env).toEqual({ PATH: "/usr/bin", HOME: "/h", DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/1/bus", XDG_RUNTIME_DIR: "/run/user/1" });
 		expect(scoped.unit).toBe("pired-cell-abc");
+	});
+});
+
+describe("the candidate's worker cap", () => {
+	// Builders: the required command line, and the manifest a fresh grid writes
+	// from it, with the inputs block optionsFromManifest reads back on a resume.
+	const argv = (...extra: string[]): string[] => [
+		"--baseline", "/b", "--candidate", "/c", "--corpus", "/corpus", "--truth", "/truth", "--out", "/out",
+		"--provider", "zai", "--model", "glm-5.3-flash", ...extra,
+	];
+	const options = (...extra: string[]) => {
+		const parsed = parseOptions(argv(...extra));
+		if (parsed === "help" || parsed.kind !== "run") throw new Error("expected a run");
+		return parsed.options;
+	};
+	const stored = (opts: ReturnType<typeof options>): Record<string, unknown> => ({
+		...newManifest(opts, "official"),
+		inputs: { corpus: opts.corpus, truth: opts.truth, corpusManifest: { path: opts.manifestPath }, baseline: { path: opts.baseline }, candidate: { path: opts.candidate } },
+		pins: { landlockWrapper: opts.fsSeal },
+	});
+
+	// Since ADR-029 pired's default cap is 0: a candidate cut from main under a
+	// scope naming no cap would not delegate, and the grid would compare the
+	// baseline with itself while reporting a delegation result.
+	it("writes the cap into the candidate's scope, so a candidate cut from main still delegates", () => {
+		expect(reviewScope("e", "/w", "candidate", 8)).toEqual({ engagement: "e", workspace: "/w", mode: "off", authorized: false, targets: {}, maxAgents: 8 });
+		expect(reviewScope("e", "/w", "candidate", 0).maxAgents).toBe(0);
+	});
+
+	it("leaves the baseline's scope exactly as it was, naming no cap", () => {
+		expect(reviewScope("e", "/w", "baseline", 8)).toEqual({ engagement: "e", workspace: "/w", mode: "off", authorized: false, targets: {} });
+	});
+
+	// A grid whose manifest predates the option wrote no maxAgents; its resume
+	// must write the same scope, or its later pairs measure a different candidate.
+	it("writes no cap for a grid whose manifest predates the option", () => {
+		expect(reviewScope("e", "/w", "candidate", undefined)).not.toHaveProperty("maxAgents");
+	});
+
+	// Eight is what the v3/v4 snapshots defaulted to, so re-running one of them
+	// without the flag delegates as its own grids did.
+	it("defaults to the v3/v4 snapshots' own cap of eight and takes an explicit one", () => {
+		expect(DEFAULT_CANDIDATE_MAX_AGENTS).toBe(8);
+		expect(options().candidateMaxAgents).toBe(8);
+		expect(options("--candidate-max-agents", "3").candidateMaxAgents).toBe(3);
+		expect(options("--candidate-max-agents", "0").candidateMaxAgents).toBe(0);
+	});
+
+	it("refuses a cap that is not a non-negative integer", () => {
+		for (const bad of ["-1", "2.5", "eight"]) expect(() => parseOptions(argv("--candidate-max-agents", bad))).toThrow(/--candidate-max-agents/);
+	});
+
+	it("pins the cap in the manifest and restores it on resume", () => {
+		const manifest = stored(options("--candidate-max-agents", "5"));
+		expect(manifest.candidateMaxAgents).toBe(5);
+		expect(optionsFromManifest("/out", manifest).candidateMaxAgents).toBe(5);
+	});
+
+	// An old manifest must still load for a resume, and resume without a cap.
+	it("restores no cap from a manifest that predates the option", () => {
+		const manifest = stored(options());
+		delete manifest.candidateMaxAgents;
+		expect(optionsFromManifest("/out", manifest)).not.toHaveProperty("candidateMaxAgents");
+	});
+
+	it("refuses to resume from a manifest whose cap is malformed rather than reading it as absent", () => {
+		expect(() => optionsFromManifest("/out", { ...stored(options()), candidateMaxAgents: -2 })).toThrow(/candidateMaxAgents/);
+	});
+
+	// Pairs measured under two caps are two candidates pooled into one comparison.
+	it("refuses a resume whose cap differs from the one the grid started with", () => {
+		const prior = { candidateMaxAgents: 8 };
+		expect(resumeMismatches(prior, { candidateMaxAgents: 4 })).toEqual(["candidateMaxAgents"]);
+		expect(resumeMismatches(prior, {})).toEqual(["candidateMaxAgents"]);
+		expect(resumeMismatches({}, {})).toEqual([]);
 	});
 });

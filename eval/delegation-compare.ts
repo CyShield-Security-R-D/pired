@@ -228,6 +228,12 @@ type Options = {
 	dryRun: boolean;
 	/** --auth-horizon-hours: how long the provider's OAuth token must stay valid; computed from the grid when absent. */
 	authHorizonHours?: number;
+	/**
+	 * --candidate-max-agents: the worker cap the candidate arm's scope states
+	 * (default 8). Absent only for a grid whose manifest predates the option,
+	 * whose resume must write the scope it started with: no `maxAgents`.
+	 */
+	candidateMaxAgents?: number;
 };
 
 type JsonRecord = Record<string, unknown>;
@@ -304,6 +310,9 @@ Options:
                         (default: the grid's worst case, passes x
                         ceil(targets/concurrency) x 2 arms x timeout, capped at
                         ${AUTH_HORIZON_CAP_MS / 3_600_000} h, plus ${AUTH_MARGIN_MS / 60_000} min)
+  --candidate-max-agents <n>
+                        Worker cap the candidate's scope states; the
+                        baseline's scope names none (default: ${DEFAULT_CANDIDATE_MAX_AGENTS})
   --out <dir>           New or empty directory; must not contain an advisory ID
   --resume <out-dir>    Continue a stopped grid in place; takes no other option
   --dry-run             Run the preflight only, with no model calls
@@ -401,7 +410,7 @@ Exit status: 0 for a passing --dry-run or an official approval decision;
 `;
 }
 
-function parseOptions(argv: string[]): Parsed {
+export function parseOptions(argv: string[]): Parsed {
 	if (argv.includes("--help") || argv.includes("-h")) return "help";
 	if (argv.includes("--resume")) {
 		if (argv.length !== 2 || argv[0] !== "--resume" || !argv[1] || argv[1].startsWith("--")) {
@@ -412,6 +421,7 @@ function parseOptions(argv: string[]): Parsed {
 	const valueFlags = new Set([
 		"--baseline", "--candidate", "--corpus", "--truth", "--out", "--provider", "--model",
 		"--thinking", "--passes", "--only", "--concurrency", "--timeout", "--manifest", "--fs-seal", "--auth-horizon-hours",
+		"--candidate-max-agents",
 	]);
 	const values = new Map<string, string>();
 	let dryRun = false;
@@ -442,6 +452,8 @@ function parseOptions(argv: string[]): Parsed {
 	const horizon = values.get("--auth-horizon-hours");
 	const authHorizonHours = horizon === undefined ? undefined : Number(horizon);
 	if (authHorizonHours !== undefined && (!Number.isFinite(authHorizonHours) || authHorizonHours <= 0)) throw new Error("--auth-horizon-hours must be a positive number of hours");
+	const candidateMaxAgents = Number(values.get("--candidate-max-agents") ?? String(DEFAULT_CANDIDATE_MAX_AGENTS));
+	if (!isWorkerCap(candidateMaxAgents)) throw new Error("--candidate-max-agents must be a non-negative integer");
 	return {
 		kind: "run",
 		options: {
@@ -452,6 +464,7 @@ function parseOptions(argv: string[]): Parsed {
 			fsSeal: resolve(values.get("--fs-seal") ?? DEFAULT_FS_SEAL),
 			manifestPath: resolve(values.get("--manifest") ?? DEFAULT_MANIFEST), dryRun,
 			...(authHorizonHours === undefined ? {} : { authHorizonHours }),
+			candidateMaxAgents,
 		},
 	};
 }
@@ -463,7 +476,7 @@ function parseOptions(argv: string[]): Parsed {
  * pins before any cell launches; a manifest that names a path that has moved is
  * caught there, not silently re-run against a different tree.
  */
-function optionsFromManifest(dir: string, manifest: JsonRecord): Options {
+export function optionsFromManifest(dir: string, manifest: JsonRecord): Options {
 	const requested = (manifest.requested ?? {}) as JsonRecord;
 	const inputs = (manifest.inputs ?? {}) as JsonRecord;
 	const corpusManifest = (inputs.corpusManifest ?? {}) as JsonRecord;
@@ -485,6 +498,11 @@ function optionsFromManifest(dir: string, manifest: JsonRecord): Options {
 	if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error("--resume manifest has an invalid timeout");
 	const selected = Array.isArray(requested.only) ? requested.only.map(String) : [];
 	const authHorizonHours = typeof requested.authHorizonHours === "number" && requested.authHorizonHours > 0 ? requested.authHorizonHours : undefined;
+	// A manifest without the field predates the option; its cells wrote no
+	// maxAgents, and a resume must keep writing none. A present but malformed one
+	// is refused rather than read as "absent", which would silently change the arm.
+	if (manifest.candidateMaxAgents !== undefined && !isWorkerCap(manifest.candidateMaxAgents)) throw new Error("--resume manifest has an invalid candidateMaxAgents");
+	const candidateMaxAgents = manifest.candidateMaxAgents as number | undefined;
 	return {
 		baseline: need(baseline.path, "the baseline snapshot path"), candidate: need(candidate.path, "the candidate snapshot path"),
 		corpus: need(inputs.corpus, "the corpus path"), truth: need(inputs.truth, "the truth path"), out: dir,
@@ -493,6 +511,7 @@ function optionsFromManifest(dir: string, manifest: JsonRecord): Options {
 		fsSeal: need(pins.landlockWrapper, "the Landlock wrapper path"),
 		manifestPath: need(corpusManifest.path, "the corpus manifest path"), dryRun: false,
 		...(authHorizonHours === undefined ? {} : { authHorizonHours }),
+		...(candidateMaxAgents === undefined ? {} : { candidateMaxAgents }),
 	};
 }
 
@@ -1593,9 +1612,30 @@ export function subagentConfigFor(childSessionDir: string): Record<string, unkno
 	return { defaultSessionDir: childSessionDir, asyncByDefault: false, artifactDir: "temp" };
 }
 
-/** The scope a cell runs under: whole-application, unenforced, exactly the research setup. */
-function reviewScope(engagement: string, workspace: string): Record<string, unknown> {
-	return { engagement, workspace, mode: "off", authorized: false, targets: {} };
+/**
+ * The candidate's worker cap when --candidate-max-agents is not given: 8, the
+ * default the v3/v4 candidate snapshots shipped with, so a re-run of one of
+ * them delegates exactly as it did when its grids ran.
+ */
+export const DEFAULT_CANDIDATE_MAX_AGENTS = 8;
+
+function isWorkerCap(value: unknown): value is number {
+	return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+/**
+ * The scope a cell runs under: whole-application, unenforced, exactly the research setup.
+ * The candidate's scope states its worker cap. Since ADR-029 pired's default is
+ * 0, so a candidate cut from main under a scope naming no cap would run with
+ * delegation silently off and the grid would compare the baseline with itself.
+ * The baseline's scope is left as it was: it names no cap, and whatever its
+ * snapshot defaults to is what it measures. An undefined cap (a manifest that
+ * predates the option) writes no field, as those grids' cells did.
+ */
+export function reviewScope(engagement: string, workspace: string, arm: Arm, candidateMaxAgents: number | undefined): Record<string, unknown> {
+	const scope: Record<string, unknown> = { engagement, workspace, mode: "off", authorized: false, targets: {} };
+	if (arm === "candidate" && candidateMaxAgents !== undefined) scope.maxAgents = candidateMaxAgents;
+	return scope;
 }
 
 /**
@@ -1652,7 +1692,7 @@ async function prepareCell(ctx: Context, target: Target, pass: number, arm: Arm,
 	const engagement = `review-${opaqueToken()}`;
 	let probe: ProbeConfig | undefined;
 	if (probeFor) probe = await probeFor(paths);
-	const scope = probe?.mode === "delegation" ? probeDelegationScope(engagement, paths.workspaceDir) : reviewScope(engagement, paths.workspaceDir);
+	const scope = probe?.mode === "delegation" ? probeDelegationScope(engagement, paths.workspaceDir) : reviewScope(engagement, paths.workspaceDir, arm, options.candidateMaxAgents);
 	const scopeText = `${JSON.stringify(scope, null, 2)}\n`;
 	await writeFile(join(paths.targetDir, "pired.scope.json"), scopeText);
 	const prompt = probe?.mode === "delegation" ? "Map the attack surface of this codebase. Delegate the first area to a worker." : promptFor(target);
@@ -2907,6 +2947,9 @@ export function resumeMismatches(prior: JsonRecord, fresh: JsonRecord): string[]
 	eq("promptSha256ByTarget", prior.promptSha256ByTarget, fresh.promptSha256ByTarget);
 	eq("schedule", prior.schedule, fresh.schedule);
 	eq("passes", prior.passes, fresh.passes);
+	// The cap is half of what the candidate arm is; pairs run under two caps
+	// would be two candidates pooled into one comparison.
+	eq("candidateMaxAgents", prior.candidateMaxAgents, fresh.candidateMaxAgents);
 	const pr = (prior.requested ?? {}) as JsonRecord;
 	const fr = (fresh.requested ?? {}) as JsonRecord;
 	for (const k of ["provider", "model", "thinking", "passes", "only"]) eq(`requested.${k}`, pr[k], fr[k]);
@@ -3088,12 +3131,13 @@ function startHeartbeat(): () => void {
 	return () => clearInterval(timer);
 }
 
-function newManifest(options: Options, mode: string): JsonRecord {
+export function newManifest(options: Options, mode: string): JsonRecord {
 	const id = new Date().toISOString().replace(/[-:.]/g, "").replace("T", "-").slice(0, 15) + `-${randomUUID().slice(0, 8)}`;
 	return {
 		schema: "pired-matched-delegation-compare/v2", id, createdAt: new Date().toISOString(), mode,
 		requested: { provider: options.provider, model: options.model, thinking: options.thinking, passes: options.passes, only: options.selected, authHorizonHours: options.authHorizonHours ?? null },
 		thinking: options.thinking, passes: options.passes, concurrency: options.concurrency, timeoutMs: options.timeoutMs,
+		...(options.candidateMaxAgents === undefined ? {} : { candidateMaxAgents: options.candidateMaxAgents }),
 		prompt: REVIEW_PROMPT, resumePolicy: RESUME_POLICY,
 		runtimeConfiguration: {
 			globalExtensions: false, globalSkills: false, promptTemplates: false, contextFiles: false, theme: false, forcedDelegation: false, scribe: "off",
