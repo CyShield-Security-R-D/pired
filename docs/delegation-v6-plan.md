@@ -57,7 +57,7 @@ its ADR.
 | 2.5 | **Matched-compute arm:** the single agent run *k* times at the candidate's token budget, with findings combined. | Tests whether delegation adds anything beyond spending more tokens. | done: ADR-034 (candidate solo ×k, follow budget with rollover) |
 | 2.6 | **Stop reason as a first-class outcome**, recorded per run: finished, offered to continue, budget, turn cap, error. | Luna ends about 80% of runs by offering to continue. | done: ADR-030 |
 | 2.7 | **The candidate's scope states its worker cap.** The review scope sets no `maxAgents`, and since ADR-029 the default is 0. | A candidate cut from `main` would otherwise run with delegation silently off. | done: ADR-032 (cap pinned at 8) |
-| 2.8 | **N targets plus clean controls.** The harness accepts exactly five targets today. | The fresh corpus has 12 targets and 2 controls. | not started |
+| 2.8 | **N targets plus clean controls.** The harness accepted exactly five targets. | The fresh corpus has 12 targets, each with a patched twin as its control. | built (ADR pending: `docs/adr-drafts/2.8-n-targets-twins-arm-configs.md`): any number of targets; official corpora and the v6 grid kinds (drafts) pinned in the pins file; patched twins beside the gate; per-arm scope options |
 
 ## Phase 3 — Product changes (candidate snapshot v5; each its own ADR)
 

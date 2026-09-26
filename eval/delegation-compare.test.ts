@@ -1,19 +1,26 @@
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
 	accountCellUsage, atHighestAttempt, attemptReport, AUTH_HORIZON_CAP_MS, AUTH_MARGIN_MS, benchmarkRuntimeOf, checkAuthHorizon, childProviderFailure, classifyInfra,
-	credentialExpiry, decideInfra, DEFAULT_CANDIDATE_MAX_AGENTS, fetchErrorsFromStderr, gridWorstCaseMs, isBrokerEnvVar, metricFromRecord, notLaunchedOutcome, ownerIsLive,
+	credentialExpiry, decideInfra, DEFAULT_CANDIDATE_MAX_AGENTS, fetchErrorsFromStderr, gridWorstCaseMs, isBrokerEnvVar, loadTargets, metricFromRecord, notLaunchedOutcome, ownerIsLive,
 	newManifest, optionsFromManifest, parseBreakerSpec, parseComparePins, parseOptions, parseOwnerRecord, planResume, providerFailureTexts, requestLogFromStderr,
-	resumeMismatches, retryPolicyFromManifest, reviewScope, runPairs, runStop, runtimeMismatch, scopedSealCommand, startTimeFromStat, subagentConfigFor,
+	adoptPasses, writeSealed, armOptionsFromManifest, cellModelInputs, credentialStopOutcome, gridAmendments, credentialStopReason, horizonRefusal, redactTermsFor, V6_DECISION, verdictFields, manifestTargetEntry, probeDelegationScope, resumeMismatches, splitTwinRuns, twinOptionsFromManifest, retryPolicyFromManifest, reviewScope, runPairs, runStop, runtimeMismatch, scopedSealCommand, startTimeFromStat, subagentConfigFor,
 	toolSurfaceErrors, trackStream, workerCapReason,
 	ceilingOf, ceilingProbeErrors, latestMatchedSessions, planMatchedResume, sessionRunOf, verifyCeiling,
 	type GridStopState, type MatchedSessionSpec, type ProviderFailures, type RunOutcome,
 } from "./delegation-compare.ts";
 import { sessionBudget, type MatchedPolicy, type SessionState } from "./delegation-compare-matched.ts";
+import { readFileSync } from "node:fs";
+import { gridKindReasons, kindFlags } from "./delegation-compare-grid.ts";
 import { BENCHMARK_SETTINGS, DEFAULT_RETRY_POLICY } from "./delegation-compare-entry.ts";
-import { DEFAULT_BREAKER, observationsFromChildSession, planSchedule, type Arm, type BreakerPolicy, type ScheduledPair } from "./delegation-compare-lib.ts";
+import { compareMatchedRuns, DEFAULT_BREAKER, observationsFromChildSession, planSchedule, type Arm, type BreakerPolicy, type ScheduledPair } from "./delegation-compare-lib.ts";
+
+/** The shipped pins, read once: every stage command line below is built from its kind (kindFlags). */
+const SHIPPED_PINS = parseComparePins(readFileSync(new URL("./delegation-compare.pins.json", import.meta.url), "utf8"));
+const STAGE1 = [...kindFlags("v6-stage1", SHIPPED_PINS.gridKinds["v6-stage1"]!, { twins: "/twins.json" }), "--auth-horizon-hours", "200"];
+const STAGE2 = [...kindFlags("v6-stage2", SHIPPED_PINS.gridKinds["v6-stage2"]!, { passesFrom: "/grids/stage1" }), "--auth-horizon-hours", "200"];
 
 // Per-file builders: a run record as the runner appends it to runs.jsonl, a
 // manifest fragment as resume reads it back, pi's transcript events, and the
@@ -1840,5 +1847,667 @@ describe("the matched-compute arm (plan 2.5)", () => {
 			expect(sessionRunOf(record, [])).toEqual({ index: 2, attempt: 3, cellId: "m-A#1-2-3", valid: true, infra: false, ceiling: 3000, totalTokens: 3300, truePositives: 1, claims: 2, stop: "budget", findings: [] });
 			expect(sessionRunOf(sessionRecord("A#1", 1, 1, 1, false))).toMatchObject({ valid: false, infra: true, stop: null, claims: 0 });
 		});
+	});
+});
+
+describe("the corpus manifest (plan 2.8)", () => {
+	// A corpus on disk as the runner reads it: a manifest, each target's
+	// pristine tree and its truth file.
+	const corpusOf = async (entries: Array<Record<string, unknown>>): Promise<{ manifestPath: string; truth: string; corpus: string }> => {
+		const root = await mkdtemp(join(tmpdir(), "pired-grid-"));
+		const corpus = join(root, "targets");
+		const truth = join(root, "truth");
+		await mkdir(truth, { recursive: true });
+		for (const entry of entries) {
+			const name = String(entry.name);
+			await mkdir(join(corpus, `${name}.pristine`), { recursive: true });
+			await writeFile(join(corpus, `${name}.pristine`, "app.py"), `print("${name}")\n`);
+			await writeFile(join(truth, `${name}.truth.json`), `${JSON.stringify(entry.twinOf ? [] : [{ file: "app.py", line: 1 }])}\n`);
+		}
+		const manifestPath = join(root, "manifest.json");
+		await writeFile(manifestPath, JSON.stringify(entries));
+		return { manifestPath, truth, corpus };
+	};
+	const target = (i: number, extra: Record<string, unknown> = {}): Record<string, unknown> => ({ id: `CVE-2030-${1000 + i}`, name: `app-${i}`, package: `o/app-${i}`, ...extra });
+
+	// The harness refused anything but exactly five targets; the fresh v6 corpus has twelve.
+	it("accepts a manifest of twelve targets", async () => {
+		const files = await corpusOf(Array.from({ length: 12 }, (_, i) => target(i + 1)));
+		const loaded = await loadTargets({ ...files, selected: [] });
+		expect(loaded.targets.map((t) => t.id)).toHaveLength(12);
+		expect(Object.keys(loaded.truthHashes)).toHaveLength(12);
+	});
+
+	it("accepts a single target, and refuses a manifest that resolves none", async () => {
+		expect((await loadTargets({ ...await corpusOf([target(1)]), selected: [] })).targets).toHaveLength(1);
+		await expect(loadTargets({ ...await corpusOf([]), selected: [] })).rejects.toThrow(/resolves no target/);
+	});
+
+	// Ids key every cell, pin and pair; two entries under one id would merge.
+	it("refuses two targets under one id", async () => {
+		const files = await corpusOf([target(1), { ...target(2), id: "CVE-2030-1001" }]);
+		await expect(loadTargets({ ...files, selected: [] })).rejects.toThrow(/CVE-2030-1001 more than once/);
+	});
+});
+
+describe("per-arm configuration (plan 2.8)", () => {
+	// Builders: the required command line, and the manifest a fresh grid writes
+	// from it, with the inputs block optionsFromManifest reads back on a resume.
+	const argv = (...extra: string[]): string[] => [
+		"--baseline", "/b", "--candidate", "/c", "--corpus", "/corpus", "--truth", "/truth", "--out", "/out",
+		"--provider", "openai-codex", "--model", "gpt-6-luna", ...extra,
+	];
+	const options = (...extra: string[]) => {
+		const parsed = parseOptions(argv(...extra));
+		if (parsed === "help" || parsed.kind !== "run") throw new Error("expected a run");
+		return parsed.options;
+	};
+	const stored = (opts: ReturnType<typeof options>): Record<string, unknown> => ({
+		...newManifest(opts, "live"),
+		inputs: { corpus: opts.corpus, truth: opts.truth, corpusManifest: { path: opts.manifestPath }, baseline: { path: opts.baseline }, candidate: { path: opts.candidate } },
+		pins: { landlockWrapper: opts.fsSeal },
+	});
+	const volatile = (manifest: Record<string, unknown>): Record<string, unknown> => {
+		const { id: _id, createdAt: _at, ...rest } = manifest;
+		return rest;
+	};
+
+	// Behaviour with no new option must stay byte-identical: the manifest a grid
+	// writes, and so the pins its resume compares, gain no field.
+	it("writes the manifest every earlier grid wrote when no arm option is given", () => {
+		const plain = volatile(newManifest(options(), "live"));
+		expect(plain).not.toHaveProperty("baselineMaxAgents");
+		expect(plain).not.toHaveProperty("maxVerifiers");
+		expect(plain).not.toHaveProperty("budgetArms");
+		// Naming the default budget arms is the default, not a new configuration.
+		expect(volatile(newManifest(options("--budget-arms", "matched,candidate"), "live"))).toEqual(plain);
+	});
+
+	it("parses each arm option and refuses a malformed one", () => {
+		const opts = options("--baseline-max-agents", "0", "--max-verifiers", "baseline=0,candidate=2", "--budget-arms", "candidate,baseline");
+		expect(opts).toMatchObject({ baselineMaxAgents: 0, maxVerifiers: { baseline: 0, candidate: 2 }, budgetArms: ["baseline", "candidate"] });
+		expect(options("--budget-arms", "none").budgetArms).toEqual([]);
+		expect(() => parseOptions(argv("--baseline-max-agents", "-1"))).toThrow(/--baseline-max-agents/);
+		expect(() => parseOptions(argv("--max-verifiers", "matched=1"))).toThrow(/--max-verifiers/);
+		expect(() => parseOptions(argv("--max-verifiers", "candidate=1,candidate=2"))).toThrow(/given twice/);
+		expect(() => parseOptions(argv("--max-verifiers", "candidate=x"))).toThrow(/non-negative integer/);
+		expect(() => parseOptions(argv("--budget-arms", "candidate,candidate"))).toThrow(/more than once/);
+		expect(() => parseOptions(argv("--budget-arms", "worker"))).toThrow(/--budget-arms/);
+	});
+
+	it("pins every arm option in the manifest and restores it on resume", () => {
+		const opts = options("--baseline-max-agents", "0", "--max-verifiers", "baseline=0,candidate=2", "--budget-arms", "baseline,candidate,matched");
+		const restored = optionsFromManifest("/out", stored(opts));
+		expect(restored.baselineMaxAgents).toBe(0);
+		expect(restored.maxVerifiers).toEqual({ baseline: 0, candidate: 2 });
+		expect(restored.budgetArms).toEqual(["baseline", "candidate", "matched"]);
+	});
+
+	// An old (v5) manifest predates every 2.8 field and must load, and resume
+	// with the arms it ran.
+	it("loads a manifest that predates the options, with every arm as it ran", () => {
+		const old = stored(options());
+		delete old.candidateMaxAgents;
+		const restored = optionsFromManifest("/out", old);
+		for (const field of ["baselineMaxAgents", "maxVerifiers", "budgetArms", "candidateMaxAgents"]) expect(restored).not.toHaveProperty(field);
+	});
+
+	it("refuses a resume from a manifest whose arm option is malformed rather than reading it as absent", () => {
+		expect(() => armOptionsFromManifest({ baselineMaxAgents: "0" })).toThrow(/baselineMaxAgents/);
+		expect(() => armOptionsFromManifest({ maxVerifiers: { matched: 1 } })).toThrow(/maxVerifiers/);
+		expect(() => armOptionsFromManifest({ maxVerifiers: {} })).toThrow(/maxVerifiers/);
+		expect(() => armOptionsFromManifest({ budgetArms: ["candidate", "candidate"] })).toThrow(/budgetArms/);
+	});
+
+	// Pairs run under two configurations of one arm would be two arms pooled into one.
+	it("refuses a resume whose arm configuration changed", () => {
+		expect(resumeMismatches({ baselineMaxAgents: 0 }, {})).toEqual(["baselineMaxAgents"]);
+		expect(resumeMismatches({ maxVerifiers: { candidate: 2 } }, { maxVerifiers: { candidate: 3 } })).toEqual(["maxVerifiers"]);
+		expect(resumeMismatches({ budgetArms: ["baseline", "candidate", "matched"] }, {})).toEqual(["budgetArms"]);
+		expect(resumeMismatches({}, {})).toEqual([]);
+	});
+
+	// Stage 1 runs S as the candidate with delegation off; since ADR-029 pired
+	// hides the launcher there, and a probe that required it failed the dry run.
+	it("lets a candidate whose scope switches delegation off show no launcher, and still requires it otherwise", () => {
+		const base = ["read", "bash", "edit", "write", "record", "recall"];
+		expect(toolSurfaceErrors("candidate", base, true)).toEqual([]);
+		expect(toolSurfaceErrors("candidate", [...base, "subagents_enable"], true)).toEqual([]);
+		expect(toolSurfaceErrors("candidate", base)).toEqual(["candidate arm does not expose subagents_enable"]);
+		expect(toolSurfaceErrors("candidate", [...base, "bg_wait"], true)).toEqual(["candidate arm exposes bg_wait, which pired hides"]);
+	});
+});
+
+describe("the delegation probe's scope", () => {
+	// It named no cap. A v5 candidate cut after ADR-029 reads that as 0, refuses
+	// the probe's launches and hides the launcher, so a v6 dry run would fail at
+	// the probe before a single cell ran.
+	it("states the v3/v4 default cap, so a snapshot whose own default is 0 can still launch the probe's workers", () => {
+		expect(probeDelegationScope("e", "/w")).toEqual({
+			engagement: "e", workspace: "/w", mode: "enforce", authorized: true, targets: { ips: ["127.0.0.1"] }, maxAgents: DEFAULT_CANDIDATE_MAX_AGENTS,
+		});
+	});
+});
+
+describe("patched twins (plan 2.8)", () => {
+	// A corpus on disk with two targets and a two-entry synthetic copy of the
+	// fresh corpus's twins.json: each twin has its target's advisory as id and
+	// its target's name as twin_of, and an answer key that is an empty list.
+	const corpusWithTwins = async (twinTruth = "[]\n") => {
+		const root = await mkdtemp(join(tmpdir(), "pired-twins-"));
+		const corpus = join(root, "targets");
+		const truth = join(root, "truth");
+		await mkdir(truth, { recursive: true });
+		const targets = [
+			{ id: "CVE-2031-0001", name: "acme_shop-aaaaaa", package: "acme/shop", scope: ["."], aliases: ["GHSA-2222-3333-4444"] },
+			{ id: "CVE-2031-0002", name: "acme_wiki-bbbbbb", package: "acme/wiki", scope: ["."], aliases: [] },
+		];
+		const twins = targets.map((t, i) => ({
+			id: t.id, package: t.package, repo: t.package, scope: ["."], cwe: ["CWE-79"], severity: "high", published: "2031-01-02", fix_commit: String(i).repeat(40),
+			variant: 2, entries: 0, name: `${t.name}-patched`, twin_of: t.name, scope_files: 10, scope_loc: 1000 * (i + 1), language: "Python",
+			target: `PLACEHOLDER/corpus/${t.name}-patched`, truth: `PLACEHOLDER/corpus/truth/${t.name}-patched.truth.json`, reviewed_commit: String(i).repeat(40),
+			twin: true, aliases: t.aliases, fixed_regions: [{ advisory: t.id, file: "app.py", line_range: [3, 5] }],
+		}));
+		for (const name of [...targets.map((t) => t.name), ...twins.map((t) => t.name)]) {
+			await mkdir(join(corpus, `${name}.pristine`), { recursive: true });
+			await writeFile(join(corpus, `${name}.pristine`, "app.py"), "print('x')\n");
+			await writeFile(join(truth, `${name}.truth.json`), name.endsWith("-patched") ? twinTruth : `${JSON.stringify([{ file: "app.py", line: 1 }])}\n`);
+		}
+		const manifestPath = join(root, "manifest.json");
+		const twinsPath = join(root, "twins.json");
+		await writeFile(manifestPath, JSON.stringify(targets));
+		await writeFile(twinsPath, JSON.stringify(twins));
+		return { manifestPath, twinsPath, truth, corpus };
+	};
+
+	it("loads the twins after the gate targets, each under its own name and carrying what the control score reads", async () => {
+		const files = await corpusWithTwins();
+		const loaded = await loadTargets({ ...files, selected: [] });
+		expect(loaded.targets.map((t) => [t.id, t.twinOf ?? null])).toEqual([
+			["CVE-2031-0001", null], ["CVE-2031-0002", null],
+			["acme_shop-aaaaaa-patched", "CVE-2031-0001"], ["acme_wiki-bbbbbb-patched", "CVE-2031-0002"],
+		]);
+		expect(loaded.twinsHash).toMatch(/^[0-9a-f]{64}$/);
+		// eval/rescore.ts reads a twin's fixed_regions and scope_loc from the grid manifest's targets.
+		expect(manifestTargetEntry(loaded.targets[2]!)).toEqual({
+			id: "acme_shop-aaaaaa-patched", name: "acme_shop-aaaaaa-patched", package: "acme/shop", scope: ["."],
+			twinOf: "CVE-2031-0001", fixed_regions: [{ advisory: "CVE-2031-0001", file: "app.py", line_range: [3, 5] }], scope_loc: 1000,
+		});
+		// A gate target's entry is the one every earlier grid wrote.
+		expect(manifestTargetEntry(loaded.targets[0]!)).toEqual({ id: "CVE-2031-0001", name: "acme_shop-aaaaaa", package: "acme/shop", scope: ["."] });
+		// The fix commit is where a changelog names the advisory, so the copy is stripped of it.
+		expect(loaded.targets[2]!.aliases).toContain("CVE-2031-0001");
+	});
+
+	// A kind redacts from its corpus's full target list, so the staged snapshot is
+	// the same bytes whether a grid runs the twins (stage 1) or not (stage 2).
+	it("draws the same redaction set for a corpus with and without its twins, and covers every twin by its target's terms", async () => {
+		const files = await corpusWithTwins();
+		const withTwins = await loadTargets({ ...files, selected: [] });
+		const { twinsPath: _twins, ...plain } = files;
+		const without = await loadTargets({ ...plain, selected: [] });
+		const terms = await redactTermsFor(withTwins.corpusTargets, files.truth);
+		expect(await redactTermsFor(without.corpusTargets, files.truth)).toEqual(terms);
+		for (const twin of withTwins.targets.filter((t) => t.twinOf)) {
+			expect(terms.some((term) => twin.name.toLowerCase().includes(term.toLowerCase()))).toBe(true);
+			for (const id of twin.aliases ?? []) if (id !== twin.id) expect(terms.map((t) => t.toLowerCase())).toContain(id.toLowerCase());
+		}
+	});
+
+	it("refuses a twin whose answer key has labels, and an --only that leaves the gate empty", async () => {
+		await expect(loadTargets({ ...await corpusWithTwins(`${JSON.stringify([{ file: "app.py", line: 3 }])}\n`), selected: [] })).rejects.toThrow(/must be an empty list/);
+		await expect(loadTargets({ ...await corpusWithTwins(), selected: ["acme_shop-aaaaaa-patched"] })).rejects.toThrow(/only patched twins/);
+		const one = await loadTargets({ ...await corpusWithTwins(), selected: ["CVE-2031-0001", "acme_shop-aaaaaa-patched"] });
+		expect(one.targets.map((t) => t.id)).toEqual(["CVE-2031-0001", "acme_shop-aaaaaa-patched"]);
+	});
+
+	const argv = (...extra: string[]): string[] => [
+		"--baseline", "/b", "--candidate", "/c", "--corpus", "/corpus", "--truth", "/truth", "--out", "/out",
+		"--provider", "openai-codex", "--model", "gpt-6-luna", ...extra,
+	];
+	const options = (...extra: string[]) => {
+		const parsed = parseOptions(argv(...extra));
+		if (parsed === "help" || parsed.kind !== "run") throw new Error("expected a run");
+		return parsed.options;
+	};
+
+	it("takes the twins file only with the arms that run it, and pins both for the resume", () => {
+		expect(() => parseOptions(argv("--twin-arms", "baseline"))).toThrow(/--twin-arms needs --twins/);
+		expect(() => parseOptions(argv("--twins", "/t.json"))).toThrow(/--twins needs --twin-arms/);
+		expect(() => parseOptions(argv("--twins", "/t.json", "--twin-arms", "matched"))).toThrow(/--twin-arms: "matched"/);
+		const opts = options("--twins", "/t.json", "--twin-arms", "candidate,baseline");
+		expect(opts).toMatchObject({ twinsPath: "/t.json", twinArms: ["baseline", "candidate"] });
+		const manifest = { ...newManifest(opts, "live"), inputs: { twinsManifest: { path: "/t.json", sha256: "a".repeat(64) } } };
+		expect(twinOptionsFromManifest(manifest)).toEqual({ twinsPath: "/t.json", twinArms: ["baseline", "candidate"] });
+		// A grid without twins wrote no field and resumes without twins.
+		expect(newManifest(options(), "live")).not.toHaveProperty("twinArms");
+		expect(twinOptionsFromManifest({})).toEqual({});
+		expect(() => twinOptionsFromManifest({ twinArms: ["baseline"] })).toThrow(/twins file path/);
+		expect(() => twinOptionsFromManifest({ twinArms: [] })).toThrow(/twinArms/);
+	});
+
+	it("refuses a resume whose twin arms or twins file changed", () => {
+		expect(resumeMismatches({ twinArms: ["baseline"] }, { twinArms: ["baseline", "candidate"] })).toEqual(["twinArms"]);
+		expect(resumeMismatches({ inputs: { twinsManifest: { sha256: "a" } } }, { inputs: { twinsManifest: { sha256: "b" } } })).toEqual(["inputs.twinsManifest.sha256"]);
+	});
+
+	// A pair loop over fake launches: each launched arm takes ten minutes.
+	const loop = (pairs: ScheduledPair[], script: (key: string, arm: Arm) => "valid" | "broken" | "drop", opts: { official?: boolean; breaker?: BreakerPolicy } = {}) => {
+		let clock = Date.UTC(2026, 8, 26, 12, 0);
+		const launched: string[] = [];
+		const matched: string[] = [];
+		const state: GridStopState = { aborted: false, stopInvalid: false, stopReason: undefined, quotaExhausted: undefined };
+		const make = (pair: ScheduledPair, arm: Arm, attempt: number, kind: "valid" | "broken" | "drop"): RunOutcome => ({
+			metric: { key: pair.key, target: pair.target, pass: pair.pass, valid: kind === "valid", truePositives: 0, precision: 0, totalClaims: 1, totalTokens: 1000 },
+			arm, cellId: `cell-${pair.key}-${arm}`, seconds: 600, infraFailure: kind === "drop",
+			record: { key: pair.key, target: pair.target, pass: pair.pass, arm, attempt, valid: kind === "valid", infraFailure: kind === "drop" },
+		});
+		const run = () => runPairs({
+			pairs, firstAttempt: () => 1, concurrency: 1, official: opts.official ?? false, state,
+			...(opts.breaker ? { breaker: opts.breaker } : {}),
+			launch: async (pair, arm, attempt) => { launched.push(`${pair.key} ${arm}`); clock += 600_000; return make(pair, arm, attempt, script(pair.key, arm)); },
+			settle: async () => undefined, report: async () => undefined,
+			nowMs: () => clock, sleep: async (ms) => { clock += ms; }, log: () => undefined, warn: () => undefined, out: "/grid",
+			matched: {
+				policy: { k: 1, kMax: 1, floorShare: 0.05 },
+				budget: () => ({ ok: true, budget: 1000, source: "candidate" }),
+				launch: async (pair, attempt, session) => { matched.push(pair.key); return { ...make(pair, "matched", attempt, "valid"), record: { ...make(pair, "matched", attempt, "valid").record, matchedSession: session } }; },
+			},
+		});
+		return { run, launched, matched, state };
+	};
+
+	// Twins run only for the arms named, and never bring the matched arm along.
+	it("launches a twin only in its twin arms and never runs the matched arm after it", async () => {
+		const g = loop(planSchedule(["A"], 1, { ids: ["A-patched"], arms: ["baseline"] }), () => "valid");
+		await g.run();
+		expect(g.launched).toEqual(["A#1 baseline", "A#1 candidate", "A-patched#1 baseline"]);
+		expect(g.matched).toEqual(["A#1"]);
+	});
+
+	// A twin is outside the decision: its failure must not stop an official grid
+	// at once, as a gate arm's does, but it still counts toward the breaker.
+	it("lets an official grid go on past a twin that fails for a non-infrastructure reason, and counts it toward the breaker", async () => {
+		const pairs = planSchedule(["A", "B"], 1, { ids: ["A-patched"], arms: ["baseline"] });
+		const g = loop(pairs, (key) => key === "A-patched#1" ? "broken" : "valid", { official: true, breaker: { ...DEFAULT_BREAKER, consecutive: 1 } });
+		const result = await g.run();
+		// consecutive=1 trips on the twin's failure itself, by count, not as a blocked gate run.
+		expect(result.breaker?.reason).toMatch(/^1 consecutive launched runs failed \(0 infrastructure\)/);
+		expect(g.state.stoppedBy).toBe("twin");
+		const g2 = loop(pairs, (key) => key === "A-patched#1" ? "broken" : "valid", { official: true, breaker: DEFAULT_BREAKER });
+		const r2 = await g2.run();
+		expect(r2.breaker?.tripped).toBe(false);
+		expect(r2.blocked.map((b) => b.key)).toEqual(["A-patched#1"]);
+		expect(g2.launched).toContain("B#1 candidate");
+	});
+
+	it("re-runs a twin pair on its own arms at the next attempt, and keeps one whose arms are valid", () => {
+		const pairs = planSchedule(["A"], 1, { ids: ["A-patched"], arms: ["baseline"] });
+		const rows = [
+			{ key: "A#1", arm: "baseline", attempt: 1, valid: true }, { key: "A#1", arm: "candidate", attempt: 1, valid: true },
+			{ key: "A-patched#1", arm: "baseline", attempt: 1, valid: false, infraFailure: true },
+		];
+		expect(planResume(pairs, rows)).toMatchObject({ keepKeys: ["A#1"], rerunKeys: ["A-patched#1"], nextAttempt: { "A-patched#1": 2 } });
+		const kept = planResume(pairs, [...rows.slice(0, 2), { key: "A-patched#1", arm: "baseline", attempt: 1, valid: true }]);
+		expect(kept.keepKeys).toEqual(["A#1", "A-patched#1"]);
+	});
+
+	// A twin's run in the comparison is a key the gate does not expect, which
+	// would leave every grid with twins incomplete and undecided.
+	it("keeps twin runs out of the gate comparison, which is then complete on the gate's own runs", () => {
+		const cells = [{ key: "A#1", target: "A", pass: 1 }];
+		const metric = (key: string, target: string) => ({ key, target, pass: 1, valid: true, truePositives: 1, precision: 0.5, totalClaims: 2, totalTokens: 1000 });
+		const runs = [
+			{ arm: "baseline", metric: metric("A#1", "A") }, { arm: "candidate", metric: metric("A#1", "A") },
+			{ arm: "baseline", metric: metric("A-patched#1", "A-patched") }, { arm: "candidate", metric: metric("A-patched#1", "A-patched") },
+		];
+		const pooled = compareMatchedRuns(runs.filter((r) => r.arm === "baseline").map((r) => r.metric), runs.filter((r) => r.arm === "candidate").map((r) => r.metric), cells);
+		expect(pooled.complete).toBe(false);
+		const { gate, twins } = splitTwinRuns(runs, new Set(["A-patched"]));
+		expect(twins.map((r) => r.metric.key)).toEqual(["A-patched#1", "A-patched#1"]);
+		const comparison = compareMatchedRuns(gate.filter((r) => r.arm === "baseline").map((r) => r.metric), gate.filter((r) => r.arm === "candidate").map((r) => r.metric), cells);
+		expect(comparison.complete).toBe(true);
+	});
+
+	// The OAuth horizon must cover the twins' runs too: twelve targets and twelve
+	// twins are twice the pairs of the gate alone.
+	it("sizes the worst case over the gate targets and the twins, and unchanged without twins", () => {
+		const HOUR = 3_600_000;
+		const base = { passes: 6, targets: 12, concurrency: 2, timeoutMs: 4 * HOUR };
+		expect(gridWorstCaseMs(base)).toBe(6 * 6 * 2 * 4 * HOUR);
+		expect(gridWorstCaseMs({ ...base, twins: 0, twinArms: 2 })).toBe(gridWorstCaseMs(base));
+		expect(gridWorstCaseMs({ ...base, twins: 12, twinArms: 2 })).toBe(6 * 12 * 2 * 4 * HOUR);
+		// A one-arm twin pair is shorter than a gate pair, so the gate pair bounds each wave.
+		expect(gridWorstCaseMs({ ...base, twins: 12, twinArms: 1 })).toBe(6 * 12 * 2 * 4 * HOUR);
+		// With the matched arm a gate pair is longer still, and a breaker multiplies every pair.
+		expect(gridWorstCaseMs({ ...base, matchedSessions: 6, twins: 12, twinArms: 2 })).toBe(6 * 12 * 8 * 4 * HOUR);
+		const breaker = { maxAttempts: 4, cooldownMs: 60_000 };
+		expect(gridWorstCaseMs({ ...base, breaker, twins: 12, twinArms: 2 })).toBe(6 * 12 * (4 * 2 * 4 * HOUR + 60_000 * 6));
+	});
+});
+
+describe("grid kinds on the command line (plan 2.8)", () => {
+	const argv = (...extra: string[]): string[] => [
+		"--baseline", "/b", "--candidate", "/c", "--corpus", "/corpus", "--truth", "/truth", "--out", "/out",
+		"--provider", "openai-codex", "--model", "gpt-6-luna", ...extra,
+	];
+	const options = (...extra: string[]) => {
+		const parsed = parseOptions(argv(...extra));
+		if (parsed === "help" || parsed.kind !== "run") throw new Error("expected a run");
+		return parsed.options;
+	};
+	const shippedPins = async () => parseComparePins(await readFile(new URL("./delegation-compare.pins.json", import.meta.url), "utf8"));
+	// The command lines the operator will type for the two stages are built
+	// from the kinds; they must read back as exactly their kinds, or both stages
+	// would run exploratory for a flag nobody noticed.
+	it("reads the stage command lines as exactly their kinds", async () => {
+		const pins = await shippedPins();
+		for (const [name, flags] of [["v6-stage1", STAGE1], ["v6-stage2", STAGE2]] as const) {
+			const opts = options(...flags);
+			expect(opts.gridKind).toBe(name);
+			expect(gridKindReasons(name, pins.gridKinds[name]!, { ...opts, retry: opts.retryPolicy !== undefined })).toEqual([]);
+		}
+		// Stage 2 without its matched arm is another grid.
+		const partial = options(...STAGE2.filter((f, i, all) => f !== "--matched" && all[i - 1] !== "--matched" && f !== "--auth-horizon-hours" && all[i - 1] !== "--auth-horizon-hours"));
+		expect(gridKindReasons("v6-stage2", pins.gridKinds["v6-stage2"]!, { ...partial, retry: true })).toEqual(["grid kind v6-stage2: the matched arm is off, not on"]);
+	});
+
+	it("pins the kind in the manifest, restores it on resume, and refuses a resume under another", () => {
+		const opts = options("--grid-kind", "v6-stage1");
+		const manifest: Record<string, unknown> = { ...newManifest(opts, "live"), inputs: { corpus: "/corpus", truth: "/truth", corpusManifest: { path: "/m.json" }, baseline: { path: "/b" }, candidate: { path: "/c" } }, pins: { landlockWrapper: "/seal" } };
+		expect(manifest.gridKind).toBe("v6-stage1");
+		expect(optionsFromManifest("/out", manifest).gridKind).toBe("v6-stage1");
+		expect(newManifest(options(), "live")).not.toHaveProperty("gridKind");
+		expect(resumeMismatches({ gridKind: "v6-stage1" }, { gridKind: "v6-stage2" })).toEqual(["gridKind"]);
+		expect(resumeMismatches({ gridKind: "v6-stage1" }, {})).toEqual(["gridKind"]);
+		expect(() => optionsFromManifest("/out", { ...manifest, gridKind: 3 })).toThrow(/gridKind/);
+		expect(() => parseOptions(argv("--grid-kind", "v6 stage1"))).toThrow(/--grid-kind/);
+	});
+});
+
+describe("S is the same arm in both stages (plan 2.8)", () => {
+	const argv = (...extra: string[]): string[] => [
+		"--baseline", "/snap/A", "--candidate", "/snap/S", "--corpus", "/corpus", "--truth", "/truth", "--out", "/out",
+		"--provider", "openai-codex", "--model", "gpt-6-luna", ...extra,
+	];
+	const options = (...extra: string[]) => {
+		const parsed = parseOptions(argv(...extra));
+		if (parsed === "help" || parsed.kind !== "run") throw new Error("expected a run");
+		return parsed.options;
+	};
+	const target = { id: "CVE-2031-0001", name: "acme_shop-aaaaaa", package: "acme/shop", target: "/corpus/acme_shop-aaaaaa", truth: "/truth/acme_shop-aaaaaa.truth.json", scope: ["."] };
+	const cell = { engagement: "review-0123456789abcdef", workspaceDir: "/cell/ws", childSessionDir: "/cell/child-sessions" };
+	const now = Date.parse("2026-09-27T10:00:00.000Z");
+	// Both stages' options come from their kinds (STAGE1, STAGE2), not from
+	// flags written here, so the test follows the kinds when they are frozen.
+	const stage1 = options(...STAGE1);
+	// Stage 2 names the candidate snapshot as its baseline, so --baseline is S's path.
+	const stage2 = { ...options(...STAGE2), baseline: "/snap/S" };
+
+	// Every input the harness writes or passes that could reach the model: the
+	// snapshot, scope bytes, pi's settings, the pi-subagents config, whether
+	// pi-subagents is loaded and the extension list, the prompt, model, effort
+	// and retry policy, and the staged (redacted) tree it reads. If any differed,
+	// stage 2's baseline would not be the S that stage 1 measured.
+	it("gives S the same model-facing inputs as stage 1's candidate and stage 2's baseline", () => {
+		const stagedS = "5".repeat(64);
+		const asCandidate = cellModelInputs(stage1, "candidate", target, cell, "/pinned/pi-subagents/index.js", stagedS, now);
+		const asBaseline = cellModelInputs(stage2, "baseline", target, cell, "/pinned/pi-subagents/index.js", stagedS, now);
+		expect(asBaseline).toEqual(asCandidate);
+		expect(JSON.stringify(asBaseline.scope)).toBe(JSON.stringify(asCandidate.scope));
+		expect(asBaseline).toMatchObject({ snapshot: "/snap/S", stagedDigest: stagedS, loadsSubagents: true, scope: { maxAgents: 0, maxVerifiers: 0, budget: { minutes: 240 } } });
+		// The staged digest each stage measures is held to one pin: stage 2's S and D are stage 1's S.
+		const kinds = SHIPPED_PINS.gridKinds;
+		expect(kinds["v6-stage2"]!.baseline).toEqual({ ...kinds["v6-stage1"]!.candidate, sameAs: "v6-stage1.candidate" });
+		expect(kinds["v6-stage2"]!.candidate).toEqual({ ...kinds["v6-stage1"]!.candidate, sameAs: "v6-stage1.candidate" });
+		expect(kinds["v6-stage1"]!.candidate).toHaveProperty("stagedDigest");
+		expect(asBaseline.extensionPaths).toHaveLength(2);
+		// D, the stage-2 candidate, differs from S only in its caps.
+		const d = cellModelInputs(stage2, "candidate", target, cell, "/pinned/pi-subagents/index.js", stagedS, now);
+		expect({ ...d, scope: undefined }).toEqual({ ...asBaseline, scope: undefined });
+		expect(d.scope).toMatchObject({ maxAgents: 8, maxVerifiers: 2 });
+	});
+
+	// Unset, the baseline loads nothing but pired and the bash default, as in every earlier grid.
+	it("keeps the default baseline without pi-subagents", () => {
+		const plain = cellModelInputs(options(), "baseline", target, cell, "/pinned/pi-subagents/index.js", "6".repeat(64), now);
+		expect(plain.loadsSubagents).toBe(false);
+		expect(plain.extensionPaths).toHaveLength(1);
+		expect(options()).not.toHaveProperty("subagentsArms");
+		expect(options("--subagents-arms", "matched,candidate")).not.toHaveProperty("subagentsArms");
+		expect(newManifest(options(), "live")).not.toHaveProperty("subagentsArms");
+	});
+
+	it("pins the arms that load pi-subagents, restores them, and refuses a resume that changes them", () => {
+		expect(newManifest(stage2, "live").subagentsArms).toEqual(["baseline", "candidate", "matched"]);
+		expect(armOptionsFromManifest({ subagentsArms: ["baseline", "candidate", "matched"] }).subagentsArms).toEqual(["baseline", "candidate", "matched"]);
+		expect(() => armOptionsFromManifest({ subagentsArms: ["worker"] })).toThrow(/subagentsArms/);
+		expect(resumeMismatches({ subagentsArms: ["baseline", "candidate", "matched"] }, {})).toEqual(["subagentsArms"]);
+	});
+
+	// A baseline that loads pi-subagents with delegation off is shown no launcher,
+	// and one that launched a worker anyway is not the single agent it stands for.
+	it("checks a baseline that loads pi-subagents as it checks the matched arm", async () => {
+		const base = ["read", "bash", "edit", "write", "record", "recall"];
+		expect(toolSurfaceErrors("baseline", base, true, true)).toEqual([]);
+		expect(toolSurfaceErrors("baseline", [...base, "subagents_enable"], true, true)).toEqual([]);
+		expect(toolSurfaceErrors("baseline", [...base, "bg_wait"], true, true)).toEqual(["baseline arm exposes bg_wait, which pired hides"]);
+		expect(toolSurfaceErrors("baseline", base, false, true)).toEqual(["baseline arm does not expose subagents_enable"]);
+		const dir = await mkdtemp(join(tmpdir(), "pired-s-baseline-"));
+		await writeFile(join(dir, "child.jsonl"), "");
+		const account = await accountCellUsage([], { arm: "baseline", childSessionDir: dir, loadsSubagents: true, delegationOff: true }, { provider: "p", model: "m", thinking: "medium" }, { subagentCalls: 0 });
+		expect(account.errors.some((e) => e.startsWith("baseline arm launched 0 worker(s) (1 child session file(s)); its scope states maxAgents 0"))).toBe(true);
+	});
+});
+
+describe("extending a grid's passes on resume (plan 2.8)", () => {
+	const argv = (...extra: string[]): string[] => [
+		"--baseline", "/b", "--candidate", "/c", "--corpus", "/corpus", "--truth", "/truth", "--out", "/out",
+		"--provider", "openai-codex", "--model", "gpt-6-luna", ...extra,
+	];
+
+	it("takes --extend-passes with --resume, and nothing else", () => {
+		expect(parseOptions(["--resume", "/grid", "--extend-passes", "6"])).toEqual({ kind: "resume", dir: "/grid", extendPasses: 6 });
+		expect(parseOptions(["--resume", "/grid"])).toEqual({ kind: "resume", dir: "/grid" });
+		expect(() => parseOptions(["--resume", "/grid", "--extend-passes", "x"])).toThrow(/--extend-passes/);
+		expect(() => parseOptions(["--resume", "/grid", "--passes", "6"])).toThrow(/--resume takes exactly one argument/);
+		expect(() => parseOptions(["--resume", "/grid", "--extend-passes"])).toThrow(/--resume takes exactly one argument/);
+	});
+
+	// The pilot's 2 passes count toward the analysis, so a kind grid may start below three.
+	it("lets a kind grid start at the pilot's two passes, and keeps three as the floor otherwise", () => {
+		const parsed = parseOptions(argv("--passes", "2", "--grid-kind", "v6-stage1"));
+		expect(parsed !== "help" && parsed.kind === "run" && parsed.options.passes).toBe(2);
+		expect(() => parseOptions(argv("--passes", "2"))).toThrow(/--passes must be an integer of at least 3/);
+	});
+
+	// Passes 1..p keep their pairs; everything but the pass count is compared as on any resume.
+	it("accepts a resume whose schedule continues the grid's to the amended passes, and refuses any other change", () => {
+		const schedule = (passes: number) => planSchedule(["A", "B"], passes).map((p) => ({ key: p.key, order: p.order }));
+		const prior = { passes: 2, schedule: schedule(2), requested: { passes: 2, provider: "p" } };
+		const fresh = { passes: 6, schedule: schedule(6), requested: { passes: 6, provider: "p" } };
+		expect(resumeMismatches(prior, fresh, { passes: 6 })).toEqual([]);
+		// Without the amendment the same change is two grids.
+		expect(resumeMismatches(prior, fresh)).toEqual(["schedule", "passes", "requested.passes"]);
+		expect(resumeMismatches(prior, fresh, { passes: 5 })).toEqual(["passes", "requested.passes"]);
+		expect(resumeMismatches(prior, { ...fresh, schedule: planSchedule(["B", "A"], 6).map((p) => ({ key: p.key, order: p.order })) }, { passes: 6 })).toEqual(["schedule"]);
+		expect(resumeMismatches(prior, { ...fresh, requested: { passes: 6, provider: "q" } }, { passes: 6 })).toEqual(["requested.provider"]);
+		// A resume at the manifest's own count is an ordinary resume.
+		expect(resumeMismatches(prior, prior, { passes: 2 })).toEqual([]);
+	});
+
+	it("keeps the pairs that ran and runs the new passes from their first attempt", () => {
+		const rows = planSchedule(["A", "B"], 2).flatMap((p) => (["baseline", "candidate"] as const).map((arm) => ({ key: p.key, arm, attempt: 1, valid: true })));
+		const plan = planResume(planSchedule(["A", "B"], 3), rows);
+		expect(plan.keepKeys).toEqual(["A#1", "B#1", "A#2", "B#2"]);
+		expect(plan.rerunKeys).toEqual(["A#3", "B#3"]);
+		expect(plan.nextAttempt).toEqual({ "A#3": 1, "B#3": 1 });
+	});
+});
+
+describe("the verdict of a kind grid (plan 2.8)", () => {
+	const cells = [{ key: "A#1", target: "A", pass: 1 }];
+	const metric = (tokens: number) => ({ key: "A#1", target: "A", pass: 1, valid: true, truePositives: 1, precision: 0.5, totalClaims: 2, totalTokens: tokens });
+	const comparison = compareMatchedRuns([metric(1000)], [metric(700)], cells);
+
+	// A grid without a kind carries ADR-026's approval exactly as before.
+	it("keeps ADR-026's verdict fields as they were for a grid without a kind", () => {
+		const out = verdictFields(undefined, { approved: false, notApprovedReasons: ["exploratory: x"], comparison, meteredOnlyComparison: comparison });
+		expect(out.head).toEqual({ approvedForThisModel: false, approved: false, acceptanceRequiresBothModels: true, notApprovedReasons: ["exploratory: x"] });
+		expect(out.comparison).toBe(comparison);
+		expect(out.meteredOnlyComparison).toBe(comparison);
+		expect(verdictFields(undefined, { approved: true, notApprovedReasons: ["ignored"], comparison }).head.notApprovedReasons).toEqual([]);
+	});
+
+	// The v6 grids are decided by the pre-registration's rule, computed by a
+	// separate analysis; ADR-026's approval must not be read off them.
+	it("writes the v6 decision rule and no ADR-026 approval or gate for a grid of a kind", () => {
+		const out = verdictFields("v6-stage1", { approved: false, notApprovedReasons: [], comparison, meteredOnlyComparison: comparison });
+		expect(out.head).toEqual({ decision: { rule: "v6 pre-registration", computedBy: "eval/v6-decision.ts", ready: true, notReadyReasons: [] } });
+		expect(V6_DECISION).toEqual({ rule: "v6 pre-registration", computedBy: "eval/v6-decision.ts" });
+		for (const field of ["approvedForThisModel", "approved", "notApprovedReasons", "acceptanceRequiresBothModels"]) expect(out.head).not.toHaveProperty(field);
+		expect(out.comparison).not.toHaveProperty("gate");
+		expect(out.comparison).not.toHaveProperty("decision");
+		expect(out.meteredOnlyComparison).not.toHaveProperty("decision");
+		// The descriptive pass means stay.
+		expect(out.comparison).toMatchObject({ complete: true, pairedRuns: 1, baseline: { truePositives: { mean: 1 } } });
+		const stopped = verdictFields("v6-stage1", { approved: false, notApprovedReasons: ["interrupted before the grid finished"], comparison });
+		expect(stopped.head.decision).toMatchObject({ ready: false, notReadyReasons: ["interrupted before the grid finished"] });
+	});
+});
+
+describe("the OAuth horizon of long grids (plan 2.8 review)", () => {
+	const HOUR = 3_600_000;
+	const now = Date.parse("2026-09-27T10:00:00Z");
+
+	// Past the cap the check sized a shorter grid than the one launched, silently.
+	it("refuses a kind or breaker grid past the cap unless the operator states the horizon", () => {
+		expect(horizonRefusal({ worstCaseMs: 576 * HOUR, gridKind: "v6-stage1", breaker: false })).toMatch(/grid kind v6-stage1 grid's worst case is 576 h, past the 168 h/);
+		expect(horizonRefusal({ worstCaseMs: 2311.2 * HOUR, breaker: true })).toMatch(/breaker grid's worst case is 2311.2 h/);
+		expect(horizonRefusal({ worstCaseMs: 576 * HOUR, gridKind: "v6-stage1", breaker: true, requestedHours: 150 })).toBeUndefined();
+		// Under the cap, and a fail-fast grid without a kind, are as they were.
+		expect(horizonRefusal({ worstCaseMs: 144.9 * HOUR, breaker: true })).toBeUndefined();
+		expect(horizonRefusal({ worstCaseMs: 576 * HOUR, breaker: false })).toBeUndefined();
+	});
+
+	// A worker that refreshes inside its cell locks the cell's own path and can
+	// spend the rotating refresh token twice; no arm may start that it could outlive.
+	it("stops before an arm the token would not outlive, naming no secret", () => {
+		const need = 4 * HOUR + AUTH_MARGIN_MS;
+		const oauth = (hours: number) => credentialExpiry(JSON.stringify({ "openai-codex": { type: "oauth", access: "eyJ.secret", refresh: "rt_secret", expires: now + hours * HOUR } }), "openai-codex");
+		expect(credentialStopReason(oauth(10), "openai-codex", now, need)).toBeUndefined();
+		const why = credentialStopReason(oauth(4.2), "openai-codex", now, need);
+		expect(why).toMatch(/expires 2026-09-27T14:12:00.000Z \(4.2 h from now\), inside the next arm's run limit plus margin \(4.58 h\)/);
+		expect(why).not.toMatch(/secret|eyJ|rt_/);
+		expect(credentialStopReason({ kind: "missing" }, "openai-codex", now, need)).toMatch(/missing/);
+		expect(credentialStopReason({ kind: "missing" }, "zai", now, need)).toBeUndefined();
+		expect(credentialStopReason({ kind: "static" }, "zai", now, need)).toBeUndefined();
+	});
+
+	// Like an exhausted quota: nothing more launches, and --resume re-runs what is left.
+	it("stops the pair loop resumably when the check fires, leaving the untouched pair without a row and the half-run pair to be re-run", async () => {
+		const settled: RunOutcome[] = [];
+		const launched: string[] = [];
+		const state: GridStopState = { aborted: false, stopInvalid: false, stopReason: undefined, quotaExhausted: undefined };
+		let checks = 0;
+		const make = (pair: ScheduledPair, arm: Arm, attempt: number): RunOutcome => ({
+			metric: { key: pair.key, target: pair.target, pass: pair.pass, valid: true, truePositives: 1, precision: 0.5, totalClaims: 2, totalTokens: 1000 },
+			arm, cellId: `c-${pair.key}-${arm}`, seconds: 600, infraFailure: false, record: { key: pair.key, target: pair.target, pass: pair.pass, arm, attempt, valid: true, infraFailure: false },
+		});
+		const lines: string[] = [];
+		await runPairs({
+			pairs: planSchedule(["A", "B"], 1), firstAttempt: () => 1, concurrency: 1, official: true, state, breaker: DEFAULT_BREAKER,
+			launch: async (pair, arm, attempt) => { launched.push(`${pair.key} ${arm}`); return make(pair, arm, attempt); },
+			settle: async (o) => { settled.push(o); }, report: async () => undefined,
+			nowMs: () => now, sleep: async () => undefined, log: (l) => lines.push(l), warn: () => undefined, out: "/grid",
+			// Fires on the third check: A's two arms ran, B's first arm is never launched.
+			credentialCheck: async () => (++checks >= 3 ? "the openai-codex OAuth token expires soon" : undefined),
+		});
+		expect(launched).toEqual(["A#1 baseline", "A#1 candidate"]);
+		expect(settled.map((o) => o.metric.key)).toEqual(["A#1", "A#1"]);
+		expect(state).toMatchObject({ stopInvalid: true, stopReason: "the openai-codex OAuth token expires soon", credentialExpiring: "the openai-codex OAuth token expires soon" });
+		expect(lines.some((l) => l.startsWith("CREDENTIAL EXPIRING"))).toBe(true);
+		// A pair whose first arm ran records its partner as not launched for infrastructure.
+		const partner = credentialStopOutcome(planSchedule(["A"], 1)[0]!, "candidate", 1);
+		expect(partner.record).toMatchObject({ notLaunched: true, infraFailure: true, valid: false });
+		expect(planResume(planSchedule(["A"], 1), [{ key: "A#1", arm: "baseline", attempt: 1, valid: true }, partner.record]).rerunKeys).toEqual(["A#1"]);
+	});
+});
+
+describe("the pilot's one amendment and stage 2's adopted passes (plan 2.8 review)", () => {
+	const argv = (...extra: string[]): string[] => [
+		"--baseline", "/b", "--candidate", "/c", "--corpus", "/corpus", "--truth", "/truth", "--out", "/out",
+		"--provider", "openai-codex", "--model", "gpt-6-luna", ...extra,
+	];
+	const amendment = (over: Record<string, unknown> = {}) => ({
+		kind: "extend-passes", at: "2026-09-27T10:00:00Z", from: 2, to: 6, by: "op@host", reason: "pilot SD 1.1 gives 6", runsCompleted: 48,
+		runsSha256: "1".repeat(64), summarySha256: null, resume: 1, ...over,
+	});
+	// A stage-1 grid directory as the runner leaves it after its amendment.
+	const stage1Dir = async (files: { amendments?: unknown[]; resumes?: unknown[]; manifest?: Record<string, unknown> } = {}) => {
+		const dir = await mkdtemp(join(tmpdir(), "pired-stage1-"));
+		await writeFile(join(dir, "manifest.json"), JSON.stringify(files.manifest ?? { id: "g1", gridKind: "v6-stage1", official: true, passes: 2 }));
+		const lines = (rows: unknown[]) => rows.map((r) => JSON.stringify(r)).join("\n") + (rows.length ? "\n" : "");
+		await writeFile(join(dir, "amendments.jsonl"), lines(files.amendments ?? [amendment()]));
+		await writeFile(join(dir, "resumes.jsonl"), lines(files.resumes ?? [{ n: 1, rerun: [], extendedPasses: { from: 2, to: 6 }, amendment: amendment() }]));
+		return dir;
+	};
+
+	it("takes a reason with the amendment, and never a reason alone", () => {
+		expect(parseOptions(["--resume", "/grid", "--extend-passes", "6", "--extend-reason", "pilot SD 1.1 gives 6"])).toEqual({ kind: "resume", dir: "/grid", extendPasses: 6, extendReason: "pilot SD 1.1 gives 6" });
+		expect(parseOptions(["--resume", "/grid", "--extend-reason", "x", "--extend-passes", "2"])).toMatchObject({ extendPasses: 2, extendReason: "x" });
+		expect(() => parseOptions(["--resume", "/grid", "--extend-reason", "x"])).toThrow(/needs --extend-passes/);
+		expect(() => parseOptions(["--resume", "/grid", "--extend-passes", "6", "--extend-passes", "7"])).toThrow(/--resume takes exactly one argument/);
+	});
+
+	// Stage 2's count is read from stage 1's amendment, never typed.
+	it("takes stage 2's pass count only from a stage-1 grid, and only with a kind", () => {
+		const parsed = parseOptions(argv("--passes-from", "/grids/s1", "--grid-kind", "v6-stage2"));
+		expect(parsed !== "help" && parsed.kind === "run" && parsed.options.passesFromDir).toBe("/grids/s1");
+		expect(() => parseOptions(argv("--passes-from", "/grids/s1"))).toThrow(/--passes-from needs --grid-kind/);
+		expect(() => parseOptions(argv("--passes-from", "/grids/s1", "--passes", "6", "--grid-kind", "v6-stage2"))).toThrow(/do not also pass --passes/);
+	});
+
+	it("adopts the count stage 1's one amendment fixed, with that grid's identity", async () => {
+		const dir = await stage1Dir();
+		expect(await adoptPasses(dir)).toEqual({ dir, gridKind: "v6-stage1", gridId: "g1", official: true, passes: 6, amendment: amendment() });
+		const fixed = await stage1Dir({ amendments: [amendment({ kind: "fix-passes", to: 2 })], resumes: [{ n: 1, amendment: amendment({ kind: "fix-passes", to: 2 }) }] });
+		expect((await adoptPasses(fixed)).passes).toBe(2);
+		await expect(adoptPasses(await stage1Dir({ amendments: [], resumes: [] }))).rejects.toThrow(/not fixed \(0 amendments/);
+	});
+
+	// Either jsonl can be edited; an amendment in one and not the other refuses.
+	it("refuses a stage-1 grid whose amendments disagree with its resumes", async () => {
+		const edited = await stage1Dir({ amendments: [amendment({ to: 8 })] });
+		await expect(adoptPasses(edited)).rejects.toThrow(/amendment 1 differs/);
+		expect((await gridAmendments(edited)).mismatch).toMatch(/amendment 1 differs/);
+		const unrecorded = await stage1Dir({ resumes: [{ n: 1, rerun: [] }] });
+		expect((await gridAmendments(unrecorded)).mismatch).toMatch(/resumes.jsonl records 0/);
+		// A grid with neither file has no amendments and no mismatch.
+		expect(await gridAmendments(await mkdtemp(join(tmpdir(), "pired-plain-")))).toEqual({ amendments: [] });
+	});
+
+	it("pins the adopted count and its source in the manifest, and refuses a resume that changes it", () => {
+		const opts = parseOptions(argv("--passes-from", "/grids/s1", "--grid-kind", "v6-stage2"));
+		if (opts === "help" || opts.kind !== "run") throw new Error("expected a run");
+		const passesFrom = { dir: "/grids/s1", gridKind: "v6-stage1", gridId: "g1", official: true, passes: 6, amendment: { ...amendment(), kind: "extend-passes" as const } };
+		const manifest: Record<string, unknown> = { ...newManifest({ ...opts.options, passes: 6, passesFrom }, "live"), inputs: { corpus: "/corpus", truth: "/truth", corpusManifest: { path: "/m.json" }, baseline: { path: "/b" }, candidate: { path: "/c" } }, pins: { landlockWrapper: "/seal" } };
+		expect(manifest.passesFrom).toEqual(passesFrom);
+		expect(optionsFromManifest("/out", manifest).passesFrom).toEqual(passesFrom);
+		expect(resumeMismatches({ passesFrom }, { passesFrom: { ...passesFrom, passes: 8 } })).toEqual(["passesFrom"]);
+		expect(() => optionsFromManifest("/out", { ...manifest, passesFrom: { ...passesFrom, amendment: {} } })).toThrow(/row 1/);
+	});
+});
+
+describe("the pilot's sealed file (plan 2.8 review)", () => {
+	// The arms' numbers must not be read before the pass count is fixed: the file
+	// is owner-only in an owner-only directory, and the runner never prints it.
+	it("writes the sealed comparison owner-only", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "pired-sealed-"));
+		const path = join(dir, "sealed", "comparison.json");
+		await writeSealed(path, { comparison: { x: 1 } });
+		expect((await stat(path)).mode & 0o777).toBe(0o600);
+		expect((await stat(join(dir, "sealed"))).mode & 0o777).toBe(0o700);
+		expect(JSON.parse(await readFile(path, "utf8"))).toEqual({ comparison: { x: 1 } });
 	});
 });

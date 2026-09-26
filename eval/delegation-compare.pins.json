@@ -8,5 +8,133 @@
 		"version": "0.71.0",
 		"digest": "527c4abecea84fa11b01ff9cc7a2739852052ebd8ee27111bdd33fd9a219a456"
 	},
-	"candidateSnapshot": "eval/artifacts/candidate-subagents-2026-09-24-v4"
+	"candidateSnapshot": "eval/artifacts/candidate-subagents-2026-09-24-v4",
+	"corpora": {
+		"_comment": "Plan item 2.8. The official corpora: a grid is official only on one of these, with every pinned input matched. v5-official is the five research targets the runner hard-coded before 2.8, recognised exactly as before and the only corpus a grid without --grid-kind can be official on (kindless). v6-fresh is a placeholder, to be frozen with the v6 pre-registration: until then every grid on it is exploratory.",
+		"v5-official": {
+			"label": "the five research targets",
+			"kindless": true,
+			"targets": [
+				"CVE-2025-52903",
+				"CVE-2025-62721",
+				"CVE-2022-39281",
+				"CVE-2024-22417",
+				"CVE-2026-40262"
+			],
+			"passes": 3,
+			"manifestSha256": "b0d72812a4481d69a5a141429d2b5d0800c81d7c120da1ea4c071f1d40dba954",
+			"truthSha256": {
+				"filebrowser_filebrowser-fetgso": "83332797cd184082843c7fd65098a67c2fb37e407aba070b301dcc9830c2f7b0",
+				"Kovah_LinkAce-z2dd6z": "3032a2db2a39ae3394b7e6343cb6c26d6643d30442766dd40786cd546bd7fba1",
+				"fatfreecrm_fat_free_crm-1wl9c6": "7fb53e4e089f3951d9ab62550f246741f22da2c4d19c1b9fe9439935ca7fbb00",
+				"benbusby_whoogle-search-03n6cv": "3b231b8378334b838daa882fd575fd282a829d9e6b9dfe68ad6fc45297910f7c",
+				"enchant97_note-mark-i71l34": "ad9049a1e4d2d56943a0c5967b2cecf9c16911df1fed479c7b9ed5376e7e272e"
+			}
+		},
+		"v6-fresh": {
+			"_comment": "To be frozen: the twelve fresh targets (twins are not listed; they are pinned by the twins file's sha256 and their truth files), the pass count the pilot fixes, the manifest's and the twins file's sha256, and every truth file's, twins included.",
+			"label": "the twelve fresh targets",
+			"kindless": false,
+			"targets": null,
+			"passes": null,
+			"manifestSha256": null,
+			"truthSha256": null,
+			"twinsSha256": null
+		}
+	},
+	"gridKinds": {
+		"_comment": "Plan item 2.8. A grid launched with --grid-kind <name> is official only when every option matches its kind, its corpus is frozen and matched, and its snapshots are the kind's; otherwise it is exploratory with the reasons listed. Both kinds below are DRAFTS from docs/delegation-v6-preregistration.md: every value is to be frozen with the pre-registration, and the verifier cap (2) and the twin arms are still operator decisions there.",
+		"v6-stage1": {
+			"_comment": "To be frozen. Arm A (main at the freeze, single agent, its own defaults) against arm S (the candidate snapshot, maxAgents 0, maxVerifiers 0, budget line on). Patched twins in both arms. Retry and breaker required; run limit 4 h. Passes: the internal pilot runs pilotPasses (2); one amendment, --resume <dir> --extend-passes <n> --extend-reason <text>, fixes the count the pilot's rule gives, at most maxPasses (10), keeping the pilot's pairs, or keeps 2 when the rule gives 2 or fewer.",
+			"corpus": "v6-fresh",
+			"baseline": {
+				"commit": null
+			},
+			"candidate": {
+				"digest": null,
+				"stagedDigest": null
+			},
+			"baselineMaxAgents": null,
+			"candidateMaxAgents": 0,
+			"maxVerifiers": {
+				"candidate": 0
+			},
+			"budgetArms": [
+				"candidate",
+				"matched"
+			],
+			"subagentsArms": [
+				"candidate",
+				"matched"
+			],
+			"twinArms": [
+				"baseline",
+				"candidate"
+			],
+			"matched": null,
+			"retry": true,
+			"breaker": {
+				"consecutive": 3,
+				"rate": 0.5,
+				"window": 8,
+				"cooldownMs": 60000,
+				"maxAttempts": 4,
+				"attemptCeiling": 16
+			},
+			"timeoutMs": 14400000,
+			"thinking": "medium",
+			"extendablePasses": true,
+			"pilotPasses": 2,
+			"maxPasses": 10,
+			"passesFrom": null
+		},
+		"v6-stage2": {
+			"_comment": "To be frozen. Arm S as the baseline (the candidate snapshot, with exactly the scope it had as stage 1's candidate, and loading pi-subagents as it did there) against arm D (the same snapshot, maxAgents 8, maxVerifiers 2, budget line on), with the matched arm M (follow, k 3). No twins. Retry and breaker required; run limit 4 h. Its baseline (S) and candidate (D) are pinned as v6-stage1's candidate, input and staged digest alike, so S is the same bytes in both stages. Passes: not extendable; launched with --passes-from <stage-1 grid dir>, it runs the count stage 1's amendment fixed.",
+			"corpus": "v6-fresh",
+			"baseline": {
+				"sameAs": "v6-stage1.candidate"
+			},
+			"candidate": {
+				"sameAs": "v6-stage1.candidate"
+			},
+			"baselineMaxAgents": 0,
+			"candidateMaxAgents": 8,
+			"maxVerifiers": {
+				"baseline": 0,
+				"candidate": 2
+			},
+			"budgetArms": [
+				"baseline",
+				"candidate",
+				"matched"
+			],
+			"subagentsArms": [
+				"baseline",
+				"candidate",
+				"matched"
+			],
+			"twinArms": [],
+			"matched": {
+				"mode": "follow",
+				"k": 3,
+				"kMax": 6,
+				"floorShare": 0.05
+			},
+			"retry": true,
+			"breaker": {
+				"consecutive": 3,
+				"rate": 0.5,
+				"window": 8,
+				"cooldownMs": 60000,
+				"maxAttempts": 4,
+				"attemptCeiling": 16
+			},
+			"timeoutMs": 14400000,
+			"thinking": "medium",
+			"extendablePasses": false,
+			"pilotPasses": null,
+			"maxPasses": null,
+			"passesFrom": "v6-stage1"
+		}
+	}
 }

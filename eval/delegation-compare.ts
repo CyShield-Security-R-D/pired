@@ -12,8 +12,8 @@
 import { execFile, execFileSync, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream, createWriteStream, readFileSync } from "node:fs";
-import { access, appendFile, cp, link, lstat, mkdir, open, readdir, readFile, realpath, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
+import { access, appendFile, chmod, cp, link, lstat, mkdir, open, readdir, readFile, realpath, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { homedir, hostname, userInfo } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -31,12 +31,17 @@ import {
 } from "./delegation-compare-entry.ts";
 import {
 	accountUsage, APPROVAL_DECISION, compareMatchedRuns, contentText, createBreaker, DEFAULT_BREAKER, findLeaks, isOfficialGrid, leakTermsFor,
-	meteredCallCount, nextPairAction, observationsFromChildSession, observationsFromPiEvents, OFFICIAL_PASSES, OFFICIAL_TARGET_IDS,
-	parseBreakerPolicy, planSchedule, reconcileChildSession, reconcileSubagentCalls, SUBAGENT_TOOL, summarizeRetries,
+	meteredCallCount, nextPairAction, observationsFromChildSession, observationsFromPiEvents,
+	armsOfPair, parseBreakerPolicy, planSchedule, reconcileChildSession, reconcileSubagentCalls, SUBAGENT_TOOL, summarizeRetries,
 	type Arm, type BreakerPolicy, type PairArm, type BreakerVerdict, type ChildSessionExtraction, type ChildVerdict, type ExpectedCell, type PiUsageExtraction,
-	type RetriedAttempt, type RetrySummary, type RunMetric, type ScheduledPair, type SubagentChild, type SubagentReconciliation,
+	type MatchedComparison, type OfficialShape, type ScheduledTwins, type RetriedAttempt, type RetrySummary, type RunMetric, type ScheduledPair, type SubagentChild, type SubagentReconciliation,
 	type UsageAccounting, type UsageObservation,
 } from "./delegation-compare-lib.ts";
+// The grid's shape and identity (plan item 2.8): the pinned official corpora.
+import {
+	ARM_ORDER, corpusReasons, DEFAULT_BUDGET_ARMS, DEFAULT_SUBAGENTS_ARMS, delegationOff, loadsSubagentsFor, gridKindReasons, kindlessArmReasons, kindlessCorpus, kindSnapshotReasons, parseArmList, parseCorpora,
+	amendmentsMismatch, blindSummary, currentPasses, pilotPairedSd, extensionRefusal, kindPassesReasons, parseAmendments, parseGridKinds, parseMaxVerifiers, scheduleExtends, type PassesAmendment, sameArms, scopeFor, scopeSettingsFor, shapeOf, summarizeTwins, twinTargets, type GridKind, type PinnedCorpus, type ScopeSettings,
+} from "./delegation-compare-grid.ts";
 // The staging, target-copy and tree-hash helpers moved to their own module so
 // the same digest rule draws the panel here, in the preflight and in tests.
 import { copyTargetTree, shouldIncludeSnapshotPath, stageSnapshot, treeManifest } from "./delegation-compare-stage.ts";
@@ -92,6 +97,8 @@ const PROBE_AGENT = "pired-scout";
 const PINS_PATH = join(ROOT, "eval/delegation-compare.pins.json");
 /** The lib owns the acceptance rule and its decision strings; the runner only consumes this verdict. */
 const APPROVAL = APPROVAL_DECISION;
+/** How summary.json explains ADR-026's approval, for a grid without a kind; a kind grid is not approved here. */
+const APPROVAL_INTERPRETATION = "one grid is one model; approvedForThisModel requires the official five-target, three-pass grid with matched pins and every run valid; candidate pass-mean pooled TP and grid-pooled precision each at least 85% of baseline (ADR-026); no target whose candidate TP range lies wholly below its baseline range; and lower mean total parent+worker+compaction tokens. Corpus acceptance additionally requires the same for the second priority model.";
 /** The opaque per-cell env marker every bash descendant inherits, so strays are reaped by value, never by name. */
 const CELL_MARKER = "BENCH_CELL";
 /**
@@ -136,25 +143,19 @@ const HARNESS_FILES = [
 	"eval/delegation-compare.ts", "eval/delegation-compare-lib.ts", "eval/delegation-compare-entry.ts",
 	"eval/delegation-compare-stage.ts", "eval/delegation-compare-proc.ts", "eval/delegation-audit.ts", "eval/corpus/fs-seal.c",
 	"eval/delegation-compare-bash-timeout.ts", "eval/delegation-compare-stop.ts", "eval/delegation-compare-matched.ts",
-	"eval/delegation-compare.pins.json",
+	"eval/delegation-compare-grid.ts", "eval/delegation-compare.pins.json",
 ] as const;
 
-/**
- * The frozen research inputs an official decision is pinned to. `--help` and the
- * handoff both promise that a different manifest or truth set is exploratory, so
- * these are byte-compared, not merely recorded. The values were measured from
+/*
+ * The frozen research inputs an official decision is pinned to (the corpus
+ * manifest's sha256 and every truth key's) live in the pins file's `corpora`
+ * since plan item 2.8. `--help` and the handoff both promise that a different
+ * manifest or truth set is exploratory, so they are byte-compared, not merely
+ * recorded. The v5 values were measured from
  * eval/artifacts/claude-handoff-2026-09-23/research/corpus (byte-identical to
- * /tmp/pired-research/corpus) on 2026-09-23; a manifest or key edited afterwards
- * no longer matches and cannot approve.
+ * /tmp/pired-research/corpus) on 2026-09-23 and moved unchanged; a manifest or
+ * key edited afterwards no longer matches and cannot approve.
  */
-const RESEARCH_MANIFEST_SHA256 = "b0d72812a4481d69a5a141429d2b5d0800c81d7c120da1ea4c071f1d40dba954";
-const TRUTH_SHA256: Readonly<Record<string, string>> = {
-	"filebrowser_filebrowser-fetgso": "83332797cd184082843c7fd65098a67c2fb37e407aba070b301dcc9830c2f7b0",
-	"Kovah_LinkAce-z2dd6z": "3032a2db2a39ae3394b7e6343cb6c26d6643d30442766dd40786cd546bd7fba1",
-	"fatfreecrm_fat_free_crm-1wl9c6": "7fb53e4e089f3951d9ab62550f246741f22da2c4d19c1b9fe9439935ca7fbb00",
-	"benbusby_whoogle-search-03n6cv": "3b231b8378334b838daa882fd575fd282a829d9e6b9dfe68ad6fc45297910f7c",
-	"enchant97_note-mark-i71l34": "ad9049a1e4d2d56943a0c5967b2cecf9c16911df1fed479c7b9ed5376e7e272e",
-};
 /**
  * The intended baseline is git 496b190 and the candidate is a frozen snapshot of
  * the pi-subagents implementation (ADR-027). The baseline is verified against
@@ -177,6 +178,10 @@ export interface ComparePins {
 	 */
 	candidateMaxAgents: number | null;
 	piSubagents: { dir: string; version: string; digest: string };
+	/** The official corpora (plan item 2.8), by name; none when the file has no `corpora`, so every grid is exploratory. */
+	corpora: Record<string, PinnedCorpus>;
+	/** The named grid kinds (plan item 2.8) a grid can be launched as with --grid-kind. */
+	gridKinds: Record<string, GridKind>;
 }
 
 export function parseComparePins(text: string): ComparePins {
@@ -185,6 +190,7 @@ export function parseComparePins(text: string): ComparePins {
 	if (!hex(raw.baselineCommit)) throw new Error("pins: baselineCommit must be a full git commit id");
 	if (raw.candidateDigest !== null && !hex(raw.candidateDigest)) throw new Error("pins: candidateDigest must be a sha256 hex digest or null");
 	if (raw.candidateMaxAgents !== undefined && raw.candidateMaxAgents !== null && !isWorkerCap(raw.candidateMaxAgents)) throw new Error("pins: candidateMaxAgents must be a non-negative integer or null");
+	const corpora = parseCorpora(raw.corpora);
 	const sub = (raw.piSubagents ?? {}) as Record<string, unknown>;
 	if (typeof sub.dir !== "string" || !sub.dir || typeof sub.version !== "string" || !sub.version || !hex(sub.digest)) {
 		throw new Error("pins: piSubagents needs dir, version and a sha256 digest");
@@ -195,6 +201,8 @@ export function parseComparePins(text: string): ComparePins {
 		candidateFrozenAt: typeof raw.candidateFrozenAt === "string" ? raw.candidateFrozenAt : null,
 		candidateMaxAgents: isWorkerCap(raw.candidateMaxAgents) ? raw.candidateMaxAgents : null,
 		piSubagents: { dir: sub.dir, version: sub.version, digest: sub.digest as string },
+		corpora,
+		gridKinds: parseGridKinds(raw.gridKinds, corpora),
 	};
 }
 
@@ -216,7 +224,7 @@ export const REVIEW_PROMPT =
 	"as findings with cwe, severity and the exact file:line of the vulnerable sink. Notes are not a " +
 	"substitute for recording: anything not in the ledger does not count.";
 
-type Target = {
+export type Target = {
 	id: string;
 	name: string;
 	package: string;
@@ -225,6 +233,11 @@ type Target = {
 	scope?: string[];
 	aliases?: string[];
 	entries?: number;
+	/**
+	 * A patched twin's target (plan item 2.8): the id of the target whose fix
+	 * commit this tree is. Set only on entries read from the --twins file.
+	 */
+	twinOf?: string;
 	[key: string]: unknown;
 };
 
@@ -253,6 +266,48 @@ type Options = {
 	 */
 	candidateMaxAgents?: number;
 	/**
+	 * --baseline-max-agents (plan item 2.8): the worker cap the baseline's scope
+	 * states. Absent, it states none, as in every earlier grid.
+	 */
+	baselineMaxAgents?: number;
+	/**
+	 * --max-verifiers (plan item 2.8): the verifier cap the baseline's or the
+	 * candidate's scope states. Absent for an arm, its scope states none.
+	 */
+	maxVerifiers?: Partial<Record<PairArm, number>>;
+	/**
+	 * --budget-arms (plan item 2.8): which arms' scopes carry the budget line.
+	 * Absent means DEFAULT_BUDGET_ARMS (candidate, matched), what every earlier
+	 * grid wrote; it is set only when it differs, so the manifest keeps its bytes.
+	 */
+	budgetArms?: Arm[];
+	/**
+	 * --subagents-arms (plan item 2.8): which arms' cells load the pinned
+	 * pi-subagents. Absent means DEFAULT_SUBAGENTS_ARMS (candidate, matched), as
+	 * in every earlier grid; set only when it differs, so the manifest keeps its bytes.
+	 */
+	subagentsArms?: Arm[];
+	/**
+	 * --twins (plan item 2.8): the patched twins file, in the fresh corpus's
+	 * shape (eval/corpus/fresh/twins.json). Given only with --twin-arms.
+	 */
+	twinsPath?: string;
+	/**
+	 * --twin-arms (plan item 2.8): the arms that run the patched twins. Absent,
+	 * no twin runs and every output is what it was before the option.
+	 */
+	twinArms?: PairArm[];
+	/**
+	 * --grid-kind (plan item 2.8): the pinned grid kind this grid claims to be.
+	 * Official only when every option matches it; absent, the grid is judged
+	 * against the kindless (v5) corpus exactly as before.
+	 */
+	gridKind?: string;
+	/** --passes-from (plan item 2.8 review): the grid whose fixed pass count this one adopts, before adoption. */
+	passesFromDir?: string;
+	/** The adopted pass count and where it came from, pinned in the manifest as `passesFrom`. */
+	passesFrom?: PassesFromRecord;
+	/**
 	 * --breaker: re-queue infrastructure-failed pairs and stop on the circuit
 	 * breaker instead of on the first invalid run. Absent: fail-fast, exactly as
 	 * every grid before the option ran.
@@ -274,7 +329,7 @@ type Options = {
 type JsonRecord = Record<string, unknown>;
 type Provider = { provider: string; model: string; baseHost: string; allowedHosts: string[] };
 type EntryConfig = CompareEntryConfig & { probe?: ProbeConfig };
-type Parsed = "help" | { kind: "run"; options: Options } | { kind: "resume"; dir: string };
+type Parsed = "help" | { kind: "run"; options: Options } | { kind: "resume"; dir: string; extendPasses?: number; extendReason?: string };
 
 /**
  * The pre-registered re-run rule, printed in --help and written verbatim into
@@ -347,8 +402,10 @@ Options:
   --provider <id>       Provider ID (required)
   --model <id>          Model ID (required)
   --thinking <level>    Fixed effort for both arms (default: medium)
-  --passes <n>          Complete passes per target, minimum 3; 1 allowed with --only (default: 3)
-  --only <ids>          Comma-separated exact target IDs (default: all five)
+  --passes <n>          Complete passes per target, minimum 3; 1 allowed with --only
+                        or --grid-kind (default: 3)
+  --only <ids>          Comma-separated exact target IDs (default: every target
+                        in the manifest; any number, at least one)
   --concurrency <n>     Matched pairs in flight, 1-8; each pair runs its two
                         arms one after the other (default: 2)
   --timeout <ms>        Per-arm deadline (default: ${DEFAULT_TIMEOUT_MS})
@@ -363,6 +420,36 @@ Options:
   --candidate-max-agents <n>
                         Worker cap the candidate's scope states; the
                         baseline's scope names none (default: ${DEFAULT_CANDIDATE_MAX_AGENTS})
+  --baseline-max-agents <n>
+                        Worker cap the baseline's scope states (default: none,
+                        the baseline runs at its snapshot's default)
+  --max-verifiers <arm>=<n>[,<arm>=<n>]
+                        Verifier cap (maxVerifiers) the baseline's or the
+                        candidate's scope states (default: none)
+  --budget-arms <arm,...>|none
+                        Arms whose scope carries the budget line (default:
+                        ${DEFAULT_BUDGET_ARMS.join(",")}; the baseline's scope is then unchanged).
+  --subagents-arms <arm,...>|none
+                        Arms whose cells load the pinned pi-subagents (default:
+                        ${DEFAULT_SUBAGENTS_ARMS.join(",")}). Stage 2 names the baseline, so S
+                        loads it in both roles.
+                        These four are pinned in the manifest, restored on
+                        --resume, and without --grid-kind make a grid exploratory.
+                        One snapshot may run in both arms only when their
+                        scopes differ
+  --twins <file>        Patched twins, in the fresh corpus's twins.json shape
+                        (name, twin_of = the target's name, fixed_regions, ...);
+                        each twin runs under its name as its id, and its answer
+                        key must be an empty list. Needs --twin-arms
+  --twin-arms <arm,...> Arms that run the twins (baseline, candidate). Twin runs
+                        never enter the gate or the matched arm; they count
+                        toward progress and the breaker, and summary.json lists
+                        them per arm with their cells. Pinned in the manifest
+  --grid-kind <name>    Claim a grid kind of the pins file (gridKinds): its
+                        corpus, snapshots, arm options, twin arms, matched
+                        policy, retry, breaker and timeout. Official only when
+                        every one matches; each difference is listed as an
+                        exploratory reason. Pinned in the manifest
   --breaker <spec>      Stop on a circuit breaker instead of the first invalid
                         run, and re-queue pairs that fail for infrastructure.
                         <spec> is "default", or comma-separated k=v pairs
@@ -373,6 +460,22 @@ Options:
                         OAuth check sizes (see --auth-horizon-hours)
   --out <dir>           New or empty directory; must not contain an advisory ID
   --resume <out-dir>    Continue a stopped grid in place; takes no other option
+                        but --extend-passes and --extend-reason
+  --extend-passes <n>   With --resume only: amend the grid's pass count to n
+                        (n equal to it fixes the count). Passes already
+                        scheduled keep their pairs and cells; new ones follow
+                        in the same pass-major order and arm-order rule.
+                        Recorded, with who, why and a hash of runs.jsonl and
+                        summary.json, in <out>/amendments.jsonl and
+                        resumes.jsonl, which must agree. An official grid is
+                        amended once, from its kind's pilotPasses to at most
+                        its maxPasses, and only when the kind declares
+                        extendablePasses
+  --extend-reason <text>
+                        With --extend-passes: why; required on an official grid
+  --passes-from <dir>   With --grid-kind: run at the pass count the grid in
+                        <dir> fixed by its one amendment (stage 2 adopts stage
+                        1's); takes the place of --passes
   --retry               Retry transient provider errors inside a run: pi's agent
                         retry, ${DEFAULT_RETRY_POLICY.maxRetries} per streak; a run may fail at most
                         max(${DEFAULT_RETRY_POLICY.maxFailedAttempts}, ${DEFAULT_RETRY_POLICY.maxFailedAttemptRate * 100}% of its metered requests) attempts,
@@ -443,9 +546,12 @@ scope's close; the escape-vector check refuses if a sealed process can reach the
 docker socket, the user D-Bus, or systemd --user, or sees a D-Bus address; the
 network check refuses if DNS or TLS to the provider fails.
 
-Official vs exploratory: only the five research targets x ${OFFICIAL_PASSES} passes is an
-acceptance decision, and only when the manifest, every truth key, the baseline,
-the candidate snapshot, its worker cap and the pi-subagents tree match their pins:
+Official vs exploratory: only a pinned corpus's targets x its passes is an
+acceptance decision (the pins file's corpora; without --grid-kind, the v5 five
+research targets x 3 passes; with it, the kind's corpus, snapshots and arm
+options), and only when the manifest, every truth key, the baseline, the
+candidate snapshot, its worker cap and the pi-subagents tree match their pins.
+Without --grid-kind:
   baseline:  git ${baseline}
   candidate: ${candidate}
   cap:       ${pins ? (pins.candidateMaxAgents === null ? "NOT PINNED (every grid is exploratory)" : `--candidate-max-agents ${pins.candidateMaxAgents}`) : "(pins unreadable)"}
@@ -505,15 +611,30 @@ Exit status: 0 for a passing --dry-run or an official approval decision;
 export function parseOptions(argv: string[]): Parsed {
 	if (argv.includes("--help") || argv.includes("-h")) return "help";
 	if (argv.includes("--resume")) {
-		if (argv.length !== 2 || argv[0] !== "--resume" || !argv[1] || argv[1].startsWith("--")) {
-			throw new Error("--resume takes exactly one argument, the output directory, and no other option.");
+		// --extend-passes and --extend-reason (plan item 2.8) are the only options a
+		// resume takes: they amend the grid's pass count, and everything else is read
+		// from the grid's manifest.
+		const usage = "--resume takes exactly one argument, the output directory, and no other option but --extend-passes <n> [--extend-reason <text>].";
+		if (argv[0] !== "--resume" || !argv[1] || argv[1].startsWith("--") || argv.length % 2 !== 0) throw new Error(usage);
+		const extra = new Map<string, string>();
+		for (let i = 2; i < argv.length; i += 2) {
+			const flag = argv[i]!;
+			const value = argv[i + 1];
+			if ((flag !== "--extend-passes" && flag !== "--extend-reason") || value === undefined || extra.has(flag)) throw new Error(usage);
+			extra.set(flag, value);
 		}
-		return { kind: "resume", dir: resolve(argv[1]!) };
+		if (!extra.size) return { kind: "resume", dir: resolve(argv[1]!) };
+		if (!extra.has("--extend-passes")) throw new Error("--extend-reason needs --extend-passes <n>");
+		const passes = Number(extra.get("--extend-passes"));
+		if (!Number.isSafeInteger(passes) || passes < 1) throw new Error("--extend-passes must be an integer pass count, at least the grid's");
+		const reason = extra.get("--extend-reason");
+		return { kind: "resume", dir: resolve(argv[1]!), extendPasses: passes, ...(reason === undefined ? {} : { extendReason: reason }) };
 	}
 	const valueFlags = new Set([
 		"--baseline", "--candidate", "--corpus", "--truth", "--out", "--provider", "--model",
 		"--thinking", "--passes", "--only", "--concurrency", "--timeout", "--manifest", "--fs-seal", "--auth-horizon-hours",
 		"--candidate-max-agents", "--breaker", "--matched", "--matched-snapshot",
+		"--baseline-max-agents", "--max-verifiers", "--budget-arms", "--subagents-arms", "--twins", "--twin-arms", "--grid-kind", "--passes-from",
 	]);
 	const values = new Map<string, string>();
 	let dryRun = false;
@@ -538,8 +659,9 @@ export function parseOptions(argv: string[]): Parsed {
 	const selected = (values.get("--only") ?? "").split(",").map((x) => x.trim()).filter(Boolean);
 	// Fewer than three passes only for an --only pilot, which is exploratory by
 	// construction: it proves the live path end to end without counting toward
-	// the decision.
-	if (!Number.isSafeInteger(passes) || passes < (selected.length ? 1 : 3)) throw new Error("--passes must be an integer of at least 3 (at least 1 with --only)");
+	// the decision; or for a grid of a kind (plan item 2.8), whose kind judges
+	// its pass count: the v6 pilot runs 2 passes that count toward the analysis.
+	if (!Number.isSafeInteger(passes) || passes < (selected.length || values.has("--grid-kind") ? 1 : 3)) throw new Error("--passes must be an integer of at least 3 (at least 1 with --only or --grid-kind)");
 	if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 8) throw new Error("--concurrency must be an integer from 1 to 8");
 	if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error("--timeout must be a positive finite millisecond count");
 	if (new Set(selected).size !== selected.length) throw new Error("--only lists a target more than once");
@@ -548,6 +670,31 @@ export function parseOptions(argv: string[]): Parsed {
 	if (authHorizonHours !== undefined && (!Number.isFinite(authHorizonHours) || authHorizonHours <= 0)) throw new Error("--auth-horizon-hours must be a positive number of hours");
 	const candidateMaxAgents = Number(values.get("--candidate-max-agents") ?? String(DEFAULT_CANDIDATE_MAX_AGENTS));
 	if (!isWorkerCap(candidateMaxAgents)) throw new Error("--candidate-max-agents must be a non-negative integer");
+	const baselineCapText = values.get("--baseline-max-agents");
+	const baselineMaxAgents = baselineCapText === undefined ? undefined : Number(baselineCapText);
+	if (baselineMaxAgents !== undefined && !isWorkerCap(baselineMaxAgents)) throw new Error("--baseline-max-agents must be a non-negative integer");
+	const verifiersText = values.get("--max-verifiers");
+	const maxVerifiers = verifiersText === undefined ? undefined : parseMaxVerifiers(verifiersText);
+	const budgetText = values.get("--budget-arms");
+	const budgetList = budgetText === undefined ? undefined : parseArmList(budgetText, ARM_ORDER, "--budget-arms");
+	// The default set is stored as absent, so a grid that names it writes the manifest every earlier grid wrote.
+	const budgetArms = budgetList === undefined || sameArms(budgetList, DEFAULT_BUDGET_ARMS) ? undefined : budgetList;
+	const subagentsText = values.get("--subagents-arms");
+	const subagentsList = subagentsText === undefined ? undefined : parseArmList(subagentsText, ARM_ORDER, "--subagents-arms");
+	const subagentsArms = subagentsList === undefined || sameArms(subagentsList, DEFAULT_SUBAGENTS_ARMS) ? undefined : subagentsList;
+	const twinsText = values.get("--twins");
+	const twinArmsText = values.get("--twin-arms");
+	const twinList = twinArmsText === undefined ? [] : parseArmList(twinArmsText, ["baseline", "candidate"], "--twin-arms") as PairArm[];
+	// Either alone would be a grid that loads twins it never runs, or runs twins it never loaded.
+	if (twinList.length && twinsText === undefined) throw new Error("--twin-arms needs --twins <file>, the patched twins to run");
+	if (twinsText !== undefined && !twinList.length) throw new Error("--twins needs --twin-arms <arm,...>: no arm would run the twins");
+	const gridKind = values.get("--grid-kind");
+	if (gridKind !== undefined && !/^[A-Za-z0-9._-]+$/.test(gridKind)) throw new Error("--grid-kind must be a pinned kind's name");
+	// Stage 2 runs at the count stage 1's pilot fixed (plan item 2.8 review): the
+	// count is read from that grid before the preflight, never typed.
+	const passesFromDir = values.get("--passes-from");
+	if (passesFromDir !== undefined && gridKind === undefined) throw new Error("--passes-from needs --grid-kind: it adopts a pass count for a grid of a kind");
+	if (passesFromDir !== undefined && values.has("--passes")) throw new Error("--passes-from sets the pass count; do not also pass --passes");
 	const breakerText = values.get("--breaker");
 	const breaker = breakerText === undefined ? undefined : parseBreakerSpec(breakerText);
 	const matchedText = values.get("--matched");
@@ -573,6 +720,13 @@ export function parseOptions(argv: string[]): Parsed {
 			manifestPath: resolve(values.get("--manifest") ?? DEFAULT_MANIFEST), dryRun,
 			...(authHorizonHours === undefined ? {} : { authHorizonHours }),
 			candidateMaxAgents,
+			...(baselineMaxAgents === undefined ? {} : { baselineMaxAgents }),
+			...(maxVerifiers === undefined ? {} : { maxVerifiers }),
+			...(budgetArms === undefined ? {} : { budgetArms }),
+			...(subagentsArms === undefined ? {} : { subagentsArms }),
+			...(twinsText === undefined ? {} : { twinsPath: resolve(twinsText), twinArms: twinList }),
+			...(gridKind === undefined ? {} : { gridKind }),
+			...(passesFromDir === undefined ? {} : { passesFromDir: resolve(passesFromDir) }),
 			...(breaker === undefined ? {} : { breaker }),
 			...(retry ? { retryPolicy: { ...DEFAULT_RETRY_POLICY } } : {}),
 			...(matched === undefined ? {} : { matched }),
@@ -637,7 +791,7 @@ export function optionsFromManifest(dir: string, manifest: JsonRecord): Options 
 	const thinking = need(manifest.thinking ?? requested.thinking, "thinking");
 	if (!["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(thinking)) throw new Error(`--resume manifest has an invalid thinking level: ${thinking}`);
 	const passes = Number(manifest.passes);
-	const pilot = Array.isArray(requested.only) && requested.only.length > 0;
+	const pilot = (Array.isArray(requested.only) && requested.only.length > 0) || typeof manifest.gridKind === "string";
 	if (!Number.isSafeInteger(passes) || passes < (pilot ? 1 : 3)) throw new Error("--resume manifest has an invalid pass count");
 	const concurrency = Number(manifest.concurrency);
 	if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 8) throw new Error("--resume manifest has an invalid concurrency");
@@ -650,6 +804,11 @@ export function optionsFromManifest(dir: string, manifest: JsonRecord): Options 
 	// is refused rather than read as "absent", which would silently change the arm.
 	if (manifest.candidateMaxAgents !== undefined && !isWorkerCap(manifest.candidateMaxAgents)) throw new Error("--resume manifest has an invalid candidateMaxAgents");
 	const candidateMaxAgents = manifest.candidateMaxAgents as number | undefined;
+	const arms = armOptionsFromManifest(manifest);
+	const twins = twinOptionsFromManifest(manifest);
+	if (manifest.gridKind !== undefined && (typeof manifest.gridKind !== "string" || !manifest.gridKind)) throw new Error("--resume manifest has an invalid gridKind");
+	const gridKind = manifest.gridKind as string | undefined;
+	const passesFrom = manifest.passesFrom === undefined ? undefined : passesFromRecordOf(manifest.passesFrom);
 	// Absent: the grid ran fail-fast, and so does its resume. A present policy is
 	// read strictly, for the same reason as the cap above.
 	let breaker: BreakerPolicy | undefined;
@@ -671,10 +830,125 @@ export function optionsFromManifest(dir: string, manifest: JsonRecord): Options 
 		manifestPath: need(corpusManifest.path, "the corpus manifest path"), dryRun: false,
 		...(authHorizonHours === undefined ? {} : { authHorizonHours }),
 		...(candidateMaxAgents === undefined ? {} : { candidateMaxAgents }),
+		...arms,
+		...twins,
+		...(gridKind === undefined ? {} : { gridKind }),
+		...(passesFrom === undefined ? {} : { passesFrom }),
 		...(breaker === undefined ? {} : { breaker }),
 		...(retryPolicy === undefined ? {} : { retryPolicy }),
 		...(matched === undefined ? {} : { matched }),
 	};
+}
+
+/** Where a grid's pass count came from when it adopted another grid's (plan item 2.8 review). */
+export interface PassesFromRecord { dir: string; gridKind: string | null; gridId: string | null; official: boolean; passes: number; amendment: PassesAmendment }
+
+function passesFromRecordOf(value: unknown): PassesFromRecord {
+	if (!isJsonRecord(value) || typeof value.dir !== "string" || !(value.gridKind === null || typeof value.gridKind === "string") || !(value.gridId === null || typeof value.gridId === "string")
+		|| typeof value.official !== "boolean" || !Number.isSafeInteger(value.passes)) throw new Error("--resume manifest has an invalid passesFrom");
+	const [amendment] = parseAmendments([value.amendment]);
+	return { dir: value.dir, gridKind: value.gridKind as string | null, gridId: value.gridId as string | null, official: value.official, passes: value.passes as number, amendment: amendment! };
+}
+
+/** A JSONL file's rows; a line that is not a JSON object is kept as its text, so a strict reader refuses it. */
+async function jsonlRows(path: string): Promise<unknown[]> {
+	if (!await exists(path)) return [];
+	return (await readFile(path, "utf8")).split("\n").filter((l) => l.trim()).map((l) => parseJsonObject(l) ?? l);
+}
+
+/**
+ * A grid's pass-count amendments, cross-checked against resumes.jsonl (plan
+ * item 2.8 review): either file can be edited, and one edited without the
+ * other is a mismatch that refuses a resume and keeps a summary from ready.
+ */
+export async function gridAmendments(dir: string): Promise<{ amendments: PassesAmendment[]; mismatch?: string }> {
+	const amendments = parseAmendments(await jsonlRows(join(dir, "amendments.jsonl")));
+	const mismatch = amendmentsMismatch(amendments, await jsonlRows(join(dir, "resumes.jsonl")));
+	return { amendments, ...(mismatch ? { mismatch } : {}) };
+}
+
+/**
+ * The pass count a stage-2 grid adopts from its stage-1 grid: the one its
+ * pilot's single amendment fixed, with that grid's identity, so the preflight
+ * can check it is the kind's own stage 1 and official.
+ */
+export async function adoptPasses(dir: string): Promise<PassesFromRecord> {
+	const manifest = parseJsonObject(await readFile(join(dir, "manifest.json"), "utf8").catch(() => ""));
+	if (!manifest) throw new Error(`--passes-from ${dir}: no readable manifest.json`);
+	const { amendments, mismatch } = await gridAmendments(dir);
+	if (mismatch) throw new Error(`--passes-from ${dir}: ${mismatch}`);
+	if (amendments.length !== 1) throw new Error(`--passes-from ${dir}: that grid's pass count is not fixed (${amendments.length} amendments; its pilot's one amendment fixes it)`);
+	const amendment = amendments[0]!;
+	return {
+		dir, gridKind: typeof manifest.gridKind === "string" ? manifest.gridKind : null, gridId: typeof manifest.id === "string" ? manifest.id : null,
+		official: manifest.official === true, passes: amendment.to, amendment,
+	};
+}
+
+/**
+ * The amendment a resume makes, with what the grid held at that moment: how
+ * many runs, a hash of runs.jsonl and of summary.json (null when there is
+ * none), and who made it, so an amendment made after results were read can be
+ * told from one made before.
+ */
+async function makeAmendment(dir: string, from: number, to: number, reason: string | undefined, resume: number): Promise<PassesAmendment> {
+	const runsText = await readFile(join(dir, "runs.jsonl"), "utf8").catch(() => "");
+	const summaryText = await readFile(join(dir, "summary.json")).catch(() => undefined);
+	let user = "unknown";
+	try { user = userInfo().username; } catch { /* no passwd entry: the host still names the machine */ }
+	return {
+		kind: to === from ? "fix-passes" : "extend-passes", at: new Date().toISOString(), from, to, by: `${user}@${hostname()}`, reason: reason ?? null,
+		runsCompleted: runsText.split("\n").filter((l) => parseJsonObject(l)).length, runsSha256: sha256(runsText),
+		summarySha256: summaryText === undefined ? null : sha256(summaryText), resume,
+	};
+}
+
+/**
+ * The patched twins a grid ran (plan item 2.8): its twin arms and the twins
+ * file its preflight recorded. A manifest without `twinArms` ran none, and its
+ * resume runs none; one with them but no recorded file cannot be resumed.
+ */
+export function twinOptionsFromManifest(manifest: JsonRecord): Pick<Options, "twinsPath" | "twinArms"> {
+	if (manifest.twinArms === undefined) return {};
+	const raw = manifest.twinArms;
+	if (!Array.isArray(raw) || !raw.length || raw.some((arm) => arm !== "baseline" && arm !== "candidate") || new Set(raw).size !== raw.length) {
+		throw new Error("--resume manifest has an invalid twinArms");
+	}
+	const inputs = (manifest.inputs ?? {}) as JsonRecord;
+	const file = (inputs.twinsManifest ?? {}) as JsonRecord;
+	if (typeof file.path !== "string" || !file.path) throw new Error("--resume manifest is missing the twins file path");
+	return { twinsPath: file.path, twinArms: raw as PairArm[] };
+}
+
+/**
+ * The per-arm options (plan item 2.8) a grid pinned, read strictly: a manifest
+ * without a field predates it or left it at its default, and a present but
+ * malformed one refuses the resume rather than silently changing an arm.
+ */
+export function armOptionsFromManifest(manifest: JsonRecord): Pick<Options, "baselineMaxAgents" | "maxVerifiers" | "budgetArms" | "subagentsArms"> {
+	const out: Pick<Options, "baselineMaxAgents" | "maxVerifiers" | "budgetArms" | "subagentsArms"> = {};
+	if (manifest.baselineMaxAgents !== undefined) {
+		if (!isWorkerCap(manifest.baselineMaxAgents)) throw new Error("--resume manifest has an invalid baselineMaxAgents");
+		out.baselineMaxAgents = manifest.baselineMaxAgents;
+	}
+	if (manifest.maxVerifiers !== undefined) {
+		const raw = manifest.maxVerifiers;
+		if (!isJsonRecord(raw) || !Object.keys(raw).length || Object.entries(raw).some(([arm, n]) => (arm !== "baseline" && arm !== "candidate") || !isWorkerCap(n))) {
+			throw new Error("--resume manifest has an invalid maxVerifiers");
+		}
+		out.maxVerifiers = raw as Partial<Record<PairArm, number>>;
+	}
+	if (manifest.budgetArms !== undefined) {
+		const raw = manifest.budgetArms;
+		if (!Array.isArray(raw) || raw.some((arm) => !ARM_ORDER.includes(arm as Arm)) || new Set(raw).size !== raw.length) throw new Error("--resume manifest has an invalid budgetArms");
+		out.budgetArms = raw as Arm[];
+	}
+	if (manifest.subagentsArms !== undefined) {
+		const raw = manifest.subagentsArms;
+		if (!Array.isArray(raw) || raw.some((arm) => !ARM_ORDER.includes(arm as Arm)) || new Set(raw).size !== raw.length) throw new Error("--resume manifest has an invalid subagentsArms");
+		out.subagentsArms = raw as Arm[];
+	}
+	return out;
 }
 
 function sha256(data: string | Buffer): string { return createHash("sha256").update(data).digest("hex"); }
@@ -760,15 +1034,61 @@ export const AUTH_HORIZON_CAP_MS = 7 * 24 * 60 * 60 * 1000;
  * its full timeout. With a breaker each pair may run maxAttempts times and wait
  * its cooldowns in between: a horizon sized for one attempt would let a grid
  * that re-queues outlive its OAuth token and refresh it inside a cell.
+ *
+ * `targets` is any number of gate targets (plan item 2.8). Patched twins are
+ * pairs of their own in the same passes, with one or two arms and no matched
+ * sessions, so a pass holds targets + twins pairs, each no longer than the
+ * longest kind. Waves of `concurrency` pairs bound a pool of workers taking
+ * pairs in order: each worker finishes a pair at least every longest-pair
+ * time while any is queued. With no twins this is the earlier formula.
  */
-export function gridWorstCaseMs(grid: { passes: number; targets: number; concurrency: number; timeoutMs: number; breaker?: Pick<BreakerPolicy, "maxAttempts" | "cooldownMs">; matchedSessions?: number }): number {
+export function gridWorstCaseMs(grid: { passes: number; targets: number; concurrency: number; timeoutMs: number; breaker?: Pick<BreakerPolicy, "maxAttempts" | "cooldownMs">; matchedSessions?: number; twins?: number; twinArms?: number }): number {
 	// The matched arm's k sessions run in the pair's slot after its two arms, each
 	// bounded by the same per-arm timeout (its token ceiling usually ends it first).
 	const arms = 2 + (grid.matchedSessions ?? 0);
-	if (!grid.breaker) return grid.passes * Math.ceil(grid.targets / grid.concurrency) * arms * grid.timeoutMs;
-	const { maxAttempts, cooldownMs } = grid.breaker;
-	const pairMs = maxAttempts * arms * grid.timeoutMs + cooldownMs * (maxAttempts * (maxAttempts - 1)) / 2;
-	return grid.passes * Math.ceil(grid.targets / grid.concurrency) * pairMs;
+	const twins = grid.twins ?? 0;
+	const pairMs = (n: number): number => {
+		if (!grid.breaker) return n * grid.timeoutMs;
+		const { maxAttempts, cooldownMs } = grid.breaker;
+		return maxAttempts * n * grid.timeoutMs + cooldownMs * (maxAttempts * (maxAttempts - 1)) / 2;
+	};
+	const longest = twins > 0 ? Math.max(pairMs(arms), pairMs(grid.twinArms ?? 2)) : pairMs(arms);
+	return grid.passes * Math.ceil((grid.targets + twins) / grid.concurrency) * longest;
+}
+
+/**
+ * Why a grid of a kind, or any grid with a breaker, must state its horizon
+ * (plan item 2.8 review), or undefined when it need not. Past the cap the
+ * check would silently size a shorter grid than the one launched, the fault
+ * parseOptions already refuses for --matched with --breaker; the v6 grids'
+ * worst case is 576 h fail-fast and about 2,311 h with the breaker, against
+ * a 168 h cap and a codex token that lives 240 h.
+ */
+export function horizonRefusal(grid: { worstCaseMs: number; gridKind?: string | undefined; breaker: boolean; requestedHours?: number | undefined }): string | undefined {
+	if (grid.requestedHours !== undefined || grid.worstCaseMs <= AUTH_HORIZON_CAP_MS) return undefined;
+	if (grid.gridKind === undefined && !grid.breaker) return undefined;
+	const hours = Math.round(grid.worstCaseMs / 36_000) / 100;
+	return `this ${grid.gridKind === undefined ? "breaker" : `grid kind ${grid.gridKind}`} grid's worst case is ${hours} h, past the ${AUTH_HORIZON_CAP_MS / 3_600_000} h the OAuth check would otherwise size without saying so. `
+		+ "Pass --auth-horizon-hours <h>, the stretch one runner is to cover, and plan token refreshes between resumes: the grid stops before an arm the token would not outlive.";
+}
+
+/**
+ * Why the grid must stop before its next launch (plan item 2.8 review), or
+ * undefined when the credential outlives one more arm. Read before every
+ * launch from the shared auth store, expiry only, never the token: an arm
+ * that starts with less than its run limit plus the margin left could have a
+ * worker refresh the token inside its cell, under the cell's own lock. The
+ * grid then stops like an exhausted quota, resumably, and the operator
+ * refreshes outside every cell.
+ */
+export function credentialStopReason(credential: CredentialExpiry, provider: string, nowMs: number, needMs: number): string | undefined {
+	if (credential.kind === "static") return undefined;
+	if (credential.kind !== "oauth") return provider === "openai-codex" ? `the ${provider} credential is ${credential.kind === "missing" ? "missing" : `unreadable (${credential.why})`}; log in or refresh outside the grid, then --resume` : undefined;
+	const left = credential.expiresAt - nowMs;
+	if (left >= needMs) return undefined;
+	const hours = (ms: number): number => Math.round(ms / 36_000) / 100;
+	return `the ${provider} OAuth token expires ${new Date(credential.expiresAt).toISOString()} (${hours(left)} h from now), inside the next arm's run limit plus margin (${hours(needMs)} h); `
+		+ "no arm is launched that a worker could refresh it inside. Refresh it outside the grid, then --resume";
 }
 
 /**
@@ -1388,16 +1708,39 @@ async function checkNetwork(options: Options, provider: Provider, nodePath: stri
 	return { ok: true, origin, status: typeof report.status === "number" ? report.status : null, note: "unauthenticated GET; any status proves reachability and spends no tokens" };
 }
 
-async function loadTargets(options: Options): Promise<{ manifestHash: string; targets: Target[]; truthHashes: Record<string, string>; sourceHashes: Record<string, string> }> {
+export async function loadTargets(options: Pick<Options, "manifestPath" | "truth" | "corpus" | "selected" | "twinsPath">): Promise<{ manifestHash: string; twinsHash?: string; targets: Target[]; corpusTargets: Target[]; truthHashes: Record<string, string>; sourceHashes: Record<string, string> }> {
 	const raw = await readFile(options.manifestPath, "utf8");
 	const manifest = JSON.parse(raw.replaceAll("PLACEHOLDER", dirname(options.truth))) as Target[];
+	// Any number of targets (plan item 2.8): the fresh v6 corpus has twelve. What
+	// makes a grid official is its pinned corpus, not a count. Ids key every cell,
+	// pin and pair, so two entries under one id would silently merge.
+	const seen = new Set<string>();
+	for (const target of manifest) {
+		if (typeof target.id !== "string" || !target.id) throw new Error("Research manifest has a target without an id.");
+		if (seen.has(target.id)) throw new Error(`Research manifest lists target id ${target.id} more than once.`);
+		seen.add(target.id);
+	}
+	// The patched twins follow the gate targets, so the first target (the one the
+	// delegation and ceiling probes use) is always a gate target.
+	let twinsHash: string | undefined;
+	let twins: Target[] = [];
+	if (options.twinsPath !== undefined) {
+		const twinsText = await readFile(options.twinsPath, "utf8");
+		twinsHash = sha256(twinsText);
+		try {
+			twins = twinTargets(JSON.parse(twinsText.replaceAll("PLACEHOLDER", dirname(options.truth))), manifest) as unknown as Target[];
+		} catch (error) {
+			throw new Error(`--twins ${options.twinsPath}: ${message(error)}`);
+		}
+	}
+	const all = [...manifest, ...twins];
 	const wanted = options.selected;
-	const selected = wanted.length ? manifest.filter((t) => wanted.includes(t.id)) : manifest;
-	if (selected.length !== (wanted.length || manifest.length)) {
+	const selected = wanted.length ? all.filter((t) => wanted.includes(t.id)) : all;
+	if (selected.length !== (wanted.length || all.length)) {
 		const found = new Set(selected.map((t) => t.id));
 		throw new Error(`Unknown --only target ID(s): ${wanted.filter((id) => !found.has(id)).join(", ")}`);
 	}
-	if (selected.length !== 5 && !wanted.length) throw new Error(`Research manifest must resolve exactly five targets (found ${selected.length}).`);
+	if (!selected.some((t) => t.twinOf === undefined)) throw new Error(twins.length && wanted.length ? "--only names only patched twins; a grid needs a target for its gate." : "Research manifest resolves no target.");
 	const truthHashes: Record<string, string> = {};
 	const sourceHashes: Record<string, string> = {};
 	for (const target of selected) {
@@ -1408,11 +1751,33 @@ async function loadTargets(options: Options): Promise<{ manifestHash: string; ta
 		if (!await exists(target.truth)) throw new Error(`Missing answer key for ${target.id}: ${target.truth}`);
 		truthHashes[target.id] = await hashFile(target.truth);
 		sourceHashes[target.id] = (await treeManifest(pristine)).digest;
+		// A patched twin has no labels: a claim on it can only be a re-flag of the
+		// fixed code, which eval/rescore.ts counts against its fixed regions.
+		if (target.twinOf !== undefined) {
+			let truth: unknown;
+			try { truth = JSON.parse(await readFile(target.truth, "utf8")); } catch { truth = undefined; }
+			if (!Array.isArray(truth) || truth.length) throw new Error(`Patched twin ${target.id}'s answer key must be an empty list: ${target.truth}`);
+		}
 	}
-	return { manifestHash: sha256(raw), targets: selected, truthHashes, sourceHashes };
+	// Every gate target of the manifest, whatever --only selected: a kind's
+	// redaction set is drawn from these alone (plan item 2.8 review).
+	return { manifestHash: sha256(raw), ...(twinsHash === undefined ? {} : { twinsHash }), targets: selected, corpusTargets: manifest, truthHashes, sourceHashes };
 }
 
 function promptFor(target: Target): string { return REVIEW_PROMPT + scopeClause(target.scope); }
+
+/**
+ * A target as the grid's manifest.json lists it. A patched twin's entry also
+ * carries what eval/rescore.ts's control score reads from it: its target, its
+ * fixed regions and its size (plan item 2.8). A gate target's entry is the one
+ * every earlier grid wrote.
+ */
+export function manifestTargetEntry(t: Target): JsonRecord {
+	return {
+		id: t.id, name: t.name, package: t.package, scope: t.scope ?? null,
+		...(t.twinOf === undefined ? {} : { twinOf: t.twinOf, fixed_regions: t.fixed_regions, scope_loc: t.scope_loc ?? null }),
+	};
+}
 
 /**
  * The strings redacted from every staged snapshot before the model reads it.
@@ -1425,7 +1790,7 @@ function promptFor(target: Target): string { return REVIEW_PROMPT + scopeClause(
  * differ only in the change under test: advisory IDs and aliases of every target,
  * each project's owner/repo/name parts, and every distinct truth-file path.
  */
-async function redactTermsFor(targets: Target[], truthDir: string): Promise<string[]> {
+export async function redactTermsFor(targets: Target[], truthDir: string): Promise<string[]> {
 	const terms = new Set<string>();
 	for (const target of targets) {
 		for (const term of leakTermsFor(target)) terms.add(term);
@@ -1480,6 +1845,20 @@ function baselineMismatchReason(rows: Array<{ path: string; sha256: string; kind
 	return "";
 }
 
+/**
+ * The pilot's sealed comparison (plan item 2.8 review): owner-only, in an
+ * owner-only directory, written through a rename like any grid file, and
+ * never printed; eval/v6-decision.ts reads it once the pass count is fixed.
+ */
+export async function writeSealed(path: string, value: unknown): Promise<void> {
+	await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+	await chmod(dirname(path), 0o700);
+	const tmp = `${path}.${opaqueToken()}.tmp`;
+	await writeFile(tmp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+	await chmod(tmp, 0o600);
+	await rename(tmp, path);
+}
+
 /** Written through a rename, so concurrent pair-workers never leave a half-written progress file. */
 async function writeJson(path: string, value: unknown): Promise<void> {
 	await mkdir(dirname(path), { recursive: true });
@@ -1530,7 +1909,9 @@ const runState = {
 	/** A provider quota or usage window is spent: nothing launched before it resets can succeed. */
 	quotaExhausted: undefined as string | undefined,
 	/** The stop came from a matched session (plan item 2.5); it does not by itself withhold the gate's approval. */
-	stoppedBy: undefined as "matched" | undefined,
+	stoppedBy: undefined as "matched" | "twin" | undefined,
+	/** The OAuth token would expire inside the next arm (plan item 2.8 review): refresh outside the grid, then --resume. */
+	credentialExpiring: undefined as string | undefined,
 };
 
 async function runOwned(command: string, args: string[], config: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number; stdoutPath: string; stderrPath: string; onLine?: LineSink; scopeUnit?: string }): Promise<OwnedResult> {
@@ -1758,6 +2139,10 @@ type PreparedCell = CellPaths & {
 	target: Target;
 	pass: number;
 	arm: Arm;
+	/** Whether this cell loads the pinned pi-subagents (plan item 2.8: per arm). */
+	loadsSubagents: boolean;
+	/** Whether this cell's scope switches delegation off, so a worker it launched fails the run. */
+	delegationOff: boolean;
 	engagement: string;
 	/** This cell's own fresh redacted snapshot copy, under cellDir. */
 	stagedSnapshot: string;
@@ -1852,29 +2237,83 @@ export function workerCapReason(pinned: number | null, requested: number | undef
  * earlier grids'.
  */
 export function reviewScope(engagement: string, workspace: string, arm: Arm, candidateMaxAgents: number | undefined, timeoutMs?: number, nowMs: number = Date.now()): Record<string, unknown> {
-	const scope: Record<string, unknown> = { engagement, workspace, mode: "off", authorized: false, targets: {} };
-	if (arm === "candidate" && candidateMaxAgents !== undefined) scope.maxAgents = candidateMaxAgents;
-	// The matched arm is the candidate with delegation switched off the way an
-	// operator switches it off, so that it differs from the candidate in nothing else.
-	if (arm === "matched") scope.maxAgents = 0;
-	// The budget line belongs to the candidate snapshot, so the matched arm, which
-	// runs that snapshot, sees it too; the baseline's scope stays byte-identical.
-	const minutes = timeoutMs !== undefined && Number.isFinite(timeoutMs) ? Math.floor(timeoutMs / 60_000) : 0;
-	if ((arm === "candidate" || arm === "matched") && minutes >= 1) scope.budget = { minutes, deadline: new Date(nowMs + timeoutMs!).toISOString() };
-	return scope;
+	// The pre-2.8 call, kept so its tests hold the default arm settings to the
+	// bytes they always wrote: the matched arm is the candidate with delegation
+	// switched off, and the budget line belongs to the candidate snapshot's arms.
+	return scopeFor(engagement, workspace, scopeSettingsFor(arm, candidateMaxAgents === undefined ? {} : { candidateMaxAgents }), timeoutMs, nowMs);
 }
 
-/** The arms that load the pinned pi-subagents tree: the candidate, and the matched arm that runs it with its cap at 0. */
-const loadsSubagents = (arm: Arm): boolean => arm !== "baseline";
+/** The twins a grid schedules: none unless --twin-arms names an arm. */
+function twinSchedule(options: Pick<Options, "twinArms">, twinIds: string[]): ScheduledTwins | undefined {
+	return options.twinArms?.length && twinIds.length ? { ids: twinIds, arms: options.twinArms } : undefined;
+}
+
+/** The grid's pinned schedule: its gate pairs, then in each pass its twins in their arms. */
+function gridSchedule(pre: Pick<Preflight, "targets">, options: Pick<Options, "passes" | "twinArms">): ScheduledPair[] {
+	const gate = pre.targets.filter((t) => t.twinOf === undefined).map((t) => t.id);
+	const twins = pre.targets.filter((t) => t.twinOf !== undefined).map((t) => t.id);
+	return planSchedule(gate, options.passes, twinSchedule(options, twins));
+}
+
+/**
+ * Everything the harness decides per arm that reaches the model or the
+ * process it runs in: the input snapshot, the scope file, pi's settings, the
+ * pi-subagents config, the extensions loaded, the prompt, the model and its
+ * effort, and the retry policy. prepareCell writes exactly these, so an arm
+ * whose inputs are equal here runs the same cell whatever its role (plan item
+ * 2.8: S as stage 1's candidate and as stage 2's baseline). Cell-local paths
+ * and the scope's deadline are the only per-cell differences, and they are
+ * random or clock-bound for every arm alike.
+ */
+export function cellModelInputs(options: Options, arm: Arm, target: Target, cell: { engagement: string; workspaceDir: string; childSessionDir: string }, piSubagentsEntry: string, stagedDigest: string, nowMs: number = Date.now()): {
+	snapshot: string; stagedDigest: string; scope: Record<string, unknown>; settings: ReturnType<typeof benchmarkSettings>; subagentConfig: Record<string, unknown>;
+	loadsSubagents: boolean; extensionPaths: string[]; prompt: string; provider: string; model: string; thinking: CompareEntryConfig["thinking"]; retryPolicy?: RetryPolicy;
+} {
+	const loads = loadsSubagents(options, arm);
+	const snapshot = arm === "baseline" ? options.baseline : arm === "matched" ? options.matched?.snapshot ?? options.candidate : options.candidate;
+	return {
+		snapshot,
+		// The redacted tree the model reads, as the preflight measured it; each cell must reproduce it.
+		stagedDigest,
+		scope: scopeFor(cell.engagement, cell.workspaceDir, armSettings(options, arm), options.timeoutMs, nowMs),
+		settings: benchmarkSettings(options.retryPolicy),
+		subagentConfig: subagentConfigFor(cell.childSessionDir),
+		loadsSubagents: loads,
+		extensionPaths: [BASH_TIMEOUT_EXTENSION, ...(loads ? [piSubagentsEntry] : [])],
+		prompt: promptFor(target),
+		provider: options.provider, model: options.model, thinking: options.thinking as CompareEntryConfig["thinking"],
+		...(options.retryPolicy ? { retryPolicy: options.retryPolicy } : {}),
+	};
+}
+
+/** The scope settings an arm runs under in this grid (plan item 2.8). */
+function armSettings(options: Options, arm: Arm): ScopeSettings {
+	return scopeSettingsFor(arm, options);
+}
+
+/**
+ * The arms that load the pinned pi-subagents tree: by default the candidate,
+ * and the matched arm that runs it with its cap at 0; --subagents-arms (plan
+ * item 2.8) can name the baseline too, for stage 2's S.
+ */
+const loadsSubagents = (options: Pick<Options, "subagentsArms">, arm: Arm): boolean => loadsSubagentsFor(arm, options);
 
 /**
  * The delegation probe's scope. The review scope enforces nothing, so a worker
  * gate that never armed would pass it silently; this one is enforced and lists
  * only loopback, so the probe's out-of-scope command must be refused by pired's
  * own gate inside the worker. Used by that probe cell alone.
+ *
+ * It states a worker cap (plan item 2.8). It named none, which the v3/v4
+ * snapshots read as their default of 8; a v5 candidate cut after ADR-029 reads
+ * it as 0, refuses both of the probe's launches and hides the launcher, so a
+ * v6 dry run would fail here (read from core/subagents.ts's workerCap and
+ * hiddenParentTools; not run, since 2.8 ran no probe). The probe proves the pinned pi-subagents
+ * path, not the arm's own cap, so it states the v3/v4 default whatever the
+ * grid's candidate cap: stage 1's candidate, at 0, still loads pi-subagents.
  */
-function probeDelegationScope(engagement: string, workspace: string): Record<string, unknown> {
-	return { engagement, workspace, mode: "enforce", authorized: true, targets: { ips: ["127.0.0.1"] } };
+export function probeDelegationScope(engagement: string, workspace: string): Record<string, unknown> {
+	return { engagement, workspace, mode: "enforce", authorized: true, targets: { ips: ["127.0.0.1"] }, maxAgents: DEFAULT_CANDIDATE_MAX_AGENTS };
 }
 
 /** Re-checked before every launch: a grid must not straddle an edit to what it measures. */
@@ -1886,7 +2325,7 @@ async function verifyFrozen(ctx: Context, arm: Arm): Promise<string[]> {
 	// what must not move mid-grid is the source the staging reads from.
 	if ((await treeManifest(ctx.sourceSnapshots[arm], "snapshot")).digest !== ctx.sourceDigests[arm]) errors.push(`${arm} input snapshot changed after preflight`);
 	// The candidate also loads the pinned pi-subagents tree; it is half of what the arm measures.
-	if (loadsSubagents(arm) && (await treeManifest(ctx.piSubagents.dir, "runtime")).digest !== ctx.piSubagents.digest) errors.push("pinned pi-subagents tree changed after preflight");
+	if (loadsSubagents(ctx.options, arm) && (await treeManifest(ctx.piSubagents.dir, "runtime")).digest !== ctx.piSubagents.digest) errors.push("pinned pi-subagents tree changed after preflight");
 	return errors;
 }
 
@@ -1921,10 +2360,11 @@ async function prepareCell(ctx: Context, target: Target, pass: number, arm: Arm,
 	const engagement = `review-${opaqueToken()}`;
 	let probe: ProbeConfig | undefined;
 	if (probeFor) probe = await probeFor(paths);
-	const scope = probe?.mode === "delegation" ? probeDelegationScope(engagement, paths.workspaceDir) : reviewScope(engagement, paths.workspaceDir, arm, options.candidateMaxAgents, options.timeoutMs);
+	const inputs = cellModelInputs(options, arm, target, { engagement, workspaceDir: paths.workspaceDir, childSessionDir: paths.childSessionDir }, ctx.piSubagents.entry, ctx.stagedDigests[arm]);
+	const scope = probe?.mode === "delegation" ? probeDelegationScope(engagement, paths.workspaceDir) : inputs.scope;
 	const scopeText = `${JSON.stringify(scope, null, 2)}\n`;
 	await writeFile(join(paths.targetDir, "pired.scope.json"), scopeText);
-	const prompt = probe?.mode === "delegation" ? "Map the attack surface of this codebase. Delegate the first area to a worker." : promptFor(target);
+	const prompt = probe?.mode === "delegation" ? "Map the attack surface of this codebase. Delegate the first area to a worker." : inputs.prompt;
 	const modelsStoreSource = join(AGENT_BASE, "models-store.json");
 	const modelsStorePath = join(paths.agentDir, "models-store.json");
 	if (await exists(modelsStoreSource)) await cp(modelsStoreSource, modelsStorePath);
@@ -1939,8 +2379,8 @@ async function prepareCell(ctx: Context, target: Target, pass: number, arm: Arm,
 	// link would lock <agentDir>/auth.json.lock, not the shared lock, so the
 	// preflight's auth stage refuses a grid whose token could expire before it
 	// ends (checkAuthHorizon) and no refresh is due while cells run.
-	const settingsText = `${JSON.stringify(benchmarkSettings(options.retryPolicy), null, 2)}\n`;
-	const subagentConfigText = `${JSON.stringify(subagentConfigFor(paths.childSessionDir), null, 2)}\n`;
+	const settingsText = `${JSON.stringify(inputs.settings, null, 2)}\n`;
+	const subagentConfigText = `${JSON.stringify(inputs.subagentConfig, null, 2)}\n`;
 	await writeFile(paths.agentSettingsPath, settingsText);
 	await writeFile(paths.subagentConfigPath, subagentConfigText);
 	for (const name of ["auth.json", "models.json"]) {
@@ -1948,18 +2388,18 @@ async function prepareCell(ctx: Context, target: Target, pass: number, arm: Arm,
 		if (await exists(source)) await symlink(source, join(paths.agentDir, name));
 	}
 	const config: EntryConfig = {
-		snapshot: stagedSnapshot, provider: options.provider, model: options.model,
-		thinking: options.thinking as CompareEntryConfig["thinking"],
+		snapshot: stagedSnapshot, provider: inputs.provider, model: inputs.model,
+		thinking: inputs.thinking,
 		cwd: paths.targetDir, agentDir: paths.agentDir, authPath: join(AGENT_BASE, "auth.json"),
 		modelsPath: join(AGENT_BASE, "models.json"), modelsStorePath, prompt,
-		extensionPaths: [BASH_TIMEOUT_EXTENSION, ...(loadsSubagents(arm) ? [ctx.piSubagents.entry] : [])],
-		...(options.retryPolicy ? { retryPolicy: options.retryPolicy } : {}),
+		extensionPaths: inputs.extensionPaths,
+		...(inputs.retryPolicy ? { retryPolicy: inputs.retryPolicy } : {}),
 		...(session ? { tokenCeiling: session.ceiling } : {}),
 		...(probe ? { probe } : {}),
 	};
 	const configText = `${JSON.stringify(config, null, 2)}\n`;
 	await writeFile(paths.configPath, configText);
-	const sealArgs = await pathRulesForCell(paths, stagedSnapshot, ctx.nodePath, loadsSubagents(arm) ? ctx.piSubagents.dir : undefined);
+	const sealArgs = await pathRulesForCell(paths, stagedSnapshot, ctx.nodePath, inputs.loadsSubagents ? ctx.piSubagents.dir : undefined);
 	const argv = [...sealArgs, "--", ctx.nodePath, "--experimental-strip-types", ENTRY, paths.configPath];
 	const env = childEnv(paths, ctx.provider);
 	// Everything the sealed process is handed, checked before launch: a hit here
@@ -1977,6 +2417,8 @@ async function prepareCell(ctx: Context, target: Target, pass: number, arm: Arm,
 	errors.push(...await verifyFrozen(ctx, arm));
 	return {
 		...paths, key: `${target.id}#${pass}`, target, pass, arm, engagement, stagedSnapshot,
+		// The delegation probe's own scope delegates whatever the arm's does.
+		loadsSubagents: inputs.loadsSubagents, delegationOff: probe?.mode === "delegation" ? false : delegationOff(armSettings(options, arm)),
 		symlinkActions: targetCopy.symlinks, argv, env, errors, leakHits,
 		cellConfigSha256: { settings: sha256(settingsText), subagentConfig: sha256(subagentConfigText) },
 		...(probe ? { probe } : {}),
@@ -2122,7 +2564,7 @@ export function childProviderFailure(child: Pick<SubagentChild, "childKey" | "st
  * extension is not loaded, so any subagent call or child session means the
  * wrong snapshot ran and its tokens would land in the wrong arm.
  */
-export async function accountCellUsage(events: JsonRecord[], cell: { arm: Arm; childSessionDir: string }, expect: { provider: string; model: string; thinking: string }, stream: Pick<StreamObservation, "subagentCalls">, retryPolicy?: RetryPolicy, ceiling: { cut?: boolean } = {}): Promise<CellUsage> {
+export async function accountCellUsage(events: JsonRecord[], cell: { arm: Arm; childSessionDir: string; loadsSubagents?: boolean; delegationOff?: boolean }, expect: { provider: string; model: string; thinking: string }, stream: Pick<StreamObservation, "subagentCalls">, retryPolicy?: RetryPolicy, ceiling: { cut?: boolean } = {}): Promise<CellUsage> {
 	const errors: string[] = [];
 	const notes: string[] = [];
 	const observations: UsageObservation[] = [];
@@ -2149,9 +2591,12 @@ export async function accountCellUsage(events: JsonRecord[], cell: { arm: Arm; c
 	const children: ChildAccount[] = [];
 	const childProviderErrors: CellUsage["childProviderErrors"] = [];
 	let reconciliation: SubagentReconciliation | undefined;
-	if (cell.arm === "baseline") {
-		if (childSessionFiles.length) errors.push(`baseline arm produced ${childSessionFiles.length} child session file(s)`);
-		if (stream.subagentCalls) errors.push(`baseline arm made ${stream.subagentCalls} ${SUBAGENT_TOOL} call(s)`);
+	// Absent, the arms load what they always did: everything but the baseline, and only the matched arm is off.
+	const loads = cell.loadsSubagents ?? cell.arm !== "baseline";
+	const off = cell.delegationOff ?? cell.arm === "matched";
+	if (!loads) {
+		if (childSessionFiles.length) errors.push(`${cell.arm} arm produced ${childSessionFiles.length} child session file(s)`);
+		if (stream.subagentCalls) errors.push(`${cell.arm} arm made ${stream.subagentCalls} ${SUBAGENT_TOOL} call(s)`);
 	} else {
 		try {
 			reconciliation = reconcileSubagentCalls(events, childSessionFiles, { sessionDir: cell.childSessionDir, toolName: SUBAGENT_TOOL });
@@ -2160,11 +2605,12 @@ export async function accountCellUsage(events: JsonRecord[], cell: { arm: Arm; c
 		} catch (error) {
 			errors.push(`subagent reconciliation failed: ${message(error)}`);
 		}
-		// The matched arm's scope states maxAgents 0: a worker it launched means
-		// delegation was not off, and the run is not the single agent it stands for.
+		// The matched arm's scope states maxAgents 0, as does S's (plan item 2.8): a
+		// worker it launched means delegation was not off, and the run is not the
+		// single agent it stands for.
 		const workers = reconciliation?.children.length ?? 0;
-		if (cell.arm === "matched" && (workers || childSessionFiles.length)) {
-			errors.push(`matched arm launched ${workers} worker(s) (${childSessionFiles.length} child session file(s)); its scope states maxAgents 0`);
+		if (off && (workers || childSessionFiles.length)) {
+			errors.push(`${cell.arm} arm launched ${workers} worker(s) (${childSessionFiles.length} child session file(s)); its scope states maxAgents 0`);
 		}
 		const callText = new Map((reconciliation?.calls ?? []).map((c) => [c.toolCallId, c.resultText]));
 		for (const child of reconciliation?.children ?? []) {
@@ -2561,7 +3007,7 @@ async function inspectRun(ctx: Context, cell: PreparedCell, launched: Launch, at
 	const stream = launched.stream;
 	const since = (at: number | undefined): number | null => at === undefined || !result ? null : (at - result.startedAt) / 1000;
 	const record: JsonRecord = {
-		key: cell.key, target: cell.target.id, pass: cell.pass, arm: cell.arm, cellId: cell.cellId, engagement: cell.engagement,
+		key: cell.key, target: cell.target.id, ...(cell.target.twinOf === undefined ? {} : { twinOf: cell.target.twinOf }), pass: cell.pass, arm: cell.arm, cellId: cell.cellId, engagement: cell.engagement,
 		attempt, ...(cell.matchedSession ? { matchedSession: cell.matchedSession } : {}), infraFailure, infraReason: infraReason ?? null, infraEvidence: infraFailure ? classified.evidence ?? null : null,
 		quotaExhausted: infraFailure && classified.exhausted === true,
 		providerFailures: failures,
@@ -2811,7 +3257,7 @@ async function inspectCeilingProbe(ctx: Context, cell: PreparedCell, launched: L
 async function runOne(ctx: Context, target: Target, pass: number, arm: Arm, attempt: number, session?: MatchedSessionSpec): Promise<RunOutcome> {
 	const cell = await prepareCell(ctx, target, pass, arm, join(ctx.out, "runs"), undefined, session);
 	await appendJsonl(join(ctx.out, "cells.jsonl"), {
-		cellId: cell.cellId, key: cell.key, target: target.id, pass, arm, attempt, ...(session ? { matchedSession: session } : {}), preparedAt: new Date().toISOString(), errors: cell.errors,
+		cellId: cell.cellId, key: cell.key, target: target.id, ...(target.twinOf === undefined ? {} : { twinOf: target.twinOf }), pass, arm, attempt, ...(session ? { matchedSession: session } : {}), preparedAt: new Date().toISOString(), errors: cell.errors,
 	});
 	const launched = await launch(ctx, cell, ctx.options.timeoutMs, () => !runState.aborted);
 	return await inspectRun(ctx, cell, launched, attempt);
@@ -2827,11 +3273,18 @@ async function runOne(ctx: Context, target: Target, pass: number, arm: Arm, atte
  * which is what pi-subagents falls back to when it cannot find the host pi
  * package; and none of the tools pired hides.
  */
-export function toolSurfaceErrors(arm: Arm, tools: string[]): string[] {
+export function toolSurfaceErrors(arm: Arm, tools: string[], off = false, loads: boolean = arm !== "baseline"): string[] {
 	const errors: string[] = [];
-	const expected: string[] = arm === "candidate" ? [...BASE_TOOLS, ENABLE_TOOL] : [...BASE_TOOLS];
+	// An arm that loads pi-subagents with its scope switching delegation off (plan
+	// item 2.8: S, maxAgents 0 and maxVerifiers 0, as stage 1's candidate or stage
+	// 2's baseline) is shown no launcher by pired since ADR-029; like the matched
+	// arm, the loader is then allowed, not required. Any other arm that loads it
+	// must show it.
+	const requiresLoader = loads && !off && arm !== "matched";
+	const optional = loads && !requiresLoader;
+	const expected: string[] = requiresLoader ? [...BASE_TOOLS, ENABLE_TOOL] : [...BASE_TOOLS];
 	for (const name of expected) if (!tools.includes(name)) errors.push(`${arm} arm does not expose ${name}`);
-	if (loadsSubagents(arm)) {
+	if (loads) {
 		for (const name of CANDIDATE_HIDDEN_TOOLS) if (tools.includes(name)) errors.push(`${arm} arm exposes ${name}, which pired hides`);
 		if (tools.includes(SUBAGENT_TOOL)) errors.push(`${arm} arm exposes ${SUBAGENT_TOOL} eagerly instead of through ${ENABLE_TOOL}`);
 	}
@@ -2839,7 +3292,7 @@ export function toolSurfaceErrors(arm: Arm, tools: string[]): string[] {
 	// keeps the lazy loader out of such a session, but a snapshot cut before that
 	// may still show it; it is allowed, not required, and a worker it launched
 	// would fail the run (accountCellUsage).
-	const known = new Set<string>([...expected, ...(loadsSubagents(arm) ? [...CANDIDATE_HIDDEN_TOOLS, SUBAGENT_TOOL] : []), ...(arm === "matched" ? [ENABLE_TOOL] : [])]);
+	const known = new Set<string>([...expected, ...(loads ? [...CANDIDATE_HIDDEN_TOOLS, SUBAGENT_TOOL] : []), ...(optional ? [ENABLE_TOOL] : [])]);
 	const extra = tools.filter((name) => !known.has(name));
 	if (extra.length) errors.push(`${arm} arm exposes unexpected tool(s) ${[...new Set(extra)].join(", ")}`);
 	return errors;
@@ -2912,7 +3365,7 @@ async function inspectProbe(ctx: Context, cell: PreparedCell, launched: Launch):
 	if (report.workspace !== cell.workspaceDir) errors.push(`pired resolved workspace ${String(report.workspace)}, not the cell workspace`);
 	const tools = Array.isArray(report.extensionTools) ? report.extensionTools.map(String) : undefined;
 	if (!tools) errors.push("probe did not list active tools");
-	else errors.push(...toolSurfaceErrors(cell.arm, tools));
+	else errors.push(...toolSurfaceErrors(cell.arm, tools, delegationOff(armSettings(ctx.options, cell.arm)), loadsSubagents(ctx.options, cell.arm)));
 	const unique = [...new Set(errors)];
 	const runtime = runtimes.length === 1 ? benchmarkRuntimeOf(runtimes[0]!) : undefined;
 	return {
@@ -3039,6 +3492,10 @@ type Preflight = {
 	expectedCells: ExpectedCell[];
 	official: boolean;
 	exploratoryReasons: string[];
+	/** The pinned official shapes this grid was judged against; the comparison's decision reads the same ones. */
+	officialShapes: OfficialShape[];
+	/** The grid kind it was launched as (plan item 2.8), when it was. */
+	kind?: GridKind;
 };
 
 async function runPreflight(options: Options, manifest: JsonRecord, saveManifest: () => Promise<void>, preflightRoot: string): Promise<Preflight> {
@@ -3086,38 +3543,64 @@ async function runPreflight(options: Options, manifest: JsonRecord, saveManifest
 		const hits = findLeaks({ "--out": options.out }, terms);
 		if (hits.length) throw new Error(`advisory label in the output path every cell sits under: ${hits.join("; ")}`);
 		const provider = await providerMetadata(options.provider, options.model);
-		const expectedCells: ExpectedCell[] = info.targets.flatMap((target) =>
+		// Only the gate targets' cells are expected by the comparison; a patched
+		// twin's runs are summarised apart and never enter it (plan item 2.8).
+		const gateTargets = info.targets.filter((t) => t.twinOf === undefined);
+		const twinTargetsRun = info.targets.filter((t) => t.twinOf !== undefined);
+		const expectedCells: ExpectedCell[] = gateTargets.flatMap((target) =>
 			Array.from({ length: options.passes }, (_, i) => ({ target: target.id, pass: i + 1, key: `${target.id}#${i + 1}` })));
-		const gridOfficial = isOfficialGrid(expectedCells);
-		const ids = info.targets.map((t) => t.id);
-		if (options.selected.length) exploratoryReasons.push("--only selects a subset");
-		if (options.passes !== OFFICIAL_PASSES) exploratoryReasons.push(`--passes ${options.passes} is not ${OFFICIAL_PASSES}`);
-		if (!options.selected.length && (ids.length !== OFFICIAL_TARGET_IDS.length || ids.some((id) => !OFFICIAL_TARGET_IDS.includes(id)))) {
-			exploratoryReasons.push("manifest targets differ from the five research targets");
+		const ids = gateTargets.map((t) => t.id);
+		const twinIds = twinTargetsRun.map((t) => t.id);
+		// The official definition is pinned (plan item 2.8): the grid is judged
+		// against the corpus its identity names, and read as official only when its
+		// cells are exactly that corpus's shape and every pinned input matches.
+		const comparePins = loadComparePins();
+		// A grid launched as a kind is judged against that kind's corpus and
+		// options; one without a kind, against the kindless (v5) corpus as before.
+		let kind: GridKind | undefined;
+		if (options.gridKind !== undefined) {
+			kind = comparePins.gridKinds[options.gridKind];
+			if (!kind) throw new Error(`--grid-kind ${options.gridKind} is not a grid kind of eval/delegation-compare.pins.json (known: ${Object.keys(comparePins.gridKinds).join(", ") || "none"})`);
 		}
-		// Pin the identity of what is graded, not only the grid shape: a manifest
-		// whose scope changed (which changes the prompt) or an edited truth key can
-		// keep the five IDs and would otherwise read as official.
-		if (info.manifestHash !== RESEARCH_MANIFEST_SHA256) exploratoryReasons.push(`research manifest sha256 ${info.manifestHash.slice(0, 12)} is not the pinned ${RESEARCH_MANIFEST_SHA256.slice(0, 12)}`);
-		for (const target of info.targets) {
-			const pinned = TRUTH_SHA256[target.name];
-			const actual = info.truthHashes[target.id];
-			if (!pinned) exploratoryReasons.push(`${target.id} (${target.name}) has no pinned truth hash`);
-			else if (actual !== pinned) exploratoryReasons.push(`${target.name} truth key sha256 ${String(actual).slice(0, 12)} is not the pinned ${pinned.slice(0, 12)}`);
+		const judged: [string, PinnedCorpus] | undefined = kind ? [kind.corpus, comparePins.corpora[kind.corpus]!] : kindlessCorpus(comparePins.corpora, ids);
+		// A kind with extendable or adopted passes fixes the targets; the pass count
+		// is the grid's own, checked by kindPassesReasons (plan item 2.8).
+		const passesByGrid = kind !== undefined && (kind.extendablePasses || kind.passesFrom !== null);
+		const gridPasses = passesByGrid ? options.passes : undefined;
+		const officialShapes: OfficialShape[] = judged && shapeOf(judged[1], gridPasses) ? [shapeOf(judged[1], gridPasses)!] : [];
+		const gridOfficial = isOfficialGrid(expectedCells, officialShapes);
+		if (kind) {
+			exploratoryReasons.push(...gridKindReasons(options.gridKind!, kind, {
+				...options, retry: options.retryPolicy !== undefined,
+			}));
+			exploratoryReasons.push(...kindPassesReasons(options.gridKind!, kind, {
+				passes: options.passes, amendments: Array.isArray(manifest.amendments) ? parseAmendments(manifest.amendments) : [],
+				...(options.passesFrom ? { passesFrom: options.passesFrom } : {}),
+			}));
+		}
+		if (!judged) exploratoryReasons.push("eval/delegation-compare.pins.json pins no corpus a grid without --grid-kind can be official on");
+		else {
+			exploratoryReasons.push(...corpusReasons(judged[0], judged[1], {
+				gateIds: ids, passes: options.passes, selected: options.selected.length > 0, manifestSha256: info.manifestHash,
+				targets: info.targets.map((t) => ({ id: t.id, name: t.name, truthSha256: info.truthHashes[t.id]! })),
+				...(info.twinsHash === undefined ? {} : { twinsSha256: info.twinsHash }),
+				...(passesByGrid ? { passesByGrid: true } : {}),
+			}));
 		}
 		manifest.provider = provider;
-		manifest.targets = info.targets.map((t) => ({ id: t.id, name: t.name, package: t.package, scope: t.scope ?? null }));
+		manifest.targets = info.targets.map(manifestTargetEntry);
 		manifest.promptSha256ByTarget = Object.fromEntries(info.targets.map((t) => [t.id, sha256(promptFor(t))]));
 		manifest.expectedCells = expectedCells;
-		manifest.schedule = planSchedule(ids, options.passes).map((p) => ({ key: p.key, order: p.order }));
+		manifest.schedule = planSchedule(ids, options.passes, twinSchedule(options, twinIds)).map((p) => ({ key: p.key, order: p.order, ...(p.twin ? { twin: true } : {}) }));
 		manifest.inputs = {
 			corpusManifest: { path: options.manifestPath, sha256: info.manifestHash },
+			...(info.twinsHash === undefined ? {} : { twinsManifest: { path: options.twinsPath, sha256: info.twinsHash } }),
 			corpus: options.corpus, truth: options.truth,
 			sourceSha256: info.sourceHashes, truthSha256: info.truthHashes,
 		};
 		return {
-			value: { ...info, provider, expectedCells, gridOfficial },
-			record: { targets: ids.length, gridOfficial },
+			value: { ...info, provider, expectedCells, gridOfficial, officialShapes, comparePins, twinIds, kind },
+			record: { targets: ids.length, ...(twinIds.length ? { twins: twinIds.length } : {}), gridOfficial },
 		};
 	});
 
@@ -3130,10 +3613,13 @@ async function runPreflight(options: Options, manifest: JsonRecord, saveManifest
 			throw error;
 		});
 		const worstCaseMs = gridWorstCaseMs({
-			passes: options.passes, targets: inputs.targets.length, concurrency: options.concurrency, timeoutMs: options.timeoutMs,
+			passes: options.passes, targets: inputs.targets.length - inputs.twinIds.length, concurrency: options.concurrency, timeoutMs: options.timeoutMs,
 			...(options.breaker === undefined ? {} : { breaker: options.breaker }),
 			...(options.matched === undefined ? {} : { matchedSessions: options.matched.kMax }),
+			...(inputs.twinIds.length && options.twinArms ? { twins: inputs.twinIds.length, twinArms: options.twinArms.length } : {}),
 		});
+		const refusal = horizonRefusal({ worstCaseMs, gridKind: options.gridKind, breaker: options.breaker !== undefined, requestedHours: options.authHorizonHours });
+		if (refusal) throw new Error(refusal);
 		const verdict = checkAuthHorizon({
 			provider: options.provider, credential: credentialExpiry(authText, options.provider), worstCaseMs,
 			...(options.authHorizonHours === undefined ? {} : { requestedHours: options.authHorizonHours }),
@@ -3148,13 +3634,24 @@ async function runPreflight(options: Options, manifest: JsonRecord, saveManifest
 	// carries, and prove the baseline is the pinned commit, the candidate its
 	// pinned snapshot, and the pi-subagents tree the candidate loads its pin.
 	const staging = await stage("staging", async () => {
-		const comparePins = loadComparePins();
+		const { comparePins } = inputs;
 		const source = {
 			baseline: await treeManifest(options.baseline, "snapshot"),
 			candidate: await treeManifest(options.candidate, "snapshot"),
 		};
-		if (source.baseline.digest === source.candidate.digest) throw new Error("Baseline and candidate snapshots are identical.");
-		const redactTerms = await redactTermsFor(inputs.targets, options.truth);
+		// One snapshot in both arms is a mistake unless the arms differ in their
+		// scope (plan item 2.8): stage 2 runs the candidate snapshot as S in the
+		// baseline arm and as D in the candidate arm, apart only in delegation.
+		const sameSnapshot = source.baseline.digest === source.candidate.digest;
+		const configsDiffer = JSON.stringify(armSettings(options, "baseline")) !== JSON.stringify(armSettings(options, "candidate"));
+		if (sameSnapshot && !configsDiffer) throw new Error("Baseline and candidate snapshots are identical.");
+		// A kind's redaction set depends only on its corpus's full target list, so
+		// the staged snapshot, the tree the model reads, is the same bytes in every
+		// grid of the corpus: S's in stage 1 (with twins) and in stage 2 (without).
+		// Redaction matches substrings, so each twin, named <target>-patched and
+		// carrying its target's ids, is covered by its target's terms. A grid
+		// without a kind redacts what it runs, as before.
+		const redactTerms = await redactTermsFor(inputs.kind ? inputs.corpusTargets : inputs.targets, options.truth);
 		// One staged copy per arm at preflight, under opaque names, only to compute
 		// and record the redacted digest and the redaction list. Each cell later
 		// stages its own fresh copy and must reproduce these digests exactly.
@@ -3169,20 +3666,38 @@ async function runPreflight(options: Options, manifest: JsonRecord, saveManifest
 		for (const arm of ["baseline", "candidate"] as const) {
 			if (staged[arm].sourceDigest !== source[arm].digest) throw new Error(`Staged ${arm} snapshot's pre-redaction digest does not match its input.`);
 		}
-		if (staged.baseline.stagedDigest === staged.candidate.stagedDigest) throw new Error("Redacted baseline and candidate snapshots are identical.");
+		if (!sameSnapshot && staged.baseline.stagedDigest === staged.candidate.stagedDigest) throw new Error("Redacted baseline and candidate snapshots are identical.");
 		// Pin identity: the baseline must be git 496b190's staged content and the
 		// candidate the frozen handoff snapshot, or the grid is exploratory.
-		const baselineReason = baselineMismatchReason(source.baseline.rows, comparePins.baselineCommit);
-		if (baselineReason) exploratoryReasons.push(baselineReason);
-		if (comparePins.candidateDigest === null) exploratoryReasons.push("no candidate is frozen: eval/delegation-compare.pins.json has candidateDigest null");
-		else if (source.candidate.digest !== comparePins.candidateDigest) exploratoryReasons.push(`candidate input digest ${source.candidate.digest.slice(0, 12)} is not the pinned ${comparePins.candidateDigest.slice(0, 12)}`);
-		const capReason = workerCapReason(comparePins.candidateMaxAgents, options.candidateMaxAgents);
-		if (capReason) exploratoryReasons.push(capReason);
+		const { kind } = inputs;
+		let baselineReason = "";
+		let baselineCommitPin: string | null = comparePins.baselineCommit;
+		const candidateDigestPin = kind ? kind.candidate.digest : comparePins.candidateDigest;
+		if (kind) {
+			// The kind pins its own snapshots and caps (plan item 2.8); its arm
+			// options were checked with the inputs.
+			baselineCommitPin = "commit" in kind.baseline ? kind.baseline.commit : null;
+			exploratoryReasons.push(...kindSnapshotReasons(options.gridKind!, kind, {
+				baselineDigest: source.baseline.digest, candidateDigest: source.candidate.digest,
+				baselineStagedDigest: staged.baseline.stagedDigest, candidateStagedDigest: staged.candidate.stagedDigest,
+				commitReason: (commit) => (baselineReason = baselineMismatchReason(source.baseline.rows, commit)),
+			}));
+		} else {
+			baselineReason = baselineMismatchReason(source.baseline.rows, comparePins.baselineCommit);
+			if (baselineReason) exploratoryReasons.push(baselineReason);
+			if (comparePins.candidateDigest === null) exploratoryReasons.push("no candidate is frozen: eval/delegation-compare.pins.json has candidateDigest null");
+			else if (source.candidate.digest !== comparePins.candidateDigest) exploratoryReasons.push(`candidate input digest ${source.candidate.digest.slice(0, 12)} is not the pinned ${comparePins.candidateDigest.slice(0, 12)}`);
+			const capReason = workerCapReason(comparePins.candidateMaxAgents, options.candidateMaxAgents);
+			if (capReason) exploratoryReasons.push(capReason);
+			exploratoryReasons.push(...kindlessArmReasons(options));
+		}
 		const piSubagents = await measurePiSubagents(comparePins);
 		exploratoryReasons.push(...piSubagents.reasons);
 		const inputsRecord = manifest.inputs as JsonRecord;
-		inputsRecord.baseline = { path: options.baseline, sha256: source.baseline.digest, files: source.baseline.files, stagedDigest: staged.baseline.stagedDigest, redactions: staged.baseline.redactions, stagedPath: stagePaths.baseline, matchesCommit: comparePins.baselineCommit, baselineMismatch: baselineReason || null };
-		inputsRecord.candidate = { path: options.candidate, sha256: source.candidate.digest, files: source.candidate.files, stagedDigest: staged.candidate.stagedDigest, redactions: staged.candidate.redactions, stagedPath: stagePaths.candidate, pinnedDigest: comparePins.candidateDigest, matchesPin: source.candidate.digest === comparePins.candidateDigest };
+		inputsRecord.baseline = { path: options.baseline, sha256: source.baseline.digest, files: source.baseline.files, stagedDigest: staged.baseline.stagedDigest, redactions: staged.baseline.redactions, stagedPath: stagePaths.baseline, matchesCommit: baselineCommitPin, baselineMismatch: baselineReason || null };
+		inputsRecord.candidate = { path: options.candidate, sha256: source.candidate.digest, files: source.candidate.files, stagedDigest: staged.candidate.stagedDigest, redactions: staged.candidate.redactions, stagedPath: stagePaths.candidate, pinnedDigest: candidateDigestPin, matchesPin: source.candidate.digest === candidateDigestPin };
+		// Written only for a grid that runs one snapshot in both arms, so every other manifest keeps its bytes.
+		if (sameSnapshot) inputsRecord.sameSnapshotInBothArms = true;
 		inputsRecord.piSubagents = { ...piSubagents.install, pinnedVersion: comparePins.piSubagents.version, pinnedDigest: comparePins.piSubagents.digest, matchesPin: piSubagents.reasons.length === 0 };
 		// The matched arm runs the candidate snapshot unless the operator names
 		// another, which is exploratory: matched vs candidate would then differ in
@@ -3269,6 +3784,16 @@ async function runPreflight(options: Options, manifest: JsonRecord, saveManifest
 			const empty = await scoreWorkspace(emptyWorkspace, join(dir, "empty.score.json"), target.truth);
 			if (!empty.graded.ok) throw new Error(`${target.id}: empty ledger: ${empty.graded.error}`);
 			if (empty.graded.totalFindings !== 0 || empty.graded.truePositives !== 0) throw new Error(`${target.id}: empty ledger scored ${empty.graded.truePositives}/${empty.graded.totalFindings}`);
+			if (target.twinOf !== undefined) {
+				// A patched twin's key has no labels (plan item 2.8), so there is no
+				// oracle: a claim must count as a claim and never as a true positive.
+				const decoy: Finding = { file: "README.md", line: 1 };
+				const graded = await gradeWithPinnedScorer([decoy], join(dir, "decoy.score.json"), target.truth);
+				if (!graded.ok) throw new Error(`${target.id}: decoy on a patched twin: ${graded.error}`);
+				if (graded.truePositives !== 0 || graded.totalFindings !== 1) throw new Error(`${target.id}: a claim on a patched twin scored ${graded.truePositives}/${graded.totalFindings}, not 0/1`);
+				records.push({ target: target.id, twinOf: target.twinOf, empty: { totalFindings: 0, truePositives: 0 }, decoy: { ...decoy, truePositives: 0, totalFindings: 1 } });
+				continue;
+			}
 			const truth = JSON.parse(await readFile(target.truth, "utf8")) as Array<{ file?: unknown; line?: unknown; line_range?: unknown }>;
 			const first = truth[0];
 			const range = Array.isArray(first?.line_range) ? first.line_range.map(Number) : [Number(first?.line), Number(first?.line)];
@@ -3303,7 +3828,8 @@ async function runPreflight(options: Options, manifest: JsonRecord, saveManifest
 		// surface (pi-subagents loaded, cap 0) are checked before any token.
 		const probeArms: Arm[] = ["baseline", "candidate", ...(options.matched ? ["matched" as const] : [])];
 		for (const target of inputs.targets) {
-			for (const arm of probeArms) {
+			// A patched twin runs only in its twin arms, so only those are probed on it.
+			for (const arm of target.twinOf === undefined ? probeArms : options.twinArms ?? []) {
 				const absent: string[] = [];
 				const cell = await prepareCell(ctx, target, 0, arm, probesRoot, async (paths) => {
 					// Each cell now stages its own snapshot under its own cellDir, so there is
@@ -3315,18 +3841,20 @@ async function runPreflight(options: Options, manifest: JsonRecord, saveManifest
 						join(decoyDir, "run.json"), decoyDir,
 						...(previous ? [previous.configPath, previous.transcriptPath, previous.cellDir, previous.workspaceDir, previous.stagedSnapshot, previous.childSessionDir] : []),
 						// Granted to the candidate alone; the baseline must not see it.
-						...(arm === "baseline" ? [ctx.piSubagents.entry] : []),
+						...(!loadsSubagents(options, arm) ? [ctx.piSubagents.entry] : []),
 						join(HOME, ".pired/engagements"), "/tmp/pired-research",
 						join(AGENT_BASE, "sessions"), join(AGENT_BASE, "run-history.jsonl"),
 					];
 					const readDenied: string[] = [];
 					for (const path of [...new Set(deniedCandidates)]) (await exists(path) ? readDenied : absent).push(path);
 					const truth = JSON.parse(await readFile(target.truth, "utf8")) as Array<{ file?: unknown }>;
+					// A patched twin's key is empty; the files its fix touched are in its tree.
+					const fixed = Array.isArray(target.fixed_regions) ? (target.fixed_regions as Array<{ file?: unknown }>).map((r) => r.file) : [];
 					const sourceFile = await firstReadableFile(paths.targetDir, [
-						...truth.map((t) => t.file).filter((f): f is string => typeof f === "string"), "README.md",
+						...[...truth.map((t) => t.file), ...fixed].filter((f): f is string => typeof f === "string"), "README.md",
 					]);
 					if (!sourceFile) throw new Error(`${target.id}: target copy has no readable file`);
-					return { readDenied, readAllowed: [sourceFile, paths.workspaceDir, paths.configPath, ...(loadsSubagents(arm) ? [ctx.piSubagents.entry] : [])] };
+					return { readDenied, readAllowed: [sourceFile, paths.workspaceDir, paths.configPath, ...(loadsSubagents(options, arm) ? [ctx.piSubagents.entry] : [])] };
 				});
 				const launched = await launch(ctx, cell, PROBE_TIMEOUT_MS, () => !runState.aborted);
 				const verdict = await inspectProbe(ctx, cell, launched);
@@ -3408,7 +3936,7 @@ async function runPreflight(options: Options, manifest: JsonRecord, saveManifest
 
 	preflight.status = "passed";
 	await saveManifest();
-	return { ctx, targets: inputs.targets, expectedCells: inputs.expectedCells, official, exploratoryReasons };
+	return { ctx, targets: inputs.targets, expectedCells: inputs.expectedCells, official, exploratoryReasons, officialShapes: inputs.officialShapes, ...(inputs.kind ? { kind: inputs.kind } : {}) };
 }
 
 /**
@@ -3475,7 +4003,8 @@ export function planResume(pairs: ScheduledPair[], runs: JsonRecord[], attemptCe
 	for (const row of rows) if (row.attempt === maxAttempt[row.key]) latest[`${row.key}\u0000${row.arm}`] = row.run;
 	const plan: ResumePlan = { rerunKeys: [], blockedKeys: [], keepKeys: [], abandonedKeys: [], nextAttempt: {}, latest, reasons: {} };
 	for (const pair of pairs) {
-		const arms = (["baseline", "candidate"] as const).map((arm) => latest[`${pair.key}\u0000${arm}`])
+		// A patched twin counts when its twin arms are valid at one attempt (plan item 2.8).
+		const arms = armsOfPair(pair).map((arm) => latest[`${pair.key}\u0000${arm}`])
 			.map((r) => r && { valid: r.valid === true, infra: r.infraFailure === true });
 		const attempt = maxAttempt[pair.key] ?? 0;
 		// No requeue context: a resume is the operator's decision to spend more on
@@ -3500,9 +4029,13 @@ export function planResume(pairs: ScheduledPair[], runs: JsonRecord[], attemptCe
 }
 
 /** Identity fields a resume must find byte-identical between the grid's original manifest and its own recomputation. */
-export function resumeMismatches(prior: JsonRecord, fresh: JsonRecord): string[] {
+export function resumeMismatches(prior: JsonRecord, fresh: JsonRecord, allow: { passes?: number } = {}): string[] {
 	const diffs: string[] = [];
 	const eq = (label: string, a: unknown, b: unknown): void => { if (JSON.stringify(a ?? null) !== JSON.stringify(b ?? null)) diffs.push(label); };
+	// An extended grid (plan item 2.8) runs at its amended pass count: its
+	// schedule must be the original one with passes after it, and its pass count
+	// exactly the amended one. Everything else is compared as on any resume.
+	const extended = allow.passes !== undefined && allow.passes !== prior.passes;
 	// The probe-resolved model runtime is reported under its own name: a models.json
 	// edit (contextWindow, maxTokens, endpoint) is a different fault from a harness edit.
 	// So is the pinned pi-subagents install: a re-installed or edited tree is a
@@ -3517,11 +4050,27 @@ export function resumeMismatches(prior: JsonRecord, fresh: JsonRecord): string[]
 	eq("provider", prior.provider, fresh.provider);
 	eq("prompt", prior.prompt, fresh.prompt);
 	eq("promptSha256ByTarget", prior.promptSha256ByTarget, fresh.promptSha256ByTarget);
-	eq("schedule", prior.schedule, fresh.schedule);
-	eq("passes", prior.passes, fresh.passes);
+	if (extended) {
+		if (!Array.isArray(prior.schedule) || !Array.isArray(fresh.schedule) || !scheduleExtends(prior.schedule, fresh.schedule)) diffs.push("schedule");
+		if (fresh.passes !== allow.passes) diffs.push("passes");
+	} else {
+		eq("schedule", prior.schedule, fresh.schedule);
+		eq("passes", prior.passes, fresh.passes);
+	}
 	// The cap is half of what the candidate arm is; pairs run under two caps
 	// would be two candidates pooled into one comparison.
 	eq("candidateMaxAgents", prior.candidateMaxAgents, fresh.candidateMaxAgents);
+	// The same for every arm's scope (plan item 2.8): pairs run under two
+	// configurations of one arm would be two arms pooled into one.
+	eq("baselineMaxAgents", prior.baselineMaxAgents, fresh.baselineMaxAgents);
+	eq("maxVerifiers", prior.maxVerifiers, fresh.maxVerifiers);
+	eq("budgetArms", prior.budgetArms, fresh.budgetArms);
+	eq("subagentsArms", prior.subagentsArms, fresh.subagentsArms);
+	// Twin runs under two sets of arms, or of two twins files, would not add up to one control.
+	eq("twinArms", prior.twinArms, fresh.twinArms);
+	// A grid that claimed a kind is judged by it; resumed as another it would be two grids.
+	eq("gridKind", prior.gridKind, fresh.gridKind);
+	eq("passesFrom", prior.passesFrom, fresh.passesFrom);
 	// A grid that re-queued and stopped under one policy, then resumed under
 	// another, would be one grid run under two stopping rules.
 	eq("breaker", prior.breaker, fresh.breaker);
@@ -3533,12 +4082,16 @@ export function resumeMismatches(prior: JsonRecord, fresh: JsonRecord): string[]
 	eq("matched", prior.matched, fresh.matched);
 	const pr = (prior.requested ?? {}) as JsonRecord;
 	const fr = (fresh.requested ?? {}) as JsonRecord;
-	for (const k of ["provider", "model", "thinking", "passes", "only"]) eq(`requested.${k}`, pr[k], fr[k]);
+	for (const k of ["provider", "model", "thinking", "passes", "only"]) {
+		if (k === "passes" && extended) { if (fr.passes !== allow.passes) diffs.push("requested.passes"); continue; }
+		eq(`requested.${k}`, pr[k], fr[k]);
+	}
 	const pi = (prior.inputs ?? {}) as JsonRecord;
 	const fi = (fresh.inputs ?? {}) as JsonRecord;
 	eq("inputs.sourceSha256", pi.sourceSha256, fi.sourceSha256);
 	eq("inputs.truthSha256", pi.truthSha256, fi.truthSha256);
 	eq("inputs.corpusManifest.sha256", (pi.corpusManifest as JsonRecord | undefined)?.sha256, (fi.corpusManifest as JsonRecord | undefined)?.sha256);
+	eq("inputs.twinsManifest.sha256", (pi.twinsManifest as JsonRecord | undefined)?.sha256, (fi.twinsManifest as JsonRecord | undefined)?.sha256);
 	for (const arm of ["baseline", "candidate", ...(prior.matched !== undefined || fresh.matched !== undefined ? ["matched"] : [])]) {
 		const pa = (pi[arm] ?? {}) as JsonRecord;
 		const fa = (fi[arm] ?? {}) as JsonRecord;
@@ -3719,6 +4272,15 @@ export function newManifest(options: Options, mode: string): JsonRecord {
 		requested: { provider: options.provider, model: options.model, thinking: options.thinking, passes: options.passes, only: options.selected, authHorizonHours: options.authHorizonHours ?? null },
 		thinking: options.thinking, passes: options.passes, concurrency: options.concurrency, timeoutMs: options.timeoutMs,
 		...(options.candidateMaxAgents === undefined ? {} : { candidateMaxAgents: options.candidateMaxAgents }),
+		// Each per-arm option (plan item 2.8) is written only when it is set, so a
+		// grid that uses none writes the manifest every earlier grid wrote.
+		...(options.baselineMaxAgents === undefined ? {} : { baselineMaxAgents: options.baselineMaxAgents }),
+		...(options.maxVerifiers === undefined ? {} : { maxVerifiers: options.maxVerifiers }),
+		...(options.budgetArms === undefined ? {} : { budgetArms: options.budgetArms }),
+		...(options.subagentsArms === undefined ? {} : { subagentsArms: options.subagentsArms }),
+		...(options.twinArms === undefined ? {} : { twinArms: options.twinArms }),
+		...(options.gridKind === undefined ? {} : { gridKind: options.gridKind }),
+		...(options.passesFrom === undefined ? {} : { passesFrom: options.passesFrom }),
 		...(options.breaker === undefined ? {} : { breaker: options.breaker }),
 		// Only a grid that asked for retries records a policy, so a grid without
 		// one writes the v5 manifest, and a v5 manifest resumes with retries off.
@@ -3742,8 +4304,13 @@ async function main(): Promise<void> {
 	// including any `--only CVE-…`. Replace them before any child starts. The
 	// owner record also relies on this title to recognise a live runner.
 	process.title = RUNNER_TITLE;
-	if (parsed.kind === "resume") return await resumeMain(parsed.dir);
+	if (parsed.kind === "resume") return await resumeMain(parsed.dir, parsed.extendPasses, parsed.extendReason);
 	const options = parsed.options;
+	if (options.passesFromDir !== undefined) {
+		options.passesFrom = await adoptPasses(options.passesFromDir);
+		options.passes = options.passesFrom.passes;
+		console.log(`--passes-from ${options.passesFromDir}: ${options.passes} passes, fixed by that grid's ${options.passesFrom.amendment.kind} amendment of ${options.passesFrom.amendment.at}`);
+	}
 	const outHits = findLeaks({ "--out": options.out }, []);
 	if (outHits.length) throw new Error(`--out must not contain an advisory identifier (${outHits.join(", ")}): every cell path sits under it and reaches the model.`);
 	await ensureEmptyOutput(options.out);
@@ -3767,7 +4334,13 @@ async function claimResumeDir(dir: string): Promise<{ n: number; root: string }>
 	throw new Error(`--resume: no free resume-<n> directory in ${dir}`);
 }
 
-type ResumeInput = { prior: JsonRecord; priorRuns: JsonRecord[]; n: number; root: string };
+type ResumeInput = {
+	prior: JsonRecord; priorRuns: JsonRecord[]; n: number; root: string;
+	/** The pass count the grid runs at when its amendments differ from its manifest's (plan item 2.8). */
+	passes?: number;
+	/** The extension this resume makes, appended to amendments.jsonl when it is accepted. */
+	extension?: PassesAmendment;
+};
 type GridPaths = { manifestPath: string; preflightRoot: string; statusPath: string };
 
 /**
@@ -3779,13 +4352,28 @@ type GridPaths = { manifestPath: string; preflightRoot: string; statusPath: stri
  * manifest go to resume-<n>/, its recomputed pins are compared with the
  * untouched original, and only an accepted resume touches progress.json.
  */
-async function resumeMain(dir: string): Promise<void> {
+async function resumeMain(dir: string, extendPasses?: number, extendReason?: string): Promise<void> {
 	const priorPath = join(dir, "manifest.json");
 	if (!await exists(priorPath)) throw new Error(`--resume: no manifest.json in ${dir}`);
 	// Before anything is written: a resume beside a live runner would re-launch its in-flight pairs.
 	await claimOwner(dir, "resume");
 	const prior = parseJsonObject(await readFile(priorPath, "utf8")) ?? {};
 	const options = optionsFromManifest(dir, prior);
+	// The grid's pass count is its manifest's as amended (plan item 2.8);
+	// manifest.json itself is never rewritten. amendments.jsonl must agree with
+	// resumes.jsonl, or one of them was edited.
+	const { amendments, mismatch } = await gridAmendments(dir);
+	if (mismatch) throw new Error(`--resume refused: ${mismatch}`);
+	options.passes = currentPasses(options.passes, amendments);
+	const amendFrom = options.passes;
+	if (extendPasses !== undefined) {
+		const why = extensionRefusal({
+			passes: options.passes, official: prior.official === true, amendments, to: extendPasses,
+			...(options.gridKind === undefined ? {} : { gridKind: options.gridKind }), ...(extendReason === undefined ? {} : { reason: extendReason }),
+		}, loadComparePins().gridKinds);
+		if (why) throw new Error(`--resume refused: ${why}`);
+		options.passes = extendPasses;
+	}
 	const priorRuns: JsonRecord[] = [];
 	const runsPath = join(dir, "runs.jsonl");
 	if (await exists(runsPath)) {
@@ -3795,10 +4383,14 @@ async function resumeMain(dir: string): Promise<void> {
 		}
 	}
 	const { n, root } = await claimResumeDir(dir);
+	const extension = extendPasses === undefined ? undefined : await makeAmendment(dir, amendFrom, extendPasses, extendReason, n);
 	const manifest = newManifest(options, "resume");
 	manifest.resumedFrom = { id: prior.id ?? null, n, priorRuns: priorRuns.length, originalManifest: priorPath };
-	console.log(`resume ${n}: preflight and pin check in ${root}; the grid's manifest.json and progress.json are not written unless the resume is accepted`);
-	await driveGrid(options, manifest, { prior, priorRuns, n, root }, {
+	// Every amendment so far, this resume's included, and only when there is one.
+	const all = [...amendments, ...(extension ? [extension] : [])];
+	if (all.length) manifest.amendments = all;
+	console.log(`resume ${n}: preflight and pin check in ${root}; the grid's manifest.json and progress.json are not written unless the resume is accepted${extension ? `; ${extension.kind === "fix-passes" ? `fixes the grid at ${extension.to}` : `extends the grid from ${extension.from} to ${extension.to}`} passes` : ""}`);
+	await driveGrid(options, manifest, { prior, priorRuns, n, root, ...(all.length ? { passes: options.passes } : {}), ...(extension ? { extension } : {}) }, {
 		manifestPath: join(root, "manifest.json"), preflightRoot: root, statusPath: join(root, "status.json"),
 	});
 }
@@ -3840,7 +4432,7 @@ async function driveGrid(options: Options, manifest: JsonRecord, resume: ResumeI
 			throw error;
 		});
 		if (resume) {
-			const diffs = resumeMismatches(resume.prior, manifest);
+			const diffs = resumeMismatches(resume.prior, manifest, resume.passes === undefined ? {} : { passes: resume.passes });
 			if (diffs.length) {
 				await refuseResume(manifest, saveManifest, `--resume refused: the recomputed pins differ from the grid's original manifest.json at: ${diffs.join(", ")}. The inputs or harness changed; a resume must measure with the same rules.`, { mismatches: diffs });
 			}
@@ -3848,12 +4440,18 @@ async function driveGrid(options: Options, manifest: JsonRecord, resume: ResumeI
 		if (!pre.official) console.log(`EXPLORATORY — not an acceptance decision (${pre.exploratoryReasons.join("; ") || "grid is not the official five targets x three passes"})`);
 		if (options.dryRun) {
 			await reportStatus({ status: "dry-run-complete", official: pre.official, expectedArms: 0, completedRuns: 0 });
-			console.log(`dry-run passed · ${pre.targets.length} targets · ${options.passes} passes configured · scopes reap strays · answer keys sealed · escape vectors denied · provider network reachable · grader verified · ${pre.targets.length * (options.matched ? 3 : 2)} sealed tool probes · 1 sealed delegation probe (faux model: a worker that hands back, one pired's turn budget stops)${options.matched ? " · 1 sealed ceiling probe (faux model: the crossing reply's record lands, no second request)" : ""} · no model calls`);
+			const twinCount = pre.targets.filter((t) => t.twinOf !== undefined).length;
+			const probes = (pre.targets.length - twinCount) * (options.matched ? 3 : 2) + twinCount * (options.twinArms?.length ?? 0);
+			console.log(`dry-run passed · ${pre.targets.length - twinCount} targets${twinCount ? ` + ${twinCount} patched twins (${options.twinArms?.join(",")})` : ""} · ${options.passes} passes configured · scopes reap strays · answer keys sealed · escape vectors denied · provider network reachable · grader verified · ${probes} sealed tool probes · 1 sealed delegation probe (faux model: a worker that hands back, one pired's turn budget stops)${options.matched ? " · 1 sealed ceiling probe (faux model: the crossing reply's record lands, no second request)" : ""} · no model calls`);
 			console.log(`manifest ${paths.manifestPath}`);
 			gridFinished = true;
 			return;
 		}
-		const plan = resume ? planResume(planSchedule(pre.targets.map((t) => t.id), options.passes), resume.priorRuns, options.breaker?.attemptCeiling) : undefined;
+		const schedule = gridSchedule(pre, options);
+		const plan = resume ? planResume(schedule, resume.priorRuns, options.breaker?.attemptCeiling) : undefined;
+		// A patched twin never enters the gate, so a blocked or abandoned twin does
+		// not fix an official grid's decision and does not refuse its resume.
+		const twinKeys = new Set(schedule.filter((p) => p.twin).map((p) => p.key));
 		if (plan && resume) {
 			console.log(`resume: ${plan.rerunKeys.length} pair(s) to re-run, ${plan.keepKeys.length} kept, ${plan.blockedKeys.length} blocked (invalid, non-infra)${options.breaker ? `, ${plan.abandonedKeys.length} abandoned (attempt ceiling ${options.breaker.attemptCeiling})` : ""}`);
 			for (const key of plan.blockedKeys) console.log(`  blocked ${key}: ${plan.reasons[key] ?? ""}`);
@@ -3861,17 +4459,19 @@ async function driveGrid(options: Options, manifest: JsonRecord, resume: ResumeI
 			// A blocked pair already fixes an official grid's decision at
 			// incomplete_or_invalid; fail-fast only watched new outcomes, so a resume
 			// used to spend every remaining pair (up to ~50 two-hour sessions) anyway.
-			if (plan.blockedKeys.length && pre.official) {
+			const gateBlocked = plan.blockedKeys.filter((k) => !twinKeys.has(k));
+			const gateAbandoned = plan.abandonedKeys.filter((k) => !twinKeys.has(k));
+			if (gateBlocked.length && pre.official) {
 				await refuseResume(manifest, saveManifest,
-					`--resume refused: ${plan.blockedKeys.length} pair(s) of this official grid are invalid for a non-infrastructure reason (${plan.blockedKeys.map((k) => `${k}: ${plan.reasons[k] ?? ""}`).join("; ")}), so its decision is already incomplete_or_invalid and launching the remaining pairs would spend tokens on a fixed outcome.`,
-					{ blocked: plan.blockedKeys });
+					`--resume refused: ${gateBlocked.length} pair(s) of this official grid are invalid for a non-infrastructure reason (${gateBlocked.map((k) => `${k}: ${plan.reasons[k] ?? ""}`).join("; ")}), so its decision is already incomplete_or_invalid and launching the remaining pairs would spend tokens on a fixed outcome.`,
+					{ blocked: gateBlocked });
 			}
 			// An abandoned pair fixes the decision the same way, and refusing is what
 			// ends an auto-resume loop that would otherwise re-run it forever.
-			if (plan.abandonedKeys.length && pre.official) {
+			if (gateAbandoned.length && pre.official) {
 				await refuseResume(manifest, saveManifest,
-					`--resume refused: ${plan.abandonedKeys.length} pair(s) of this official grid reached the attempt ceiling (${plan.abandonedKeys.map((k) => `${k}: ${plan.reasons[k] ?? ""}`).join("; ")}), so its decision is already incomplete_or_invalid.`,
-					{ abandoned: plan.abandonedKeys });
+					`--resume refused: ${gateAbandoned.length} pair(s) of this official grid reached the attempt ceiling (${gateAbandoned.map((k) => `${k}: ${plan.reasons[k] ?? ""}`).join("; ")}), so its decision is already incomplete_or_invalid.`,
+					{ abandoned: gateAbandoned });
 			}
 			manifest.resumeDecision = { status: "accepted", rerun: plan.rerunKeys, kept: plan.keepKeys, blocked: plan.blockedKeys, ...(options.breaker ? { abandoned: plan.abandonedKeys } : {}) };
 			await saveManifest();
@@ -3879,7 +4479,10 @@ async function driveGrid(options: Options, manifest: JsonRecord, resume: ResumeI
 			await appendJsonl(join(output, "resumes.jsonl"), {
 				n: resume.n, id: manifest.id, manifest: relative(output, paths.manifestPath), acceptedAt: new Date().toISOString(),
 				rerun: plan.rerunKeys, kept: plan.keepKeys, blocked: plan.blockedKeys, ...(options.breaker ? { abandoned: plan.abandonedKeys } : {}),
+				...(resume.extension ? { extendedPasses: { from: resume.extension.from, to: resume.extension.to }, amendment: resume.extension } : {}),
 			});
+			// The amendment is on record only once the resume that makes it is accepted.
+			if (resume.extension) await appendJsonl(join(output, "amendments.jsonl"), resume.extension);
 			// Accepted: from here the resume is the grid's runner and reports in progress.json.
 			statusFile.path = join(output, "progress.json");
 		}
@@ -3986,6 +4589,23 @@ export function attemptReport(rows: JsonRecord[], abandonedKeys: string[]): Atte
 	return report;
 }
 
+/**
+ * The record of a pair's second arm that was not launched because the OAuth
+ * token would not have outlived it (plan item 2.8 review). Infrastructure, so
+ * --resume re-runs both arms once the token is refreshed.
+ */
+export function credentialStopOutcome(pair: ScheduledPair, arm: Arm, attempt: number): RunOutcome {
+	const record: JsonRecord = {
+		key: pair.key, target: pair.target, pass: pair.pass, arm, attempt, cellId: null, valid: false, notLaunched: true,
+		infraFailure: true, infraReason: "credential expiring: the OAuth token would not outlive this arm", totalTokens: null,
+		errors: ["not launched: the OAuth token expires inside this arm's run limit; refresh it outside the grid, then --resume"],
+	};
+	return {
+		metric: { key: pair.key, target: pair.target, pass: pair.pass, valid: false, truePositives: 0, precision: 0, totalClaims: 0, totalTokens: Number.NaN },
+		arm, cellId: "", seconds: 0, record, infraFailure: true,
+	};
+}
+
 /** The record of an arm whose launch threw inside the runner: a harness fault, never infrastructure. */
 function runnerFaultOutcome(pair: ScheduledPair, arm: Arm, attempt: number, error: unknown): RunOutcome {
 	const record: JsonRecord = { key: pair.key, target: pair.target, pass: pair.pass, arm, attempt, valid: false, infraFailure: false, errors: [`runner fault: ${message(error)}`] };
@@ -3996,7 +4616,7 @@ function runnerFaultOutcome(pair: ScheduledPair, arm: Arm, attempt: number, erro
 }
 
 /** The part of runState the pair loop reads and sets; the signal handlers share the same object. */
-export type GridStopState = { aborted: boolean; stopInvalid: boolean; stopReason: string | undefined; quotaExhausted: string | undefined; stoppedBy?: "matched" | undefined };
+export type GridStopState = { aborted: boolean; stopInvalid: boolean; stopReason: string | undefined; quotaExhausted: string | undefined; stoppedBy?: "matched" | "twin" | undefined; credentialExpiring?: string | undefined };
 
 /** What the pair loop needs from the grid around it. runGrid passes the real runner; the tests pass fakes and a fake clock. */
 export interface PairLoop {
@@ -4023,6 +4643,11 @@ export interface PairLoop {
 	out: string;
 	/** The matched arm (plan item 2.5). Absent, the loop is the one every earlier grid ran. */
 	matched?: MatchedLoop;
+	/**
+	 * Read before every launch (plan item 2.8 review): a reason to stop when the
+	 * provider's OAuth token would not outlive the next arm. Absent, no check.
+	 */
+	credentialCheck?: () => Promise<string | undefined>;
 }
 
 /**
@@ -4110,10 +4735,11 @@ export async function runPairs(loop: PairLoop): Promise<PairLoopResult> {
 		`provider quota exhausted on the ${arm} run of ${pair.target} pass ${pair.pass} (${state.quotaExhausted ?? ""}); the quota must reset before --resume`;
 	/**
 	 * Keep one arm's outcome and apply the stop rules to it: the quota stop, and
-	 * the fail-fast rule or the breaker. `gate` is false for a matched session:
-	 * a non-infrastructure failure there leaves the gate's decision open, so it
-	 * does not trip an official grid's breaker at once the way a pair's arm does;
-	 * it still counts as a failed launch. A throw is a bookkeeping failure.
+	 * the fail-fast rule or the breaker. `gate` is false for a matched session
+	 * and for a patched twin's run (plan item 2.8): a non-infrastructure failure
+	 * there leaves the gate's decision open, so it does not trip an official
+	 * grid's breaker at once the way a pair's arm does; it still counts as a
+	 * failed launch. A throw is a bookkeeping failure.
 	 */
 	const keep = async (outcome: RunOutcome, pair: ScheduledPair, arm: Arm, attempt: number, launched: boolean, gate: boolean): Promise<void> => {
 		await loop.settle(outcome);
@@ -4124,7 +4750,7 @@ export async function runPairs(loop: PairLoop): Promise<PairLoopResult> {
 		if (!breaker) {
 			if (!outcome.metric.valid && !state.stopInvalid && !state.aborted) {
 				state.stopInvalid = true;
-				if (!gate) state.stoppedBy = "matched";
+				if (!gate) state.stoppedBy = pair.twin ? "twin" : "matched";
 				state.stopReason = outcome.quotaExhausted
 					? quotaStop(arm, pair)
 					: `stopped after an invalid ${arm} run of ${pair.target} pass ${pair.pass}${outcome.infraFailure ? ` (infra: ${String(outcome.record.infraReason ?? "")})` : ""}`;
@@ -4138,7 +4764,7 @@ export async function runPairs(loop: PairLoop): Promise<PairLoopResult> {
 			});
 			if (verdict.tripped && !state.stopInvalid && !state.aborted) {
 				state.stopInvalid = true;
-				if (!gate) state.stoppedBy = "matched";
+				if (!gate) state.stoppedBy = pair.twin ? "twin" : "matched";
 				state.stopReason = outcome.quotaExhausted
 					? quotaStop(arm, pair)
 					: `circuit breaker tripped on the ${arm} run of ${pair.target} pass ${pair.pass} attempt ${attempt}: ${verdict.reason ?? ""}`;
@@ -4146,6 +4772,17 @@ export async function runPairs(loop: PairLoop): Promise<PairLoopResult> {
 			}
 		}
 		await loop.report(outcome, pair, arm, attempt);
+	};
+	/** Stop the grid, resumably, when the credential would not outlive the next launch. */
+	const credentialStop = async (): Promise<string | undefined> => {
+		if (!loop.credentialCheck) return undefined;
+		const why = await loop.credentialCheck();
+		if (why) {
+			if (!state.credentialExpiring) loop.log(`CREDENTIAL EXPIRING — ${why}. No further arm will launch; refresh it outside the grid, then --resume ${loop.out}.`);
+			state.credentialExpiring ??= why;
+			if (!state.stopInvalid) { state.stopInvalid = true; state.stopReason = why; }
+		}
+		return why;
 	};
 	const runPair = async ({ pair, attempt, firstAttempt, matchedOnly }: Queued): Promise<void> => {
 		if (matchedOnly) {
@@ -4164,12 +4801,19 @@ export async function runPairs(loop: PairLoop): Promise<PairLoopResult> {
 			try {
 				let outcome: RunOutcome;
 				let launched = false;
-				if (first && (!first.metric.valid || state.aborted)) {
+				const partnerBlocked = first !== undefined && (!first.metric.valid || state.aborted);
+				const expiring = !partnerBlocked ? await credentialStop() : undefined;
+				if (expiring && !first) break;
+				if (partnerBlocked) {
 					// The partner is not launched: a first arm invalid for a non-infra
 					// reason blocks the pair and one invalid for infra re-runs both arms,
 					// so up to two hours of this arm could never be compared. It is
 					// recorded, as infra exactly when the first arm was.
-					outcome = notLaunchedOutcome(pair, arm, attempt, first, state.aborted);
+					outcome = notLaunchedOutcome(pair, arm, attempt, first!, state.aborted);
+				} else if (expiring) {
+					// The first arm ran; this one is recorded as not launched for
+					// infrastructure, so --resume re-runs both at the next attempt.
+					outcome = credentialStopOutcome(pair, arm, attempt);
 				} else {
 					launched = true;
 					try {
@@ -4180,7 +4824,7 @@ export async function runPairs(loop: PairLoop): Promise<PairLoopResult> {
 				}
 				first ??= outcome;
 				byArm[arm] = outcome;
-				await keep(outcome, pair, arm, attempt, launched, true);
+				await keep(outcome, pair, arm, attempt, launched, !pair.twin);
 			} catch (error) {
 				// The bookkeeping itself failed; stop launching and keep draining.
 				if (!state.stopInvalid) { state.stopInvalid = true; state.stopReason = `bookkeeping write failed: ${message(error)}`; }
@@ -4188,14 +4832,15 @@ export async function runPairs(loop: PairLoop): Promise<PairLoopResult> {
 			}
 		}
 		// The matched arm follows a pair whose two arms are valid at this attempt,
-		// the only pairs the comparison keeps. A grid already stopping launches none.
-		if (loop.matched && byArm.baseline?.metric.valid && byArm.candidate?.metric.valid) {
+		// the only pairs the comparison keeps. A grid already stopping launches none,
+		// and a patched twin never has one.
+		if (loop.matched && !pair.twin && byArm.baseline?.metric.valid && byArm.candidate?.metric.valid) {
 			await runMatched(pair, attempt, byArm.candidate, []);
 		}
 		// A signal leaves the pair as it is; its resume decides from runs.jsonl.
 		if (!policy || state.aborted) return;
 		const now = loop.nowMs();
-		const arms = [byArm.baseline, byArm.candidate].map((o) => o && { valid: o.metric.valid, infra: o.infraFailure });
+		const arms = armsOfPair(pair).map((arm) => byArm[arm]).map((o) => o && { valid: o.metric.valid, infra: o.infraFailure });
 		const action = nextPairAction(attempt, arms, { attemptCeiling: policy.attemptCeiling, requeue: { policy, atMs: now, attemptsThisRun: attempt - firstAttempt + 1 } });
 		if (action.kind === "blocked") {
 			result.blocked.push({ key: pair.key, attempt, reason: action.reason });
@@ -4203,8 +4848,9 @@ export async function runPairs(loop: PairLoop): Promise<PairLoopResult> {
 			result.abandoned.push({ key: pair.key, attempt, reason: action.reason });
 			loop.log(`ABANDONED ${pair.target} pass ${pair.pass} · ${action.reason}`);
 			// Like a blocked run, an abandoned pair fixes an official grid's decision,
-			// so the pairs after it would spend tokens on a known outcome.
-			if (loop.official && !state.stopInvalid) {
+			// so the pairs after it would spend tokens on a known outcome. A patched
+			// twin is outside the decision, so it does not stop the grid.
+			if (loop.official && !pair.twin && !state.stopInvalid) {
 				state.stopInvalid = true;
 				state.stopReason = `${pair.key} failed at the attempt ceiling of ${policy.attemptCeiling}, so this official grid's decision is already incomplete_or_invalid`;
 			}
@@ -4255,6 +4901,8 @@ export async function runPairs(loop: PairLoop): Promise<PairLoopResult> {
 				loop.log(`MATCHED SESSION ${step.kind.toUpperCase()} ${pair.target} pass ${pair.pass} session ${step.index} · ${step.reason}`);
 				return;
 			}
+			// A session is an arm too: none starts that the token would not outlive.
+			if (await credentialStop()) return;
 			const name = `${pair.key}/${step.index}`;
 			const spec: MatchedSessionSpec = {
 				index: step.index, k: matched.policy.k, kMax: matched.policy.kMax, sessionAttempt: step.attempt, budget: budget.budget, ceiling: step.ceiling,
@@ -4317,6 +4965,16 @@ export async function runPairs(loop: PairLoop): Promise<PairLoopResult> {
 	await Promise.all(Array.from({ length: Math.min(loop.concurrency, Math.max(1, loop.pairs.length)) }, worker));
 	result.breaker = breaker ? breaker.verdict : null;
 	return result;
+}
+
+/**
+ * A grid's runs split into the gate's and the patched twins' (plan item 2.8).
+ * compareMatchedRuns reads a run whose key it does not expect as "unexpected",
+ * which makes the grid incomplete, so a twin's run left in would keep every
+ * grid with twins from a decision.
+ */
+export function splitTwinRuns<T extends { metric: { target: string } }>(outcomes: readonly T[], twinIds: ReadonlySet<string>): { gate: T[]; twins: T[] } {
+	return { gate: outcomes.filter((o) => !twinIds.has(o.metric.target)), twins: outcomes.filter((o) => twinIds.has(o.metric.target)) };
 }
 
 /** A persisted run record as the loop's outcome, the way a resume seeds the pairs it keeps. */
@@ -4468,12 +5126,52 @@ async function summarizeMatched(policy: MatchedPolicy, pairs: ScheduledPair[], c
 	};
 }
 
+/** Where the v6 pre-registration's decision rule is computed (plan item 2.8); the script lands separately. */
+export const V6_DECISION = { rule: "v6 pre-registration", computedBy: "eval/v6-decision.ts" } as const;
+
+/**
+ * The verdict fields of summary.json. A grid without a kind carries ADR-026's
+ * approval exactly as before. A grid of a kind (plan item 2.8) is decided by
+ * the v6 pre-registration's rule, which a separate analysis computes from its
+ * runs, so it carries no approvedForThisModel, and its comparisons lose
+ * ADR-026's gate and decision string: a reader must not take a v6 grid's
+ * outcome from a rule it was never judged by. It says only whether the grid
+ * is ready for that analysis, and why not.
+ */
+export function verdictFields(gridKind: string | undefined, v: { approved: boolean; notApprovedReasons: string[]; comparison: MatchedComparison; meteredOnlyComparison?: MatchedComparison }): { head: JsonRecord; comparison: JsonRecord; meteredOnlyComparison?: JsonRecord } {
+	if (gridKind === undefined) {
+		return {
+			// One grid measures one model; acceptance needs both priority models. This
+			// name and flag keep a single-model summary from reading as final acceptance.
+			head: { approvedForThisModel: v.approved, approved: v.approved, acceptanceRequiresBothModels: true, notApprovedReasons: v.approved ? [] : v.notApprovedReasons },
+			comparison: v.comparison as unknown as JsonRecord,
+			...(v.meteredOnlyComparison ? { meteredOnlyComparison: v.meteredOnlyComparison as unknown as JsonRecord } : {}),
+		};
+	}
+	const descriptive = (c: MatchedComparison): JsonRecord => {
+		const { gate: _gate, decision: _decision, ...rest } = c;
+		return rest as unknown as JsonRecord;
+	};
+	return {
+		head: { decision: { ...V6_DECISION, ready: v.notApprovedReasons.length === 0, notReadyReasons: v.notApprovedReasons } },
+		comparison: descriptive(v.comparison),
+		...(v.meteredOnlyComparison ? { meteredOnlyComparison: descriptive(v.meteredOnlyComparison) } : {}),
+	};
+}
+
 async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, plan: ResumePlan | undefined, priorRuns: JsonRecord[]): Promise<void> {
 	const { ctx, expectedCells, official } = pre;
 	const output = ctx.out;
 	const targetById = new Map(pre.targets.map((t) => [t.id, t]));
-	const pairs = planSchedule(pre.targets.map((t) => t.id), options.passes);
-	const expectedArms = pairs.length * (2 + (options.matched?.k ?? 0));
+	const pairs = gridSchedule(pre, options);
+	// A pilot's grid is blind until its one amendment fixes the pass count (plan
+	// item 2.8 review): nothing that shows an arm's numbers is printed or summarised.
+	const blinded = pre.kind?.extendablePasses === true && !(Array.isArray(manifest.amendments) && manifest.amendments.length);
+	// A patched twin's runs (plan item 2.8) count toward progress, in their own arms, and never toward the gate.
+	const twinIds = new Set(pre.targets.filter((t) => t.twinOf !== undefined).map((t) => t.id));
+	const gatePairs = pairs.filter((p) => !p.twin);
+	const expectedArms = gatePairs.length * (2 + (options.matched?.k ?? 0)) + pairs.filter((p) => p.twin).reduce((n, p) => n + p.order.length, 0);
+	const onGate = (o: RunOutcome): boolean => !twinIds.has(o.metric.target);
 	// On a resume, seed the outcomes with the latest attempt of every pair not
 	// being re-run, so the comparison sees the whole grid. Only the re-run pairs
 	// are launched; a blocked pair carries its invalid record and keeps the grid
@@ -4490,9 +5188,11 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 	}
 	// The matched sessions of the pairs a resume keeps: their latest runs are
 	// carried, and the ones still missing or failed for infrastructure are queued.
-	const matchedResume = plan && options.matched ? planMatchedResume(plan, priorRuns, options.matched, options.breaker?.attemptCeiling) : undefined;
+	// A kept twin pair has no matched sessions: only the gate pairs a resume keeps are read for them.
+	const gateKeep = plan ? plan.keepKeys.filter((key) => gatePairs.some((p) => p.key === key)) : [];
+	const matchedResume = plan && options.matched ? planMatchedResume({ ...plan, keepKeys: gateKeep }, priorRuns, options.matched, options.breaker?.attemptCeiling) : undefined;
 	if (plan && options.matched) {
-		for (const key of plan.keepKeys) {
+		for (const key of gateKeep) {
 			const candidate = plan.latest[`${key}\u0000candidate`];
 			const attempt = typeof candidate?.attempt === "number" ? candidate.attempt : 1;
 			for (const record of latestMatchedSessions(priorRuns, key, attempt)) outcomes.push(outcomeFromRecord(record, "matched"));
@@ -4539,13 +5239,18 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 			const state = outcome.metric.valid ? "valid" : outcome.record.notLaunched === true ? "NOT LAUNCHED" : "INVALID";
 			const session = sessionOf(outcome.record);
 			const label = session && options.matched ? `${arm} session ${session.index} (k=${options.matched.k}, up to ${options.matched.kMax}; session attempt ${session.sessionAttempt})` : arm;
-			console.log(`${state} ${label} ${pair.target} pass ${pair.pass} attempt ${attempt} · ${outcome.seconds.toFixed(0)}s · tokens ${tokens}${outcome.infraFailure ? ` · infra: ${String(outcome.record.infraReason ?? "")}` : ""}`);
+			// A blind pilot prints no run's time or tokens: they are an arm's cost.
+			console.log(`${state} ${label} ${pair.target} pass ${pair.pass} attempt ${attempt}${blinded ? "" : ` · ${outcome.seconds.toFixed(0)}s · tokens ${tokens}`}${outcome.infraFailure ? ` · infra: ${String(outcome.record.infraReason ?? "")}` : ""}`);
 		},
 		nowMs: () => Date.now(),
 		sleep: (ms) => new Promise((done) => { setTimeout(done, ms); }),
 		log: (line) => console.log(line),
 		warn: (line) => console.error(line),
 		out: output,
+		credentialCheck: async () => {
+			const authText = await readFile(join(AGENT_BASE, "auth.json"), "utf8").catch(() => undefined);
+			return credentialStopReason(credentialExpiry(authText, options.provider), options.provider, Date.now(), options.timeoutMs + AUTH_MARGIN_MS);
+		},
 		...(options.matched ? {
 			matched: {
 				policy: options.matched,
@@ -4561,21 +5266,26 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 	const interrupted = runState.aborted;
 	const stoppedInvalid = runState.stopInvalid;
 	const abandonedKeys = [...new Set([...(plan?.abandonedKeys ?? []), ...loop.abandoned.map((a) => a.key)])];
-	const compared = atHighestAttempt(outcomes);
+	// The gate reads the gate targets' runs only; a twin's are summarised apart.
+	const { gate: compared, twins: twinOutcomes } = splitTwinRuns(atHighestAttempt(outcomes), twinIds);
 	const comparison = compareMatchedRuns(
 		compared.filter((o) => o.arm === "baseline").map((o) => o.metric),
 		compared.filter((o) => o.arm === "candidate").map((o) => o.metric),
-		expectedCells,
+		expectedCells, pre.officialShapes,
 	);
 	// Under a retry policy the gate reads metered tokens plus the estimate for
 	// unmetered attempts; the same comparison on metered tokens alone is reported
 	// beside it, so a verdict that rests on the estimate shows as one.
 	const meteredOnlyComparison = options.retryPolicy ? compareMatchedRuns(
-		outcomes.filter((o) => o.arm === "baseline").map((o) => metricFromRecord(o.record, "metered")),
-		outcomes.filter((o) => o.arm === "candidate").map((o) => metricFromRecord(o.record, "metered")),
-		expectedCells,
+		outcomes.filter((o) => o.arm === "baseline" && onGate(o)).map((o) => metricFromRecord(o.record, "metered")),
+		outcomes.filter((o) => o.arm === "candidate" && onGate(o)).map((o) => metricFromRecord(o.record, "metered")),
+		expectedCells, pre.officialShapes,
 	) : undefined;
-	const matchedSummary = options.matched ? await summarizeMatched(options.matched, pairs, compared, outcomes, expectedCells, targetById, output, loop.matched, matchedResume) : undefined;
+	const matchedSummary = options.matched ? await summarizeMatched(options.matched, gatePairs, compared, outcomes, expectedCells, targetById, output, loop.matched, matchedResume) : undefined;
+	const twinSummary = options.twinArms?.length && twinIds.size ? {
+		...summarizeTwins(options.twinArms, pre.targets.filter((t) => t.twinOf !== undefined).map((t) => ({ id: t.id, twinOf: t.twinOf! })), options.passes, twinOutcomes.map((o) => o.record)),
+		stops: summarizeStops(twinOutcomes.map((o) => ({ arm: o.arm, key: String((o.record as JsonRecord).key ?? o.cellId), valid: o.metric.valid, stop: (o.record as JsonRecord).stop }))),
+	} : undefined;
 	// Each cell loads node_modules afresh, and hashing it (~25k files) per launch
 	// is too slow, so it is re-hashed once at the end: a runtime that moved during
 	// the grid means the arms may not have run the same pi, and nothing is approved.
@@ -4586,8 +5296,26 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 	// comparison row present, and the approval could count a row runs.jsonl never got.
 	// A stop a matched session caused leaves every gate row it did not prevent
 	// written; the gate's own completeness decides, as the arm never enters it.
-	const stopWithholdsApproval = stoppedInvalid && runState.stoppedBy !== "matched";
-	const approved = official && !interrupted && !stopWithholdsApproval && runtimeStable && comparison.complete && comparison.decision === APPROVAL;
+	// So does a stop a patched twin's run caused (plan item 2.8).
+	const stopWithholdsApproval = stoppedInvalid && runState.stoppedBy === undefined;
+	// The pass-count amendments, cross-checked again at the summary: an edit to
+	// amendments.jsonl or resumes.jsonl during the grid keeps it from a decision.
+	const recorded = await gridAmendments(output).catch((error: unknown) => ({ amendments: [] as PassesAmendment[], mismatch: `amendments unreadable: ${message(error)}` }));
+	const amendmentReasons = [
+		...(recorded.mismatch ? [`pass-count amendments: ${recorded.mismatch}`] : []),
+		...(JSON.stringify(recorded.amendments) !== JSON.stringify(manifest.amendments ?? []) ? ["pass-count amendments: amendments.jsonl changed during the grid"] : []),
+		// A pilot's grid is not ready until its one amendment fixes the pass count.
+		...(pre.kind?.extendablePasses && !recorded.amendments.length ? [`the pass count is not fixed yet: the pilot's amendment (--resume ${output} --extend-passes <n> --extend-reason <text>) is pending`] : []),
+	];
+	// A grid of a kind (plan item 2.8) is decided by the v6 pre-registration's
+	// rule, computed elsewhere: ADR-026's approval is neither computed nor printed.
+	const approved = options.gridKind === undefined && official && !interrupted && !stopWithholdsApproval && runtimeStable && comparison.complete && comparison.decision === APPROVAL
+		&& amendmentReasons.length === 0;
+	// A patched twin that gave up or was abandoned is no reason the gate did not
+	// approve; it is listed in the breaker block and the twins block instead.
+	const twinKeys = new Set(pairs.filter((p) => p.twin).map((p) => p.key));
+	const gateGaveUp = loop.gaveUp.filter((g) => !twinKeys.has(g.key));
+	const gateAbandoned = abandonedKeys.filter((k) => !twinKeys.has(k));
 	// Why a non-approval is a non-approval, so the console and summary never show
 	// the approval string alone when the candidate was not approved.
 	const notApprovedReasons = [
@@ -4595,20 +5323,30 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 		...(interrupted ? ["interrupted before the grid finished"] : []),
 		...(stoppedInvalid && !interrupted ? [`stopped early: ${runState.stopReason ?? "an invalid run"}`] : []),
 		...(runState.quotaExhausted ? [`provider quota exhausted (${runState.quotaExhausted}); it must reset before --resume`] : []),
-		...(loop.gaveUp.length ? [`${loop.gaveUp.length} pair(s) reached the attempt cap (${loop.gaveUp.map((g) => g.key).join(", ")}); --resume re-runs them`] : []),
-		...(abandonedKeys.length ? [`${abandonedKeys.length} pair(s) abandoned at the attempt ceiling (${abandonedKeys.join(", ")}); no resume re-runs them`] : []),
+		...(runState.credentialExpiring ? [`stopped before the OAuth token expired (${runState.credentialExpiring})`] : []),
+		...(gateGaveUp.length ? [`${gateGaveUp.length} pair(s) reached the attempt cap (${gateGaveUp.map((g) => g.key).join(", ")}); --resume re-runs them`] : []),
+		...(gateAbandoned.length ? [`${gateAbandoned.length} pair(s) abandoned at the attempt ceiling (${gateAbandoned.join(", ")}); no resume re-runs them`] : []),
 		...(!runtimeStable ? ["the pi runtime changed during the grid"] : []),
 		...(!comparison.complete ? [`grid incomplete or invalid: ${comparison.missingOrInvalid.slice(0, 4).join("; ") || "missing pairs"}`] : []),
-		...(comparison.complete && comparison.decision !== APPROVAL ? [`comparison decision: ${comparison.decision}`] : []),
+		...(comparison.complete && comparison.decision !== APPROVAL && options.gridKind === undefined ? [`comparison decision: ${comparison.decision}`] : []),
+		...amendmentReasons,
 	];
+	const verdictOut = verdictFields(options.gridKind, { approved, notApprovedReasons, comparison, ...(meteredOnlyComparison ? { meteredOnlyComparison } : {}) });
 	const inputsRecord = (manifest.inputs ?? {}) as JsonRecord;
 	const baselineInput = (inputsRecord.baseline ?? {}) as JsonRecord;
 	const candidateInput = (inputsRecord.candidate ?? {}) as JsonRecord;
 	const summary = {
 		id: manifest.id, mode: manifest.mode, provider: options.provider, model: options.model, thinking: options.thinking,
 		official, decisionScope: official ? "official" : "exploratory", exploratoryReasons: pre.exploratoryReasons,
+		// Only a grid launched as a kind names one.
+		...(options.gridKind === undefined ? {} : { gridKind: options.gridKind }),
+		// Only a grid whose passes were extended lists the amendments (plan item 2.8).
+		...(Array.isArray(manifest.amendments) ? { passesAmendments: manifest.amendments } : {}),
 		interrupted, interruptedAt: runState.abortedAtMs === undefined ? null : new Date(runState.abortedAtMs).toISOString(),
-		stoppedInvalid, stopReason: runState.stopReason ?? null, quotaExhausted: runState.quotaExhausted ?? null, runtimeStable,
+		stoppedInvalid, stopReason: runState.stopReason ?? null, quotaExhausted: runState.quotaExhausted ?? null,
+		// Only a grid that stopped before its token expired says so.
+		...(runState.credentialExpiring ? { credentialExpiring: runState.credentialExpiring } : {}),
+		runtimeStable,
 		// Only a grid run with --breaker has this block, so a fail-fast grid's summary is what it always was.
 		...(options.breaker === undefined ? {} : {
 			breaker: {
@@ -4619,59 +5357,91 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 			},
 		}),
 		completeRunGrid: comparison.complete,
-		// One grid measures one model; acceptance needs both priority models. This
-		// name and flag keep a single-model summary from reading as final acceptance.
-		approvedForThisModel: approved, approved, acceptanceRequiresBothModels: true, notApprovedReasons: approved ? [] : notApprovedReasons,
+		...verdictOut.head,
 		inputDigests: {
 			baseline: baselineInput.sha256 ?? null, candidate: candidateInput.sha256 ?? null,
 			baselineStaged: baselineInput.stagedDigest ?? null, candidateStaged: candidateInput.stagedDigest ?? null,
 		},
 		runtimeSha256: ctx.pins.piRuntimeSha256, runtimeAfterSha256: runtimeAfter,
-		comparison,
-		...(options.retryPolicy ? { retryPolicy: options.retryPolicy, meteredOnlyComparison } : {}),
+		comparison: verdictOut.comparison,
+		...(options.retryPolicy ? { retryPolicy: options.retryPolicy, meteredOnlyComparison: verdictOut.meteredOnlyComparison } : {}),
 		// Only a grid run with --matched has this block; the gate above never reads it.
 		...(matchedSummary ? { matched: matchedSummary } : {}),
+		// Only a grid run with --twin-arms has this block; the gate above never reads it.
+		...(twinSummary ? { twins: twinSummary } : {}),
 		interpretation: {
 			precision: "lower bound against patch-localized keys; unmatched claims are unadjudicated and are not confirmed false positives",
 			passes: "ranges are across complete five-target pooled passes; three passes are coarse and are not a significance test",
-			approval: "one grid is one model; approvedForThisModel requires the official five-target, three-pass grid with matched pins and every run valid; candidate pass-mean pooled TP and grid-pooled precision each at least 85% of baseline (ADR-026); no target whose candidate TP range lies wholly below its baseline range; and lower mean total parent+worker+compaction tokens. Corpus acceptance additionally requires the same for the second priority model.",
+			...(options.gridKind === undefined ? { approval: APPROVAL_INTERPRETATION } : {}),
 			tokens: "an invalid run carries no token count; it is excluded from the comparison and the grid is then incomplete",
+			...(options.gridKind === undefined ? {} : { gridKind: "official here means the grid ran as its pinned kind; the grid is decided by the v6 pre-registration's rule, computed from these runs by eval/v6-decision.ts, and ADR-026's approval is not computed; comparison carries the descriptive pass means without ADR-026's gate" }),
 			...(options.retryPolicy ? { retryTokens: "the comparison's tokens are metered tokens plus a lower-bound estimate for failed attempts pi retried that reported no usage (the previous reply's prompt plus output); meteredOnlyComparison reads metered tokens alone" } : {}),
 		},
-		delegationAudit: summarizeAudits(outcomes.flatMap((o) => {
+		// The gate targets' runs only: a patched twin's are in the twins block.
+		delegationAudit: summarizeAudits(outcomes.filter(onGate).flatMap((o) => {
 			const audit = (o.record as JsonRecord).delegationAudit as DelegationAudit | { error: string } | null | undefined;
 			return o.arm === "candidate" && audit && !("error" in audit) ? [{ label: `${String((o.record as JsonRecord).key ?? o.cellId)}`, audit }] : [];
 		})),
 		// Per arm, so an arm that hands the turn back early is visible next to its TP.
-		stops: summarizeStops(outcomes.map((o) => ({ arm: o.arm, key: String((o.record as JsonRecord).key ?? o.cellId), valid: o.metric.valid, stop: (o.record as JsonRecord).stop }))),
+		stops: summarizeStops(outcomes.filter(onGate).map((o) => ({ arm: o.arm, key: String((o.record as JsonRecord).key ?? o.cellId), valid: o.metric.valid, stop: (o.record as JsonRecord).stop }))),
 		rows: outcomes.map((o) => o.record),
 	};
-	await serially(() => writeJson(join(output, "summary.json"), summary));
+	// A blind pilot's summary holds the paired SD only; the rest is sealed.
+	const pilot = blinded ? pilotPairedSd(compared.filter((o) => o.arm === "baseline").map((o) => o.metric), compared.filter((o) => o.arm === "candidate").map((o) => o.metric)) : undefined;
+	const sealedPath = join(output, "sealed", "comparison.json");
+	if (pilot) {
+		const view = blindSummary(summary, pilot, sealedPath);
+		await writeSealed(sealedPath, view.sealed);
+		await serially(() => writeJson(join(output, "summary.json"), view.summary));
+	} else {
+		await serially(() => writeJson(join(output, "summary.json"), summary));
+	}
 	await progress(interrupted ? "interrupted" : stoppedInvalid ? "stopped-invalid" : comparison.complete ? "complete" : "incomplete");
 	if (!official) console.log("EXPLORATORY — not an acceptance decision");
 	if (interrupted) console.log("INTERRUPTED — grid incomplete");
 	if (stoppedInvalid && !interrupted) console.log(`STOPPED EARLY — ${runState.stopReason ?? "an invalid run"}`);
 	if (runState.quotaExhausted) console.log(`QUOTA EXHAUSTED — wait for the reset, then: node --experimental-strip-types eval/delegation-compare.ts --resume ${output}`);
+	if (runState.credentialExpiring) console.log(`CREDENTIAL EXPIRING — refresh the token outside the grid, then: node --experimental-strip-types eval/delegation-compare.ts --resume ${output}`);
 	if (loop.gaveUp.length) console.log(`ATTEMPT CAP — ${loop.gaveUp.length} pair(s) left for --resume: ${loop.gaveUp.map((g) => g.key).join(", ")}`);
 	if (abandonedKeys.length) console.log(`ABANDONED — ${abandonedKeys.length} pair(s) failed at the attempt ceiling and will not be re-run: ${abandonedKeys.join(", ")}`);
-	console.log(`pass-mean TP ${comparison.baseline.truePositives.mean.toFixed(2)} → ${comparison.candidate.truePositives.mean.toFixed(2)}; precision ${comparison.baseline.precision.mean.toFixed(3)} → ${comparison.candidate.precision.mean.toFixed(3)}`);
-	const fmt = (x: number | null) => x === null ? "n/a" : x.toFixed(3);
-	// A stopped or partial grid is not evaluated, which is not the same as failed:
-	// printing BELOW there read as a quality failure the candidate did not have.
-	const verdict = (within: boolean | null | undefined): string => !comparison.complete || within === null || within === undefined ? "n/a (grid incomplete)" : within ? "ok" : "BELOW";
-	console.log(`gate: TP ${comparison.candidate.truePositives.mean.toFixed(2)} vs floor ${comparison.gate.truePositiveFloor.toFixed(2)} (${verdict(comparison.gate.truePositivesWithinMargin)}); pooled precision ${fmt(comparison.baseline.pooledPrecision)} → ${fmt(comparison.candidate.pooledPrecision)} vs floor ${fmt(comparison.gate.precisionFloor)} (${verdict(comparison.gate.precisionWithinMargin)}); targets below baseline range: ${comparison.gate.targetsBelowBaselineRange.join(", ") || "none"}`);
-	for (const t of comparison.targets) {
-		console.log(`  ${t.target}: TP ${t.baseline.truePositives.min}–${t.baseline.truePositives.max} → ${t.candidate.truePositives.min}–${t.candidate.truePositives.max}; precision ${fmt(t.baseline.pooledPrecision)} → ${fmt(t.candidate.pooledPrecision)}; tokens ${t.baseline.totalTokens.mean.toFixed(0)} → ${t.candidate.totalTokens.mean.toFixed(0)}`);
+	if (pilot) {
+		console.log(`PILOT (blind until the pass count is fixed): ${pilot.validPairs} valid pair(s) · paired SD of ${pilot.metric}: ${pilot.sd === null ? "n/a (fewer than 2 pairs)" : pilot.sd.toFixed(3)} · the arms' numbers are sealed in ${sealedPath}, not printed`);
+	} else {
+		console.log(`pass-mean TP ${comparison.baseline.truePositives.mean.toFixed(2)} → ${comparison.candidate.truePositives.mean.toFixed(2)}; precision ${comparison.baseline.precision.mean.toFixed(3)} → ${comparison.candidate.precision.mean.toFixed(3)}`);
+		const fmt = (x: number | null) => x === null ? "n/a" : x.toFixed(3);
+		// A stopped or partial grid is not evaluated, which is not the same as failed:
+		// printing BELOW there read as a quality failure the candidate did not have.
+		const verdict = (within: boolean | null | undefined): string => !comparison.complete || within === null || within === undefined ? "n/a (grid incomplete)" : within ? "ok" : "BELOW";
+		// ADR-026's gate is not the rule a kind grid is decided by, so it is not printed there.
+		if (options.gridKind === undefined) console.log(`gate: TP ${comparison.candidate.truePositives.mean.toFixed(2)} vs floor ${comparison.gate.truePositiveFloor.toFixed(2)} (${verdict(comparison.gate.truePositivesWithinMargin)}); pooled precision ${fmt(comparison.baseline.pooledPrecision)} → ${fmt(comparison.candidate.pooledPrecision)} vs floor ${fmt(comparison.gate.precisionFloor)} (${verdict(comparison.gate.precisionWithinMargin)}); targets below baseline range: ${comparison.gate.targetsBelowBaselineRange.join(", ") || "none"}`);
+		for (const t of comparison.targets) {
+			console.log(`  ${t.target}: TP ${t.baseline.truePositives.min}–${t.baseline.truePositives.max} → ${t.candidate.truePositives.min}–${t.candidate.truePositives.max}; precision ${fmt(t.baseline.pooledPrecision)} → ${fmt(t.candidate.pooledPrecision)}; tokens ${t.baseline.totalTokens.mean.toFixed(0)} → ${t.candidate.totalTokens.mean.toFixed(0)}`);
+		}
+		console.log(`pass-mean tokens ${comparison.baseline.totalTokens.mean.toFixed(0)} → ${comparison.candidate.totalTokens.mean.toFixed(0)}; ranges ${comparison.baseline.totalTokens.min.toFixed(0)}–${comparison.baseline.totalTokens.max.toFixed(0)} / ${comparison.candidate.totalTokens.min.toFixed(0)}–${comparison.candidate.totalTokens.max.toFixed(0)}; separated=${comparison.tokenRangesSeparated}`);
+		const d = summary.delegationAudit;
+		console.log(`delegation: ${d.runsThatDelegated}/${d.runs} candidate runs delegated · ${d.workers} workers ${JSON.stringify(d.workersByAgent)} ${JSON.stringify(d.workersByStatus)} outcomes ${JSON.stringify(d.workersByOutcome)} · worker share of candidate tokens ${d.workerTokenShare === null ? "n/a" : `${(100 * d.workerTokenShare).toFixed(1)}%`} · ${d.runsWithViolations} run(s) with contract violations`);
+		for (const v of d.violations.slice(0, 10)) console.log(`  delegation violation ${v}`);
+		for (const [arm, counts] of Object.entries(summary.stops.runs)) console.log(`stops ${arm}: ${JSON.stringify(counts)}`);
+		if (matchedSummary) {
+			const mc = matchedSummary.comparisons.matchedVsCandidate;
+			const ratio = matchedSummary.budgetRatio.median;
+			console.log(`matched (${matchedSummary.policy.mode}, k=${matchedSummary.policy.k}): ${matchedSummary.unions.filter((u) => u.valid).length}/${matchedSummary.unions.length} pairs valid · pass-mean TP matched ${(mc.arms.matched?.truePositives.mean ?? 0).toFixed(2)} vs candidate ${(mc.arms.candidate?.truePositives.mean ?? 0).toFixed(2)} (${mc.complete ? "complete" : "incomplete"}) · pooled precision ${fmt(mc.arms.matched?.pooledPrecision ?? null)} vs ${fmt(mc.arms.candidate?.pooledPrecision ?? null)} · median budget ratio ${ratio === null ? "n/a" : ratio.toFixed(3)} over ${matchedSummary.budgetRatio.perPair.length} pair(s) · reported beside the gate, not in it`);
+		}
+		if (twinSummary) {
+			const line = twinSummary.arms.map((arm) => {
+				const a = twinSummary.byArm[arm]!;
+				return `${arm} ${a.valid}/${a.runs} valid, ${a.claims} claims`;
+			}).join(" · ");
+			console.log(`patched twins (${twinSummary.targets.length}, beside the gate): ${line} · control score: eval/rescore.ts`);
+		}
 	}
-	console.log(`pass-mean tokens ${comparison.baseline.totalTokens.mean.toFixed(0)} → ${comparison.candidate.totalTokens.mean.toFixed(0)}; ranges ${comparison.baseline.totalTokens.min.toFixed(0)}–${comparison.baseline.totalTokens.max.toFixed(0)} / ${comparison.candidate.totalTokens.min.toFixed(0)}–${comparison.candidate.totalTokens.max.toFixed(0)}; separated=${comparison.tokenRangesSeparated}`);
-	const d = summary.delegationAudit;
-	console.log(`delegation: ${d.runsThatDelegated}/${d.runs} candidate runs delegated · ${d.workers} workers ${JSON.stringify(d.workersByAgent)} ${JSON.stringify(d.workersByStatus)} outcomes ${JSON.stringify(d.workersByOutcome)} · worker share of candidate tokens ${d.workerTokenShare === null ? "n/a" : `${(100 * d.workerTokenShare).toFixed(1)}%`} · ${d.runsWithViolations} run(s) with contract violations`);
-	for (const v of d.violations.slice(0, 10)) console.log(`  delegation violation ${v}`);
-	for (const [arm, counts] of Object.entries(summary.stops.runs)) console.log(`stops ${arm}: ${JSON.stringify(counts)}`);
-	if (matchedSummary) {
-		const mc = matchedSummary.comparisons.matchedVsCandidate;
-		const ratio = matchedSummary.budgetRatio.median;
-		console.log(`matched (${matchedSummary.policy.mode}, k=${matchedSummary.policy.k}): ${matchedSummary.unions.filter((u) => u.valid).length}/${matchedSummary.unions.length} pairs valid · pass-mean TP matched ${(mc.arms.matched?.truePositives.mean ?? 0).toFixed(2)} vs candidate ${(mc.arms.candidate?.truePositives.mean ?? 0).toFixed(2)} (${mc.complete ? "complete" : "incomplete"}) · pooled precision ${fmt(mc.arms.matched?.pooledPrecision ?? null)} vs ${fmt(mc.arms.candidate?.pooledPrecision ?? null)} · median budget ratio ${ratio === null ? "n/a" : ratio.toFixed(3)} over ${matchedSummary.budgetRatio.perPair.length} pair(s) · reported beside the gate, not in it`);
+	if (options.gridKind !== undefined) {
+		// No ADR-026 verdict for a kind grid: only whether it is ready for its own rule.
+		const decision = verdictOut.head.decision as { ready: boolean; notReadyReasons: string[] };
+		console.log(`decision: v6 pre-registration, computed by eval/v6-decision.ts · ${decision.ready ? "grid ready for it" : `NOT READY · ${decision.notReadyReasons.join(" · ")}`}`);
+		console.log(`summary ${join(output, "summary.json")}`);
+		process.exitCode = decision.ready ? 0 : 1;
+		return;
 	}
 	// When not approved, print the reason, never the bare approval decision string.
 	if (approved) console.log(`APPROVED (this model) · ${comparison.decision}`);

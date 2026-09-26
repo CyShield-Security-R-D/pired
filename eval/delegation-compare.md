@@ -387,6 +387,46 @@ native-worker snapshot from ADR-025, which the candidate probe refuses because i
     check) is never re-run. An official grid holding one refuses to resume, because it cannot
     approve.
 
+### v6 grids: N targets, patched twins, per-arm scopes, grid kinds (plan 2.8, ADR draft)
+
+- **Targets.** The manifest may list any number of targets, at least one. What makes a grid
+  official is the corpus pinned under `corpora` in `eval/delegation-compare.pins.json`: without
+  `--grid-kind` that is `v5-official`, judged exactly as above.
+- **Patched twins.** `--twins <twins.json> --twin-arms baseline,candidate` runs each target's
+  fix-commit tree in the named arms. A twin runs under its `name` as its id, its answer key is an
+  empty list, and its runs stay out of the gate and the matched arm; `summary.json`'s `twins` block
+  lists them per arm with their cells, and `eval/rescore.ts` scores them against the
+  `fixed_regions` the grid manifest carries.
+- **Per-arm scopes.** `--baseline-max-agents`, `--max-verifiers <arm>=<n>` and `--budget-arms`
+  configure each arm's scope, and `--subagents-arms` which arms load pi-subagents; unset, every
+  arm is what it always was. Stage 2 loads pi-subagents in its baseline, so S's cells are the same
+  in both stages.
+- **Grid kinds.** `--grid-kind v6-stage1` or `v6-stage2` claims a kind pinned under `gridKinds`;
+  the grid is official only when its corpus, snapshots and every option match it, and each
+  difference is listed as an exploratory reason. Both kinds are drafts until the pre-registration
+  is frozen. `kindFlags` in `eval/delegation-compare-grid.ts` builds a kind's options, and a test
+  reads them back as exactly the kind. A kind grid is not approved or refused by ADR-026's gate:
+  its `summary.json` names the v6 pre-registration's rule and `eval/v6-decision.ts`, which
+  computes it, and says whether the grid is ready for it.
+- **Stage 1 is a pilot, then the full grid.** It starts at `--passes 2`. Until the pass count is
+  fixed it is blind: it prints and summarises only the valid pairs and their paired SD, and the
+  arms' numbers go to `<out>/sealed/comparison.json`, never printed. The count is fixed once:
+
+  ```sh
+  node --experimental-strip-types eval/delegation-compare.ts --resume <stage-1 out> \
+    --extend-passes <n> --extend-reason "<the pre-registered rule's inputs and result>"
+  ```
+
+  with n at most 10, or n = 2 to keep the pilot's count. The amendment is recorded, with who made
+  it and hashes of `runs.jsonl` and `summary.json`, in `amendments.jsonl` and `resumes.jsonl`,
+  which must agree on every resume.
+- **Stage 2** is launched with `--passes-from <stage-1 out>` in place of `--passes`, and runs the
+  count stage 1 fixed. Its `--baseline` and `--candidate` name the same snapshot, which its kind
+  pins as stage 1's candidate, staged bytes included.
+- **OAuth.** Both stages' worst case is past the 168 h the check asks for, so both need
+  `--auth-horizon-hours`. The runner stops before any arm the token would not outlive; refresh the
+  token outside the grid and `--resume`.
+
 ## Results
 
 None yet. No scored session has run.

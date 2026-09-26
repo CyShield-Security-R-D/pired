@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	analyze, cli, clusterBootstrap, diffsByTarget, exactBinomialTwoSided, formatReport, mcnemar, minDetectableEffect, mulberry32,
-	pairDiffs, pairRuns, pairsNeeded, parseArgs, parseArms, perIssueFindRate, sampleSd, selectGrids, truthIdsFromManifests, type Pair, type RunRecord,
+	dropTwins, pairDiffs, pairRuns, pairsNeeded, parseArgs, parseArms, perIssueFindRate, sampleSd, selectGrids, truthIdsFromManifests, twinIdsFromManifests, type Pair, type RunRecord,
 } from "./paired.ts";
 
 const run = (arm: string, target: string, pass: number, ids: string[], extra: Partial<RunRecord> = {}): RunRecord => ({
@@ -315,5 +315,42 @@ describe("a third arm (plan 2.5)", () => {
 		const out = cli(["r.json", "--arms", "matched,candidate"], () => JSON.stringify(grid));
 		expect(out.code).toBe(0);
 		expect(out.out).toContain("McNemar: b=1 (matched only) c=0 (candidate only)");
+	});
+});
+
+describe("patched twins (plan 2.8)", () => {
+	// A twin is its target's fix-commit tree with no labels: its two arms would
+	// pair as a zero-TP pair every pass and dilute every effect and find rate.
+	const grid = [
+		run("baseline", "A", 1, ["A1"]), run("candidate", "A", 1, ["A1", "A2"]),
+		run("baseline", "A-patched", 1, []), run("candidate", "A-patched", 1, []),
+		run("baseline", "B-patched", 1, [], { control: { near: 1 } }), run("candidate", "B-patched", 1, [], { twinOf: "B" }),
+	];
+	const manifest = JSON.stringify({ targets: [{ id: "A", name: "a" }, { id: "A-patched", name: "a-patched", twinOf: "A", fixed_regions: [] }], inputs: { truth: "/t" } });
+
+	it("names the twins a grid manifest lists by twinOf or fixed_regions", () => {
+		expect([...twinIdsFromManifests(["g1/manifest.json"], () => manifest)]).toEqual(["A-patched"]);
+		expect([...twinIdsFromManifests(["g1/manifest.json"], () => JSON.stringify({ targets: [{ id: "X", fixed_regions: [] }] }))]).toEqual(["X"]);
+	});
+
+	it("drops twin rows named by the manifest or marked by their own control score or target", () => {
+		const { kept, twins } = dropTwins(grid, new Set(["A-patched"]));
+		expect(kept.map((r) => r.target)).toEqual(["A", "A"]);
+		expect(twins).toHaveLength(4);
+		// Without a manifest, rows that mark themselves still go.
+		expect(dropTwins(grid).kept.map((r) => r.target)).toEqual(["A", "A", "A-patched", "A-patched"]);
+	});
+
+	it("leaves twins out of the CLI's pairs and says how many rows it dropped", () => {
+		const files: Record<string, string> = {
+			"r.json": JSON.stringify(grid), "g1/manifest.json": manifest,
+			"/t/a.truth.json": JSON.stringify([{ id: "A1" }, { id: "A2" }]), "/t/a-patched.truth.json": "[]",
+		};
+		const out = cli(["r.json", "--manifest", "g1/manifest.json"], (p) => files[p]!).out;
+		expect(out).toMatch(/^dropped 4 patched-twin row\(s\)/);
+		expect(out).not.toContain("A-patched");
+		expect(out).toContain(formatReport(analyze(grid.slice(0, 2), "line±3", truthIdsFromManifests(["g1/manifest.json"], (p) => files[p]!))).split("\n")[0]!);
+		// A grid without twins prints what it always printed.
+		expect(cli(["r.json"], () => JSON.stringify(grid.slice(0, 2))).out).not.toContain("dropped");
 	});
 });
