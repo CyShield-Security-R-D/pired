@@ -56,6 +56,13 @@
  * - claims are also capped at [lo, lo+cap] for range-overlap: over the ledgers of
  *   all valid runs, 59 of 2242 citations span more than 30 lines, and capping
  *   them changes range-overlap in 3 of 154 paired runs (138 labels to 134).
+ *
+ * Beside the levels, each run is partitioned by status and by author
+ * (`partitionClaims`, delegation-v6 Phase 3, 3.1): labels matched by all rows,
+ * by the rows a report presents (not refuted or disposed of), by the confirmed
+ * rows, by each `by`, and by every row ever recorded refuted. The official
+ * scorer ignores status, so this is where a verifier's refutations — right or
+ * wrong — become countable. It is additive: the mirror does not read it.
  */
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
@@ -369,6 +376,103 @@ export function ledgerFindings(runDir: string): Array<{ citations: Citation[]; c
 	});
 }
 
+// --- Claim tiers and provenance (delegation-v6 Phase 3, 3.1) -----------------
+
+/**
+ * The claim tiers the v6 trial pre-registers. The official scorer grades every
+ * finding row whatever its status (eval/dvbank/score.ts `fromLedger`), so a
+ * verifier's refutation cannot move the official count; these tiers are where
+ * it shows:
+ *
+ * - `all`: every located row — what the official number grades;
+ * - `presented`: not refuted and not disposed of by the operator — what a
+ *   report presents as a finding or a lead;
+ * - `confirmed`: confirmed, triaged or reported — the export's Confirmed section.
+ */
+export const CLAIM_TIERS = ["all", "presented", "confirmed"] as const;
+export type ClaimTier = (typeof CLAIM_TIERS)[number];
+
+const DISPOSED = new Set(["refuted", "false-positive", "accepted-risk", "ignored"]);
+const SETTLED = new Set(["confirmed", "triaged", "reported"]);
+
+/** Which tiers a row with this status belongs to. A row with no status is a lead: presented, not confirmed. */
+export function tiersOf(status: unknown): ClaimTier[] {
+	const s = typeof status === "string" ? status : "";
+	if (DISPOSED.has(s)) return ["all"];
+	return SETTLED.has(s) ? ["all", "presented", "confirmed"] : ["all", "presented"];
+}
+
+/** Labels matched and rows counted, at every level, for one slice of a run's claims. */
+export interface ClaimSlice {
+	/** Located finding rows in the slice — the precision denominator, one per row. */
+	claims: number;
+	matched: Record<Level, string[]>;
+}
+
+/** A located ledger finding, with what the partition reads. */
+export interface LedgerFinding {
+	citations: Citation[];
+	cwe?: string;
+	vulnClass?: string;
+	/** The live row's status. */
+	status?: string;
+	/** Who created the row (`by`), or undefined on a ledger written before it existed. */
+	by?: string;
+	/** Any line of the row's history, not only the live one, recorded it `refuted`. */
+	everRefuted: boolean;
+}
+
+/** The author key a row is counted under: its `by`, or `unknown` for a row written before `by` existed. */
+export const UNKNOWN_AUTHOR = "unknown";
+
+function slice(findings: LedgerFinding[], truths: Truth[], cap: number): ClaimSlice {
+	const cites = findings.map((f) => f.citations);
+	return {
+		claims: findings.length,
+		matched: Object.fromEntries(LEVELS.map((l) => [l, [...matchUnique(cites, truths, l, cap)].sort()])) as Record<Level, string[]>,
+	};
+}
+
+/**
+ * The status and provenance partition of one run: labels matched by each claim
+ * tier, by each author, and by the rows that were ever refuted — the last so a
+ * verifier rejecting a real bug is counted even when a later write re-confirmed
+ * it. Additive: nothing here feeds the official mirror.
+ */
+export function partitionClaims(findings: LedgerFinding[], truths: Truth[], cap = DEFAULT_WIDTH_CAP): {
+	tiers: Record<ClaimTier, ClaimSlice>;
+	byAuthor: Record<string, ClaimSlice>;
+	everRefuted: ClaimSlice;
+} {
+	const tiers = Object.fromEntries(CLAIM_TIERS.map((t) => [t, slice(findings.filter((f) => tiersOf(f.status).includes(t)), truths, cap)])) as Record<ClaimTier, ClaimSlice>;
+	const authors = [...new Set(findings.map((f) => f.by ?? UNKNOWN_AUTHOR))].sort();
+	const byAuthor = Object.fromEntries(authors.map((a) => [a, slice(findings.filter((f) => (f.by ?? UNKNOWN_AUTHOR) === a), truths, cap)]));
+	return { tiers, byAuthor, everRefuted: slice(findings.filter((f) => f.everRefuted), truths, cap) };
+}
+
+/**
+ * Every located ledger finding with its status, author and refutation history.
+ * The citations are read exactly as `ledgerFindings` reads them.
+ */
+export function ledgerFindingRows(runDir: string): LedgerFinding[] {
+	const ws = join(runDir, "workspace");
+	const inventory = inventoryIndex(liveRecords(readJsonl(join(ws, "inventory.jsonl"))));
+	const raw = readJsonl(join(ws, "findings.jsonl"));
+	const refutedIds = new Set(raw.filter((r) => r.status === "refuted" && typeof r.id === "string").map((r) => r.id as string));
+	return liveRecords(raw).flatMap((f) => {
+		const citations = citationsForRecord(f, inventory);
+		if (!citations.length) return [];
+		return [{
+			citations,
+			...(typeof f.cwe === "string" ? { cwe: f.cwe } : {}),
+			...(typeof f.class === "string" ? { vulnClass: f.class } : {}),
+			...(typeof f.status === "string" ? { status: f.status } : {}),
+			...(typeof f.by === "string" ? { by: f.by } : {}),
+			everRefuted: refutedIds.has(f.id as string),
+		}];
+	});
+}
+
 /** The citations of every located finding in a run's ledger. */
 export function findingsFromLedger(runDir: string): Citation[][] {
 	return ledgerFindings(runDir).map((f) => f.citations);
@@ -421,6 +525,12 @@ export interface RescoreRow {
 	 */
 	claimsIdentical: boolean | null;
 	matched: Record<Level, string[]>;
+	/** The claim tiers (all / presented / confirmed): labels matched and rows, per level. Additive (3.1). */
+	tiers: Record<ClaimTier, ClaimSlice>;
+	/** The same, per author (`by`; `unknown` for rows written before it existed). */
+	byAuthor: Record<string, ClaimSlice>;
+	/** The rows any line of whose history says `refuted`, re-confirmed or not. */
+	everRefuted: ClaimSlice;
 }
 
 /**
@@ -463,6 +573,7 @@ export function rescoreGrid(gridDir: string, cap = DEFAULT_WIDTH_CAP): { rows: R
 		const findings = findingsFromLedger(dir);
 		const claims = claimsFromLedger(dir);
 		const matched = Object.fromEntries(LEVELS.map((l) => [l, [...matchUnique(findings, truth, l, cap)].sort()])) as Record<Level, string[]>;
+		const partition = partitionClaims(ledgerFindingRows(dir), truth, cap);
 		return {
 			grid: gridDir, cell: r.__cell as string, target: String(r.target), pass: Number(r.pass), arm: String(r.arm), attempt: Number(r.attempt ?? 0),
 			officialTp: Number(r.truePositives), claims: Number(r.findings), tokens: Number(r.totalTokens),
@@ -472,6 +583,7 @@ export function rescoreGrid(gridDir: string, cap = DEFAULT_WIDTH_CAP): { rows: R
 			strictLocationTp: officialMatches(claims, truth, { classRule: false, fileRule: "segments" }).size,
 			claimsIdentical: ((scored) => scored === null ? null : scored.join("\n") === claimKeys(claims).join("\n"))(scoredClaimKeys(dir)),
 			matched,
+			...partition,
 		};
 	});
 	return { rows, truths };
@@ -525,6 +637,26 @@ export function formatReport(rows: RescoreRow[], truths: Truth[], cap = DEFAULT_
 			const rs = paired.filter((r) => r.grid === g && r.arm === arm);
 			const sum = (f: (r: RescoreRow) => number) => rs.reduce((n, r) => n + f(r), 0);
 			lines.push([g, arm, rs.length, sum((r) => r.officialTp), ...LEVELS.map((l) => sum((r) => r.matched[l].length)), sum((r) => r.claims), sum((r) => r.tokens)].join("\t"));
+		}
+	}
+	// The status and provenance partition (3.1): the same paired runs, cut by
+	// claim tier and by author. Rows are the precision denominator per slice.
+	lines.push(`claim tiers\tgrid\tarm\ttier\trows\t${LEVELS.join("\t")}`);
+	for (const g of grids) {
+		for (const arm of [...new Set(paired.filter((r) => r.grid === g).map((r) => r.arm))].sort()) {
+			const rs = paired.filter((r) => r.grid === g && r.arm === arm);
+			const sum = (f: (r: RescoreRow) => ClaimSlice | undefined) => ({
+				claims: rs.reduce((n, r) => n + (f(r)?.claims ?? 0), 0),
+				levels: LEVELS.map((l) => rs.reduce((n, r) => n + (f(r)?.matched[l].length ?? 0), 0)),
+			});
+			const tierLine = (label: string, f: (r: RescoreRow) => ClaimSlice | undefined) => {
+				const t = sum(f);
+				lines.push(["claim tiers", g, arm, label, t.claims, ...t.levels].join("\t"));
+			};
+			for (const tier of CLAIM_TIERS) tierLine(tier, (r) => r.tiers?.[tier]);
+			tierLine("ever-refuted", (r) => r.everRefuted);
+			const authors = [...new Set(rs.flatMap((r) => Object.keys(r.byAuthor ?? {})))].sort();
+			for (const a of authors) tierLine(`by ${a}`, (r) => r.byAuthor?.[a]);
 		}
 	}
 	const wide = labelHygiene(truths, cap);
