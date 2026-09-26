@@ -46,6 +46,11 @@ import { auditCell, auditLimits, summarizeAudits, type AuditLimits, type Delegat
 // cells and the operator's own processes.
 import { reapMarkedProcesses } from "./delegation-compare-proc.ts";
 import { classifyRunStop, summarizeStops, type RunStop } from "./delegation-compare-stop.ts";
+// The matched-compute arm (plan item 2.5): its policy, budget, union scorer and comparisons.
+import {
+	budgetRatios, matchedComparisons, metricOfUnion, parseMatchedPolicy, parseMatchedSpec, planSessions, scoreUnion, sessionBudget, targetsWithoutBudget,
+	type MatchedPolicy, type MatchedUnion, type SessionPlan, type SessionRun,
+} from "./delegation-compare-matched.ts";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const ENTRY = join(ROOT, "eval/delegation-compare-entry.ts");
@@ -258,6 +263,12 @@ type Options = {
 	 * Absent, retries stay off and every output is the v5 one.
 	 */
 	retryPolicy?: RetryPolicy;
+	/**
+	 * --matched: the matched-compute arm (plan item 2.5), the candidate snapshot
+	 * with delegation off run k times at the candidate's token budget. Absent,
+	 * no such arm runs and every output is what it was before the option.
+	 */
+	matched?: MatchedPolicy;
 };
 
 type JsonRecord = Record<string, unknown>;
@@ -303,6 +314,20 @@ const RESUME_POLICY =
 	"is not launched and is recorded as not launched, as infrastructure exactly when " +
 	"the first arm's failure was. Every attempt is appended to runs.jsonl with its " +
 	"attempt number.";
+
+/**
+ * How a resume treats the matched arm, written into a manifest only when the
+ * grid runs one, so every other manifest keeps its bytes.
+ */
+const MATCHED_RESUME_POLICY =
+	"The matched arm runs only after a pair whose two arms are both valid at the same attempt, and " +
+	"belongs to that attempt: a pair re-run by --resume re-runs its matched sessions too, since under " +
+	"mode follow their budget is the new candidate run's tokens. For a kept pair, each session is judged " +
+	"at its own highest attempt by the pairing rule: a valid session is kept, a missing session or one " +
+	"invalid for infrastructure is re-run on its own at attempt + 1 with the budget of the pair's kept " +
+	"candidate run, and one invalid for any other reason stays invalid, which leaves the matched arm " +
+	"invalid for that pair. The arm is valid only when all k sessions are. It never changes the gate, " +
+	"the approval or which pairs are re-run.";
 
 /** Built on demand: the pin lines read eval/delegation-compare.pins.json, and --help must still print if it is broken. */
 function helpText(): string {
@@ -353,6 +378,20 @@ Options:
                         max(${DEFAULT_RETRY_POLICY.maxFailedAttempts}, ${DEFAULT_RETRY_POLICY.maxFailedAttemptRate * 100}% of its metered requests) attempts,
                         parent and workers; recorded in the manifest
                         (default: off, as in every v5 grid)
+  --matched <spec>      Also run the matched-compute arm: the candidate snapshot
+                        with delegation off (its scope states maxAgents 0), k
+                        sessions in fresh cells after each pair whose two arms
+                        are valid, each stopped between requests at B/k tokens,
+                        their findings unioned and scored with the pinned
+                        scorer. <spec> is "follow" (B = the pair's candidate
+                        tokens, the gate's metric), "fixed", or k=v pairs:
+                        mode=follow|fixed k=3 budget.<target id>=<tokens> (fixed
+                        only). Pinned in the manifest; reported beside the gate
+                        as matched vs candidate and matched vs baseline, never
+                        inside it (default: off)
+  --matched-snapshot <dir>
+                        Run the matched arm from this snapshot instead of the
+                        candidate's; makes the grid exploratory
   --dry-run             Run the preflight only, with no model calls
   --help, -h            Show this help without starting a model
 
@@ -474,7 +513,7 @@ export function parseOptions(argv: string[]): Parsed {
 	const valueFlags = new Set([
 		"--baseline", "--candidate", "--corpus", "--truth", "--out", "--provider", "--model",
 		"--thinking", "--passes", "--only", "--concurrency", "--timeout", "--manifest", "--fs-seal", "--auth-horizon-hours",
-		"--candidate-max-agents", "--breaker",
+		"--candidate-max-agents", "--breaker", "--matched", "--matched-snapshot",
 	]);
 	const values = new Map<string, string>();
 	let dryRun = false;
@@ -511,6 +550,10 @@ export function parseOptions(argv: string[]): Parsed {
 	if (!isWorkerCap(candidateMaxAgents)) throw new Error("--candidate-max-agents must be a non-negative integer");
 	const breakerText = values.get("--breaker");
 	const breaker = breakerText === undefined ? undefined : parseBreakerSpec(breakerText);
+	const matchedText = values.get("--matched");
+	const matchedSnapshot = values.get("--matched-snapshot");
+	if (matchedSnapshot !== undefined && matchedText === undefined) throw new Error("--matched-snapshot needs --matched");
+	const matched = matchedText === undefined ? undefined : parseMatchedSpec(matchedText, matchedSnapshot === undefined ? undefined : resolve(matchedSnapshot));
 	return {
 		kind: "run",
 		options: {
@@ -524,6 +567,7 @@ export function parseOptions(argv: string[]): Parsed {
 			candidateMaxAgents,
 			...(breaker === undefined ? {} : { breaker }),
 			...(retry ? { retryPolicy: { ...DEFAULT_RETRY_POLICY } } : {}),
+			...(matched === undefined ? {} : { matched }),
 		},
 	};
 }
@@ -605,6 +649,11 @@ export function optionsFromManifest(dir: string, manifest: JsonRecord): Options 
 		try { breaker = parseBreakerPolicy(manifest.breaker); } catch (error) { throw new Error(`--resume manifest has an invalid breaker: ${message(error)}`); }
 	}
 	const retryPolicy = retryPolicyFromManifest(manifest);
+	// Absent: the grid ran no matched arm, and neither does its resume.
+	let matched: MatchedPolicy | undefined;
+	if (manifest.matched !== undefined) {
+		try { matched = parseMatchedPolicy(manifest.matched); } catch (error) { throw new Error(`--resume manifest has an invalid matched policy: ${message(error)}`); }
+	}
 	return {
 		baseline: need(baseline.path, "the baseline snapshot path"), candidate: need(candidate.path, "the candidate snapshot path"),
 		corpus: need(inputs.corpus, "the corpus path"), truth: need(inputs.truth, "the truth path"), out: dir,
@@ -616,6 +665,7 @@ export function optionsFromManifest(dir: string, manifest: JsonRecord): Options 
 		...(candidateMaxAgents === undefined ? {} : { candidateMaxAgents }),
 		...(breaker === undefined ? {} : { breaker }),
 		...(retryPolicy === undefined ? {} : { retryPolicy }),
+		...(matched === undefined ? {} : { matched }),
 	};
 }
 
@@ -703,10 +753,13 @@ export const AUTH_HORIZON_CAP_MS = 7 * 24 * 60 * 60 * 1000;
  * its cooldowns in between: a horizon sized for one attempt would let a grid
  * that re-queues outlive its OAuth token and refresh it inside a cell.
  */
-export function gridWorstCaseMs(grid: { passes: number; targets: number; concurrency: number; timeoutMs: number; breaker?: Pick<BreakerPolicy, "maxAttempts" | "cooldownMs"> }): number {
-	if (!grid.breaker) return grid.passes * Math.ceil(grid.targets / grid.concurrency) * 2 * grid.timeoutMs;
+export function gridWorstCaseMs(grid: { passes: number; targets: number; concurrency: number; timeoutMs: number; breaker?: Pick<BreakerPolicy, "maxAttempts" | "cooldownMs">; matchedSessions?: number }): number {
+	// The matched arm's k sessions run in the pair's slot after its two arms, each
+	// bounded by the same per-arm timeout (its token ceiling usually ends it first).
+	const arms = 2 + (grid.matchedSessions ?? 0);
+	if (!grid.breaker) return grid.passes * Math.ceil(grid.targets / grid.concurrency) * arms * grid.timeoutMs;
 	const { maxAttempts, cooldownMs } = grid.breaker;
-	const pairMs = maxAttempts * 2 * grid.timeoutMs + cooldownMs * (maxAttempts * (maxAttempts - 1)) / 2;
+	const pairMs = maxAttempts * arms * grid.timeoutMs + cooldownMs * (maxAttempts * (maxAttempts - 1)) / 2;
 	return grid.passes * Math.ceil(grid.targets / grid.concurrency) * pairMs;
 }
 
@@ -1708,6 +1761,22 @@ type PreparedCell = CellPaths & {
 	probe?: ProbeConfig;
 	/** sha256 of the settings and pi-subagents config written for this cell; both must be unchanged after it runs. */
 	cellConfigSha256: { settings: string; subagentConfig: string };
+	/** A matched session's token ceiling and identity; absent for every other cell. */
+	tokenCeiling?: number;
+	matchedSession?: MatchedSessionSpec;
+};
+
+/** Which matched session a cell is, and the budget it runs under (plan item 2.5). */
+export type MatchedSessionSpec = {
+	index: number;
+	of: number;
+	/** The session's own attempt; `attempt` on the record stays the pair's. */
+	sessionAttempt: number;
+	budget: number;
+	ceiling: number;
+	budgetSource: "candidate" | "fixed";
+	/** The candidate run whose tokens set the budget under mode follow. */
+	candidateCellId: string | null;
 };
 
 /**
@@ -1761,8 +1830,14 @@ export function workerCapReason(pinned: number | null, requested: number | undef
 export function reviewScope(engagement: string, workspace: string, arm: Arm, candidateMaxAgents: number | undefined): Record<string, unknown> {
 	const scope: Record<string, unknown> = { engagement, workspace, mode: "off", authorized: false, targets: {} };
 	if (arm === "candidate" && candidateMaxAgents !== undefined) scope.maxAgents = candidateMaxAgents;
+	// The matched arm is the candidate with delegation switched off the way an
+	// operator switches it off, so that it differs from the candidate in nothing else.
+	if (arm === "matched") scope.maxAgents = 0;
 	return scope;
 }
+
+/** The arms that load the pinned pi-subagents tree: the candidate, and the matched arm that runs it with its cap at 0. */
+const loadsSubagents = (arm: Arm): boolean => arm !== "baseline";
 
 /**
  * The delegation probe's scope. The review scope enforces nothing, so a worker
@@ -1783,11 +1858,11 @@ async function verifyFrozen(ctx: Context, arm: Arm): Promise<string[]> {
 	// what must not move mid-grid is the source the staging reads from.
 	if ((await treeManifest(ctx.sourceSnapshots[arm], "snapshot")).digest !== ctx.sourceDigests[arm]) errors.push(`${arm} input snapshot changed after preflight`);
 	// The candidate also loads the pinned pi-subagents tree; it is half of what the arm measures.
-	if (arm === "candidate" && (await treeManifest(ctx.piSubagents.dir, "runtime")).digest !== ctx.piSubagents.digest) errors.push("pinned pi-subagents tree changed after preflight");
+	if (loadsSubagents(arm) && (await treeManifest(ctx.piSubagents.dir, "runtime")).digest !== ctx.piSubagents.digest) errors.push("pinned pi-subagents tree changed after preflight");
 	return errors;
 }
 
-async function prepareCell(ctx: Context, target: Target, pass: number, arm: Arm, root: string, probeFor?: (cell: CellPaths) => Promise<ProbeConfig>): Promise<PreparedCell> {
+async function prepareCell(ctx: Context, target: Target, pass: number, arm: Arm, root: string, probeFor?: (cell: CellPaths) => Promise<ProbeConfig>, session?: MatchedSessionSpec): Promise<PreparedCell> {
 	const { options } = ctx;
 	const paths = cellPaths(root);
 	const errors: string[] = [];
@@ -1849,13 +1924,14 @@ async function prepareCell(ctx: Context, target: Target, pass: number, arm: Arm,
 		thinking: options.thinking as CompareEntryConfig["thinking"],
 		cwd: paths.targetDir, agentDir: paths.agentDir, authPath: join(AGENT_BASE, "auth.json"),
 		modelsPath: join(AGENT_BASE, "models.json"), modelsStorePath, prompt,
-		extensionPaths: [BASH_TIMEOUT_EXTENSION, ...(arm === "candidate" ? [ctx.piSubagents.entry] : [])],
+		extensionPaths: [BASH_TIMEOUT_EXTENSION, ...(loadsSubagents(arm) ? [ctx.piSubagents.entry] : [])],
 		...(options.retryPolicy ? { retryPolicy: options.retryPolicy } : {}),
+		...(session ? { tokenCeiling: session.ceiling } : {}),
 		...(probe ? { probe } : {}),
 	};
 	const configText = `${JSON.stringify(config, null, 2)}\n`;
 	await writeFile(paths.configPath, configText);
-	const sealArgs = await pathRulesForCell(paths, stagedSnapshot, ctx.nodePath, arm === "candidate" ? ctx.piSubagents.dir : undefined);
+	const sealArgs = await pathRulesForCell(paths, stagedSnapshot, ctx.nodePath, loadsSubagents(arm) ? ctx.piSubagents.dir : undefined);
 	const argv = [...sealArgs, "--", ctx.nodePath, "--experimental-strip-types", ENTRY, paths.configPath];
 	const env = childEnv(paths, ctx.provider);
 	// Everything the sealed process is handed, checked before launch: a hit here
@@ -1876,6 +1952,7 @@ async function prepareCell(ctx: Context, target: Target, pass: number, arm: Arm,
 		symlinkActions: targetCopy.symlinks, argv, env, errors, leakHits,
 		cellConfigSha256: { settings: sha256(settingsText), subagentConfig: sha256(subagentConfigText) },
 		...(probe ? { probe } : {}),
+		...(session ? { tokenCeiling: session.ceiling, matchedSession: session } : {}),
 	};
 }
 
@@ -2017,7 +2094,7 @@ export function childProviderFailure(child: Pick<SubagentChild, "childKey" | "st
  * extension is not loaded, so any subagent call or child session means the
  * wrong snapshot ran and its tokens would land in the wrong arm.
  */
-export async function accountCellUsage(events: JsonRecord[], cell: { arm: Arm; childSessionDir: string }, expect: { provider: string; model: string; thinking: string }, stream: Pick<StreamObservation, "subagentCalls">, retryPolicy?: RetryPolicy): Promise<CellUsage> {
+export async function accountCellUsage(events: JsonRecord[], cell: { arm: Arm; childSessionDir: string }, expect: { provider: string; model: string; thinking: string }, stream: Pick<StreamObservation, "subagentCalls">, retryPolicy?: RetryPolicy, ceiling: { cut?: boolean } = {}): Promise<CellUsage> {
 	const errors: string[] = [];
 	const notes: string[] = [];
 	const observations: UsageObservation[] = [];
@@ -2027,12 +2104,14 @@ export async function accountCellUsage(events: JsonRecord[], cell: { arm: Arm; c
 	const retried: RetriedAttempt[] = [];
 	let parent: PiUsageExtraction | undefined;
 	try {
-		parent = observationsFromPiEvents(events, { delegationTools: [SUBAGENT_TOOL], ...retry });
+		// A session the token ceiling cut (plan item 2.5) ends on the empty reply of
+		// the request it never sent; without a ceiling the option is never passed.
+		parent = observationsFromPiEvents(events, { delegationTools: [SUBAGENT_TOOL], ...retry, ...(ceiling.cut ? { ceilingStop: true } : {}) });
 		retried.push(...parent.retries ?? []);
 		observations.push(...parent.observations);
 		errors.push(...parent.errors, ...parent.providerErrors);
 		notes.push(...parent.notes);
-		if (!parent.finalStop) errors.push("parent did not finish with an assistant stopReason=stop");
+		if (!parent.finalStop && !ceiling.cut) errors.push("parent did not finish with an assistant stopReason=stop");
 	} catch (error) {
 		errors.push(`parent usage extraction failed: ${message(error)}`);
 	}
@@ -2052,6 +2131,12 @@ export async function accountCellUsage(events: JsonRecord[], cell: { arm: Arm; c
 			notes.push(...reconciliation.notes);
 		} catch (error) {
 			errors.push(`subagent reconciliation failed: ${message(error)}`);
+		}
+		// The matched arm's scope states maxAgents 0: a worker it launched means
+		// delegation was not off, and the run is not the single agent it stands for.
+		const workers = reconciliation?.children.length ?? 0;
+		if (cell.arm === "matched" && (workers || childSessionFiles.length)) {
+			errors.push(`matched arm launched ${workers} worker(s) (${childSessionFiles.length} child session file(s)); its scope states maxAgents 0`);
 		}
 		const callText = new Map((reconciliation?.calls ?? []).map((c) => [c.toolCallId, c.resultText]));
 		for (const child of reconciliation?.children ?? []) {
@@ -2366,6 +2451,7 @@ async function inspectRun(ctx: Context, cell: PreparedCell, launched: Launch, at
 	let graded: GraderResult | undefined;
 	let findings: Finding[] = [];
 	let telemetry: JsonRecord | undefined;
+	let ceilingState: ReturnType<typeof ceilingOf>;
 	if (result) {
 		try {
 			const transcript = await readTranscriptEvents(cell.transcriptPath);
@@ -2386,7 +2472,8 @@ async function inspectRun(ctx: Context, cell: PreparedCell, launched: Launch, at
 		}
 		if (events.some((e) => e.type === "benchmark_probe" || e.type === "benchmark_probe_delegation")) errors.push("a scored run emitted a probe report");
 		if (assistantReplies(events).some((m) => m.provider === PROBE_FAUX_PROVIDER)) errors.push("a scored run was answered by the probe's scripted model");
-		accounting = await accountCellUsage(events, cell, options, launched.stream, options.retryPolicy);
+		ceilingState = ceilingOf(events, cell, result, errors);
+		accounting = await accountCellUsage(events, cell, options, launched.stream, options.retryPolicy, { cut: ceilingState?.cut === true });
 		errors.push(...accounting.errors);
 		errors.push(...await cellConfigErrors(cell));
 		try {
@@ -2446,7 +2533,7 @@ async function inspectRun(ctx: Context, cell: PreparedCell, launched: Launch, at
 	const since = (at: number | undefined): number | null => at === undefined || !result ? null : (at - result.startedAt) / 1000;
 	const record: JsonRecord = {
 		key: cell.key, target: cell.target.id, pass: cell.pass, arm: cell.arm, cellId: cell.cellId, engagement: cell.engagement,
-		attempt, infraFailure, infraReason: infraReason ?? null, infraEvidence: infraFailure ? classified.evidence ?? null : null,
+		attempt, ...(cell.matchedSession ? { matchedSession: cell.matchedSession } : {}), infraFailure, infraReason: infraReason ?? null, infraEvidence: infraFailure ? classified.evidence ?? null : null,
 		quotaExhausted: infraFailure && classified.exhausted === true,
 		providerFailures: failures,
 		stoppedByRunner, interruptedAt: stoppedByRunner && abortedAt !== undefined ? new Date(abortedAt).toISOString() : null,
@@ -2456,6 +2543,8 @@ async function inspectRun(ctx: Context, cell: PreparedCell, launched: Launch, at
 		precisionLowerBound: precision, submittedFindings: findings.length,
 		score: graded?.ok ? graded.summary : null, telemetry: telemetry ?? null,
 		totalTokens: Number.isFinite(totalTokens) ? totalTokens : null,
+		// Only a matched session has a ceiling, so every other record keeps its shape.
+		...(cell.tokenCeiling !== undefined ? { tokenCeiling: ceilingState ?? null } : {}),
 		// Only a grid under a retry policy writes these, so a v5 record keeps its shape.
 		...(options.retryPolicy ? {
 			totalTokensWithRetryEstimate: Number.isFinite(totalTokensWithRetryEstimate) ? totalTokensWithRetryEstimate : null,
@@ -2529,7 +2618,7 @@ async function inspectRun(ctx: Context, cell: PreparedCell, launched: Launch, at
 		// engagementTelemetry reads a missing engagement as zeros; passed on, that
 		// would read as "nothing open" rather than "no ledger".
 		const ledger = telemetry && await exists(cell.workspaceDir) ? telemetry : undefined;
-		stop = runStop({ launchError: launched.launchError, result: launched.result, stoppedByRunner, events, telemetry: ledger, children: accounting?.children ?? [] });
+		stop = runStop({ launchError: launched.launchError, result: launched.result, stoppedByRunner, events, telemetry: ledger, children: accounting?.children ?? [], ...(ceilingState?.cut ? { tokenCeiling: true } : {}) });
 	} catch (error) {
 		stop = { error: error instanceof Error ? error.message : String(error) };
 	}
@@ -2555,10 +2644,13 @@ export function runStop(run: {
 	events: JsonRecord[];
 	telemetry: JsonRecord | undefined;
 	children: Array<Pick<ChildAccount, "child" | "session">>;
+	/** A matched session's token ceiling cut it (plan item 2.5). */
+	tokenCeiling?: boolean;
 }): RunStop {
 	const last = assistantReplies(run.events).at(-1);
 	return classifyRunStop({
 		...(run.launchError ? { launchError: run.launchError } : {}),
+		...(run.tokenCeiling ? { tokenCeiling: true } : {}),
 		process: run.result ? { exitCode: run.result.exitCode, signal: run.result.signal, timedOut: run.result.timedOut } : null,
 		stoppedByRunner: run.stoppedByRunner,
 		...(last ? { lastReply: { stopReason: last.stopReason, text: contentText(last.content) } } : {}),
@@ -2569,10 +2661,33 @@ export function runStop(run: {
 	})));
 }
 
-async function runOne(ctx: Context, target: Target, pass: number, arm: Arm, attempt: number): Promise<RunOutcome> {
-	const cell = await prepareCell(ctx, target, pass, arm, join(ctx.out, "runs"));
+/**
+ * The entry's `benchmark_token_ceiling` line, checked against the cell: one line
+ * exactly when the cell had a ceiling and the entry ran to its end. A problem is
+ * pushed onto `errors`; the line is returned when it is the cell's own.
+ */
+export function ceilingOf(events: JsonRecord[], cell: { tokenCeiling?: number }, result: Pick<OwnedResult, "exitCode" | "timedOut"> | undefined, errors: string[]): { ceiling: number; metered: number; requests: number; reached: boolean; cut: boolean; [key: string]: unknown } | undefined {
+	const lines = events.filter((e) => e.type === "benchmark_token_ceiling");
+	if (cell.tokenCeiling === undefined) {
+		if (lines.length) errors.push("a run without a token ceiling reported one");
+		return undefined;
+	}
+	if (lines.length > 1) { errors.push(`expected one token ceiling line, found ${lines.length}`); return undefined; }
+	const line = lines[0];
+	if (!line) {
+		// A killed or crashed entry never reaches the line; its own failure says why.
+		if (result && !result.timedOut && result.exitCode === 0) errors.push("the entry did not report its token ceiling");
+		return undefined;
+	}
+	if (line.ceiling !== cell.tokenCeiling) { errors.push(`the entry ran under a token ceiling of ${String(line.ceiling)}, not the cell's ${cell.tokenCeiling}`); return undefined; }
+	const { type: _type, ...state } = line;
+	return state as ReturnType<typeof ceilingOf> & object;
+}
+
+async function runOne(ctx: Context, target: Target, pass: number, arm: Arm, attempt: number, session?: MatchedSessionSpec): Promise<RunOutcome> {
+	const cell = await prepareCell(ctx, target, pass, arm, join(ctx.out, "runs"), undefined, session);
 	await appendJsonl(join(ctx.out, "cells.jsonl"), {
-		cellId: cell.cellId, key: cell.key, target: target.id, pass, arm, attempt, preparedAt: new Date().toISOString(), errors: cell.errors,
+		cellId: cell.cellId, key: cell.key, target: target.id, pass, arm, attempt, ...(session ? { matchedSession: session } : {}), preparedAt: new Date().toISOString(), errors: cell.errors,
 	});
 	const launched = await launch(ctx, cell, ctx.options.timeoutMs, () => !runState.aborted);
 	return await inspectRun(ctx, cell, launched, attempt);
@@ -2592,11 +2707,15 @@ export function toolSurfaceErrors(arm: Arm, tools: string[]): string[] {
 	const errors: string[] = [];
 	const expected: string[] = arm === "candidate" ? [...BASE_TOOLS, ENABLE_TOOL] : [...BASE_TOOLS];
 	for (const name of expected) if (!tools.includes(name)) errors.push(`${arm} arm does not expose ${name}`);
-	if (arm === "candidate") {
-		for (const name of CANDIDATE_HIDDEN_TOOLS) if (tools.includes(name)) errors.push(`candidate arm exposes ${name}, which pired hides`);
-		if (tools.includes(SUBAGENT_TOOL)) errors.push(`candidate arm exposes ${SUBAGENT_TOOL} eagerly instead of through ${ENABLE_TOOL}`);
+	if (loadsSubagents(arm)) {
+		for (const name of CANDIDATE_HIDDEN_TOOLS) if (tools.includes(name)) errors.push(`${arm} arm exposes ${name}, which pired hides`);
+		if (tools.includes(SUBAGENT_TOOL)) errors.push(`${arm} arm exposes ${SUBAGENT_TOOL} eagerly instead of through ${ENABLE_TOOL}`);
 	}
-	const known = new Set<string>([...expected, ...(arm === "candidate" ? [...CANDIDATE_HIDDEN_TOOLS, SUBAGENT_TOOL] : [])]);
+	// The matched arm loads pi-subagents with its cap at 0. Since ADR-029 pired
+	// keeps the lazy loader out of such a session, but a snapshot cut before that
+	// may still show it; it is allowed, not required, and a worker it launched
+	// would fail the run (accountCellUsage).
+	const known = new Set<string>([...expected, ...(loadsSubagents(arm) ? [...CANDIDATE_HIDDEN_TOOLS, SUBAGENT_TOOL] : []), ...(arm === "matched" ? [ENABLE_TOOL] : [])]);
 	const extra = tools.filter((name) => !known.has(name));
 	if (extra.length) errors.push(`${arm} arm exposes unexpected tool(s) ${[...new Set(extra)].join(", ")}`);
 	return errors;
@@ -2889,6 +3008,7 @@ async function runPreflight(options: Options, manifest: JsonRecord, saveManifest
 		const worstCaseMs = gridWorstCaseMs({
 			passes: options.passes, targets: inputs.targets.length, concurrency: options.concurrency, timeoutMs: options.timeoutMs,
 			...(options.breaker === undefined ? {} : { breaker: options.breaker }),
+			...(options.matched === undefined ? {} : { matchedSessions: options.matched.k }),
 		});
 		const verdict = checkAuthHorizon({
 			provider: options.provider, credential: credentialExpiry(authText, options.provider), worstCaseMs,
@@ -2940,14 +3060,36 @@ async function runPreflight(options: Options, manifest: JsonRecord, saveManifest
 		inputsRecord.baseline = { path: options.baseline, sha256: source.baseline.digest, files: source.baseline.files, stagedDigest: staged.baseline.stagedDigest, redactions: staged.baseline.redactions, stagedPath: stagePaths.baseline, matchesCommit: comparePins.baselineCommit, baselineMismatch: baselineReason || null };
 		inputsRecord.candidate = { path: options.candidate, sha256: source.candidate.digest, files: source.candidate.files, stagedDigest: staged.candidate.stagedDigest, redactions: staged.candidate.redactions, stagedPath: stagePaths.candidate, pinnedDigest: comparePins.candidateDigest, matchesPin: source.candidate.digest === comparePins.candidateDigest };
 		inputsRecord.piSubagents = { ...piSubagents.install, pinnedVersion: comparePins.piSubagents.version, pinnedDigest: comparePins.piSubagents.digest, matchesPin: piSubagents.reasons.length === 0 };
+		// The matched arm runs the candidate snapshot unless the operator names
+		// another, which is exploratory: matched vs candidate would then differ in
+		// more than delegation. Without --matched nothing here is recorded.
+		let matched = { path: options.candidate, digest: source.candidate.digest, stagedDigest: staged.candidate.stagedDigest };
+		if (options.matched) {
+			const missing = targetsWithoutBudget(options.matched, inputs.targets.map((t) => t.id));
+			if (missing.length) throw new Error(`--matched mode fixed names no budget for ${missing.join(", ")}`);
+			const override = options.matched.snapshot;
+			let stagedPath = stagePaths.candidate;
+			if (override !== undefined && resolve(override) !== resolve(options.candidate)) {
+				const overrideSource = await treeManifest(override, "snapshot");
+				stagedPath = join(preflightRoot, "stage", opaqueToken());
+				const overrideStaged = await stageSnapshot(override, stagedPath, { redactTerms, nodeModules: PI_NODE_MODULES });
+				if (overrideStaged.sourceDigest !== overrideSource.digest) throw new Error("Staged matched snapshot's pre-redaction digest does not match its input.");
+				matched = { path: override, digest: overrideSource.digest, stagedDigest: overrideStaged.stagedDigest };
+				if (overrideSource.digest !== source.candidate.digest) exploratoryReasons.push(`the matched arm runs snapshot ${overrideSource.digest.slice(0, 12)}, not the candidate's ${source.candidate.digest.slice(0, 12)}`);
+			}
+			inputsRecord.matched = { path: matched.path, sha256: matched.digest, stagedDigest: matched.stagedDigest, stagedPath, sameAsCandidate: matched.digest === source.candidate.digest, policy: options.matched };
+		}
 		return {
 			value: {
-				sourceSnapshots: { baseline: options.baseline, candidate: options.candidate } as Record<Arm, string>,
-				sourceDigests: { baseline: source.baseline.digest, candidate: source.candidate.digest } as Record<Arm, string>,
-				stagedDigests: { baseline: staged.baseline.stagedDigest, candidate: staged.candidate.stagedDigest } as Record<Arm, string>,
+				sourceSnapshots: { baseline: options.baseline, candidate: options.candidate, matched: matched.path },
+				sourceDigests: { baseline: source.baseline.digest, candidate: source.candidate.digest, matched: matched.digest },
+				stagedDigests: { baseline: staged.baseline.stagedDigest, candidate: staged.candidate.stagedDigest, matched: matched.stagedDigest },
 				redactTerms, piSubagents: piSubagents.install,
 			},
-			record: { baseline: source.baseline.digest, candidate: source.candidate.digest, redactedBaseline: staged.baseline.stagedDigest, redactedCandidate: staged.candidate.stagedDigest, redactTerms: redactTerms.length, piSubagents: `${piSubagents.install.version} ${piSubagents.install.digest.slice(0, 12)}` },
+			record: {
+				baseline: source.baseline.digest, candidate: source.candidate.digest, redactedBaseline: staged.baseline.stagedDigest, redactedCandidate: staged.candidate.stagedDigest, redactTerms: redactTerms.length, piSubagents: `${piSubagents.install.version} ${piSubagents.install.digest.slice(0, 12)}`,
+				...(options.matched ? { matched: matched.digest, redactedMatched: matched.stagedDigest } : {}),
+			},
 		};
 	});
 
@@ -3033,8 +3175,11 @@ async function runPreflight(options: Options, manifest: JsonRecord, saveManifest
 		const failures: string[] = [];
 		const resolved: BenchmarkRuntime[] = [];
 		let previous: PreparedCell | undefined;
+		// The matched arm is probed too when the grid runs one: its seal and tool
+		// surface (pi-subagents loaded, cap 0) are checked before any token.
+		const probeArms: Arm[] = ["baseline", "candidate", ...(options.matched ? ["matched" as const] : [])];
 		for (const target of inputs.targets) {
-			for (const arm of ["baseline", "candidate"] as const) {
+			for (const arm of probeArms) {
 				const absent: string[] = [];
 				const cell = await prepareCell(ctx, target, 0, arm, probesRoot, async (paths) => {
 					// Each cell now stages its own snapshot under its own cellDir, so there is
@@ -3057,7 +3202,7 @@ async function runPreflight(options: Options, manifest: JsonRecord, saveManifest
 						...truth.map((t) => t.file).filter((f): f is string => typeof f === "string"), "README.md",
 					]);
 					if (!sourceFile) throw new Error(`${target.id}: target copy has no readable file`);
-					return { readDenied, readAllowed: [sourceFile, paths.workspaceDir, paths.configPath, ...(arm === "candidate" ? [ctx.piSubagents.entry] : [])] };
+					return { readDenied, readAllowed: [sourceFile, paths.workspaceDir, paths.configPath, ...(loadsSubagents(arm) ? [ctx.piSubagents.entry] : [])] };
 				});
 				const launched = await launch(ctx, cell, PROBE_TIMEOUT_MS, () => !runState.aborted);
 				const verdict = await inspectProbe(ctx, cell, launched);
@@ -3233,6 +3378,9 @@ export function resumeMismatches(prior: JsonRecord, fresh: JsonRecord): string[]
 	// A retried attempt is a failure without a policy and a count with one; half
 	// a grid read one way and half the other would not compare.
 	eq("retryPolicy", prior.retryPolicy, fresh.retryPolicy);
+	// The matched arm's mode, k and budgets: sessions run under two policies
+	// would be two arms unioned into one.
+	eq("matched", prior.matched, fresh.matched);
 	const pr = (prior.requested ?? {}) as JsonRecord;
 	const fr = (fresh.requested ?? {}) as JsonRecord;
 	for (const k of ["provider", "model", "thinking", "passes", "only"]) eq(`requested.${k}`, pr[k], fr[k]);
@@ -3241,7 +3389,7 @@ export function resumeMismatches(prior: JsonRecord, fresh: JsonRecord): string[]
 	eq("inputs.sourceSha256", pi.sourceSha256, fi.sourceSha256);
 	eq("inputs.truthSha256", pi.truthSha256, fi.truthSha256);
 	eq("inputs.corpusManifest.sha256", (pi.corpusManifest as JsonRecord | undefined)?.sha256, (fi.corpusManifest as JsonRecord | undefined)?.sha256);
-	for (const arm of ["baseline", "candidate"]) {
+	for (const arm of ["baseline", "candidate", ...(prior.matched !== undefined || fresh.matched !== undefined ? ["matched"] : [])]) {
 		const pa = (pi[arm] ?? {}) as JsonRecord;
 		const fa = (fi[arm] ?? {}) as JsonRecord;
 		eq(`inputs.${arm}.sha256`, pa.sha256, fa.sha256);
@@ -3425,6 +3573,8 @@ export function newManifest(options: Options, mode: string): JsonRecord {
 		// Only a grid that asked for retries records a policy, so a grid without
 		// one writes the v5 manifest, and a v5 manifest resumes with retries off.
 		...(options.retryPolicy ? { retryPolicy: options.retryPolicy } : {}),
+		// Only a grid that asked for the matched arm records one.
+		...(options.matched ? { matched: options.matched, matchedResumePolicy: MATCHED_RESUME_POLICY } : {}),
 		prompt: REVIEW_PROMPT, resumePolicy: RESUME_POLICY,
 		runtimeConfiguration: {
 			globalExtensions: false, globalSkills: false, promptTemplates: false, contextFiles: false, theme: false, forcedDelegation: false, scribe: "off",
@@ -3548,7 +3698,7 @@ async function driveGrid(options: Options, manifest: JsonRecord, resume: ResumeI
 		if (!pre.official) console.log(`EXPLORATORY — not an acceptance decision (${pre.exploratoryReasons.join("; ") || "grid is not the official five targets x three passes"})`);
 		if (options.dryRun) {
 			await reportStatus({ status: "dry-run-complete", official: pre.official, expectedArms: 0, completedRuns: 0 });
-			console.log(`dry-run passed · ${pre.targets.length} targets · ${options.passes} passes configured · scopes reap strays · answer keys sealed · escape vectors denied · provider network reachable · grader verified · ${pre.targets.length * 2} sealed tool probes · 1 sealed delegation probe (faux model: a worker that hands back, one pired's turn budget stops) · no model calls`);
+			console.log(`dry-run passed · ${pre.targets.length} targets · ${options.passes} passes configured · scopes reap strays · answer keys sealed · escape vectors denied · provider network reachable · grader verified · ${pre.targets.length * (options.matched ? 3 : 2)} sealed tool probes · 1 sealed delegation probe (faux model: a worker that hands back, one pired's turn budget stops) · no model calls`);
 			console.log(`manifest ${paths.manifestPath}`);
 			gridFinished = true;
 			return;
