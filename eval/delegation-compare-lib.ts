@@ -11,11 +11,13 @@
  *   observationsFromChildSession(text, child.childKey)       each child's calls
  *   reconcileChildSession(child, session, expect)            whether that child may be scored
  *   accountUsage([...parent.observations, ...each session.observations])
+ *   summarizeRetries([...parent.retries, ...each session.retries], cap)  under a retry policy only
  *
  * Signatures (stable; the runner codes against them):
  *
- *   observationsFromPiEvents(events: Row[], options?: { delegationTools?: readonly string[] }): PiUsageExtraction
- *   observationsFromChildSession(sessionJsonl: string | undefined, childKey: string): ChildSessionExtraction
+ *   observationsFromPiEvents(events: Row[], options?: { delegationTools?: readonly string[]; retry?: boolean }): PiUsageExtraction
+ *   observationsFromChildSession(sessionJsonl: string | undefined, childKey: string, options?: { retry?: boolean }): ChildSessionExtraction
+ *   summarizeRetries(attempts: readonly RetriedAttempt[], maxFailedAttempts: number): RetrySummary
  *   reconcileSubagentCalls(parentEvents: Row[], childSessionFiles: string[], options?: { sessionDir?: string; toolName?: string }): SubagentReconciliation
  *   reconcileChildSession(child: SubagentChild, session: ChildSessionExtraction | undefined, expect?: { model?: string; thinking?: string }): ChildVerdict
  *   childOutcome(child: Pick<SubagentChild, "status" | "error">, session: ChildSessionExtraction): { outcome: ChildOutcome; why?: string }
