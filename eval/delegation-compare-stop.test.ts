@@ -155,6 +155,17 @@ describe("parentStopInput", () => {
 		expect(classifyStop(parentStopInput(cleanExit({ tokenCeiling: true }))).outcome).toBe("budget");
 		expect(classifyStop(parentStopInput(cleanExit({ turnCap: "parent turn cap" }))).outcome).toBe("turn-cap");
 	});
+
+	it("labels a session the token ceiling cut as budget, though its last reply is the empty aborted one", () => {
+		// Plan 2.5: the matched arm's ceiling aborts between requests, and pi writes
+		// an `error` reply for the request it never sent. Read as the last reply, that
+		// made every ceiling stop an error.
+		const cutReply = { stopReason: "error", text: "" };
+		expect(classifyStop(parentStopInput(cleanExit({ tokenCeiling: true, lastReply: cutReply })))).toEqual({ outcome: "budget", evidence: ["token ceiling"] });
+		expect(classifyStop(parentStopInput(cleanExit({ lastReply: cutReply }))).outcome).toBe("error");
+		// A crash is still a crash under a ceiling.
+		expect(classifyStop(parentStopInput(cleanExit({ tokenCeiling: true, process: { exitCode: 1, signal: null, timedOut: false } }))).outcome).toBe("error");
+	});
 });
 
 describe("workerStopInput", () => {

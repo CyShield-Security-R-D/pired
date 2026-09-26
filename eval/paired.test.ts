@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	analyze, cli, clusterBootstrap, diffsByTarget, exactBinomialTwoSided, formatReport, mcnemar, minDetectableEffect, mulberry32,
-	pairDiffs, pairRuns, pairsNeeded, parseArgs, perIssueFindRate, sampleSd, selectGrids, truthIdsFromManifests, type Pair, type RunRecord,
+	pairDiffs, pairRuns, pairsNeeded, parseArgs, parseArms, perIssueFindRate, sampleSd, selectGrids, truthIdsFromManifests, type Pair, type RunRecord,
 } from "./paired.ts";
 
 const run = (arm: string, target: string, pass: number, ids: string[], extra: Partial<RunRecord> = {}): RunRecord => ({
@@ -274,5 +274,46 @@ describe("analyze and the CLI", () => {
 		expect(out).toContain("A9\t0\t0\t2");
 		expect(out).toContain("B7\t0\t0\t1");
 		expect(cli(["r.json"], (p) => files[p]!).out).not.toContain("A9");
+	});
+});
+
+describe("a third arm (plan 2.5)", () => {
+	// The matched arm's row is one union per pair, at the pair's attempt.
+	const grid = [
+		run("baseline", "A", 1, ["A1"]), run("candidate", "A", 1, ["A1", "A2"]), run("matched", "A", 1, ["A1", "A2", "A3"]),
+		run("baseline", "A", 2, []), run("candidate", "A", 2, ["A2"]), run("matched", "A", 2, ["A2"]),
+	];
+
+	it("leaves the gate's pairing untouched by a matched row", () => {
+		const pairs = pairRuns(grid);
+		expect(pairs.map((p) => [[...p.baseline], [...p.candidate]])).toEqual([[["A1"], ["A1", "A2"]], [[], ["A2"]]]);
+		expect(analyze(grid)).not.toHaveProperty("arms");
+	});
+
+	it("pairs matched vs candidate on request, reporting candidate − matched under the arms' own names", () => {
+		const r = analyze(grid, "line±3", undefined, ["matched", "candidate"]);
+		expect(r.arms).toEqual(["matched", "candidate"]);
+		expect(r.pairs).toBe(2);
+		expect(r.mcnemar).toMatchObject({ b: 1, c: 0 });
+		const text = formatReport(r);
+		expect(text).toContain("truth id\tmatched\tcandidate\tn");
+		expect(text).toContain("(matched only)");
+		expect(text).toContain("mean diff per pair (candidate − matched)");
+	});
+
+	it("reads --arms and refuses an unknown or repeated arm", () => {
+		expect(parseArgs(["r.json", "--arms", "matched,candidate"])).toEqual({ file: "r.json", level: "line±3", grid: undefined, manifests: [], arms: ["matched", "candidate"] });
+		expect(parseArms("baseline, matched")).toEqual(["baseline", "matched"]);
+		expect(() => parseArms("candidate,candidate")).toThrow(/two different arms/);
+		expect(() => parseArms("single,candidate")).toThrow(/two different arms/);
+		const out = cli(["r.json", "--arms", "matched"], () => "[]");
+		expect(out.code).toBe(2);
+		expect(out.out).toMatch(/--arms takes two different arms/);
+	});
+
+	it("runs the CLI on the matched pairing", () => {
+		const out = cli(["r.json", "--arms", "matched,candidate"], () => JSON.stringify(grid));
+		expect(out.code).toBe(0);
+		expect(out.out).toContain("McNemar: b=1 (matched only) c=0 (candidate only)");
 	});
 });
