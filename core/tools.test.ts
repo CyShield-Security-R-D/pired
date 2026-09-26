@@ -1832,6 +1832,18 @@ describe("a held refutation adds nothing to the lead it did not close", () => {
 	});
 });
 
+/** A synthetic export handler: the guard at line 31, the join it guards at line 40. */
+const EXPORT_GO = [
+	"package export", "", ...Array.from({ length: 27 }, (_, i) => `// filler ${i + 3}`),
+	"func Export(w http.ResponseWriter, r *http.Request) {",                // 30
+	"\tif strings.Contains(r.URL.Query().Get(\"name\"), \"..\") { http.Error(w, \"bad name\", 400); return }", // 31
+	...Array.from({ length: 8 }, (_, i) => `\t// step ${i + 32}`),
+	"\tf, _ := os.Open(filepath.Join(root, r.URL.Query().Get(\"name\")))", // 40
+	"\tio.Copy(w, f)",                                                     // 41
+	"}",
+].join("\n");
+const EXPORT_GUARD = "src/export.go:31: if strings.Contains(r.URL.Query().Get(\"name\"), \"..\")";
+
 describe("refuting a finding in a review with no live target", () => {
 	// An honest verifier in a source-only review says live=false, and judge()
 	// downgraded every refutation it made. Measured on the 2026-09-24 grid, the
@@ -1840,6 +1852,7 @@ describe("refuting a finding in a review with no live target", () => {
 	async function withFinding(sourceOnly?: () => boolean) {
 		const svc = makeFakeServices();
 		const ws = await Workspace.open("/ws/acme", "acme", svc);
+		await svc.fs.writeFile("/target/src/export.go", EXPORT_GO);
 		const ctx: ToolContext = { cwd: "/target", services: svc };
 		const record = createRecordTool({ workspace: ws, ...(sourceOnly ? { sourceOnly } : {}) });
 		const made = await record.execute({ kind: "finding", title: "Path escape in export", severity: "high", target: "src/export.go:40", class: "traversal" }, ctx);
@@ -1848,10 +1861,10 @@ describe("refuting a finding in a review with no live target", () => {
 
 	it("settles a cited refutation that honestly says live=false", async () => {
 		const { ws, ctx, record, id } = await withFinding(() => true);
-		const out = textOf(await record.execute({ kind: "finding", id, status: "refuted", basis: ["src/export.go:31"], live: false }, ctx));
+		const out = textOf(await record.execute({ kind: "finding", id, status: "refuted", basis: [EXPORT_GUARD], live: false }, ctx));
 		const f = (await ws.read("findings")).find((x) => x.id === id);
 		expect(f?.status).toBe("refuted");
-		expect(f?.verification).toMatchObject({ verdict: "refuted", basis: ["src/export.go:31"] });
+		expect(f?.verification).toMatchObject({ verdict: "refuted", basis: [EXPORT_GUARD], tier: "static" });
 		expect(out).not.toMatch(/not reachable/);
 	});
 
@@ -1859,8 +1872,10 @@ describe("refuting a finding in a review with no live target", () => {
 		// live=false there means nothing was running. Stored, the report rendered
 		// "(target was not reachable)" beside a refutation the source settled.
 		const { ws, ctx, record, id } = await withFinding(() => true);
-		await record.execute({ kind: "finding", id, status: "refuted", basis: ["src/export.go:31"], live: false }, ctx);
-		expect((await ws.read("findings")).find((x) => x.id === id)?.verification).not.toHaveProperty("live");
+		await record.execute({ kind: "finding", id, status: "refuted", basis: [EXPORT_GUARD], live: false }, ctx);
+		const f = (await ws.read("findings")).find((x) => x.id === id);
+		expect(f?.status).toBe("refuted");
+		expect(f?.verification).not.toHaveProperty("live");
 	});
 
 	it("keeps the downgrade when the engagement has a live target", async () => {
@@ -2384,5 +2399,102 @@ describe("who created a row", () => {
 		const { ws, ctx, as } = await authors();
 		await as().execute({ kind: "finding", title: "IDOR", severity: "high", target: "e1" }, ctx);
 		expect((await ws.read("findings"))[0]).not.toHaveProperty("by");
+	});
+});
+
+describe("a verdict's quotes are checked against the files they cite", () => {
+	const JOIN = "src/export.go:40: f, _ := os.Open(filepath.Join(root, r.URL.Query().Get(\"name\")))";
+	const SOURCE = "src/export.go:40: r.URL.Query().Get(\"name\")";
+
+	async function engagement(opts: { sourceOnly?: boolean; author?: string } = {}) {
+		const svc = makeFakeServices();
+		const ws = await Workspace.open("/ws/acme", "acme", svc);
+		await svc.fs.writeFile("/target/src/export.go", EXPORT_GO);
+		const ctx: ToolContext = { cwd: "/target", services: svc };
+		const record = createRecordTool({
+			workspace: ws,
+			...(opts.sourceOnly !== undefined ? { sourceOnly: () => opts.sourceOnly === true } : {}),
+			...(opts.author !== undefined ? { author: () => opts.author } : {}),
+		});
+		const made = await record.execute({ kind: "finding", title: "Path traversal in export", severity: "high", target: "src/export.go:40", class: "traversal" }, ctx);
+		return { svc, ws, ctx, record, id: (made.details as { id: string }).id };
+	}
+	const stored = async (ws: Workspace, id: string) => (await ws.read("findings")).find((f) => f.id === id);
+
+	it("confirms on a review of source when the path quotes both ends, and stores the quotes and the tier", async () => {
+		const { ws, ctx, record, id } = await engagement({ sourceOnly: true, author: "pired-verify" });
+		await record.execute({
+			kind: "finding", id, status: "confirmed",
+			control: "the '..' check at line 31 tests the raw value; an encoded %2e%2e passes it",
+			path: [SOURCE, JOIN],
+		}, ctx);
+		const f = await stored(ws, id);
+		expect(f?.status).toBe("confirmed");
+		expect(f?.verification).toMatchObject({ verdict: "stands", by: "pired-verify", tier: "static" });
+		expect(f?.verification?.path?.map((q) => q.at)).toEqual(["src/export.go:40", "src/export.go:40"]);
+	});
+
+	it("keeps a finding suspected and quotes the real line when a verifier's sink quote is not there", async () => {
+		const { ws, ctx, record, id } = await engagement({ sourceOnly: true, author: "pired-verify" });
+		const out = textOf(await record.execute({
+			kind: "finding", id, status: "confirmed", control: "ran it",
+			path: [SOURCE, "src/export.go:12: http.ServeFile(w, r, filepath.Join(root, name))"],
+		}, ctx));
+		expect((await stored(ws, id))?.status).toBe("suspected");
+		expect(out).toMatch(/Not recorded as confirmed: a quote does not match the file it cites/);
+		expect(out).toMatch(/line 12 reads: "\/\/ filler 12"/);
+	});
+
+	it("reads a path sent as a serialised list, and does not split a quote on its commas", async () => {
+		const { ws, ctx, record, id } = await engagement({ sourceOnly: true });
+		await record.execute({ kind: "finding", id, status: "confirmed", control: "encoded dots pass the check", path: JSON.stringify([SOURCE, JOIN]) }, ctx);
+		expect((await stored(ws, id))?.status).toBe("confirmed");
+	});
+
+	it("resolves a quote by its basename, the way the locator does", async () => {
+		const { ws, ctx, record, id } = await engagement({ sourceOnly: true });
+		await record.execute({ kind: "finding", id, status: "refuted", basis: ["export.go:31: if strings.Contains(r.URL.Query().Get(\"name\"), \"..\")"] }, ctx);
+		const f = await stored(ws, id);
+		expect(f?.status).toBe("refuted");
+	});
+
+	it("does not read a quote from outside the engagement directory", async () => {
+		const { svc, ws, ctx, record, id } = await engagement({ sourceOnly: true });
+		await svc.fs.writeFile("/etc/guard.go", "if strings.Contains(name, \"..\") { return }\n");
+		for (const cited of ["../etc/guard.go:1", "/etc/guard.go:1"]) {
+			await record.execute({ kind: "finding", id, status: "refuted", basis: [`${cited}: if strings.Contains(name, "..") { return }`] }, ctx);
+			expect((await stored(ws, id))?.status).toBe("suspected");
+		}
+		// An absolute path inside the engagement directory is read as the relative one.
+		await record.execute({ kind: "finding", id, status: "refuted", basis: ["/target/src/export.go:31: if strings.Contains(r.URL.Query().Get(\"name\"), \"..\")"] }, ctx);
+		expect((await stored(ws, id))?.status).toBe("refuted");
+	});
+
+	it("labels a verification that quotes a saved transcript executed", async () => {
+		const { ws, ctx, record, id } = await engagement({ sourceOnly: true });
+		const saved = (await record.execute({ kind: "evidence", name: "export-probe.txt", content: "GET /export?name=%2e%2e/etc/passwd HTTP/1.1\n\nHTTP/1.1 200 OK\nroot:x:0:0\n" }, ctx)).details as { path: string };
+		await record.execute({
+			kind: "finding", id, status: "confirmed",
+			control: `encoded dots reached the join — ${saved.path}`,
+			path: [SOURCE, JOIN, `${saved.path}:3: HTTP/1.1 200 OK root:x:0:0`],
+		}, ctx);
+		const f = await stored(ws, id);
+		expect(f?.status).toBe("confirmed");
+		expect(f?.verification?.tier).toBe("executed");
+	});
+
+	it("takes who judged it from where the call ran, never from the caller", async () => {
+		const { ws, ctx, record, id } = await engagement({ author: "lead" });
+		await record.execute({ kind: "finding", id, status: "suspected", basis: ["src/export.go:31"], by: "pired-verify" }, ctx);
+		expect((await stored(ws, id))?.verification?.by).toBe("lead");
+		// The scribe writing through the lead's tool is told apart on the call.
+		await record.execute({ kind: "finding", id, status: "suspected", basis: ["src/export.go:31"] }, { ...ctx, author: "scribe" });
+		expect((await stored(ws, id))?.verification?.by).toBe("scribe");
+	});
+
+	it("takes a quoted guard alone as a look that could not settle the claim", async () => {
+		const { ws, ctx, record, id } = await engagement({ sourceOnly: true });
+		await record.execute({ kind: "finding", id, status: "suspected", guards: [EXPORT_GUARD] }, ctx);
+		expect((await stored(ws, id))?.verification).toMatchObject({ verdict: "unresolved", guards: [{ at: "src/export.go:31" }] });
 	});
 });

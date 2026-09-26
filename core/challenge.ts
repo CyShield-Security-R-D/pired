@@ -37,7 +37,8 @@
 
 import {
 	type BlockerType, type ChallengeVerdict, DISPOSED_STATUSES, type FindingRecord, type FindingStatus,
-	type HypothesisRecord, type Severity, UNVERIFIED_STATUS, type Verification,
+	type HypothesisRecord, LEAD_AUTHOR, OPERATOR_AUTHOR, type QuotedLocation, SCRIBE_AUTHOR, type Severity,
+	UNVERIFIED_STATUS, type Verification, type VerificationTier,
 } from "./ontology.ts";
 
 // ---------------------------------------------------------------------------
@@ -835,6 +836,220 @@ export const SEVERITY_RANK: Record<Severity, number> = { info: 1, low: 2, medium
 function rank(s: Severity): number { return SEVERITY_RANK[s]; }
 
 // ---------------------------------------------------------------------------
+// Grounded quotes — a verification's citations, checked against the source
+// ---------------------------------------------------------------------------
+
+/**
+ * How far from the cited line a quote may sit and still count as that line's.
+ *
+ * Line numbers drift by a few in honest use: a model counts from a `read`
+ * window's first line, cites the statement's opening line for a call that
+ * spans three, or quotes the `if` above the line it names. Seven lines is one
+ * guard and the statement it guards. Fixed before any v6 run and never tuned on
+ * corpus runs (delegation-v6 Phase 3 design, 3.1): a tolerance fitted to what a
+ * benchmark's verifiers happened to cite would be measuring the benchmark.
+ */
+export const QUOTE_WINDOW = 3;
+
+/**
+ * The shortest quote that can identify a line, in non-space characters.
+ *
+ * A quote proves the line was read only if it could not have been guessed.
+ * `}`, `return err`, `if (!ok) {` and `else:` sit within three lines of almost
+ * any line of any file, so matching one inside the window proves nothing
+ * about the claim beside it. Twelve non-space characters is about the shortest
+ * statement that carries an identifier and a call — `db.execute(q)` is
+ * thirteen — so a real sink clears it and a brace does not. A guard shorter
+ * than that (`if not user:` is ten) is quoted with the line it guards: the
+ * window is matched as one joined text, so two lines quoted together count.
+ * Chosen from the shape of source lines, never from runs, like the window
+ * above.
+ */
+export const MIN_QUOTE_CHARS = 12;
+
+/** A cited line and quote, as the model sends it: `file:line: verbatim text`. */
+export interface ParsedQuote {
+	file: string;
+	/** First cited line, 1-based. */
+	line: number;
+	/** Last cited line, for a `file:12-14: text` range; the first otherwise. */
+	end: number;
+	quote: string;
+}
+
+/**
+ * `file:line: text`, `file:lo-hi: text`, with the file free of spaces and
+ * colons so a URL (`http://host:8080/x`) or prose is not read as a citation.
+ */
+const QUOTE_SHAPE = /^\s*([^\s:]+):(\d+)(?:-(\d+))?:\s*(\S.*?)\s*$/s;
+
+/**
+ * Parse one `file:line: verbatim text` string, or undefined when it is not one.
+ *
+ * A pair of backticks or quotes wrapped round the whole text is taken off: it
+ * is how a model sets code apart, not part of the line.
+ */
+export function parseQuote(raw: string): ParsedQuote | undefined {
+	const m = QUOTE_SHAPE.exec(raw);
+	if (!m) return undefined;
+	const line = Number(m[2]);
+	const end = m[3] === undefined ? line : Number(m[3]);
+	if (line < 1 || end < line) return undefined;
+	let quote = m[4] ?? "";
+	const wrapped = /^(`+|"|')([\s\S]*)\1$/.exec(quote);
+	if (wrapped && (wrapped[2] ?? "").trim().length > 0) quote = (wrapped[2] ?? "").trim();
+	return { file: (m[1] ?? "").replace(/^\.\//, ""), line, end, quote };
+}
+
+/** Runs of whitespace as one space, trimmed: indentation and wrapping are not content. */
+function normaliseSpace(text: string): string {
+	return text.replace(/\s+/g, " ").trim();
+}
+
+/** One cited quote after it was checked against the file it names. */
+export interface GroundedQuote extends QuotedLocation {
+	grounded: boolean;
+	/** Why it is not grounded, in words the reply can print. */
+	why?: string;
+	/** The cited line, when the string parsed. */
+	line?: number;
+	/** The text actually at the cited line, when the file was read — so the model can correct the quote in one turn. */
+	actual?: string;
+}
+
+/**
+ * How the host reads a cited file: under the engagement's directory, with its
+ * basename fallback, or from the workspace's evidence. Returns the path it
+ * resolved to, or undefined when there is no such file. A function rather than
+ * a port so this module stays pure: the host owns the resolution rules.
+ */
+export type QuoteReader = (file: string) => Promise<{ path: string; body: string } | undefined>;
+
+/** The longest `actual` line carried into a reply. */
+const ACTUAL_BUDGET = 200;
+
+/**
+ * Check each `file:line: verbatim text` against the file it names.
+ *
+ * A quote is grounded when, after whitespace is normalised on both sides, it
+ * appears within QUOTE_WINDOW lines of the cited line (or range), and it is at
+ * least MIN_QUOTE_CHARS non-space characters long. The window is read as one
+ * joined text, so a quote the model joined from two lines matches as well as
+ * one taken from a single line.
+ *
+ * A string that is not in the form at all comes back ungrounded, saying so:
+ * `path` and `guards` are quotes by contract. Every file is read once.
+ */
+export async function groundQuotes(hops: readonly string[] | undefined, readFile: QuoteReader): Promise<GroundedQuote[]> {
+	const out: GroundedQuote[] = [];
+	const cache = new Map<string, Promise<{ path: string; body: string } | undefined>>();
+	const read = (file: string) => {
+		let hit = cache.get(file);
+		if (!hit) {
+			hit = readFile(file).catch(() => undefined);
+			cache.set(file, hit);
+		}
+		return hit;
+	};
+	for (const raw of hops ?? []) {
+		if (raw.trim().length === 0) continue;
+		const parsed = parseQuote(raw);
+		if (!parsed) {
+			out.push({ at: raw.trim(), quote: "", grounded: false, why: "it is not in the form 'file:line: verbatim text'" });
+			continue;
+		}
+		const quote = normaliseSpace(parsed.quote);
+		const cited = parsed.end === parsed.line ? `${parsed.file}:${parsed.line}` : `${parsed.file}:${parsed.line}-${parsed.end}`;
+		const chars = quote.replace(/\s/g, "").length;
+		if (chars < MIN_QUOTE_CHARS) {
+			out.push({
+				at: cited, quote, grounded: false,
+				why: `the quote is ${chars} non-space characters; at least ${MIN_QUOTE_CHARS} are needed to identify a line`,
+			});
+			continue;
+		}
+		const found = await read(parsed.file);
+		if (!found) {
+			out.push({ at: cited, quote, grounded: false, why: `there is no file '${parsed.file}' under the engagement directory or in the workspace evidence` });
+			continue;
+		}
+		const lines = found.body.split(/\r?\n/);
+		const at = parsed.end === parsed.line ? `${found.path}:${parsed.line}` : `${found.path}:${parsed.line}-${parsed.end}`;
+		if (parsed.line > lines.length) {
+			out.push({ at, quote, grounded: false, why: `${found.path} has ${lines.length} lines` });
+			continue;
+		}
+		const lo = Math.max(0, parsed.line - 1 - QUOTE_WINDOW);
+		const hi = Math.min(lines.length, parsed.end + QUOTE_WINDOW);
+		const window = normaliseSpace(lines.slice(lo, hi).join(" "));
+		if (window.includes(quote)) {
+			out.push({ at, quote, grounded: true });
+			continue;
+		}
+		const actual = normaliseSpace(lines[parsed.line - 1] ?? "");
+		out.push({
+			at, quote, grounded: false, line: parsed.line,
+			why: `the quote is not within ${QUOTE_WINDOW} lines of line ${parsed.line}`,
+			actual: actual.length > ACTUAL_BUDGET ? `${actual.slice(0, ACTUAL_BUDGET)}…` : actual,
+		});
+	}
+	return out;
+}
+
+/** A quote as stored: where, and what. The grounding result stays out of the ledger. */
+function stored(q: GroundedQuote): QuotedLocation {
+	return { at: q.at, quote: q.quote };
+}
+
+/**
+ * The quotes that failed, one per line, each with the text actually at its
+ * cited line — the reply that lets a model fix a quote in one turn.
+ */
+export function describeUngrounded(quotes: readonly GroundedQuote[]): string {
+	return quotes
+		.filter((q) => !q.grounded)
+		.map((q) => `- ${q.at}${q.quote ? ` "${q.quote}"` : ""}: ${q.why ?? "not found"}` +
+			(q.actual !== undefined ? `; line ${q.line ?? "?"} reads: ${q.actual.length > 0 ? `"${q.actual}"` : "(blank)"}` : ""))
+		.join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// Who wrote a row, and who judged it
+// ---------------------------------------------------------------------------
+
+/**
+ * Whether `by` names a delegated worker rather than the lead, its scribe or the
+ * operator. Absent is not a worker: a row written before `by` existed is
+ * unknown, and is left out of every count that separates workers from the lead.
+ */
+export function isWorkerAuthor(by: string | undefined): boolean {
+	return by !== undefined && by !== LEAD_AUTHOR && by !== SCRIBE_AUTHOR && by !== OPERATOR_AUTHOR;
+}
+
+/**
+ * The party behind an author. The scribe writes from the lead's own review
+ * buffer, so its findings are the lead's reasoning: a lead confirming a
+ * scribe's finding is the finder confirming itself, which is the agreement
+ * the scribe measurement showed (precision 0.059 to 0.038).
+ */
+function partyOf(by: string): string {
+	return by === SCRIBE_AUTHOR ? LEAD_AUTHOR : by;
+}
+
+/**
+ * Whether a finding's verification was made by someone other than its finder:
+ * true or false when both authors are recorded, undefined when either is not.
+ *
+ * Two launches of one worker share its agent name, so a second
+ * `pired-investigate` reading the first one's finding counts as its finder.
+ * That errs toward "not independent", which is the side a report can afford.
+ */
+export function isIndependent(finding: Pick<FindingRecord, "by" | "verification">): boolean | undefined {
+	const judgedBy = finding.verification?.by;
+	if (finding.by === undefined || judgedBy === undefined) return undefined;
+	return partyOf(finding.by) !== partyOf(judgedBy);
+}
+// ---------------------------------------------------------------------------
 // The verdict — and the burden of proof on each side of it
 // ---------------------------------------------------------------------------
 
@@ -858,6 +1073,45 @@ export interface ChallengeReport {
 	 * the challenger: it decides whether `live=false` can mean anything at all.
 	 */
 	sourceOnly?: boolean;
+	/**
+	 * The `path` the challenger quoted, grounded by the host (`groundQuotes`):
+	 * the hops from where untrusted input enters to where it is used, the first
+	 * the source and the last the sink.
+	 */
+	path?: GroundedQuote[];
+	/** The `guards` the challenger quoted — the checks it examined — grounded by the host. */
+	guards?: GroundedQuote[];
+	/**
+	 * The entries of `basis` written as quotes, grounded by the host. `basis`
+	 * itself keeps every entry as sent: an evidence path or a model section is
+	 * still a citation, only not one this can check against a file.
+	 */
+	basisQuotes?: GroundedQuote[];
+	/** Who is judging, stamped as `verification.by`. Set by the host from where the call ran, never by the challenger. */
+	by?: string;
+	/**
+	 * The contents of the evidence files the challenge cites, read by the host.
+	 * Only the tier reads them: a cited transcript or tool output is a check that
+	 * ran, where a quoted excerpt is a reading.
+	 */
+	evidence?: string[];
+}
+
+/**
+ * How far a verification's grounds reach, derived and never taken from the
+ * caller. `executed` when it was live against a running target, or cites
+ * evidence that is not a static excerpt (a transcript, a tool's output);
+ * `static` otherwise.
+ *
+ * `live=true` counts only where there is a target. On the 2026-09-24 grid 17 of
+ * 18 settled verification records asserted live=true on scopes with no target
+ * (ADR-028); on a review of source the flag describes nothing that ran.
+ * `executed` is the top label, not a gate: nothing is refused for being static.
+ */
+export function deriveTier(report: Pick<ChallengeReport, "live" | "sourceOnly" | "evidence">): VerificationTier {
+	if (report.live === true && report.sourceOnly !== true) return "executed";
+	const ran = (report.evidence ?? []).some((text) => text.trim().length > 0 && evidenceShape(text) !== "static");
+	return ran ? "executed" : "static";
 }
 
 export interface ChallengeOutcome {
@@ -944,10 +1198,21 @@ export function judge(finding: FindingRecord, report: ChallengeReport, at: strin
 	// there. Against a live target it is kept: there it is a claim about
 	// reachability, and the reason a refutation was not accepted.
 	const live = report.sourceOnly === true && report.live === false ? undefined : report.live;
+	const path = report.path ?? [];
+	const guards = report.guards ?? [];
+	const quotes = [...path, ...guards, ...(report.basisQuotes ?? [])];
+	const ungrounded = quotes.filter((q) => !q.grounded);
+	// Quotes are kept only when every one matched its file: a path with a hop
+	// that is not in the source is not a path anybody traced.
+	const keepQuotes = ungrounded.length === 0;
 	const verification = (verdict: ChallengeVerdict): Verification => ({
 		verdict, at,
+		...(report.by !== undefined ? { by: report.by } : {}),
 		...(report.control !== undefined ? { control: report.control } : {}),
 		...(basis.length > 0 ? { basis } : {}),
+		...(keepQuotes && path.length > 0 ? { path: path.map(stored) } : {}),
+		...(keepQuotes && guards.length > 0 ? { guards: guards.map(stored) } : {}),
+		...(isEarned({ verdict }) ? { tier: deriveTier(report) } : {}),
 		...(live !== undefined ? { live } : {}),
 		...(report.entitlement !== undefined ? { entitlement: report.entitlement } : {}),
 		...(report.notes !== undefined ? { notes: report.notes } : {}),
@@ -979,6 +1244,20 @@ export function judge(finding: FindingRecord, report: ChallengeReport, at: strin
 		...(blocker ? { blocker } : {}),
 	});
 
+	// A quote that is not in the file it cites settles nothing, in either
+	// direction and whoever wrote it. It is the one check here that costs no
+	// judgement: the line either says it or it does not. The reply prints what
+	// the line does say, so a model that paraphrased or miscounted can fix it in
+	// one turn instead of guessing (delegation-v6 Phase 3 design, 3.1).
+	if (ungrounded.length > 0) {
+		return unresolved(
+			`${ungrounded.length === 1 ? "a quote does" : `${ungrounded.length} quotes do`} not match the file it cites, ` +
+			`so nothing was settled on ${ungrounded.length === 1 ? "it" : "them"}:\n${describeUngrounded(ungrounded)}\n` +
+			`Quote the line as it reads, copied from the file — 'file:line: verbatim text', within ${QUOTE_WINDOW} lines of ` +
+			"the line cited — and record the verdict again.",
+		);
+	}
+
 	if (report.verdict === "refuted") {
 		// A refutation with nothing behind it is an opinion, and an opinion is not
 		// allowed to withdraw a finding from a client's report.
@@ -1007,6 +1286,18 @@ export function judge(finding: FindingRecord, report: ChallengeReport, at: strin
 				"That refutes the connection, not the finding — re-challenge with a working session.",
 			);
 		}
+		// On a review of source the cited line is the whole proof, so it has to be
+		// shown, not named. A bare `file:line` cannot be checked against the file;
+		// the guard's own text can, and it is what the adjudication rubric's
+		// `guarded` label asks for. A live target keeps ADR-009's bar: there the
+		// grounds are the control case run on the wire.
+		if (report.sourceOnly === true && quotes.length === 0) {
+			return unresolved(
+				"a refutation of source quotes what makes this not a finding — the guard, or the line that shows the " +
+				"claim is wrong — as 'file:line: verbatim text' in basis or guards. A line number alone cannot be " +
+				"checked against the file, and a refutation withdraws a finding from the report.",
+			);
+		}
 		return {
 			verdict: "refuted",
 			status: "refuted",
@@ -1021,6 +1312,18 @@ export function judge(finding: FindingRecord, report: ChallengeReport, at: strin
 				`the control case was not run — ${contract?.control ?? GENERIC_CONTROL} ` +
 				"A finding is not proven by the attack working; it is proven by the attack working and " +
 				"the control failing.",
+			);
+		}
+		// On a review of source nothing ran, so the claim that input reaches the
+		// sink is only as good as the trace: the line where it enters and the line
+		// where it is used, each quoted as it reads. On the 2026-09-24 grid 17 of
+		// 18 settled verification records rested on a live=true that described no
+		// running target (ADR-028): a control case alone is a sentence.
+		if (report.sourceOnly === true && path.length < 2) {
+			return unresolved(
+				"a confirmation on a review of source quotes the path the input takes: path=[the source hop, …, the " +
+				"sink hop], each 'file:line: verbatim text'. The first is where untrusted input enters, the last where " +
+				"it is used; one line holding both is quoted twice.",
 			);
 		}
 		if (contract?.entitlement && (report.entitlement === undefined || report.entitlement.trim().length === 0)) {

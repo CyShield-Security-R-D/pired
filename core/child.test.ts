@@ -338,11 +338,13 @@ describe("openChildWorkspace", () => {
 	it("lets a worker's tools see a source-only parent scope, and a scope with targets as live", async () => {
 		const verdictUnder = async (s: EngagementScope): Promise<unknown> => {
 			const { svc, registry } = await parentWorkspace(s);
+			// On a review of source the refutation quotes the guard (3.1), so the file is there to quote.
+			await svc.fs.writeFile("/target/src/invoices.ts", "import { db } from './db';\n".repeat(8) + "if (invoice.ownerId !== user.id) throw forbidden();\n");
 			const record = (await openChildWorkspace(DIR, svc, { scopeRegistry: registry })).tools.find((t) => t.name === "record");
 			const ctx: ToolContext = { cwd: "/target", services: svc };
 			const created = await record?.execute({ kind: "finding", title: "IDOR on invoices", severity: "high", target: "src/invoices.ts:12" }, ctx);
 			const id = (created?.details as { id?: string } | undefined)?.id;
-			await record?.execute({ kind: "finding", id, status: "refuted", basis: ["src/invoices.ts:9"], live: false, reason: "the owner check runs first" }, ctx);
+			await record?.execute({ kind: "finding", id, status: "refuted", basis: ["src/invoices.ts:9: if (invoice.ownerId !== user.id) throw forbidden();"], live: false, reason: "the owner check runs first" }, ctx);
 			return (await new Workspace(DIR, svc).read("findings")).find((f) => f.id === id)?.status;
 		};
 		expect(await verdictUnder(scope({ mode: "off", targets: {} }))).toBe("refuted");

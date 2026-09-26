@@ -12,7 +12,7 @@
 
 import { buildBrowserModel, recordLabel } from "./browser.ts";
 import { workerContext } from "./delegation.ts";
-import { auditFinding, challengeBrief, hasGrounds, hypothesisBrief, isExaminedUnsettled, judge, SEVERITY_RANK, unchallengedQueue, unsettledLabel, verdictPatch } from "./challenge.ts";
+import { auditFinding, challengeBrief, groundQuotes, hasGrounds, hypothesisBrief, isExaminedUnsettled, judge, parseQuote, type QuoteReader, SEVERITY_RANK, unchallengedQueue, unsettledLabel, verdictPatch } from "./challenge.ts";
 import { computeCoverage, coveragePercent, findGaps, selectNext } from "./coverage.ts";
 import { CVSS_DEFAULT_VERSION, CVSS_EXAMPLE, cvssVersion, validateCvss } from "./cvss.ts";
 import { type Fields, findDuplicate, findNearDuplicate, holdsLeadOpen, type IdentityKind, isNoOp, leadMeetsClearance, mergeRecord, reopensLead, updateById } from "./identity.ts";
@@ -434,7 +434,7 @@ const RECORD_DESCRIPTION = `Record engagement state to the durable workspace. On
 - finding: title, severity[info|low|medium|high|critical] (+target, class, cwe, cvss, description, repro, evidence[], status)
   A finding is anything worth carrying into the report, not only a proven vulnerability. Use severity=info for an observation that costs nothing now but may matter later — a missing dependency pin, an unpinned base image, a permissive default, a lead you could not finish. 'target' is optional and accepts a recorded element id OR a raw string (a file path, a module, a component) when no element fits; give one when you can, and record the finding either way rather than leaving it in notes.
   A finding is a section of a document a client pays for, so it is written as one: 'description' says what the flaw is and where, 'impact' says what it costs THEM — the records exposed, the money moved, the service lost, the obligation breached — and 'remediation' says the concrete change that fixes it (the control to add, the call to replace; never "sanitize input"). 'repro' is numbered steps a third party can follow. Write impact in the client's terms, not the tool's: "any logged-in customer can read all 40k customer records, including national IDs" beats "confidentiality impact is high".
-  status[suspected|open|confirmed|triaged|reported|refuted|false-positive|accepted-risk|ignored] is how a finding is settled without losing it. New findings are 'suspected': recorded, not yet challenged. 'confirmed' is earned, not asserted — pass 'control' (the case that had to FAIL for this to mean anything: the unauthenticated request, the false payload, the absent guard) and, for access-control classes, 'entitlement' (how you established the caller was not MEANT to reach the resource — reading another user's object is a bug when the reader was not entitled and a feature when they were, and the response looks identical). To refute, pass 'basis' (file:line, an evidence path, or the model section that settles it), and 'live' when the engagement has a live target — a review of source has none to reach, and there the basis is the whole bar. A challenge that could not settle it is a result too: status=suspected with 'basis' or 'control' on the finding's id, and nothing about the claim itself, keeps its status and writes your grounds on it ('reason' alone is a note, not a look). Short of either bar the status does not move and nothing is lost. 'recall challenge' lists what no challenge has settled — findings nobody has examined first, then those examined but unsettled; 'recall challenge id=<id>' returns the brief for any finding, including one already examined. When the operator says a finding is not real, set status=false-positive; when they say the risk is accepted, status=accepted-risk; when they want it set aside, status=ignored. All three keep the row and its history, drop it out of the open-findings count, and take a 'reason' — which is what a client asks for three months later. Prefer them to deleting.
+  status[suspected|open|confirmed|triaged|reported|refuted|false-positive|accepted-risk|ignored] is how a finding is settled without losing it. New findings are 'suspected': recorded, not yet challenged. 'confirmed' is earned, not asserted — pass 'control' (the case that had to FAIL for this to mean anything: the unauthenticated request, the false payload, the absent guard) and, for access-control classes, 'entitlement' (how you established the caller was not MEANT to reach the resource — reading another user's object is a bug when the reader was not entitled and a feature when they were, and the response looks identical). To refute, pass 'basis' (file:line, an evidence path, or the model section that settles it), and 'live' when the engagement has a live target — a review of source has none to reach, and there the basis is the whole bar. On a review of source the proof is quoted, not named: a confirmation carries 'path' (the source hop to the sink hop) and a refutation quotes the guard that makes it not a finding (in 'basis' or 'guards'), each as 'file:line: verbatim text'. pired checks every quote against the file; one that is not there within 3 lines settles nothing, and the reply shows what the line does say. A challenge that could not settle it is a result too: status=suspected with 'basis' or 'control' on the finding's id, and nothing about the claim itself, keeps its status and writes your grounds on it ('reason' alone is a note, not a look). Short of either bar the status does not move and nothing is lost. 'recall challenge' lists what no challenge has settled — findings nobody has examined first, then those examined but unsettled; 'recall challenge id=<id>' returns the brief for any finding, including one already examined. When the operator says a finding is not real, set status=false-positive; when they say the risk is accepted, status=accepted-risk; when they want it set aside, status=ignored. All three keep the row and its history, drop it out of the open-findings count, and take a 'reason' — which is what a client asks for three months later. Prefer them to deleting.
 - blocker: question (+blockerType, priority[low|medium|high], options[], blocks[] (work ids this gates), status[open|answered|dismissed], answer)
   A parked question stays open until someone closes it, and an open blocker is one you keep routing around. When the operator answers it — in a dialog, or just by telling you in chat that it is decided or already handled — write that down: \`recall blockers\` gives you the id, then \`record kind=blocker id=<id> status=answered answer=<what they said>\`. Answers given in the UI arrive on their own; you do not need a tool call to read them.
 - loot: handle (e.g. cred:web-admin), secret (+lootType, username, target, source)
@@ -459,7 +459,15 @@ const RECORD_PARAMETERS: JsonSchema = {
 		section: { enum: MODEL_SECTIONS, description: "For kind=model: which section of the target model this replaces." },
 		value: { type: "string" }, ip: { type: "string" }, tech: { type: "array", items: { type: "string" } },
 		host: { type: "string" }, port: { type: "integer" }, proto: { type: "string" }, name: { type: "string", description: "Name for param/tech; for kind=evidence, the filename to save under (e.g. \"sqli-login.txt\")." }, version: { type: "string" },
-		endpoint: { type: "string" }, method: { type: "string" }, path: { type: "string" }, params: { type: "array", items: { type: "string" } }, auth: { type: "string" }, location: { type: "string" },
+		endpoint: { type: "string" }, method: { type: "string" },
+		// Two meanings, told apart by kind. The verification's hop list is called
+		// `path` in the ledger (FORMAT.md §8.3) and the endpoint's route always
+		// was; a second name for either would be the one a model guesses wrong.
+		path: {
+			anyOf: [{ type: "string" }, { type: "array", items: { type: "string" } }],
+			description: "kind=endpoint: the route (a string). kind=finding verdict: the path untrusted input takes, as a list of 'file:line: verbatim text' — the first hop where it enters (the source), the last where it is used (the sink). Each quote is checked against the file; confirming on a review of source needs both ends.",
+		},
+		params: { type: "array", items: { type: "string" } }, auth: { type: "string" }, location: { type: "string" },
 		file: { type: "string" },
 		statement: { type: "string" },
 		// `anyOf`, not a bare description. These two were the only properties in the
@@ -486,7 +494,8 @@ const RECORD_PARAMETERS: JsonSchema = {
 		content: { type: "string", description: "For kind=evidence: the raw output to save to the file." },
 		title: { type: "string" }, severity: { enum: SEVERITIES }, cwe: { type: "string" }, cvss: { type: "string", description: `CVSS vector. v4.0 by default, e.g. "${CVSS_EXAMPLE["4.0"]}"; a v3.1 vector is accepted when the engagement requires one.` }, description: { type: "string", description: "What the flaw is and where: the mechanism, in plain language." }, impact: { type: "string", description: "What it costs the client in their terms — records exposed, money moved, service lost, obligation breached." }, remediation: { type: "string", description: "The concrete change that fixes it: the control to add, the call to replace. Not \"sanitize input\"." }, repro: { type: "string" }, status: { type: "string" }, evidence: { type: "array", items: { type: "string" }, description: "Workspace-relative paths to evidence files you wrote (e.g. [\"evidence/sqli-login.txt\"]). Not inline text." },
 		control: { type: "string", description: "For kind=finding: the control case you ran and what it returned — the request that had to FAIL for the finding to mean anything." },
-		basis: { type: "array", items: { type: "string" }, description: "The grounds for a refutation, a severity change, or a second look at a cleared cell — file:line, an evidence path, or the model section that settles it. On kind=hypothesis with an id, this is what marks the row as independently re-checked. On kind=finding with an id and status=suspected (and no claim fields), it records a challenge that could not settle the claim." },
+		basis: { type: "array", items: { type: "string" }, description: "The grounds for a refutation, a severity change, or a second look at a cleared cell — file:line, an evidence path, or the model section that settles it. Written as 'file:line: verbatim text', an entry is a quote and is checked against the file: the text must be on that line or within 3 of it. On kind=hypothesis with an id, this is what marks the row as independently re-checked. On kind=finding with an id and status=suspected (and no claim fields), it records a challenge that could not settle the claim." },
+		guards: { type: "array", items: { type: "string" }, description: "For a kind=finding verdict: the checks you examined — validation, an authorization test, escaping, a parameterised call — each as 'file:line: verbatim text', checked against the file. On a review of source a refutation quotes the guard (here or in basis) that makes the claim not a finding." },
 		live: { type: "boolean", description: "For an engagement with a live target: was it reachable, and the session valid, when you challenged it? A refutation against a dead session refutes nothing. When there is no running target, leave it out: a review of source has no target to reach, and there the cited basis carries the refutation. Applies to kind=finding and to a re-checked kind=hypothesis." },
 		entitlement: { type: "string", description: "For kind=finding: how you established the caller was (or was not) meant to reach the resource. Required to confirm an access-control finding." },
 		question: { type: "string" }, blockerType: { enum: BLOCKER_TYPES }, priority: { enum: PRIORITIES }, options: { type: "array", items: { type: "string" } }, blocks: { type: "array", items: { type: "string" } }, context: { type: "string" },
@@ -594,8 +603,72 @@ function passStamp(deps: ToolDeps): { pass?: number } {
  * update, which keep the row's creator.
  */
 function authorStamp(deps: ToolDeps, ctx: ToolContext): { by?: string } {
-	const by = ctx.author ?? deps.author?.();
+	const by = authorOf(deps, ctx);
 	return by ? { by } : {};
+}
+
+/** Who is writing through this call: the call's own author (the scribe), else whoever the tools were built for. */
+function authorOf(deps: ToolDeps, ctx: ToolContext): string | undefined {
+	return ctx.author ?? deps.author?.();
+}
+
+/**
+ * A list of quotes as the model sent it: a list, one string, or a list
+ * serialised into a string. Never split on commas, the way `asList` splits a
+ * target list: a line of code has commas in it.
+ */
+function quoteList(v: unknown): string[] {
+	if (typeof v === "string" && v.trim().startsWith("[")) {
+		try {
+			const parsed: unknown = JSON.parse(v);
+			if (Array.isArray(parsed)) return strArr(parsed) ?? [];
+		} catch {
+			// a bracketed string that is not JSON is one quote, and is checked as one
+		}
+	}
+	return strArr(v) ?? [];
+}
+
+/**
+ * How a verification's quotes are read: a workspace evidence path from the
+ * workspace, anything else under the engagement's directory, with the
+ * basename fallback the locator uses (a review says "share.go"; the file is
+ * `http/share.go`). A path that leaves either is not read — record content is
+ * agent-authored — and reads as a file that is not there.
+ */
+function quoteReader(deps: ToolDeps, ctx: ToolContext): QuoteReader {
+	return async (cited) => {
+		const root = ctx.cwd ? ctx.cwd.replace(/\/+$/, "") : undefined;
+		const file = root && cited.startsWith(`${root}/`) ? cited.slice(root.length + 1) : cited;
+		if (file.startsWith("/") || file.includes("\\") || file.split("/").some((seg) => seg === "..")) return undefined;
+		if (file.startsWith("evidence/")) {
+			const body = await deps.workspace.readRelative(file);
+			if (body !== undefined) return { path: file, body };
+		}
+		if (!root) return undefined;
+		const direct = await ctx.services.fs.readFileIfExists(`${root}/${file}`).catch(() => undefined);
+		if (direct !== undefined) return { path: file, body: direct };
+		const hit = await findByBasename(ctx, root, file.split("/").pop() ?? file);
+		if (!hit) return undefined;
+		const body = await ctx.services.fs.readFileIfExists(`${root}/${hit}`).catch(() => undefined);
+		return body === undefined ? undefined : { path: hit, body };
+	};
+}
+
+/**
+ * The workspace evidence files a verification cites anywhere — its basis, its
+ * control case, its quotes — read for the tier (`deriveTier`), which asks only
+ * whether any of them is something that ran rather than an excerpt.
+ */
+async function citedEvidence(deps: ToolDeps, texts: readonly string[]): Promise<string[]> {
+	const paths = new Set<string>();
+	for (const t of texts) for (const m of t.matchAll(/(?:^|[\s(\[,"'`])(evidence\/[^\s:,;)"'`\]]+)/g)) paths.add(m[1] ?? "");
+	const out: string[] = [];
+	for (const rel of paths) {
+		const body = await deps.workspace.readRelative(rel);
+		if (body !== undefined) out.push(body);
+	}
+	return out;
 }
 
 /** Resolve one target to an element id, or leave it as written. */
@@ -1205,7 +1278,10 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 				// `reason` is a note any such edit may carry. Written as a
 				// verification, either would put an "examined" mark on a finding no
 				// challenge had looked at.
-				const grounded = hasGrounds({ basis: strArr(a.basis), control: str(a.control) });
+				// The grounded contract's quotes: the hops from source to sink, and the
+				// checks examined. A look that quoted either said what it looked at.
+				const hops = { path: quoteList(a.path), guards: quoteList(a.guards) };
+				const grounded = hasGrounds({ basis: [...(strArr(a.basis) ?? []), ...hops.path, ...hops.guards], control: str(a.control) });
 				const unsettled = wanted === "suspected" && existing !== undefined && !claimSent && grounded;
 				if (wanted === "suspected" && existing !== undefined && claimSent && grounded) {
 					// Said, because the grounds are otherwise dropped without a word:
@@ -1224,6 +1300,17 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 						class: str(a.class) ?? existing?.class,
 						status: existing?.status ?? UNVERIFIED_STATUS,
 					} as FindingRecord;
+					// Every quote is checked against the file it cites before the
+					// verdict is judged: judge() is pure, so the reading happens here.
+					const reader = quoteReader(deps, ctx);
+					const basisList = strArr(a.basis) ?? [];
+					const path = await groundQuotes(hops.path, reader);
+					const guards = await groundQuotes(hops.guards, reader);
+					const basisQuotes = await groundQuotes(basisList.filter((b) => parseQuote(b) !== undefined), reader);
+					const evidence = await citedEvidence(deps, [
+						...basisList, str(a.control) ?? "", ...[...path, ...guards, ...basisQuotes].map((q) => q.at),
+					]);
+					const judgedBy = authorOf(deps, ctx);
 					const outcome = judge(subject, {
 						verdict: wanted === "confirmed" ? "stands" : wanted === "refuted" ? "refuted" : "unresolved",
 						control: str(a.control),
@@ -1234,6 +1321,10 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 						// The host's reading of the scope, never the caller's: whether
 						// live=false can refute anything is not the challenger's to say.
 						sourceOnly: deps.sourceOnly?.() === true,
+						path, guards, basisQuotes, evidence,
+						// Who judged it, from where the call ran — never from the caller,
+						// whose `by` was deleted above.
+						...(judgedBy !== undefined ? { by: judgedBy } : {}),
 					}, ctx.services.clock.nowIso());
 					const patch = verdictPatch(outcome);
 					a.status = patch.status;

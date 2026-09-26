@@ -2,8 +2,9 @@ import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
 	auditFinding, challengeBrief, type ChallengeReport, CLASS_ALIASES, CONTRACTS, contractFor,
-	challengeCommand, evidenceShape, GENERIC_CONTROL, hasGrounds, hypothesisBrief, isEarned, isExaminedUnsettled, isUnchallenged, judge,
-	modelAnswersEntitlement, unchallengedBrief, unchallengedQueue, unsettledLabel, verdictPatch,
+	challengeCommand, deriveTier, describeUngrounded, evidenceShape, GENERIC_CONTROL, type GroundedQuote, groundQuotes, hasGrounds,
+	hypothesisBrief, isEarned, isExaminedUnsettled, isIndependent, isUnchallenged, isWorkerAuthor, judge, MIN_QUOTE_CHARS,
+	modelAnswersEntitlement, parseQuote, QUOTE_WINDOW, type QuoteReader, unchallengedBrief, unchallengedQueue, unsettledLabel, verdictPatch,
 } from "./challenge.ts";
 import type { FindingRecord, HypothesisRecord } from "./ontology.ts";
 
@@ -18,6 +19,10 @@ function finding(over: Partial<FindingRecord> = {}): FindingRecord {
 		...over,
 	} as FindingRecord;
 }
+
+/** A guard quoted from the source and found where it was cited, as the host hands it to judge(). */
+const GUARD_BASIS = "src/policy.go:31: if note.OwnerID != user.ID { return ErrForbidden }";
+const GUARD = { at: "src/policy.go:31", quote: "if note.OwnerID != user.ID { return ErrForbidden }", grounded: true };
 
 /** A challenge that met every bar, so individual tests can knock one out. */
 function goodReport(over: Partial<ChallengeReport> = {}): ChallengeReport {
@@ -92,10 +97,10 @@ describe("refuting where there is no live target", () => {
 	// by asserting live=true on scopes with no target (17 of 18 verification
 	// records), and the honest ones could not refute anything.
 	it("accepts a cited refutation that says live=false when the engagement is source-only", () => {
-		const out = judge(finding(), { verdict: "refuted", basis: ["src/policy.go:31"], live: false, sourceOnly: true }, NOW);
+		const out = judge(finding(), { verdict: "refuted", basis: [GUARD_BASIS], basisQuotes: [GUARD], live: false, sourceOnly: true }, NOW);
 		expect(out.status).toBe("refuted");
 		expect(out.downgraded).toBeUndefined();
-		expect(out.verification).toMatchObject({ verdict: "refuted", basis: ["src/policy.go:31"] });
+		expect(out.verification).toMatchObject({ verdict: "refuted", basis: [GUARD_BASIS] });
 	});
 
 	/**
@@ -104,13 +109,14 @@ describe("refuting where there is no live target", () => {
 	 * the source settled — the dead-session refutation the live rule rejects.
 	 */
 	it("stores no live flag on a source-only refutation that said live=false", () => {
-		const out = judge(finding(), { verdict: "refuted", basis: ["src/policy.go:31"], live: false, sourceOnly: true }, NOW);
+		const out = judge(finding(), { verdict: "refuted", basis: [GUARD_BASIS], basisQuotes: [GUARD], live: false, sourceOnly: true }, NOW);
+		expect(out.status).toBe("refuted");
 		expect(out.verification).not.toHaveProperty("live");
 		// A look that settled nothing is written the same way.
 		const look = judge(finding(), { verdict: "unresolved", basis: ["src/policy.go:31"], live: false, sourceOnly: true }, NOW);
 		expect(look.verification).not.toHaveProperty("live");
 		// live=true is a claim that a running target was tested, and is kept as said.
-		expect(judge(finding(), { verdict: "refuted", basis: ["src/policy.go:31"], live: true, sourceOnly: true }, NOW).verification.live).toBe(true);
+		expect(judge(finding(), { verdict: "refuted", basis: [GUARD_BASIS], basisQuotes: [GUARD], live: true, sourceOnly: true }, NOW).verification.live).toBe(true);
 	});
 
 	it("still downgrades live=false when the engagement has a live target, and keeps the flag it was downgraded on", () => {
@@ -887,5 +893,260 @@ describe("challengeCommand", () => {
 	it("is unbothered by an empty ledger", () => {
 		expect(challengeCommand({ findings: [] }).text).toMatch(/nothing unchallenged/);
 		expect(challengeCommand({ findings: [], id: "f1" }).tone).toBe("warning");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Grounded verification (delegation-v6 Phase 3, 3.1)
+// ---------------------------------------------------------------------------
+
+/**
+ * A synthetic decoy: each sink sits beside a guarded twin, far enough apart
+ * that neither's window reaches the other. Written for these tests, not taken
+ * from any corpus application, so nothing here is fitted to a benchmark.
+ */
+const DECOY = [
+	"from flask import request, abort",                                              // 1
+	"from .db import db, current_user, render",                                      // 2
+	"",                                                                              // 3
+	"@app.get(\"/notes/<note_id>\")",                                                // 4
+	"def get_note(note_id):",                                                        // 5
+	"    note = db.query(\"SELECT * FROM notes WHERE id = ?\", (note_id,)).one()",   // 6
+	"    return note.body",                                                          // 7
+	"",                                                                              // 8
+	"",                                                                              // 9
+	"@app.get(\"/notes/<note_id>/checked\")",                                        // 10
+	"def get_note_checked(note_id):",                                                // 11
+	"    note = db.query(\"SELECT * FROM notes WHERE id = ?\", (note_id,)).one()",   // 12
+	"    if note.owner_id != current_user().id:",                                    // 13
+	"        abort(403)",                                                            // 14
+	"    return note.body",                                                          // 15
+	"",                                                                              // 16
+	"",                                                                              // 17
+	"@app.get(\"/search\")",                                                         // 18
+	"def search():",                                                                 // 19
+	"    term = request.args.get(\"q\", \"\")",                                      // 20
+	"    rows = db.execute(\"SELECT * FROM notes WHERE body LIKE '%\" + term + \"%'\")", // 21
+	"    return render(rows)",                                                       // 22
+	"",                                                                              // 23
+	"",                                                                              // 24
+	"",                                                                              // 25
+	"@app.get(\"/search/checked\")",                                                 // 26
+	"def search_checked():",                                                         // 27
+	"    term = request.args.get(\"q\", \"\")",                                      // 28
+	"    rows = db.execute(\"SELECT * FROM notes WHERE body LIKE ?\", (\"%\" + term + \"%\",))", // 29
+	"    return render(rows)",                                                       // 30
+].join("\n");
+
+/** The decoy as the host would resolve it: the one file, under the engagement directory. */
+const readDecoy: QuoteReader = async (file) =>
+	file === "app/notes.py" || file === "notes.py" ? { path: "app/notes.py", body: DECOY } : undefined;
+
+const SQLI_SOURCE = "app/notes.py:20: term = request.args.get(\"q\", \"\")";
+const SQLI_SINK = "app/notes.py:21: rows = db.execute(\"SELECT * FROM notes WHERE body LIKE '%\" + term + \"%'\")";
+const IDOR_GUARD = "app/notes.py:13: if note.owner_id != current_user().id:";
+
+/** A decoy finding, as the ledger holds it. */
+function decoyFinding(over: Partial<FindingRecord> = {}): FindingRecord {
+	return finding({ id: "f9", title: "SQL injection in /search", class: "sqli", target: "app/notes.py:21", ...over });
+}
+
+describe("grounding a quote against the file it cites", () => {
+	it("accepts a quote three lines off after whitespace normalisation", async () => {
+		// Line 21's sink, cited at 18 and with its indentation and spacing mangled.
+		const [q] = await groundQuotes(["app/notes.py:18:   rows =   db.execute(\"SELECT * FROM notes WHERE body LIKE '%\" + term"], readDecoy);
+		expect(q?.grounded).toBe(true);
+		expect(q?.at).toBe("app/notes.py:18");
+	});
+
+	it("does not accept the same quote four lines off", async () => {
+		const [q] = await groundQuotes(["app/notes.py:17: rows = db.execute(\"SELECT * FROM notes WHERE body LIKE '%\" + term"], readDecoy);
+		expect(q?.grounded).toBe(false);
+		expect(q?.why).toMatch(/not within 3 lines of line 17/);
+	});
+
+	it("keeps a sink quote cited at its guarded twin's line from counting, and says what that line reads", async () => {
+		// The decoy's point: the parameterised twin is eight lines below, so a
+		// verifier that read one function and cited the other is caught.
+		const [q] = await groundQuotes(["app/notes.py:29: rows = db.execute(\"SELECT * FROM notes WHERE body LIKE '%\" + term + \"%'\")"], readDecoy);
+		expect(q?.grounded).toBe(false);
+		expect(q?.actual).toContain("LIKE ?");
+		expect(describeUngrounded([q as GroundedQuote])).toMatch(/line 29 reads: "rows = db\.execute\("SELECT \* FROM notes WHERE body LIKE \?"/);
+	});
+
+	it("will not take a quote too short to identify a line, even when the line holds it", async () => {
+		const [q] = await groundQuotes(["app/notes.py:14: abort(403)"], readDecoy);
+		expect(q?.grounded).toBe(false);
+		expect(q?.why).toMatch(new RegExp(`at least ${MIN_QUOTE_CHARS}`));
+		expect(MIN_QUOTE_CHARS).toBe(12);
+		expect(QUOTE_WINDOW).toBe(3);
+	});
+
+	it("matches a short guard quoted together with the line it guards", async () => {
+		// `if note.owner_id != current_user().id:` clears the bar alone; a guard
+		// that does not is quoted with the line after it, across the line break.
+		const [q] = await groundQuotes(["app/notes.py:13: current_user().id: abort(403)"], readDecoy);
+		expect(q?.grounded).toBe(true);
+	});
+
+	it("reads a range as its whole span, and takes off backticks wrapped round the text", async () => {
+		const [range, ticked] = await groundQuotes([
+			"app/notes.py:12-15: return note.body",
+			"app/notes.py:13: `if note.owner_id != current_user().id:`",
+		], readDecoy);
+		expect(range).toMatchObject({ grounded: true, at: "app/notes.py:12-15" });
+		expect(ticked).toMatchObject({ grounded: true, quote: "if note.owner_id != current_user().id:" });
+	});
+
+	it("says a string that is not a quote is not one, and names a file that is not there", async () => {
+		const [prose, missing, beyond] = await groundQuotes([
+			"the handler checks ownership",
+			"app/other.py:3: something long enough to be a quote",
+			"app/notes.py:90: return render(rows) and more",
+		], readDecoy);
+		expect(prose).toMatchObject({ grounded: false, why: expect.stringMatching(/file:line: verbatim text/) });
+		expect(missing).toMatchObject({ grounded: false, why: expect.stringMatching(/no file 'app\/other\.py'/) });
+		expect(beyond).toMatchObject({ grounded: false, why: "app/notes.py has 30 lines" });
+	});
+
+	it("stores the path the host resolved, so a basename citation names the file", async () => {
+		const [q] = await groundQuotes([`notes.py:13: if note.owner_id != current_user().id:`], readDecoy);
+		expect(q).toMatchObject({ grounded: true, at: "app/notes.py:13" });
+	});
+
+	it("reads each cited file once, and skips blank entries", async () => {
+		let reads = 0;
+		const counting: QuoteReader = async (file) => { reads += 1; return readDecoy(file); };
+		const out = await groundQuotes([SQLI_SOURCE, "", SQLI_SINK, IDOR_GUARD], counting);
+		expect(out).toHaveLength(3);
+		expect(reads).toBe(1);
+	});
+
+	it("treats a reader that throws as a file that is not there", async () => {
+		const [q] = await groundQuotes([SQLI_SINK], async () => { throw new Error("EACCES"); });
+		expect(q?.grounded).toBe(false);
+	});
+
+	it("parses the citation forms a model writes and nothing else", () => {
+		expect(parseQuote("./app/notes.py:20: term = x")).toMatchObject({ file: "app/notes.py", line: 20, end: 20, quote: "term = x" });
+		expect(parseQuote("app/notes.py:12-15: return note.body")).toMatchObject({ line: 12, end: 15 });
+		expect(parseQuote("http://host:8080/x")).toBeUndefined();
+		expect(parseQuote("app/notes.py:20")).toBeUndefined();
+		expect(parseQuote("app/notes.py:0: nothing on line zero")).toBeUndefined();
+		expect(parseQuote("app/notes.py:15-12: backwards range")).toBeUndefined();
+		expect(parseQuote("app/notes.py:13: \"\"")?.quote).toBe("\"\"");
+	});
+});
+
+describe("the grounded judge", () => {
+	const source = async (hops: string[]) => groundQuotes(hops, readDecoy);
+
+	it("confirms on a source-only engagement only when path quotes a source and a sink found at their cited lines", async () => {
+		const control = "the parameterised twin at app/notes.py:29 is what safe looks like; this one concatenates";
+		const confirmed = judge(decoyFinding(), { verdict: "stands", control, sourceOnly: true, path: await source([SQLI_SOURCE, SQLI_SINK]) }, NOW);
+		expect(confirmed.status).toBe("confirmed");
+		expect(confirmed.verification.path).toEqual([
+			{ at: "app/notes.py:20", quote: "term = request.args.get(\"q\", \"\")" },
+			{ at: "app/notes.py:21", quote: "rows = db.execute(\"SELECT * FROM notes WHERE body LIKE '%\" + term + \"%'\")" },
+		]);
+		expect(confirmed.verification.tier).toBe("static");
+
+		const sinkOnly = judge(decoyFinding(), { verdict: "stands", control, sourceOnly: true, path: await source([SQLI_SINK]) }, NOW);
+		expect(sinkOnly.status).toBe("suspected");
+		expect(sinkOnly.downgraded).toMatch(/path=\[the source hop, …, the\s+sink hop\]/);
+
+		const noPath = judge(decoyFinding(), { verdict: "stands", control, sourceOnly: true }, NOW);
+		expect(noPath.status).toBe("suspected");
+	});
+
+	it("keeps a finding suspected and quotes the real line when a verifier's sink quote is not there", async () => {
+		// The sink quoted at the guarded twin's line: the file says otherwise.
+		const wrong = "app/notes.py:29: rows = db.execute(\"SELECT * FROM notes WHERE body LIKE '%\" + term + \"%'\")";
+		const out = judge(decoyFinding(), {
+			verdict: "stands", control: "concatenated into the query", sourceOnly: true, path: await source([SQLI_SOURCE, wrong]),
+		}, NOW);
+		expect(out.verdict).toBe("unresolved");
+		expect(out.status).toBe("suspected");
+		expect(out.downgraded).toMatch(/a quote does not match the file it cites/);
+		expect(out.downgraded).toMatch(/line 29 reads: "rows = db\.execute\("SELECT \* FROM notes WHERE body LIKE \?"/);
+		// A path with a hop nobody can find is not kept as a path.
+		expect(out.verification).not.toHaveProperty("path");
+	});
+
+	it("leaves a confirmed finding confirmed when a later look quotes a line that is not there", async () => {
+		const earned = { verdict: "stands" as const, at: "t1", control: "ran", by: "pired-verify" };
+		const out = judge(decoyFinding({ status: "confirmed", verification: earned }), {
+			verdict: "refuted", basis: ["app/notes.py:21: rows = db.execute(q, params)"], basisQuotes: await source(["app/notes.py:21: rows = db.execute(q, params)"]), sourceOnly: true,
+		}, NOW);
+		expect(out.status).toBe("confirmed");
+		expect(out.kept).toEqual(earned);
+	});
+
+	it("refutes on a source review only with a grounded quoted guard", async () => {
+		const idor = finding({ id: "f8", title: "IDOR on /notes/<id>/checked", class: "idor", target: "app/notes.py:12" });
+		const bare = judge(idor, { verdict: "refuted", basis: ["app/notes.py:13"], sourceOnly: true }, NOW);
+		expect(bare.status).toBe("suspected");
+		expect(bare.downgraded).toMatch(/quotes what makes this not a finding/);
+
+		const quoted = judge(idor, { verdict: "refuted", basis: [IDOR_GUARD], basisQuotes: await source([IDOR_GUARD]), sourceOnly: true }, NOW);
+		expect(quoted.status).toBe("refuted");
+
+		// The guard may travel in `guards` rather than in `basis`, which still names the grounds.
+		const inGuards = judge(idor, { verdict: "refuted", basis: ["the ownership check"], guards: await source([IDOR_GUARD]), sourceOnly: true }, NOW);
+		expect(inGuards.status).toBe("refuted");
+		expect(inGuards.verification.guards).toEqual([{ at: "app/notes.py:13", quote: "if note.owner_id != current_user().id:" }]);
+
+		// The guard quoted at the unguarded twin's line is not there.
+		const misplaced = "app/notes.py:6: if note.owner_id != current_user().id:";
+		const decoyed = judge(idor, { verdict: "refuted", basis: [misplaced], basisQuotes: await source([misplaced]), sourceOnly: true }, NOW);
+		expect(decoyed.status).toBe("suspected");
+		expect(decoyed.downgraded).toMatch(/line 6 reads/);
+	});
+
+	it("keeps ADR-009's bar for a refutation against a live target: a cited basis, no quote required", () => {
+		const out = judge(finding(), { verdict: "refuted", basis: ["evidence/f1-owner-only.txt"], live: true }, NOW);
+		expect(out.status).toBe("refuted");
+	});
+
+	it("keeps the live-target confirmation unchanged: control and entitlement, no path", () => {
+		expect(judge(finding(), goodReport(), NOW).status).toBe("confirmed");
+	});
+
+	it("stamps who judged it, on an earned verdict and on a look alike", async () => {
+		const confirmed = judge(finding(), goodReport({ by: "pired-verify" }), NOW);
+		expect(confirmed.verification.by).toBe("pired-verify");
+		const look = judge(finding(), { verdict: "unresolved", basis: ["app/notes.py:13"], by: "lead" }, NOW);
+		expect(look.verification.by).toBe("lead");
+		expect(look.verification).not.toHaveProperty("tier");
+	});
+
+	it("derives the tier: executed for a live check against a target or a cited transcript, static otherwise", () => {
+		expect(deriveTier({ live: true })).toBe("executed");
+		// live=true on a review of source describes nothing that ran (ADR-028).
+		expect(deriveTier({ live: true, sourceOnly: true })).toBe("static");
+		expect(deriveTier({ sourceOnly: true, evidence: ["GET /search?q=' HTTP/1.1\n\nHTTP/1.1 500 Internal Server Error\n"] })).toBe("executed");
+		expect(deriveTier({ sourceOnly: true, evidence: ["$ python poc.py\nrows returned: 412\n"] })).toBe("executed");
+		expect(deriveTier({ sourceOnly: true, evidence: ["app/notes.py:21: rows = db.execute(...)"] })).toBe("static");
+		expect(deriveTier({ sourceOnly: true, evidence: ["   "] })).toBe("static");
+		expect(judge(finding(), goodReport(), NOW).verification.tier).toBe("executed");
+	});
+});
+
+describe("who wrote a finding, and who judged it", () => {
+	it("tells a worker from the lead, its scribe and the operator", () => {
+		expect(isWorkerAuthor("pired-investigate")).toBe(true);
+		expect(isWorkerAuthor("worker")).toBe(true);
+		for (const by of ["lead", "scribe", "operator", undefined]) expect(isWorkerAuthor(by)).toBe(false);
+	});
+
+	it("calls a verification independent only when someone other than the finder made it", () => {
+		const v = (by: string) => ({ verdict: "stands" as const, at: NOW, by });
+		expect(isIndependent({ by: "pired-investigate", verification: v("pired-verify") })).toBe(true);
+		expect(isIndependent({ by: "pired-investigate", verification: v("lead") })).toBe(true);
+		expect(isIndependent({ by: "lead", verification: v("lead") })).toBe(false);
+		// The scribe writes from the lead's own buffer: the lead confirming it is the finder confirming itself.
+		expect(isIndependent({ by: "scribe", verification: v("lead") })).toBe(false);
+		expect(isIndependent({ verification: v("lead") })).toBeUndefined();
+		expect(isIndependent({ by: "lead" })).toBeUndefined();
 	});
 });
