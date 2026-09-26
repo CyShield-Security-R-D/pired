@@ -4,7 +4,7 @@ import {
 	auditFinding, challengeBrief, type ChallengeReport, CLASS_ALIASES, CONTRACTS, contractFor,
 	challengeCommand, deriveTier, describeUngrounded, evidenceShape, GENERIC_CONTROL, type GroundedQuote, groundQuotes, hasGrounds,
 	hypothesisBrief, isEarned, isExaminedUnsettled, isIndependent, isUnchallenged, isWorkerAuthor, judge, MIN_QUOTE_CHARS,
-	modelAnswersEntitlement, parseQuote, provenanceLabel, QUOTE_WINDOW, type QuoteReader, unchallengedBrief, unchallengedQueue, unsettledLabel, verdictPatch,
+	isCommentOnly, MAX_QUOTE_OCCURRENCES, MAX_QUOTE_SPAN, modelAnswersEntitlement, parseQuote, provenanceLabel, QUOTE_WINDOW, type QuoteReader, unchallengedBrief, unchallengedQueue, unsettledLabel, verdictPatch,
 } from "./challenge.ts";
 import type { FindingRecord, HypothesisRecord } from "./ontology.ts";
 
@@ -974,12 +974,68 @@ describe("grounding a quote against the file it cites", () => {
 		expect(describeUngrounded([q as GroundedQuote])).toMatch(/line 29 reads: "rows = db\.execute\("SELECT \* FROM notes WHERE body LIKE \?"/);
 	});
 
-	it("will not take a quote too short to identify a line, even when the line holds it", async () => {
-		const [q] = await groundQuotes(["app/notes.py:14: abort(403)"], readDecoy);
+	it("will not take a quote below the floor, even when the line holds it", async () => {
+		const [q] = await groundQuotes(["app/notes.py:14: 403)"], readDecoy);
 		expect(q?.grounded).toBe(false);
 		expect(q?.why).toMatch(new RegExp(`at least ${MIN_QUOTE_CHARS}`));
-		expect(MIN_QUOTE_CHARS).toBe(12);
+		expect(MIN_QUOTE_CHARS).toBe(6);
+		expect(MAX_QUOTE_OCCURRENCES).toBe(3);
 		expect(QUOTE_WINDOW).toBe(3);
+	});
+
+	it("grounds a short guard a file has once, which a length rule failed", async () => {
+		// `if not user:` is ten non-space characters: under the old twelve-character
+		// rule the one guard that mattered could not be quoted on its own.
+		const file = "def view(user):\n    if not user:\n        abort(401)\n    return render(user.notes)\n";
+		const [q] = await groundQuotes(["views.py:2: if not user:"], async () => ({ path: "views.py", body: file }));
+		expect(q?.grounded).toBe(true);
+	});
+
+	it("refuses a line the file repeats too often to identify, which a length rule passed", async () => {
+		// `return nil, err` is thirteen non-space characters and sits under half the
+		// calls in a Go handler: in the window, and proof of nothing.
+		const body = Array.from({ length: 5 }, (_, i) => `\tv${i}, err := step${i}(ctx)\n\tif err != nil {\n\t\treturn nil, err\n\t}`).join("\n");
+		const [q] = await groundQuotes(["handler.go:3: return nil, err"], async () => ({ path: "handler.go", body }));
+		expect(q?.grounded).toBe(false);
+		expect(q?.why).toMatch(/occurs 5 times in handler\.go, so it does not identify a line/);
+		// Quoted with the call it belongs to, the same line identifies itself.
+		const [joined] = await groundQuotes(["handler.go:1-3: v0, err := step0(ctx) if err != nil { return nil, err"], async () => ({ path: "handler.go", body }));
+		expect(joined?.grounded).toBe(true);
+	});
+
+	it("refuses a brace or a bare `return nil` however near the cited line it is", async () => {
+		const body = Array.from({ length: 12 }, (_, i) => `func f${i}() error {\n\treturn nil\n}`).join("\n");
+		const read: QuoteReader = async () => ({ path: "f.go", body });
+		const [brace, bare] = await groundQuotes(["f.go:3: }", "f.go:2: return nil"], read);
+		expect(brace?.grounded).toBe(false);
+		expect(brace?.why).toMatch(/at least 6/);
+		expect(bare?.grounded).toBe(false);
+		expect(bare?.why).toMatch(/occurs 12 times/);
+	});
+
+	it("caps a range, so the decoy's guarded twin thirty lines away cannot ground", async () => {
+		// The parameterised twin is at line 29; a range from line 1 would otherwise
+		// read the whole file as one window.
+		const twin = "rows = db.execute(\"SELECT * FROM notes WHERE body LIKE ?\"";
+		const [wide] = await groundQuotes([`app/notes.py:1-30: ${twin}`], readDecoy);
+		expect(wide?.grounded).toBe(false);
+		expect(wide?.why).toMatch(/the range spans 30 lines; cite the line the quote is on, or a range of at most 7/);
+		const [narrow] = await groundQuotes([`app/notes.py:26-32: ${twin}`], readDecoy);
+		expect(narrow?.grounded).toBe(true);
+		expect(MAX_QUOTE_SPAN).toBe(6);
+	});
+
+	it("marks a quote that is only a comment, and grounds it all the same", async () => {
+		const body = "def export(req):\n    # checks the caller owns the invoice\n    return send(req.invoice)\n";
+		const [q] = await groundQuotes(["x.py:2: # checks the caller owns the invoice"], async () => ({ path: "x.py", body }));
+		expect(q).toMatchObject({ grounded: true, commentOnly: true });
+		for (const c of ["// guard", "/* guard */", "* guard", "-- guard", "<!-- guard -->"]) expect(isCommentOnly(c)).toBe(true);
+		expect(isCommentOnly("if (!owner) return")).toBe(false);
+	});
+
+	it("reports a file the host could not settle on, in the host's words", async () => {
+		const [q] = await groundQuotes(["notes.py:13: if note.owner_id != current_user().id:"], async () => ({ unresolved: "'notes.py' is ambiguous" }));
+		expect(q).toMatchObject({ grounded: false, why: "'notes.py' is ambiguous" });
 	});
 
 	it("matches a short guard quoted together with the line it guards", async () => {
@@ -1120,15 +1176,27 @@ describe("the grounded judge", () => {
 		expect(look.verification).not.toHaveProperty("tier");
 	});
 
-	it("derives the tier: executed for a live check against a target or a cited transcript, static otherwise", () => {
+	it("derives the tier: executed only for a live check or a saved exchange on an engagement with a target", () => {
+		const exchange = "GET /search?q=' HTTP/1.1\nHost: app\n\nHTTP/1.1 500 Internal Server Error\n";
 		expect(deriveTier({ live: true })).toBe("executed");
-		// live=true on a review of source describes nothing that ran (ADR-028).
+		expect(deriveTier({ evidence: [exchange] })).toBe("executed");
+		// A review of source is static whatever it cites or claims (ADR-028).
 		expect(deriveTier({ live: true, sourceOnly: true })).toBe("static");
-		expect(deriveTier({ sourceOnly: true, evidence: ["GET /search?q=' HTTP/1.1\n\nHTTP/1.1 500 Internal Server Error\n"] })).toBe("executed");
-		expect(deriveTier({ sourceOnly: true, evidence: ["$ python poc.py\nrows returned: 412\n"] })).toBe("executed");
-		expect(deriveTier({ sourceOnly: true, evidence: ["app/notes.py:21: rows = db.execute(...)"] })).toBe("static");
-		expect(deriveTier({ sourceOnly: true, evidence: ["   "] })).toBe("static");
+		expect(deriveTier({ sourceOnly: true, evidence: [exchange] })).toBe("static");
+		// A tool's output, notes, or a request with no response: nothing shows the target answered.
+		expect(deriveTier({ evidence: ["$ python poc.py\nrows returned: 412\n"] })).toBe("static");
+		expect(deriveTier({ evidence: ["curl -s https://app/search?q=x"] })).toBe("static");
+		expect(deriveTier({ evidence: ["   "] })).toBe("static");
 		expect(judge(finding(), goodReport(), NOW).verification.tier).toBe("executed");
+	});
+
+	it("does not read a `cat -n` excerpt with three-digit line numbers as a transcript", () => {
+		const excerpt = "   120\tdef search():\n   121\t    term = request.args.get('q')\n   122\t    return db.execute(term)\n";
+		expect(evidenceShape(excerpt)).not.toBe("wire");
+		expect(deriveTier({ evidence: [excerpt] })).toBe("static");
+		// A status code alone on its line, as `curl -w '%{http_code}'` prints it, is still a response.
+		expect(evidenceShape("curl -s -o /dev/null -w '%{http_code}' https://app/\n403\n")).toBe("wire");
+		expect(evidenceShape("status:\n200 OK\n")).toBe("wire");
 	});
 });
 

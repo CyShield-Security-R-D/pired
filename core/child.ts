@@ -354,7 +354,7 @@ function deepFreeze<T>(value: T): T {
  * parent can hand it the exact scope object its own gate was built from, where
  * no tool call reaches. The copy is deep-frozen: a worker holds it, never edits it.
  */
-export function publishParentScope(registry: object, dir: string, scope: EngagementScope): () => void {
+export function publishParentScope(registry: object, dir: string, scope: EngagementScope, root?: string): () => void {
 	const key = Symbol.for(PARENT_SCOPE_KEY);
 	let slot = scopeSlot(registry);
 	if (!slot) {
@@ -364,9 +364,35 @@ export function publishParentScope(registry: object, dir: string, scope: Engagem
 	const published = deepFreeze(JSON.parse(JSON.stringify(scope)) as EngagementScope);
 	slot.set(dir, published);
 	const owned = slot;
+	// The engagement root beside it: the directory the parent runs in, which a
+	// worker launched with a cwd inside it resolves quotes against (3.1).
+	const roots = rootSlot(registry);
+	if (root !== undefined) roots.set(dir, root);
+	else roots.delete(dir);
 	return () => {
-		if (owned.get(dir) === published) owned.delete(dir);
+		if (owned.get(dir) === published) {
+			owned.delete(dir);
+			if (roots.get(dir) === root) roots.delete(dir);
+		}
 	};
+}
+
+/** Where the parent keeps the engagement roots it published, keyed like the scopes. */
+export const PARENT_ROOT_KEY = "pired.parent-root.v1";
+
+function rootSlot(registry: object): Map<string, string> {
+	const key = Symbol.for(PARENT_ROOT_KEY);
+	const found = (registry as Record<symbol, unknown>)[key];
+	if (found instanceof Map) return found as Map<string, string>;
+	const slot = new Map<string, string>();
+	Object.defineProperty(registry, key, { value: slot, configurable: true, enumerable: false, writable: false });
+	return slot;
+}
+
+/** The engagement root the parent published for this workspace, if it named one. */
+export function readParentRoot(registry: object, dir: string): string | undefined {
+	const found = (registry as Record<symbol, unknown>)[Symbol.for(PARENT_ROOT_KEY)];
+	return found instanceof Map ? (found as Map<string, string>).get(dir) : undefined;
 }
 
 /** The scope a parent in this process published for `dir`, or undefined. */
@@ -432,6 +458,9 @@ export async function openChildWorkspace(
 		// not exist.
 		sourceOnly: () => isSourceOnly(scope),
 		author: () => options.author?.() ?? UNNAMED_WORKER_AUTHOR,
+		// The parent's directory, so a quote is resolved and stored against the
+		// engagement root whatever cwd this worker was launched in.
+		root: () => readParentRoot(options.scopeRegistry, path),
 	}).filter((t) => CHILD_TOOLS.has(t.name));
 	const ledger: ChildLedger = {
 		findings: () => workspace.read("findings"),

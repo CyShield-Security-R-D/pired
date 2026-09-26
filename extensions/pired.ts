@@ -1414,7 +1414,7 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		// change mid-session. Published wherever `scope` is (re)assigned; today
 		// that is only here.
 		withdrawScope?.();
-		withdrawScope = publishParentScope(globalThis, dir, scope);
+		withdrawScope = publishParentScope(globalThis, dir, scope, ctx.cwd);
 		// The scope is read from the target directory, so anything outside this
 		// process cannot see it. `pired-state` reads it from the workspace and had
 		// been finding nothing there since it shipped — its scope section never

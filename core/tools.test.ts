@@ -2470,8 +2470,8 @@ describe("a verdict's quotes are checked against the files they cite", () => {
 		expect((await stored(ws, id))?.status).toBe("refuted");
 	});
 
-	it("labels a verification that quotes a saved transcript executed", async () => {
-		const { ws, ctx, record, id } = await engagement({ sourceOnly: true });
+	it("labels a verification that quotes a saved exchange with a live target executed", async () => {
+		const { ws, ctx, record, id } = await engagement({ sourceOnly: false });
 		const saved = (await record.execute({ kind: "evidence", name: "export-probe.txt", content: "GET /export?name=%2e%2e/etc/passwd HTTP/1.1\n\nHTTP/1.1 200 OK\nroot:x:0:0\n" }, ctx)).details as { path: string };
 		await record.execute({
 			kind: "finding", id, status: "confirmed",
@@ -2481,6 +2481,19 @@ describe("a verdict's quotes are checked against the files they cite", () => {
 		const f = await stored(ws, id);
 		expect(f?.status).toBe("confirmed");
 		expect(f?.verification?.tier).toBe("executed");
+	});
+
+	it("does not let a verifier's own evidence excerpt ground a hop on a review of source", async () => {
+		// The probe: a verifier saved an "excerpt" holding the sink it wanted, then
+		// quoted its own file as the sink hop.
+		const { ws, ctx, record, id } = await engagement({ sourceOnly: true, author: "pired-verify" });
+		const saved = (await record.execute({ kind: "evidence", name: "sink.txt", content: "db.execute(\"SELECT \" + name)\n" }, ctx)).details as { path: string };
+		const out = textOf(await record.execute({
+			kind: "finding", id, status: "confirmed", control: "concatenated",
+			path: [SOURCE, `${saved.path}:1: db.execute("SELECT " + name)`],
+		}, ctx));
+		expect((await stored(ws, id))?.status).toBe("suspected");
+		expect(out).toContain(`there is no file '${saved.path}' under the engagement root`);
 	});
 
 	it("takes who judged it from where the call ran, never from the caller", async () => {
@@ -2556,5 +2569,84 @@ describe("recall shows who recorded a finding and who judged it (3.1)", () => {
 		expect(findings).toContain("SQLi in search (app/search.py:21) · by pired-investigate · verified by pired-verify, executed");
 		const queue = textOf(await recall.execute({ query: "challenge" }, ctx));
 		expect(queue).toContain("Open redirect on login · by pired-investigate");
+	});
+});
+
+describe("where a quote's file is found (3.1)", () => {
+	const GUARD = "if strings.Contains(r.URL.Query().Get(\"name\"), \"..\")";
+	async function tree(files: Record<string, string>, opts: { cwd?: string; root?: string; sourceOnly?: boolean } = {}) {
+		const svc = makeFakeServices();
+		const ws = await Workspace.open("/ws/acme", "acme", svc);
+		for (const [path, body] of Object.entries(files)) await svc.fs.writeFile(`/target/${path}`, body);
+		const ctx: ToolContext = { cwd: opts.cwd ?? "/target", services: svc };
+		const record = createRecordTool({
+			workspace: ws, sourceOnly: () => opts.sourceOnly ?? true,
+			...(opts.root !== undefined ? { root: () => opts.root } : {}),
+		});
+		const made = await record.execute({ kind: "finding", title: "Path traversal in export", severity: "high", target: "src/export.go:40", class: "traversal" }, ctx);
+		const id = (made.details as { id: string }).id;
+		const refute = async (quote: string) => {
+			const out = textOf(await record.execute({ kind: "finding", id, status: "refuted", basis: [quote] }, ctx));
+			return { out, f: (await ws.read("findings")).find((x) => x.id === id) };
+		};
+		return { svc, ws, ctx, record, id, refute };
+	}
+
+	it("resolves against the engagement root, not a worker's cwd inside it, and stores the path from the root", async () => {
+		const { refute } = await tree({ "src/export.go": EXPORT_GO }, { cwd: "/target/src", root: "/target" });
+		const { f } = await refute(`export.go:31: ${GUARD}`);
+		expect(f?.status).toBe("refuted");
+		expect(f?.verification?.basis).toEqual([`export.go:31: ${GUARD}`]);
+		// A path relative to the worker's cwd is read too, and stored from the root.
+		const second = await tree({ "src/export.go": EXPORT_GO }, { cwd: "/target/src", root: "/target" });
+		await second.record.execute({ kind: "finding", id: second.id, status: "suspected", guards: [`export.go:31: ${GUARD}`] }, second.ctx);
+		expect((await second.ws.read("findings")).find((x) => x.id === second.id)?.verification?.guards?.[0]?.at).toBe("src/export.go:31");
+	});
+
+	it("reports two files of one name as ambiguous rather than as missing", async () => {
+		const { out, f } = await (await tree({ "a/export.go": EXPORT_GO, "b/export.go": EXPORT_GO })).refute(`export.go:31: ${GUARD}`);
+		expect(f?.status).toBe("suspected");
+		expect(out).toMatch(/'export\.go' is ambiguous: a\/export\.go, b\/export\.go all end in 'export\.go'/);
+		expect(out).not.toMatch(/there is no file/);
+	});
+
+	it("descends a directory with a dot in its name", async () => {
+		const { f } = await (await tree({ "com.acme/v1.2/export.go": EXPORT_GO })).refute(`export.go:31: ${GUARD}`);
+		expect(f?.status).toBe("refuted");
+		expect(f?.verification?.basis?.[0]).toContain("export.go:31");
+	});
+
+	it("says so when the tree is too large to be sure a basename names one file", async () => {
+		const files: Record<string, string> = { "zz/export.go": EXPORT_GO };
+		for (let i = 0; i < 2001; i++) files[`d${i}/README`] = "x";
+		const { out, f } = await (await tree(files)).refute(`export.go:31: ${GUARD}`);
+		expect(f?.status).toBe("suspected");
+		expect(out).toMatch(/too large to be sure 'export\.go' names one file/);
+	});
+});
+
+describe("a route sent as a path hop on a live engagement (3.1)", () => {
+	it("drops an entry that is not a quote with a note, and judges the verdict without it", async () => {
+		const svc = makeFakeServices();
+		const ws = await Workspace.open("/ws/acme", "acme", svc);
+		const ctx: ToolContext = { cwd: "/target", services: svc };
+		const record = createRecordTool({ workspace: ws, sourceOnly: () => false });
+		const made = await record.execute({ kind: "finding", title: "Login bypass", severity: "high", target: "app/login.py:9" }, ctx);
+		const id = (made.details as { id: string }).id;
+		const out = textOf(await record.execute({ kind: "finding", id, status: "confirmed", control: "a wrong password returned 302 to /home", live: true, path: ["/api/login"] }, ctx));
+		expect((await ws.read("findings")).find((x) => x.id === id)?.status).toBe("confirmed");
+		expect(out).toContain("Not read as path hops: '/api/login'");
+	});
+
+	it("keeps a route in path failing the verdict on a review of source, where every hop is a quote", async () => {
+		const svc = makeFakeServices();
+		const ws = await Workspace.open("/ws/acme", "acme", svc);
+		const ctx: ToolContext = { cwd: "/target", services: svc };
+		const record = createRecordTool({ workspace: ws, sourceOnly: () => true });
+		const made = await record.execute({ kind: "finding", title: "Login bypass", severity: "high", target: "app/login.py:9" }, ctx);
+		const id = (made.details as { id: string }).id;
+		const out = textOf(await record.execute({ kind: "finding", id, status: "confirmed", control: "x", path: ["/api/login", "/api/home"] }, ctx));
+		expect((await ws.read("findings")).find((x) => x.id === id)?.status).toBe("suspected");
+		expect(out).toMatch(/not in the form 'file:line: verbatim text'/);
 	});
 });

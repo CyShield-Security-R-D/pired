@@ -622,9 +622,22 @@ export interface AuditInput {
 	now?: string;
 }
 
-/** An HTTP response is in this text somewhere. */
+/**
+ * An HTTP response is in this text somewhere: a status line, curl's `< HTTP/`,
+ * or a line that is only a status code and its reason (`200 OK`, what
+ * `curl -w '%{http_code}'` prints).
+ *
+ * The bare-code form is the whole line. Read as any line starting with three
+ * digits, it took a `cat -n` excerpt — `   120\tif not user:` — for a response,
+ * so quoted source read as a transcript.
+ */
 function hasResponse(text: string): boolean {
-	return /HTTP\/[0-9.]+\s+\d{3}/.test(text) || /^\s*<\s+HTTP\//m.test(text) || /^\s*(?:HTTP\/)?\d{3}\s/m.test(text);
+	return hasStatusLine(text) || /^\s*[1-5]\d{2}(?:[ \t]+[A-Z][A-Za-z -]*)?\s*$/m.test(text);
+}
+
+/** An HTTP status line proper: `HTTP/1.1 200`, or curl's `< HTTP/2 200`. */
+function hasStatusLine(text: string): boolean {
+	return /HTTP\/[0-9.]+\s+\d{3}/.test(text) || /^\s*<\s+HTTP\//m.test(text);
 }
 
 /** An HTTP request is in this text somewhere. */
@@ -852,20 +865,34 @@ function rank(s: Severity): number { return SEVERITY_RANK[s]; }
 export const QUOTE_WINDOW = 3;
 
 /**
- * The shortest quote that can identify a line, in non-space characters.
+ * How often a quote may occur in its file and still identify a line.
  *
- * A quote proves the line was read only if it could not have been guessed.
- * `}`, `return err`, `if (!ok) {` and `else:` sit within three lines of almost
- * any line of any file, so matching one inside the window proves nothing
- * about the claim beside it. Twelve non-space characters is about the shortest
- * statement that carries an identifier and a call — `db.execute(q)` is
- * thirteen — so a real sink clears it and a brace does not. A guard shorter
- * than that (`if not user:` is ten) is quoted with the line it guards: the
- * window is matched as one joined text, so two lines quoted together count.
- * Chosen from the shape of source lines, never from runs, like the window
- * above.
+ * A quote proves the line was read only if it could not have been guessed, and
+ * what makes a quote guessable is how common it is in that file, not how long
+ * it is. A length rule measured the wrong thing both ways: twelve characters
+ * passed `return nil, err`, which sits near half the lines of a Go handler, and
+ * failed `if not user:`, which is a guard a file has once. So a quote grounds
+ * when it is in the window AND occurs at most this many times in the whole file
+ * (whitespace normalised). Three allows the same guard repeated on a handful of
+ * handlers; a line a file repeats more than that is a line anyone could quote.
+ * Fixed before any v6 run and never tuned on corpus runs, like the window.
  */
-export const MIN_QUOTE_CHARS = 12;
+export const MAX_QUOTE_OCCURRENCES = 3;
+
+/**
+ * A floor under the frequency rule, in non-space characters. Below it a quote
+ * is punctuation or a keyword (`}`, `else:`, `end`), which says nothing even
+ * where a file happens to hold it once.
+ */
+export const MIN_QUOTE_CHARS = 6;
+
+/**
+ * The widest range a quote may cite: its first line plus two windows. A range
+ * is read as one window, so an unbounded one (`file:1-900`) would ground any
+ * quote anywhere in the file — the decoy's guarded twin thirty lines away
+ * included.
+ */
+export const MAX_QUOTE_SPAN = 2 * QUOTE_WINDOW;
 
 /** A cited line and quote, as the model sends it: `file:line: verbatim text`. */
 export interface ParsedQuote {
@@ -906,6 +933,22 @@ function normaliseSpace(text: string): string {
 	return text.replace(/\s+/g, " ").trim();
 }
 
+/**
+ * A quote that is only a comment: `// checks ownership`, `# TODO validate`.
+ * It grounds like any quote — the line is there — but a comment is not the
+ * check it describes, so it is marked for the metrics to count (3.1).
+ */
+export function isCommentOnly(quote: string): boolean {
+	return /^(?:\/\/|#|\/\*|\*|--|<!--|;|')/.test(quote.trim());
+}
+
+/** Non-overlapping occurrences of `needle` in `hay`. */
+function occurrences(hay: string, needle: string): number {
+	let n = 0;
+	for (let i = hay.indexOf(needle); i !== -1; i = hay.indexOf(needle, i + needle.length)) n += 1;
+	return n;
+}
+
 /** One cited quote after it was checked against the file it names. */
 export interface GroundedQuote extends QuotedLocation {
 	grounded: boolean;
@@ -918,12 +961,19 @@ export interface GroundedQuote extends QuotedLocation {
 }
 
 /**
- * How the host reads a cited file: under the engagement's directory, with its
- * basename fallback, or from the workspace's evidence. Returns the path it
- * resolved to, or undefined when there is no such file. A function rather than
- * a port so this module stays pure: the host owns the resolution rules.
+ * What the host found for a cited file: its contents and the path it resolved
+ * to (relative to the engagement root), or why it could not settle on one file
+ * — a basename two files share, a tree too large to search whole.
  */
-export type QuoteReader = (file: string) => Promise<{ path: string; body: string } | undefined>;
+export type QuoteSource = { path: string; body: string } | { unresolved: string };
+
+/**
+ * How the host reads a cited file: under the engagement root, with its basename
+ * fallback, and — only where there is a live target — from the workspace's
+ * evidence. Undefined when there is no such file. A function rather than a port
+ * so this module stays pure: the host owns the resolution rules.
+ */
+export type QuoteReader = (file: string) => Promise<QuoteSource | undefined>;
 
 /** The longest `actual` line carried into a reply. */
 const ACTUAL_BUDGET = 200;
@@ -932,17 +982,18 @@ const ACTUAL_BUDGET = 200;
  * Check each `file:line: verbatim text` against the file it names.
  *
  * A quote is grounded when, after whitespace is normalised on both sides, it
- * appears within QUOTE_WINDOW lines of the cited line (or range), and it is at
- * least MIN_QUOTE_CHARS non-space characters long. The window is read as one
- * joined text, so a quote the model joined from two lines matches as well as
- * one taken from a single line.
+ * appears within QUOTE_WINDOW lines of the cited line (or of a range no wider
+ * than MAX_QUOTE_SPAN), occurs at most MAX_QUOTE_OCCURRENCES times in the whole
+ * file, and has at least MIN_QUOTE_CHARS non-space characters. The window is
+ * read as one joined text, so a quote the model joined from two lines matches
+ * as well as one taken from a single line.
  *
  * A string that is not in the form at all comes back ungrounded, saying so:
  * `path` and `guards` are quotes by contract. Every file is read once.
  */
 export async function groundQuotes(hops: readonly string[] | undefined, readFile: QuoteReader): Promise<GroundedQuote[]> {
 	const out: GroundedQuote[] = [];
-	const cache = new Map<string, Promise<{ path: string; body: string } | undefined>>();
+	const cache = new Map<string, Promise<QuoteSource | undefined>>();
 	const read = (file: string) => {
 		let hit = cache.get(file);
 		if (!hit) {
@@ -959,22 +1010,33 @@ export async function groundQuotes(hops: readonly string[] | undefined, readFile
 			continue;
 		}
 		const quote = normaliseSpace(parsed.quote);
-		const cited = parsed.end === parsed.line ? `${parsed.file}:${parsed.line}` : `${parsed.file}:${parsed.line}-${parsed.end}`;
+		const range = (file: string) => parsed.end === parsed.line ? `${file}:${parsed.line}` : `${file}:${parsed.line}-${parsed.end}`;
 		const chars = quote.replace(/\s/g, "").length;
 		if (chars < MIN_QUOTE_CHARS) {
 			out.push({
-				at: cited, quote, grounded: false,
-				why: `the quote is ${chars} non-space characters; at least ${MIN_QUOTE_CHARS} are needed to identify a line`,
+				at: range(parsed.file), quote, grounded: false,
+				why: `the quote is ${chars} non-space characters; at least ${MIN_QUOTE_CHARS} are needed to say anything about a line`,
+			});
+			continue;
+		}
+		if (parsed.end - parsed.line > MAX_QUOTE_SPAN) {
+			out.push({
+				at: range(parsed.file), quote, grounded: false,
+				why: `the range spans ${parsed.end - parsed.line + 1} lines; cite the line the quote is on, or a range of at most ${MAX_QUOTE_SPAN + 1}`,
 			});
 			continue;
 		}
 		const found = await read(parsed.file);
-		if (!found) {
-			out.push({ at: cited, quote, grounded: false, why: `there is no file '${parsed.file}' under the engagement directory or in the workspace evidence` });
+		if (!found || "unresolved" in found) {
+			out.push({
+				at: range(parsed.file), quote, grounded: false,
+				why: found?.unresolved ?? `there is no file '${parsed.file}' under the engagement root`,
+			});
 			continue;
 		}
 		const lines = found.body.split(/\r?\n/);
-		const at = parsed.end === parsed.line ? `${found.path}:${parsed.line}` : `${found.path}:${parsed.line}-${parsed.end}`;
+		const at = range(found.path);
+		const marks = isCommentOnly(quote) ? { commentOnly: true } : {};
 		if (parsed.line > lines.length) {
 			out.push({ at, quote, grounded: false, why: `${found.path} has ${lines.length} lines` });
 			continue;
@@ -983,7 +1045,15 @@ export async function groundQuotes(hops: readonly string[] | undefined, readFile
 		const hi = Math.min(lines.length, parsed.end + QUOTE_WINDOW);
 		const window = normaliseSpace(lines.slice(lo, hi).join(" "));
 		if (window.includes(quote)) {
-			out.push({ at, quote, grounded: true });
+			const times = occurrences(normaliseSpace(lines.join(" ")), quote);
+			if (times > MAX_QUOTE_OCCURRENCES) {
+				out.push({
+					at, quote, grounded: false, ...marks,
+					why: `the quote occurs ${times} times in ${found.path}, so it does not identify a line; quote more of the line, or the line beside it`,
+				});
+				continue;
+			}
+			out.push({ at, quote, grounded: true, ...marks });
 			continue;
 		}
 		const actual = normaliseSpace(lines[parsed.line - 1] ?? "");
@@ -998,7 +1068,7 @@ export async function groundQuotes(hops: readonly string[] | undefined, readFile
 
 /** A quote as stored: where, and what. The grounding result stays out of the ledger. */
 function stored(q: GroundedQuote): QuotedLocation {
-	return { at: q.at, quote: q.quote };
+	return { at: q.at, quote: q.quote, ...(q.commentOnly ? { commentOnly: true } : {}) };
 }
 
 /**
@@ -1099,9 +1169,9 @@ export interface ChallengeReport {
 
 /**
  * How far a verification's grounds reach, derived and never taken from the
- * caller. `executed` when it was live against a running target, or cites
- * evidence that is not a static excerpt (a transcript, a tool's output);
- * `static` otherwise.
+ * caller. `executed` only on an engagement with a live target, and only when
+ * the check was live against it or cites a saved exchange with it (a request
+ * and its response); `static` otherwise, and always on a review of source.
  *
  * `live=true` counts only where there is a target. On the 2026-09-24 grid 17 of
  * 18 settled verification records asserted live=true on scopes with no target
@@ -1109,9 +1179,15 @@ export interface ChallengeReport {
  * `executed` is the top label, not a gate: nothing is refused for being static.
  */
 export function deriveTier(report: Pick<ChallengeReport, "live" | "sourceOnly" | "evidence">): VerificationTier {
-	if (report.live === true && report.sourceOnly !== true) return "executed";
-	const ran = (report.evidence ?? []).some((text) => text.trim().length > 0 && evidenceShape(text) !== "static");
-	return ran ? "executed" : "static";
+	// A review of source has nothing running to execute against; whatever the
+	// verification cites, it read code.
+	if (report.sourceOnly === true) return "static";
+	if (report.live === true) return "executed";
+	// A saved exchange with the target: a request and its status line, both. A
+	// file that shows neither — notes, a tool's summary — is not a check that
+	// ran against the target, and a `cat -n` excerpt is quoted source.
+	const exchanged = (report.evidence ?? []).some((text) => hasRequest(text) && hasStatusLine(text));
+	return exchanged ? "executed" : "static";
 }
 
 export interface ChallengeOutcome {

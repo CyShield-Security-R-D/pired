@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	CHILD_DENIED_TOOLS, type ChildLedger, ChildSetupError, createChildGuard, FALLBACK_MAX_TURNS, HANDOFF_GRACE_TURNS,
 	identifyAgent, openChildWorkspace, PARENT_SCOPE_KEY, publishParentScope, readParentScope, RECORD_RESERVE_TURNS,
-	SUPERVISOR_SECTION_END, SUPERVISOR_SECTION_START, SUPERVISOR_TOOL, VERIFIER_FINDING_KEYS, VERIFIER_STATUSES, FINDER_STATUSES,
+	readParentRoot, SUPERVISOR_SECTION_END, SUPERVISOR_SECTION_START, SUPERVISOR_TOOL, VERIFIER_FINDING_KEYS, VERIFIER_STATUSES, FINDER_STATUSES,
 	withoutSupervisorSection,
 } from "./child.ts";
 import { type EngagementScope, FINDING_STATUSES, type FindingRecord, HYPOTHESIS_OUTCOMES, type HypothesisRecord, type StoreName } from "./ontology.ts";
@@ -353,6 +353,32 @@ describe("openChildWorkspace", () => {
 });
 
 describe("publishing the parent's scope", () => {
+	it("publishes the engagement root beside it, and withdraws both together", () => {
+		const registry = {};
+		const withdraw = publishParentScope(registry, DIR, scope(), "/target");
+		expect(readParentRoot(registry, DIR)).toBe("/target");
+		withdraw();
+		expect(readParentRoot(registry, DIR)).toBeUndefined();
+		expect(readParentRoot({}, DIR)).toBeUndefined();
+		// Republished without a root, the old one does not linger.
+		publishParentScope(registry, DIR, scope(), "/target");
+		publishParentScope(registry, DIR, scope());
+		expect(readParentRoot(registry, DIR)).toBeUndefined();
+	});
+
+	it("lets a worker launched in a subdirectory resolve a quote against the parent's root", async () => {
+		const { svc, registry } = await parentWorkspace(scope({ mode: "off", targets: {} }));
+		publishParentScope(registry, DIR, scope({ mode: "off", targets: {} }), "/target");
+		await svc.fs.writeFile("/target/src/invoices.ts", "import { db } from './db';\n".repeat(8) + "if (invoice.ownerId !== user.id) throw forbidden();\n");
+		const record = (await openChildWorkspace(DIR, svc, { scopeRegistry: registry, author: () => "pired-verify" })).tools.find((t) => t.name === "record");
+		const ctx: ToolContext = { cwd: "/target/src", services: svc };
+		const created = await record?.execute({ kind: "finding", title: "IDOR on invoices", severity: "high", target: "src/invoices.ts:12" }, ctx);
+		const id = (created?.details as { id?: string } | undefined)?.id;
+		await record?.execute({ kind: "finding", id, status: "suspected", guards: ["invoices.ts:9: if (invoice.ownerId !== user.id) throw forbidden();"] }, ctx);
+		const f = (await new Workspace(DIR, svc).read("findings")).find((x) => x.id === id);
+		expect(f?.verification?.guards?.[0]?.at).toBe("src/invoices.ts:9");
+	});
+
 	it("hands workers a frozen copy, so neither side's later edits reach the other", () => {
 		const registry = {};
 		const mine = scope();

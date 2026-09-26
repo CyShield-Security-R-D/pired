@@ -84,6 +84,13 @@ export interface ToolDeps {
 	 */
 	author?: () => string | undefined;
 	/**
+	 * The engagement root: the directory the lead's session runs in. A worker may
+	 * be launched with a cwd inside it, and a quote it cites is resolved — and its
+	 * `at` stored — against the root, so the same file has one name on the
+	 * ledger. Undefined means the call's own cwd is the root, as in the lead.
+	 */
+	root?: () => string | undefined;
+	/**
 	 * The session's ceilings and what it has spent, or undefined when the scope
 	 * declares no budget. Declared by the Phase 3 groundwork; nothing reads it
 	 * until the budget line (3.2).
@@ -630,29 +637,89 @@ function quoteList(v: unknown): string[] {
 }
 
 /**
- * How a verification's quotes are read: a workspace evidence path from the
- * workspace, anything else under the engagement's directory, with the
- * basename fallback the locator uses (a review says "share.go"; the file is
- * `http/share.go`). A path that leaves either is not read — record content is
- * agent-authored — and reads as a file that is not there.
+ * How a verification's quotes are read: under the engagement root — the lead's
+ * directory, not a worker's cwd inside it — with a basename fallback (a review
+ * says "share.go"; the file is `http/share.go`), and a path relative to the
+ * worker's cwd tried before the fallback. Only where there is a live target is
+ * the workspace's `evidence/` read as well: on a review of source the source is
+ * the only ground, and a verifier's own `record kind=evidence` excerpt would
+ * otherwise ground a hop in a file it wrote itself. A path that leaves the root
+ * is not read — record content is agent-authored.
+ *
+ * Every path is returned relative to the root, so a stored `at` names the same
+ * file whichever directory the writer stood in.
  */
 function quoteReader(deps: ToolDeps, ctx: ToolContext): QuoteReader {
+	const trim = (p: string) => p.replace(/\/+$/, "");
+	const base = deps.root?.() ?? ctx.cwd;
+	const root = base ? trim(base) : undefined;
+	const sourceOnly = deps.sourceOnly?.() === true;
+	const cwdRel = root && ctx.cwd && trim(ctx.cwd).startsWith(`${root}/`) ? trim(ctx.cwd).slice(root.length + 1) : undefined;
 	return async (cited) => {
-		const root = ctx.cwd ? ctx.cwd.replace(/\/+$/, "") : undefined;
 		const file = root && cited.startsWith(`${root}/`) ? cited.slice(root.length + 1) : cited;
 		if (file.startsWith("/") || file.includes("\\") || file.split("/").some((seg) => seg === "..")) return undefined;
-		if (file.startsWith("evidence/")) {
+		if (!sourceOnly && file.startsWith("evidence/")) {
 			const body = await deps.workspace.readRelative(file);
 			if (body !== undefined) return { path: file, body };
 		}
 		if (!root) return undefined;
-		const direct = await ctx.services.fs.readFileIfExists(`${root}/${file}`).catch(() => undefined);
-		if (direct !== undefined) return { path: file, body: direct };
-		const hit = await findByBasename(ctx, root, file.split("/").pop() ?? file);
-		if (!hit) return undefined;
+		for (const rel of cwdRel ? [file, `${cwdRel}/${file}`] : [file]) {
+			const direct = await ctx.services.fs.readFileIfExists(`${root}/${rel}`).catch(() => undefined);
+			if (direct !== undefined) return { path: rel, body: direct };
+		}
+		const name = file.split("/").pop() ?? file;
+		const search = await searchBasename(ctx, root, name);
+		if (search.matches.length > 1) {
+			return { unresolved: `'${file}' is ambiguous: ${search.matches.slice(0, 4).join(", ")}${search.matches.length > 4 ? " …" : ""} all end in '${name}'; cite the path from the engagement root` };
+		}
+		if (!search.complete) {
+			return { unresolved: `the tree under the engagement root is too large to be sure '${file}' names one file${search.matches.length === 1 ? ` (${search.matches[0]} is one)` : ""}; cite the path from the engagement root` };
+		}
+		const hit = search.matches[0];
+		if (hit === undefined) return undefined;
 		const body = await ctx.services.fs.readFileIfExists(`${root}/${hit}`).catch(() => undefined);
 		return body === undefined ? undefined : { path: hit, body };
 	};
+}
+
+/**
+ * A file extension, or what reads as one: an entry ending in one is not
+ * descended. A directory named `com.example` or `v1.2` is, which the no-dot
+ * rule the locator uses would skip.
+ */
+const FILE_LIKE = /\.(?:py|pyi|js|jsx|ts|tsx|mjs|cjs|go|rb|php|java|cs|rs|kt|kts|scala|swift|c|h|cpp|hpp|sql|sh|md|txt|json|ya?ml|toml|lock|xml|html?|css|scss|svg|png|jpe?g|gif|ico|pdf|zip|gz|tar|jar|class|so|o|a|dll|exe|bin|map|env|ini|cfg|conf|log|csv|mod|sum|gradle|properties|pem|key|crt)$/i;
+
+/** Directories one basename search may open. Past it the search says it is incomplete rather than guess. */
+const BASENAME_SEARCH_DIRS = 2000;
+
+/**
+ * Every file under `root` named `base`, and whether the whole tree was searched.
+ *
+ * Unlike the locator's `findByBasename`, which stops at a second match and is
+ * content to guess nothing, a quote has to know: two matches are an ambiguity
+ * to report, and a search cut short by its bound cannot say there is only one.
+ */
+async function searchBasename(ctx: ToolContext, root: string, base: string, maxDirs = BASENAME_SEARCH_DIRS): Promise<{ matches: string[]; complete: boolean }> {
+	const SKIP = /^(node_modules|vendor|third_party|dist|build|site-packages|\.git)$/;
+	let frontier = [""];
+	const matches: string[] = [];
+	let opened = 0;
+	for (let depth = 0; depth < 12 && frontier.length > 0; depth += 1) {
+		const next: string[] = [];
+		for (const dir of frontier) {
+			if (opened >= maxDirs) return { matches, complete: false };
+			opened += 1;
+			const entries = await ctx.services.fs.readdir(`${root}${dir ? `/${dir}` : ""}`).catch(() => [] as string[]);
+			for (const entry of entries) {
+				if (SKIP.test(entry) || entry.startsWith(".")) continue;
+				const rel = dir ? `${dir}/${entry}` : entry;
+				if (entry === base) matches.push(rel);
+				else if (!FILE_LIKE.test(entry)) next.push(rel);
+			}
+		}
+		frontier = next;
+	}
+	return { matches, complete: frontier.length === 0 };
 }
 
 /**
@@ -1281,6 +1348,20 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 				// The grounded contract's quotes: the hops from source to sink, and the
 				// checks examined. A look that quoted either said what it looked at.
 				const hops = { path: quoteList(a.path), guards: quoteList(a.guards) };
+				// With a live target, `path` is also what a model calls the route it
+				// tested ("/api/login"). There a hop is not required, so an entry that is
+				// not a quote is dropped with a note rather than failing the verdict; on
+				// a review of source every hop is a quote by contract.
+				let droppedHops = "";
+				if (deps.sourceOnly?.() !== true) {
+					const notQuotes = hops.path.filter((h) => h.trim().length > 0 && parseQuote(h) === undefined);
+					if (notQuotes.length > 0) {
+						hops.path = hops.path.filter((h) => !notQuotes.includes(h));
+						droppedHops =
+							`\nNot read as path hops: ${notQuotes.map((h) => `'${h}'`).join(", ")} — a hop is 'file:line: verbatim text'. ` +
+							"A route belongs in the finding's target or description; the verdict was judged without it.";
+					}
+				}
 				const grounded = hasGrounds({ basis: [...(strArr(a.basis) ?? []), ...hops.path, ...hops.guards], control: str(a.control) });
 				const unsettled = wanted === "suspected" && existing !== undefined && !claimSent && grounded;
 				if (wanted === "suspected" && existing !== undefined && claimSent && grounded) {
@@ -1411,6 +1492,7 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 						downgrade += "\nThis finding was already REPORTED to the client. Changing it now is a conversation with the operator, not an edit — say so before you move on.";
 					}
 				}
+				downgrade += droppedHops;
 			}
 
 			// A CVSS vector is checked against the version it claims, not taken on

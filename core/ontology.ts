@@ -587,6 +587,12 @@ export interface HypothesisRecord extends RecordBase {
 export interface QuotedLocation {
 	at: string;
 	quote: string;
+	/**
+	 * The quote is only a comment (`// checks ownership`). It grounds — the line
+	 * is there — but a comment is not the check it names, so it is marked for
+	 * the metrics to count. Absent means code.
+	 */
+	commentOnly?: boolean;
 }
 
 export interface Verification {
