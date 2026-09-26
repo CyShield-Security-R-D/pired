@@ -3598,8 +3598,10 @@ async function runPreflight(options: Options, manifest: JsonRecord, saveManifest
 					const readDenied: string[] = [];
 					for (const path of [...new Set(deniedCandidates)]) (await exists(path) ? readDenied : absent).push(path);
 					const truth = JSON.parse(await readFile(target.truth, "utf8")) as Array<{ file?: unknown }>;
+					// A patched twin's key is empty; the files its fix touched are in its tree.
+					const fixed = Array.isArray(target.fixed_regions) ? (target.fixed_regions as Array<{ file?: unknown }>).map((r) => r.file) : [];
 					const sourceFile = await firstReadableFile(paths.targetDir, [
-						...truth.map((t) => t.file).filter((f): f is string => typeof f === "string"), "README.md",
+						...[...truth.map((t) => t.file), ...fixed].filter((f): f is string => typeof f === "string"), "README.md",
 					]);
 					if (!sourceFile) throw new Error(`${target.id}: target copy has no readable file`);
 					return { readDenied, readAllowed: [sourceFile, paths.workspaceDir, paths.configPath, ...(loadsSubagents(arm) ? [ctx.piSubagents.entry] : [])] };

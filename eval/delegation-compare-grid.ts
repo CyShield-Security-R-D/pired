@@ -230,12 +230,15 @@ export interface ScopeSettings {
 
 /**
  * One arm's scope settings. The matched arm is the candidate with delegation
- * switched off the way an operator switches it off, so its cap is 0 and it
- * states no verifier cap: at 0 verifiers share the worker cap, which is 0.
+ * switched off the way an operator switches it off, so its cap is 0. When the
+ * candidate's scope states a verifier cap, the matched arm's states 0 as well:
+ * that switches verifiers off in so many words, and in stage 2 it makes M's
+ * scope the same bytes as S's, the arm it is read beside. Otherwise it states
+ * none, as before (at 0 verifiers share the worker cap, which is 0).
  */
 export function scopeSettingsFor(arm: Arm, options: ArmOptions): ScopeSettings {
 	const budget = (options.budgetArms ?? DEFAULT_BUDGET_ARMS).includes(arm);
-	if (arm === "matched") return { maxAgents: 0, budget };
+	if (arm === "matched") return { maxAgents: 0, ...(options.maxVerifiers?.candidate === undefined ? {} : { maxVerifiers: 0 }), budget };
 	const maxAgents = arm === "candidate" ? options.candidateMaxAgents : options.baselineMaxAgents;
 	const maxVerifiers = options.maxVerifiers?.[arm];
 	return { ...(maxAgents === undefined ? {} : { maxAgents }), ...(maxVerifiers === undefined ? {} : { maxVerifiers }), budget };

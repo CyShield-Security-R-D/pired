@@ -148,14 +148,15 @@ describe("each arm's scope", () => {
 		expect(JSON.stringify(scope)).toBe(JSON.stringify(research));
 		expect(scopeSettingsFor("baseline", { candidateMaxAgents: 8, budgetArms: DEFAULT_BUDGET_ARMS })).toEqual({ budget: false });
 		expect(scopeSettingsFor("candidate", { candidateMaxAgents: 8 })).toEqual({ maxAgents: 8, budget: true });
-		expect(scopeSettingsFor("matched", { candidateMaxAgents: 8, maxVerifiers: { candidate: 2 } })).toEqual({ maxAgents: 0, budget: true });
+		expect(scopeSettingsFor("matched", { candidateMaxAgents: 8 })).toEqual({ maxAgents: 0, budget: true });
 	});
 
 	it("writes the baseline's cap, each arm's verifier cap and the budget line only where they are configured", () => {
 		const options = { candidateMaxAgents: 8, baselineMaxAgents: 0, maxVerifiers: { candidate: 2 }, budgetArms: ["baseline" as const] };
 		expect(scopeFor("e", "/w", scopeSettingsFor("baseline", options), fourHours, now)).toEqual({ ...research, maxAgents: 0, budget: { minutes: 240, deadline: "2026-09-26T14:00:00.000Z" } });
 		expect(scopeFor("e", "/w", scopeSettingsFor("candidate", options), fourHours, now)).toEqual({ ...research, maxAgents: 8, maxVerifiers: 2 });
-		expect(scopeFor("e", "/w", scopeSettingsFor("matched", options), fourHours, now)).toEqual({ ...research, maxAgents: 0 });
+		// The candidate states a verifier cap, so the matched arm, the candidate with delegation off, states 0.
+		expect(scopeFor("e", "/w", scopeSettingsFor("matched", options), fourHours, now)).toEqual({ ...research, maxAgents: 0, maxVerifiers: 0 });
 	});
 
 	// Stage 2 runs stage 1's candidate S as its baseline. If S's scope changed
@@ -317,6 +318,8 @@ describe("grid kinds", () => {
 		const s2 = scopeFor("e", "/w", scopeSettingsFor("baseline", armOptions(kinds["v6-stage2"]!)), kinds["v6-stage2"]!.timeoutMs!, now);
 		expect(JSON.stringify(s2)).toBe(JSON.stringify(s1));
 		expect(delegationOff(scopeSettingsFor("baseline", armOptions(kinds["v6-stage2"]!)))).toBe(true);
+		// M is S's snapshot with delegation off, read beside S and D: in stage 2 its scope is S's too.
+		expect(JSON.stringify(scopeFor("e", "/w", scopeSettingsFor("matched", armOptions(kinds["v6-stage2"]!)), 14_400_000, now))).toBe(JSON.stringify(s2));
 		// Stage 1's baseline A runs at its own defaults, as every v5 baseline did.
 		expect(JSON.stringify(scopeFor("e", "/w", scopeSettingsFor("baseline", armOptions(kinds["v6-stage1"]!)), 14_400_000, now)))
 			.toBe(JSON.stringify({ engagement: "e", workspace: "/w", mode: "off", authorized: false, targets: {} }));
