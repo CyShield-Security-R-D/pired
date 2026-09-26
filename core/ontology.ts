@@ -202,8 +202,8 @@ export type LootType = (typeof LOOT_TYPES)[number];
 
 /**
  * How far a verification's grounds reach: `static` is quoted source, `executed` a
- * live check or evidence that is not a static excerpt. Derived by pired, never
- * taken from the caller. Declared by the Phase 3 groundwork; judged by 3.1.
+ * live check against a target, or a saved exchange with it. Derived by pired
+ * (core/challenge.ts `deriveTier`), never taken from the caller.
  */
 export const VERIFICATION_TIERS = ["static", "executed"] as const;
 export type VerificationTier = (typeof VERIFICATION_TIERS)[number];

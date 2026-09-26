@@ -107,6 +107,12 @@ worker's lead off as the lead's. It is set on creation only: a merge, an update 
 id and the `/dedupe` sweep keep the creator. **Absent means unknown**, which is
 every row written before it existed.
 
+A finding also carries `contributors` once someone other than its creator has
+changed it through a merge: the list of those authors, in the order they first
+did, in `by`'s vocabulary. It is additive and set by the record path only. A
+verification by any contributor, like one by the creator, is *verified by its
+finder* (§8.3).
+
 ## 5. `manifest.json`
 
 Single JSON object at the workspace root.
@@ -331,33 +337,45 @@ later change (3.1):
 entry is a cited `file:line` and the text quoted from it.
 
 **The grounded contract (3.1).** The model sends `path`, `guards` and `basis` as
-string lists of `"file:line: verbatim text"` (`file:lo-hi: text` for a range);
-pired stores `path` and `guards` as `{at, quote}` and leaves `basis` as sent. On
-write, the record tool reads each cited file — under the engagement directory,
-by basename when the path was shortened, or from the workspace's `evidence/` —
-and a quote is *grounded* when, after whitespace is normalised, it appears within
-3 lines of the cited line and has at least 12 non-space characters. Both numbers
-were fixed before any v6 run and are not tuned on corpus runs. `at` is stored as
-the path the file resolved to.
+string lists of `"file:line: verbatim text"` (`file:lo-hi: text` for a range of
+at most 7 lines); pired stores `path` and `guards` as `{at, quote}` (plus
+`commentOnly: true` for a quote that is only a comment) and leaves `basis` as
+sent. On write, the record tool reads each cited file under the engagement root
+— the lead's directory, whatever cwd a worker was launched in — trying the path,
+then the path from the writer's cwd, then the basename; two files of one name
+are reported as ambiguous. Only on an engagement with a live target is the
+workspace's `evidence/` read as well. A quote is *grounded* when, after
+whitespace is normalised, it appears within 3 lines of the cited line **and**
+occurs at most 3 times in its file, with a floor of 6 non-space characters: a
+line the file repeats (`return nil, err`) cannot identify one, and a guard it
+has once (`if not user:`) can. These numbers were fixed before any v6 run and
+are not tuned on corpus runs. `at` is stored relative to the engagement root.
 
 - Any ungrounded quote: the verdict is `unresolved` and the status does not move;
   the reply prints the text actually at the cited line. `path` and `guards` are
-  kept only when every quote was grounded.
+  kept only when every quote was grounded. The unresolved verification records
+  `attempted` (the verdict the caller asked for) and `ungrounded` (how many
+  quotes missed), so downgrade rates are counts.
 - Confirming on an engagement with no live target (no targets in `scope.json`):
   `control` plus a `path` of at least two grounded hops, the first the source and
   the last the sink. With a live target the bar is unchanged: `control`, and
-  `entitlement` for the access-control classes.
+  `entitlement` for the access-control classes; there a `path` entry that is not
+  a quote (a route) is dropped with a note.
 - Refuting with no live target: `basis` plus at least one grounded quote, in
   `basis`, `guards` or `path` — the guard, or the line that makes it not a
   finding. With a live target: `basis`, and a target that was reachable.
-- `tier` is `executed` when the verification was live against a running target,
-  or cites a workspace evidence file that is not a static excerpt (a transcript,
-  a tool's output); otherwise `static`. It is written on an earned verdict only,
-  and it is a label, not a gate.
+- `tier` is `executed` only on an engagement with a live target, when the
+  verification was live against it or cites a saved exchange with it (a request
+  and its response); otherwise `static`, and always `static` on a review of
+  source. It is written on an earned verdict only, and it is a label, not a gate.
 - `by` is who made the verification, stamped from where the call ran. A finding
-  whose `verification.by` differs from its own `by` was *independently verified*;
-  the same author means *verified by its finder*. The scribe counts as the lead,
-  whose buffer it transcribes.
+  is *independently verified* when `verification.by` is neither its `by` nor any
+  of its `contributors` (authors whose merge changed it); otherwise it was
+  *verified by its finder*. The scribe counts as the lead, whose buffer it
+  transcribes.
+- Once a verification has settled a finding, its finders may not change its
+  `status`, `title`, `description`, `target` or `severity` by id (a grounded look
+  is still allowed), and any merge into it keeps its status and verification.
 
 **Who may write what.** Enforced by the child gate and the record tool, by
 refusing with a reason rather than stripping (ADR-028):
@@ -366,7 +384,7 @@ refusing with a reason rather than stripping (ADR-028):
 |---|---|
 | lead (and its scribe) | Anything. Its confirm and refute are judged; a self-confirmation is kept and labelled "verified by its finder". |
 | `pired-scout` | No findings. |
-| `pired-investigate`, `pired-escalate` | Create findings, which land `suspected`. `status=confirmed` or `refuted` is refused, as are the operator's dispositions. By id, only findings it recorded; a create that merges into another author's finding is allowed, and keeps that finding's status. |
+| `pired-investigate`, `pired-escalate`, and a worker whose role could not be read (`worker`) | Create findings, which land `suspected`. `status=confirmed` or `refuted` is refused, as are the operator's dispositions. By id, only findings it recorded, and not their status or claim once a verification settled them; a create that merges into another author's finding is allowed, keeps that finding's status and adds the writer to its `contributors`. |
 | `pired-verify` | `confirmed`, `refuted` or `suspected` on a finding by id, with grounds (its keys: `status`, `basis`, `path`, `guards`, `control`, `entitlement`, `live`, `reason`). A finding it creates (for a hypothesis it confirmed) lands `suspected`: no confirming in the write that creates the row. |
 | every worker | No `kind=settle`. |
 | operator (`pired-ledger`) | Anything, as the lead. |
@@ -509,6 +527,8 @@ Login uses a legacy session cookie without SameSite. Worth an CSRF pass on state
   who-writes-what rules (§8.3), `maxVerifiers` enforced and the optional
   `verifier.model` (§6). Additive: no field changes meaning for a row written
   before it, and a verification with no `by`, `path`, `guards` or `tier` reads as
-  one whose author and tier are unknown.
+  one whose author and tier are unknown. Later in 3.1: `contributors` on findings
+  (§4), `commentOnly` on a stored quote, and `attempted` and `ungrounded` on an
+  unresolved verification (§8.3) — additive in the same way.
 
 *(Future breaking changes append here with the old→new field mapping and reader behavior.)*
