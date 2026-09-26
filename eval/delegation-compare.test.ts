@@ -1015,6 +1015,17 @@ describe("runPairs", () => {
 		expect(result.blocked).toEqual([{ key: "A#1", attempt: 1, reason: "attempt 1: an arm is invalid for a non-infrastructure reason; it stays invalid" }]);
 	});
 
+	// Counting only infrastructure let a candidate that fails every run spend a
+	// whole exploratory grid. Under the counterbalanced order its failures
+	// alternate with valid baselines, so the window's rate, not the streak, stops it.
+	it("stops an exploratory grid whose candidate fails every run within the first window", async () => {
+		const g = grid(["A", "B", "C", "D", "E", "F"], (_key, arm) => arm === "candidate" ? "broken" : "valid", { breaker: DEFAULT_BREAKER });
+		await g.run();
+		expect(g.launched).toHaveLength(8);
+		expect(g.launched.some((l) => l.startsWith("F#1"))).toBe(false);
+		expect(g.state.stopReason).toMatch(/: 5 of 8 launched runs failed \(0 infrastructure\)/);
+	});
+
 	it("stops the grid on a spent quota with the quota's own reason and resume advice", async () => {
 		const g = grid(["A", "B"], () => "quota", { breaker: DEFAULT_BREAKER });
 		await g.run();
