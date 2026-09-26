@@ -115,10 +115,16 @@ export const BENCHMARK_SETTINGS = Object.freeze({
  * it; the transport level emits nothing, which is why it is pinned at 0 rather
  * than left to a default a later pi could change.
  *
- * `maxFailedAttempts` is the harness's own cap: pi's `maxRetries` is per streak
- * (the counter resets on the next good reply), so without a run-wide cap a
- * provider that drops every third request would be retried forever and the run
- * would read as valid.
+ * `maxFailedAttempts` and `maxFailedAttemptRate` are the harness's own cap: pi's
+ * `maxRetries` is per streak (the counter resets on the next good reply), so
+ * without a run-wide cap a provider that drops every third request would be
+ * retried all run and the run would read as valid. A run may fail
+ * max(maxFailedAttempts, floor(maxFailedAttemptRate x its metered requests))
+ * attempts, parent and workers together. The cap scales with the run because a
+ * fixed one hits the arm that makes more calls harder (v5c luna valid runs
+ * averaged 117 requests in the candidate, 98 in the baseline), and a run over
+ * it is re-run as infrastructure: the survival bias toward short runs that
+ * retrying is meant to remove.
  */
 export interface RetryPolicy {
 	enabled: true;
@@ -126,13 +132,18 @@ export interface RetryPolicy {
 	baseDelayMs: number;
 	maxAgentDelayMs: number;
 	providerMaxRetries: 0;
-	/** Failed attempts allowed per run, parent and workers together; more makes the run invalid infrastructure. */
+	/** The floor of the run-wide cap on failed attempts, parent and workers together. */
 	maxFailedAttempts: number;
+	/** The cap's share of the run's metered requests, 0 to 1; the larger of the two applies. */
+	maxFailedAttemptRate: number;
 }
 
-/** The v6 policy (design 2.1): four agent retries, 2 s base, 30 s ceiling, no transport retries. */
+/**
+ * The v6 policy (design 2.1): four agent retries, 2 s base, 30 s ceiling, no
+ * transport retries; at most max(12, 10% of metered requests) failed attempts.
+ */
 export const DEFAULT_RETRY_POLICY: Readonly<RetryPolicy> = Object.freeze({
-	enabled: true, maxRetries: 4, baseDelayMs: 2000, maxAgentDelayMs: 30_000, providerMaxRetries: 0, maxFailedAttempts: 12,
+	enabled: true, maxRetries: 4, baseDelayMs: 2000, maxAgentDelayMs: 30_000, providerMaxRetries: 0, maxFailedAttempts: 12, maxFailedAttemptRate: 0.1,
 });
 
 /**
@@ -166,9 +177,12 @@ export function validateRetryPolicy(value: unknown): RetryPolicy {
 	for (const key of ["baseDelayMs", "maxAgentDelayMs"] as const) {
 		if (!Number.isFinite(row[key]) || (row[key] as number) < 0) throw new Error(`retryPolicy.${key} must be a non-negative number of milliseconds`);
 	}
+	const rate = row.maxFailedAttemptRate;
+	if (typeof rate !== "number" || !Number.isFinite(rate) || rate < 0 || rate > 1) throw new Error("retryPolicy.maxFailedAttemptRate must be a share of requests from 0 to 1");
 	return {
 		enabled: true, maxRetries: row.maxRetries as number, baseDelayMs: row.baseDelayMs as number,
 		maxAgentDelayMs: row.maxAgentDelayMs as number, providerMaxRetries: 0, maxFailedAttempts: row.maxFailedAttempts as number,
+		maxFailedAttemptRate: rate,
 	};
 }
 

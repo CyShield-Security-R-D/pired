@@ -1694,12 +1694,12 @@ describe("summarizeRetries", () => {
 			attempt({ id: "p2", estimatedTokens: 1_200 }),
 			attempt({ id: "w1", origin: "worker", recovered: false, estimatedTokens: 800 }),
 			attempt({ id: "summary-retry:1" }),
-		], 12);
+		], { maxFailedAttempts: 12, maxFailedAttemptRate: 0.1 }, 98);
 		expect(summary).toEqual({
 			attempts: 4, recovered: 3, unrecovered: 1,
 			bySource: { parent: { attempts: 3, recovered: 3, unrecovered: 0 }, worker: { attempts: 1, recovered: 0, unrecovered: 1 } },
 			meteredTokens: 40, unmeteredAttempts: 3, estimatedTokens: 2_000, unestimatedAttempts: 1,
-			maxFailedAttempts: 12, capExceeded: false,
+			cap: { floor: 12, rate: 0.1, meteredRequests: 98, allowed: 12 }, capExceeded: false,
 		});
 	});
 
@@ -1707,8 +1707,19 @@ describe("summarizeRetries", () => {
 	// third request would otherwise be retried all run and the run read as valid.
 	it("flags a run with more failed attempts than the run-wide cap, parent and workers together", () => {
 		const attempts = [attempt(), attempt(), attempt({ origin: "worker" })];
-		expect(summarizeRetries(attempts, 3).capExceeded).toBe(false);
-		expect(summarizeRetries(attempts, 2).capExceeded).toBe(true);
+		expect(summarizeRetries(attempts, { maxFailedAttempts: 3, maxFailedAttemptRate: 0 }, 50).capExceeded).toBe(false);
+		expect(summarizeRetries(attempts, { maxFailedAttempts: 2, maxFailedAttemptRate: 0 }, 50).capExceeded).toBe(true);
+	});
+
+	// A fixed cap throws out long runs first, and the arm that makes more calls
+	// has more of them (v5c luna: 117 requests a valid candidate run, 98 a
+	// baseline one); each run it throws out is re-run as infrastructure.
+	it("scales the cap with the run's metered requests, never below the floor", () => {
+		const thirteen = Array.from({ length: 13 }, () => attempt());
+		const policy = { maxFailedAttempts: 12, maxFailedAttemptRate: 0.1 };
+		expect(summarizeRetries(thirteen, policy, 98)).toMatchObject({ cap: { allowed: 12 }, capExceeded: true });
+		expect(summarizeRetries(thirteen, policy, 139)).toMatchObject({ cap: { allowed: 13 }, capExceeded: false });
+		expect(summarizeRetries(thirteen, policy, 0)).toMatchObject({ cap: { allowed: 12 }, capExceeded: true });
 	});
 
 	it("counts only observations that reported spend as metered calls", () => {

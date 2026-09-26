@@ -35,6 +35,8 @@ describe("validateRetryPolicy", () => {
 		expect(() => validateRetryPolicy(policy({ maxFailedAttempts: 0 }))).toThrow(/maxFailedAttempts/);
 		expect(() => validateRetryPolicy(policy({ maxRetries: 1.5 }))).toThrow(/maxRetries/);
 		expect(() => validateRetryPolicy(policy({ baseDelayMs: -1 }))).toThrow(/baseDelayMs/);
+		expect(() => validateRetryPolicy(policy({ maxFailedAttemptRate: 1.5 }))).toThrow(/maxFailedAttemptRate/);
+		expect(() => validateRetryPolicy(policy({ maxFailedAttemptRate: undefined }))).toThrow(/maxFailedAttemptRate/);
 		expect(() => validateRetryPolicy(null)).toThrow(/object/);
 	});
 });

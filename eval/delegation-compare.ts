@@ -315,8 +315,9 @@ Options:
   --out <dir>           New or empty directory; must not contain an advisory ID
   --resume <out-dir>    Continue a stopped grid in place; takes no other option
   --retry               Retry transient provider errors inside a run: pi's agent
-                        retry, ${DEFAULT_RETRY_POLICY.maxRetries} per streak, at most ${DEFAULT_RETRY_POLICY.maxFailedAttempts} failed attempts per
-                        run (parent and workers); recorded in the manifest
+                        retry, ${DEFAULT_RETRY_POLICY.maxRetries} per streak; a run may fail at most
+                        max(${DEFAULT_RETRY_POLICY.maxFailedAttempts}, ${DEFAULT_RETRY_POLICY.maxFailedAttemptRate * 100}% of its metered requests) attempts,
+                        parent and workers; recorded in the manifest
                         (default: off, as in every v5 grid)
   --dry-run             Run the preflight only, with no model calls
   --help, -h            Show this help without starting a model
@@ -1945,11 +1946,14 @@ export async function accountCellUsage(events: JsonRecord[], cell: { arm: Arm; c
 	errors.push(...usage.errors);
 	if (!usage.valid) errors.push("provider usage attribution is incomplete");
 	if (!retryPolicy) return { errors: [...new Set(errors)], notes, parent, reconciliation, children, childProviderErrors, childSessionFiles, usage };
-	const summary = summarizeRetries(retried, retryPolicy.maxFailedAttempts);
-	if (summary.capExceeded) errors.push(`${summary.attempts} failed provider attempts (parent ${summary.bySource.parent.attempts}, workers ${summary.bySource.worker.attempts}) exceed the retry policy's cap of ${summary.maxFailedAttempts} per run`);
+	const meteredCalls = meteredCallCount(observations);
+	const summary = summarizeRetries(retried, retryPolicy, meteredCalls);
+	if (summary.capExceeded) {
+		errors.push(`${summary.attempts} failed provider attempts (parent ${summary.bySource.parent.attempts}, workers ${summary.bySource.worker.attempts}) exceed the retry policy's cap of ${summary.cap.allowed} for a run of ${meteredCalls} metered requests`);
+	}
 	return {
 		errors: [...new Set(errors)], notes, parent, reconciliation, children, childProviderErrors, childSessionFiles, usage,
-		retry: summary, meteredCalls: meteredCallCount(observations),
+		retry: summary, meteredCalls,
 	};
 }
 
@@ -2195,12 +2199,15 @@ export function classifyInfra(failures: ProviderFailures, timedOut: boolean): In
  */
 export function decideInfra(run: {
 	valid: boolean; timedOut: boolean; stoppedByRunner: boolean; notLaunchedInterrupted: boolean; failures: ProviderFailures;
-	retry?: Pick<RetrySummary, "attempts" | "maxFailedAttempts" | "capExceeded">;
+	retry?: Pick<RetrySummary, "attempts" | "cap" | "capExceeded">;
 }): InfraClass {
 	if (run.valid || run.timedOut) return { infra: false };
 	const provider = classifyInfra(run.failures, false);
 	if (provider.infra) return provider;
-	if (run.retry?.capExceeded) return { infra: true, reason: "retry cap exceeded", evidence: `${run.retry.attempts} failed provider attempts; the policy allows ${run.retry.maxFailedAttempts} per run` };
+	if (run.retry?.capExceeded) {
+		const { cap } = run.retry;
+		return { infra: true, reason: "retry cap exceeded", evidence: `${run.retry.attempts} failed provider attempts; the policy allows ${cap.allowed} (max of ${cap.floor} and ${cap.rate} x ${cap.meteredRequests} metered requests)` };
+	}
 	if (run.stoppedByRunner || run.notLaunchedInterrupted) return { infra: true, reason: "runner interruption" };
 	return { infra: false };
 }

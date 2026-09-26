@@ -322,18 +322,18 @@ describe("retry cap and request log", () => {
 	// pi recovers each drop, so a provider that kept dropping leaves no failure
 	// text; without the cap the run would be blocked as the arm's own fault.
 	it("classes a run past the retry cap as infrastructure though pi recovered every drop", () => {
-		const verdict = decideInfra({ ...run, retry: { attempts: 13, maxFailedAttempts: 12, capExceeded: true } });
+		const verdict = decideInfra({ ...run, retry: { attempts: 13, cap: { floor: 12, rate: 0.1, meteredRequests: 98, allowed: 12 }, capExceeded: true } });
 		expect(verdict).toMatchObject({ infra: true, reason: "retry cap exceeded" });
-		expect(verdict.evidence).toContain("13 failed provider attempts");
-		expect(decideInfra({ ...run, retry: { attempts: 12, maxFailedAttempts: 12, capExceeded: false } }).infra).toBe(false);
+		expect(verdict.evidence).toBe("13 failed provider attempts; the policy allows 12 (max of 12 and 0.1 x 98 metered requests)");
+		expect(decideInfra({ ...run, retry: { attempts: 12, cap: { floor: 12, rate: 0.1, meteredRequests: 98, allowed: 12 }, capExceeded: false } }).infra).toBe(false);
 	});
 
 	it("still never classes a timed-out run as infrastructure, past the cap or not", () => {
-		expect(decideInfra({ ...run, timedOut: true, retry: { attempts: 20, maxFailedAttempts: 12, capExceeded: true } }).infra).toBe(false);
+		expect(decideInfra({ ...run, timedOut: true, retry: { attempts: 20, cap: { floor: 12, rate: 0.1, meteredRequests: 98, allowed: 12 }, capExceeded: true } }).infra).toBe(false);
 	});
 
 	it("keeps a spent quota ahead of the cap, so the grid still stops for the reset", () => {
-		const verdict = decideInfra({ ...run, failures: parentFails("insufficient_quota"), retry: { attempts: 20, maxFailedAttempts: 12, capExceeded: true } });
+		const verdict = decideInfra({ ...run, failures: parentFails("insufficient_quota"), retry: { attempts: 20, cap: { floor: 12, rate: 0.1, meteredRequests: 98, allowed: 12 }, capExceeded: true } });
 		expect(verdict).toMatchObject({ infra: true, exhausted: true });
 	});
 
@@ -578,7 +578,7 @@ describe("accountCellUsage", () => {
 		const events = [parentReply("p1", "toolUse"), ...droppedParent(), ...subagentCall("call-1", { mode: "single", runId: "run-a", results: [childRow("run-a", dir)] }), parentReply("p2", "stop")];
 		const account = await accountCellUsage(events, { arm: "candidate", childSessionDir: dir }, expectRun, { subagentCalls: 1 }, { ...DEFAULT_RETRY_POLICY, maxFailedAttempts: 1 });
 		expect(account.retry?.capExceeded).toBe(true);
-		expect(account.errors.join("\n")).toMatch(/2 failed provider attempts \(parent 1, workers 1\) exceed the retry policy's cap of 1 per run/);
+		expect(account.errors.join("\n")).toMatch(/2 failed provider attempts \(parent 1, workers 1\) exceed the retry policy's cap of 1 for a run of 4 metered requests/);
 	});
 
 	// Absent a policy the cell reads as every v5 cell did: a retry is a failure

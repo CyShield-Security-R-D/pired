@@ -11,13 +11,13 @@
  *   observationsFromChildSession(text, child.childKey)       each child's calls
  *   reconcileChildSession(child, session, expect)            whether that child may be scored
  *   accountUsage([...parent.observations, ...each session.observations])
- *   summarizeRetries([...parent.retries, ...each session.retries], cap)  under a retry policy only
+ *   summarizeRetries([...parent.retries, ...each session.retries], policy, meteredCallCount(all))  under a retry policy only
  *
  * Signatures (stable; the runner codes against them):
  *
  *   observationsFromPiEvents(events: Row[], options?: { delegationTools?: readonly string[]; retry?: boolean }): PiUsageExtraction
  *   observationsFromChildSession(sessionJsonl: string | undefined, childKey: string, options?: { retry?: boolean }): ChildSessionExtraction
- *   summarizeRetries(attempts: readonly RetriedAttempt[], maxFailedAttempts: number): RetrySummary
+ *   summarizeRetries(attempts: readonly RetriedAttempt[], policy: { maxFailedAttempts; maxFailedAttemptRate }, meteredRequests: number): RetrySummary
  *   reconcileSubagentCalls(parentEvents: Row[], childSessionFiles: string[], options?: { sessionDir?: string; toolName?: string }): SubagentReconciliation
  *   reconcileChildSession(child: SubagentChild, session: ChildSessionExtraction | undefined, expect?: { model?: string; thinking?: string }): ChildVerdict
  *   childOutcome(child: Pick<SubagentChild, "status" | "error">, session: ChildSessionExtraction): { outcome: ChildOutcome; why?: string }
@@ -134,11 +134,11 @@ export interface RetrySummary {
 	unmeteredAttempts: number;
 	/** The lower-bound estimate summed over the unmetered attempts (see RetriedAttempt.estimatedTokens). */
 	estimatedTokens: number;
-	/** Unmetered attempts with no estimate: a first request, or a summary call. */
+	/** Unmetered attempts with no estimate (see RetriedAttempt.estimateBasis). */
 	unestimatedAttempts: number;
-	/** The policy's run-wide cap on failed attempts. */
-	maxFailedAttempts: number;
-	/** More failed attempts than the cap: the run is invalid, for infrastructure. */
+	/** The run-wide cap: max(floor, floor(rate x meteredRequests)), from the grid's retry policy. */
+	cap: { floor: number; rate: number; meteredRequests: number; allowed: number };
+	/** More failed attempts than the cap allows: the run is invalid, for infrastructure. */
 	capExceeded: boolean;
 }
 
@@ -146,14 +146,17 @@ export interface RetrySummary {
  * Sum one run's retried attempts against the policy's run-wide cap. pi's own
  * `maxRetries` resets on every good reply, so without this a provider that
  * drops every third request would be retried for the whole run and the run
- * would read as valid while a third of its requests went unmetered.
+ * would read as valid while a third of its requests went unmetered. The cap
+ * grows with the run's metered requests, the same rule in both arms, so the arm
+ * that makes more calls is not the one a fixed cap throws out more often.
  */
-export function summarizeRetries(attempts: readonly RetriedAttempt[], maxFailedAttempts: number): RetrySummary {
+export function summarizeRetries(attempts: readonly RetriedAttempt[], policy: { maxFailedAttempts: number; maxFailedAttemptRate: number }, meteredRequests: number): RetrySummary {
 	const bySource: RetrySummary["bySource"] = { parent: { attempts: 0, recovered: 0, unrecovered: 0 }, worker: { attempts: 0, recovered: 0, unrecovered: 0 } };
 	let meteredTokens = 0;
 	let unmeteredAttempts = 0;
 	let estimatedTokens = 0;
 	let unestimatedAttempts = 0;
+	const allowed = Math.max(policy.maxFailedAttempts, Math.floor(policy.maxFailedAttemptRate * meteredRequests));
 	for (const attempt of attempts) {
 		const source = bySource[attempt.origin];
 		source.attempts++;
@@ -169,7 +172,8 @@ export function summarizeRetries(attempts: readonly RetriedAttempt[], maxFailedA
 		attempts: attempts.length, recovered: bySource.parent.recovered + bySource.worker.recovered,
 		unrecovered: bySource.parent.unrecovered + bySource.worker.unrecovered, bySource,
 		meteredTokens, unmeteredAttempts, estimatedTokens, unestimatedAttempts,
-		maxFailedAttempts, capExceeded: attempts.length > maxFailedAttempts,
+		cap: { floor: policy.maxFailedAttempts, rate: policy.maxFailedAttemptRate, meteredRequests, allowed },
+		capExceeded: attempts.length > allowed,
 	};
 }
 
