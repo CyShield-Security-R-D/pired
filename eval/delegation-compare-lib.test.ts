@@ -773,6 +773,52 @@ describe("observationsFromChildSession", () => {
 		expect(unretried.providerErrors.join(" ")).toContain("429 rate limited");
 	});
 
+	it("treats a worker's error reply omitted by a context edit and followed by a reply as a retried attempt", () => {
+		// A worker's session file has no auto_retry events; the context edit pi
+		// appends for the failed attempt is the only mark the retry leaves.
+		const failed = childReply({ stop: "error", usage: childUsage(0, 0, 0, 0), errorMessage: "terminated" });
+		const rows = [
+			...preamble(),
+			childReply({ id: "r1", stop: "toolUse", usage: childUsage(28, 8, 1469, 28), content: [toolCall("tool:1", "bash", { command: "ls" })] }),
+			childResult("tool:1", "bash", "a\n"),
+			failed,
+			entry("context_edit", { targetId: failed.id, replacement: null }),
+			childReply({ id: "r2" }),
+		];
+		const parsed = observationsFromChildSession(jsonl(rows), CHILD_KEY, { retry: true });
+		expect(parsed.providerErrors).toEqual([]);
+		expect(parsed.errors).toEqual([]);
+		expect(parsed.retries).toEqual([{ id: `${CHILD_KEY}/entry:${String(failed.id)}`, origin: "worker", errorMessage: "terminated", meteredTokens: 0, estimatedTokens: 28 + 8 + 1469 + 28 }]);
+		expect(accountUsage(parsed.observations).valid).toBe(true);
+		// Off, the same file is a failure, as every v5 grid read it.
+		const off = observationsFromChildSession(jsonl(rows), CHILD_KEY);
+		expect(off.retries).toBeUndefined();
+		expect(off.providerErrors.join(" ")).toContain("terminated");
+	});
+
+	it("keeps a worker's error a failure under the retry policy when no context edit omits it or no reply follows", () => {
+		const failed = childReply({ stop: "error", usage: childUsage(0, 0, 0, 0), errorMessage: "terminated" });
+		const unomitted = observationsFromChildSession(jsonl([...preamble(), failed, childReply({ id: "r2" })]), CHILD_KEY, { retry: true });
+		expect(unomitted.providerErrors.join(" ")).toContain("terminated");
+		const otherTarget = observationsFromChildSession(jsonl([...preamble(), failed, entry("context_edit", { targetId: "elsewhere", replacement: null }), childReply({ id: "r2" })]), CHILD_KEY, { retry: true });
+		expect(otherTarget.providerErrors.join(" ")).toContain("terminated");
+		const exhausted = observationsFromChildSession(jsonl([...preamble(), failed, entry("context_edit", { targetId: failed.id, replacement: null })]), CHILD_KEY, { retry: true });
+		expect(exhausted.providerErrors.join(" ")).toContain("terminated");
+		expect(exhausted.retries).toEqual([]);
+	});
+
+	it("keeps a worker's overflow recovery apart from a retry under the retry policy", () => {
+		const failed = childReply({ stop: "error", usage: childUsage(0, 0, 0, 0), errorMessage: "context_length_exceeded" });
+		const parsed = observationsFromChildSession(jsonl([
+			...preamble(), failed,
+			entry("context_edit", { targetId: failed.id, replacement: null }),
+			entry("compaction", { summary: "s", firstKeptEntryId: "x", tokensBefore: 190000, usage: childUsage(40000, 900, 0, 0) }),
+			childReply({ id: "r2", usage: childUsage(12, 3, 3000, 0) }),
+		]), CHILD_KEY, { retry: true });
+		expect(parsed.recoveredOverflows).toBe(1);
+		expect(parsed.retries).toEqual([]);
+	});
+
 	it("rejects a forked session, whose copied history would book the parent's replies again", () => {
 		const rows = finishedChild();
 		rows[0] = sessionHeader({ parentSession: "/home/op/.pi/sessions/parent.jsonl" });

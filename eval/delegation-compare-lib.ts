@@ -173,6 +173,8 @@ export interface ChildSessionExtraction {
 	missingResponseIds: number;
 	/** `context_edit` entries: retry and overflow omissions, which pi-subagents' own usage sum leaves out. */
 	contextEdits: number;
+	/** Failed attempts pi retried and recovered from; present only with the `retry` option. */
+	retries?: RetriedAttempt[];
 	/** The last assistant reply's stopReason; undefined when the session holds no reply. */
 	finalStop?: string;
 	/** How the session ended (see ChildEnding). */
@@ -703,7 +705,10 @@ const INERT_ENTRY_TYPES = new Set(["model_change", "session_info", "custom", "cu
  *   `_omitRecoveryAttempt`, `_runAutoCompaction`). The compaction entry does
  *   not record its reason, so an errored reply counts as recovered only when a
  *   compaction entry follows it and another reply follows that. An auto-retry
- *   leaves the same shape without the compaction and stays a failure.
+ *   leaves the same shape without the compaction and stays a failure, unless
+ *   the `retry` option says the grid ran under a retry policy: then an `error`
+ *   reply a context edit omits, followed by another reply, is a retried
+ *   attempt listed in `retries`, its reported usage still counted.
  * - The last reply must be `stop` or `length`, or the session must end on one
  *   of the two bounded stops whose spend is fully in the file (ChildEnding).
  *   Anything else is a child cut off mid-loop, and an `error` or `aborted` reply
@@ -726,7 +731,7 @@ const INERT_ENTRY_TYPES = new Set(["model_change", "session_info", "custom", "cu
  * parent's history, replies and usage included, and counting it would book the
  * parent's calls a second time.
  */
-export function observationsFromChildSession(sessionJsonl: string | undefined, childKey: string): ChildSessionExtraction {
+export function observationsFromChildSession(sessionJsonl: string | undefined, childKey: string, options: { retry?: boolean } = {}): ChildSessionExtraction {
 	const out: ChildSessionExtraction = {
 		childKey, observations: [], errors: [], providerErrors: [], notes: [],
 		turns: 0, compactions: 0, cacheWarmings: 0, recoveredOverflows: 0, missingResponseIds: 0, contextEdits: 0,
@@ -734,6 +739,10 @@ export function observationsFromChildSession(sessionJsonl: string | undefined, c
 		replyUsage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 	};
 	const who = `child ${childKey}`;
+	const retry = options.retry === true;
+	if (retry) out.retries = [];
+	// The last good reply's prompt plus output: the lower bound for an attempt that reported nothing.
+	let lastPromptPlusOutput = 0;
 	const error = (message: string) => out.errors.push(`${who}: ${message}`);
 	const note = (message: string) => out.notes.push(`${who}: ${message}`);
 	const fail = (reason: string) => {
@@ -781,13 +790,24 @@ export function observationsFromChildSession(sessionJsonl: string | undefined, c
 	// a request, and which tool calls it made, decide how the session ended.
 	let last: { id: string; observation: number; empty: boolean; calls: ChildToolCall[] } | undefined;
 	// A failed or truncated reply whose meaning depends on what follows it.
-	let pending: { id: string; stopReason: string; errorMessage?: string } | undefined;
+	let pending: { id: string; stopReason: string; errorMessage?: string; entryId: string; usage?: Partial<UsageTotals> } | undefined;
 	let compactedSincePending = false;
+	// Whether a context_edit omitted the pending reply's entry. The file has no
+	// auto_retry events, so this omission is the only mark pi's retry leaves
+	// (agent-session.js _omitRecoveryAttempt).
+	let omittedPending = false;
 	const settle = (retried: boolean) => {
 		if (!pending) return;
 		if (retried && compactedSincePending) {
 			out.recoveredOverflows++;
 			note(`assistant reply ${pending.id} (${pending.stopReason}) overflowed the context; a compaction recovered it and the turn was retried`);
+		} else if (retry && retried && omittedPending && pending.stopReason === "error") {
+			const meteredTokens = pending.usage && reportsSpend(pending.usage) ? num(pending.usage.totalTokens) : 0;
+			out.retries!.push({
+				id: `${childKey}/${pending.id}`, origin: "worker", ...(pending.errorMessage === undefined ? {} : { errorMessage: pending.errorMessage }),
+				meteredTokens, estimatedTokens: meteredTokens > 0 ? 0 : lastPromptPlusOutput,
+			});
+			note(`assistant reply ${pending.id} failed (${pending.errorMessage || "provider error"}); pi omitted it and retried the turn`);
 		} else if (pending.stopReason === "error") fail(`assistant reply ${pending.id} failed: ${pending.errorMessage || "provider error"}`);
 		pending = undefined;
 	};
@@ -863,9 +883,11 @@ export function observationsFromChildSession(sessionJsonl: string | undefined, c
 				out.finalStop = stopReason;
 				if (stopReason === "aborted") fail(`assistant reply ${id} was aborted`);
 				else if (stopReason === "error" || stopReason === "length") {
-					pending = { id, stopReason, ...(typeof message.errorMessage === "string" ? { errorMessage: message.errorMessage } : {}) };
+					pending = { id, stopReason, entryId: row.id, ...(usage ? { usage } : {}), ...(typeof message.errorMessage === "string" ? { errorMessage: message.errorMessage } : {}) };
 					compactedSincePending = false;
+					omittedPending = false;
 				} else if (!COMPLETED_STOPS.has(stopReason)) error(`assistant reply ${id} ended with unexpected stopReason ${stopReason}`);
+				if (retry && stopReason !== "error" && usage && reportsSpend(usage)) lastPromptPlusOutput = promptPlusOutput(usage);
 				break;
 			}
 			case "compaction":
@@ -884,6 +906,7 @@ export function observationsFromChildSession(sessionJsonl: string | undefined, c
 				break;
 			case "context_edit":
 				out.contextEdits++;
+				if (pending && row.targetId === pending.entryId) omittedPending = true;
 				break;
 			case "thinking_level_change":
 				if (typeof row.thinkingLevel === "string") out.thinkingLevels.push(row.thinkingLevel);
