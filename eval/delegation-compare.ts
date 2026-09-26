@@ -39,7 +39,7 @@ import {
 } from "./delegation-compare-lib.ts";
 // The grid's shape and identity (plan item 2.8): the pinned official corpora.
 import {
-	ARM_ORDER, corpusReasons, DEFAULT_BUDGET_ARMS, delegationOff, gridKindReasons, kindlessArmReasons, kindlessCorpus, kindSnapshotReasons, parseArmList, parseCorpora,
+	ARM_ORDER, corpusReasons, DEFAULT_BUDGET_ARMS, DEFAULT_SUBAGENTS_ARMS, delegationOff, loadsSubagentsFor, gridKindReasons, kindlessArmReasons, kindlessCorpus, kindSnapshotReasons, parseArmList, parseCorpora,
 	parseGridKinds, parseMaxVerifiers, sameArms, scopeFor, scopeSettingsFor, shapeOf, summarizeTwins, twinTargets, type GridKind, type PinnedCorpus, type ScopeSettings,
 } from "./delegation-compare-grid.ts";
 // The staging, target-copy and tree-hash helpers moved to their own module so
@@ -280,6 +280,12 @@ type Options = {
 	 */
 	budgetArms?: Arm[];
 	/**
+	 * --subagents-arms (plan item 2.8): which arms' cells load the pinned
+	 * pi-subagents. Absent means DEFAULT_SUBAGENTS_ARMS (candidate, matched), as
+	 * in every earlier grid; set only when it differs, so the manifest keeps its bytes.
+	 */
+	subagentsArms?: Arm[];
+	/**
 	 * --twins (plan item 2.8): the patched twins file, in the fresh corpus's
 	 * shape (eval/corpus/fresh/twins.json). Given only with --twin-arms.
 	 */
@@ -416,7 +422,11 @@ Options:
   --budget-arms <arm,...>|none
                         Arms whose scope carries the budget line (default:
                         ${DEFAULT_BUDGET_ARMS.join(",")}; the baseline's scope is then unchanged).
-                        These three are pinned in the manifest, restored on
+  --subagents-arms <arm,...>|none
+                        Arms whose cells load the pinned pi-subagents (default:
+                        ${DEFAULT_SUBAGENTS_ARMS.join(",")}). Stage 2 names the baseline, so S
+                        loads it in both roles.
+                        These four are pinned in the manifest, restored on
                         --resume, and without --grid-kind make a grid exploratory.
                         One snapshot may run in both arms only when their
                         scopes differ
@@ -587,7 +597,7 @@ export function parseOptions(argv: string[]): Parsed {
 		"--baseline", "--candidate", "--corpus", "--truth", "--out", "--provider", "--model",
 		"--thinking", "--passes", "--only", "--concurrency", "--timeout", "--manifest", "--fs-seal", "--auth-horizon-hours",
 		"--candidate-max-agents", "--breaker", "--matched", "--matched-snapshot",
-		"--baseline-max-agents", "--max-verifiers", "--budget-arms", "--twins", "--twin-arms", "--grid-kind",
+		"--baseline-max-agents", "--max-verifiers", "--budget-arms", "--subagents-arms", "--twins", "--twin-arms", "--grid-kind",
 	]);
 	const values = new Map<string, string>();
 	let dryRun = false;
@@ -631,6 +641,9 @@ export function parseOptions(argv: string[]): Parsed {
 	const budgetList = budgetText === undefined ? undefined : parseArmList(budgetText, ARM_ORDER, "--budget-arms");
 	// The default set is stored as absent, so a grid that names it writes the manifest every earlier grid wrote.
 	const budgetArms = budgetList === undefined || sameArms(budgetList, DEFAULT_BUDGET_ARMS) ? undefined : budgetList;
+	const subagentsText = values.get("--subagents-arms");
+	const subagentsList = subagentsText === undefined ? undefined : parseArmList(subagentsText, ARM_ORDER, "--subagents-arms");
+	const subagentsArms = subagentsList === undefined || sameArms(subagentsList, DEFAULT_SUBAGENTS_ARMS) ? undefined : subagentsList;
 	const twinsText = values.get("--twins");
 	const twinArmsText = values.get("--twin-arms");
 	const twinList = twinArmsText === undefined ? [] : parseArmList(twinArmsText, ["baseline", "candidate"], "--twin-arms") as PairArm[];
@@ -667,6 +680,7 @@ export function parseOptions(argv: string[]): Parsed {
 			...(baselineMaxAgents === undefined ? {} : { baselineMaxAgents }),
 			...(maxVerifiers === undefined ? {} : { maxVerifiers }),
 			...(budgetArms === undefined ? {} : { budgetArms }),
+			...(subagentsArms === undefined ? {} : { subagentsArms }),
 			...(twinsText === undefined ? {} : { twinsPath: resolve(twinsText), twinArms: twinList }),
 			...(gridKind === undefined ? {} : { gridKind }),
 			...(breaker === undefined ? {} : { breaker }),
@@ -802,8 +816,8 @@ export function twinOptionsFromManifest(manifest: JsonRecord): Pick<Options, "tw
 	return { twinsPath: file.path, twinArms: raw as PairArm[] };
 }
 
-export function armOptionsFromManifest(manifest: JsonRecord): Pick<Options, "baselineMaxAgents" | "maxVerifiers" | "budgetArms"> {
-	const out: Pick<Options, "baselineMaxAgents" | "maxVerifiers" | "budgetArms"> = {};
+export function armOptionsFromManifest(manifest: JsonRecord): Pick<Options, "baselineMaxAgents" | "maxVerifiers" | "budgetArms" | "subagentsArms"> {
+	const out: Pick<Options, "baselineMaxAgents" | "maxVerifiers" | "budgetArms" | "subagentsArms"> = {};
 	if (manifest.baselineMaxAgents !== undefined) {
 		if (!isWorkerCap(manifest.baselineMaxAgents)) throw new Error("--resume manifest has an invalid baselineMaxAgents");
 		out.baselineMaxAgents = manifest.baselineMaxAgents;
@@ -819,6 +833,11 @@ export function armOptionsFromManifest(manifest: JsonRecord): Pick<Options, "bas
 		const raw = manifest.budgetArms;
 		if (!Array.isArray(raw) || raw.some((arm) => !ARM_ORDER.includes(arm as Arm)) || new Set(raw).size !== raw.length) throw new Error("--resume manifest has an invalid budgetArms");
 		out.budgetArms = raw as Arm[];
+	}
+	if (manifest.subagentsArms !== undefined) {
+		const raw = manifest.subagentsArms;
+		if (!Array.isArray(raw) || raw.some((arm) => !ARM_ORDER.includes(arm as Arm)) || new Set(raw).size !== raw.length) throw new Error("--resume manifest has an invalid subagentsArms");
+		out.subagentsArms = raw as Arm[];
 	}
 	return out;
 }
@@ -1958,6 +1977,10 @@ type PreparedCell = CellPaths & {
 	target: Target;
 	pass: number;
 	arm: Arm;
+	/** Whether this cell loads the pinned pi-subagents (plan item 2.8: per arm). */
+	loadsSubagents: boolean;
+	/** Whether this cell's scope switches delegation off, so a worker it launched fails the run. */
+	delegationOff: boolean;
 	engagement: string;
 	/** This cell's own fresh redacted snapshot copy, under cellDir. */
 	stagedSnapshot: string;
@@ -2070,13 +2093,46 @@ function gridSchedule(pre: Pick<Preflight, "targets">, options: Pick<Options, "p
 	return planSchedule(gate, options.passes, twinSchedule(options, twins));
 }
 
+/**
+ * Everything the harness decides per arm that reaches the model or the
+ * process it runs in: the input snapshot, the scope file, pi's settings, the
+ * pi-subagents config, the extensions loaded, the prompt, the model and its
+ * effort, and the retry policy. prepareCell writes exactly these, so an arm
+ * whose inputs are equal here runs the same cell whatever its role (plan item
+ * 2.8: S as stage 1's candidate and as stage 2's baseline). Cell-local paths
+ * and the scope's deadline are the only per-cell differences, and they are
+ * random or clock-bound for every arm alike.
+ */
+export function cellModelInputs(options: Options, arm: Arm, target: Target, cell: { engagement: string; workspaceDir: string; childSessionDir: string }, piSubagentsEntry: string, nowMs: number = Date.now()): {
+	snapshot: string; scope: Record<string, unknown>; settings: ReturnType<typeof benchmarkSettings>; subagentConfig: Record<string, unknown>;
+	loadsSubagents: boolean; extensionPaths: string[]; prompt: string; provider: string; model: string; thinking: CompareEntryConfig["thinking"]; retryPolicy?: RetryPolicy;
+} {
+	const loads = loadsSubagents(options, arm);
+	const snapshot = arm === "baseline" ? options.baseline : arm === "matched" ? options.matched?.snapshot ?? options.candidate : options.candidate;
+	return {
+		snapshot,
+		scope: scopeFor(cell.engagement, cell.workspaceDir, armSettings(options, arm), options.timeoutMs, nowMs),
+		settings: benchmarkSettings(options.retryPolicy),
+		subagentConfig: subagentConfigFor(cell.childSessionDir),
+		loadsSubagents: loads,
+		extensionPaths: [BASH_TIMEOUT_EXTENSION, ...(loads ? [piSubagentsEntry] : [])],
+		prompt: promptFor(target),
+		provider: options.provider, model: options.model, thinking: options.thinking as CompareEntryConfig["thinking"],
+		...(options.retryPolicy ? { retryPolicy: options.retryPolicy } : {}),
+	};
+}
+
 /** The scope settings an arm runs under in this grid (plan item 2.8). */
 function armSettings(options: Options, arm: Arm): ScopeSettings {
 	return scopeSettingsFor(arm, options);
 }
 
-/** The arms that load the pinned pi-subagents tree: the candidate, and the matched arm that runs it with its cap at 0. */
-const loadsSubagents = (arm: Arm): boolean => arm !== "baseline";
+/**
+ * The arms that load the pinned pi-subagents tree: by default the candidate,
+ * and the matched arm that runs it with its cap at 0; --subagents-arms (plan
+ * item 2.8) can name the baseline too, for stage 2's S.
+ */
+const loadsSubagents = (options: Pick<Options, "subagentsArms">, arm: Arm): boolean => loadsSubagentsFor(arm, options);
 
 /**
  * The delegation probe's scope. The review scope enforces nothing, so a worker
@@ -2105,7 +2161,7 @@ async function verifyFrozen(ctx: Context, arm: Arm): Promise<string[]> {
 	// what must not move mid-grid is the source the staging reads from.
 	if ((await treeManifest(ctx.sourceSnapshots[arm], "snapshot")).digest !== ctx.sourceDigests[arm]) errors.push(`${arm} input snapshot changed after preflight`);
 	// The candidate also loads the pinned pi-subagents tree; it is half of what the arm measures.
-	if (loadsSubagents(arm) && (await treeManifest(ctx.piSubagents.dir, "runtime")).digest !== ctx.piSubagents.digest) errors.push("pinned pi-subagents tree changed after preflight");
+	if (loadsSubagents(ctx.options, arm) && (await treeManifest(ctx.piSubagents.dir, "runtime")).digest !== ctx.piSubagents.digest) errors.push("pinned pi-subagents tree changed after preflight");
 	return errors;
 }
 
@@ -2140,10 +2196,11 @@ async function prepareCell(ctx: Context, target: Target, pass: number, arm: Arm,
 	const engagement = `review-${opaqueToken()}`;
 	let probe: ProbeConfig | undefined;
 	if (probeFor) probe = await probeFor(paths);
-	const scope = probe?.mode === "delegation" ? probeDelegationScope(engagement, paths.workspaceDir) : scopeFor(engagement, paths.workspaceDir, armSettings(options, arm), options.timeoutMs);
+	const inputs = cellModelInputs(options, arm, target, { engagement, workspaceDir: paths.workspaceDir, childSessionDir: paths.childSessionDir }, ctx.piSubagents.entry);
+	const scope = probe?.mode === "delegation" ? probeDelegationScope(engagement, paths.workspaceDir) : inputs.scope;
 	const scopeText = `${JSON.stringify(scope, null, 2)}\n`;
 	await writeFile(join(paths.targetDir, "pired.scope.json"), scopeText);
-	const prompt = probe?.mode === "delegation" ? "Map the attack surface of this codebase. Delegate the first area to a worker." : promptFor(target);
+	const prompt = probe?.mode === "delegation" ? "Map the attack surface of this codebase. Delegate the first area to a worker." : inputs.prompt;
 	const modelsStoreSource = join(AGENT_BASE, "models-store.json");
 	const modelsStorePath = join(paths.agentDir, "models-store.json");
 	if (await exists(modelsStoreSource)) await cp(modelsStoreSource, modelsStorePath);
@@ -2158,8 +2215,8 @@ async function prepareCell(ctx: Context, target: Target, pass: number, arm: Arm,
 	// link would lock <agentDir>/auth.json.lock, not the shared lock, so the
 	// preflight's auth stage refuses a grid whose token could expire before it
 	// ends (checkAuthHorizon) and no refresh is due while cells run.
-	const settingsText = `${JSON.stringify(benchmarkSettings(options.retryPolicy), null, 2)}\n`;
-	const subagentConfigText = `${JSON.stringify(subagentConfigFor(paths.childSessionDir), null, 2)}\n`;
+	const settingsText = `${JSON.stringify(inputs.settings, null, 2)}\n`;
+	const subagentConfigText = `${JSON.stringify(inputs.subagentConfig, null, 2)}\n`;
 	await writeFile(paths.agentSettingsPath, settingsText);
 	await writeFile(paths.subagentConfigPath, subagentConfigText);
 	for (const name of ["auth.json", "models.json"]) {
@@ -2167,18 +2224,18 @@ async function prepareCell(ctx: Context, target: Target, pass: number, arm: Arm,
 		if (await exists(source)) await symlink(source, join(paths.agentDir, name));
 	}
 	const config: EntryConfig = {
-		snapshot: stagedSnapshot, provider: options.provider, model: options.model,
-		thinking: options.thinking as CompareEntryConfig["thinking"],
+		snapshot: stagedSnapshot, provider: inputs.provider, model: inputs.model,
+		thinking: inputs.thinking,
 		cwd: paths.targetDir, agentDir: paths.agentDir, authPath: join(AGENT_BASE, "auth.json"),
 		modelsPath: join(AGENT_BASE, "models.json"), modelsStorePath, prompt,
-		extensionPaths: [BASH_TIMEOUT_EXTENSION, ...(loadsSubagents(arm) ? [ctx.piSubagents.entry] : [])],
-		...(options.retryPolicy ? { retryPolicy: options.retryPolicy } : {}),
+		extensionPaths: inputs.extensionPaths,
+		...(inputs.retryPolicy ? { retryPolicy: inputs.retryPolicy } : {}),
 		...(session ? { tokenCeiling: session.ceiling } : {}),
 		...(probe ? { probe } : {}),
 	};
 	const configText = `${JSON.stringify(config, null, 2)}\n`;
 	await writeFile(paths.configPath, configText);
-	const sealArgs = await pathRulesForCell(paths, stagedSnapshot, ctx.nodePath, loadsSubagents(arm) ? ctx.piSubagents.dir : undefined);
+	const sealArgs = await pathRulesForCell(paths, stagedSnapshot, ctx.nodePath, inputs.loadsSubagents ? ctx.piSubagents.dir : undefined);
 	const argv = [...sealArgs, "--", ctx.nodePath, "--experimental-strip-types", ENTRY, paths.configPath];
 	const env = childEnv(paths, ctx.provider);
 	// Everything the sealed process is handed, checked before launch: a hit here
@@ -2196,6 +2253,8 @@ async function prepareCell(ctx: Context, target: Target, pass: number, arm: Arm,
 	errors.push(...await verifyFrozen(ctx, arm));
 	return {
 		...paths, key: `${target.id}#${pass}`, target, pass, arm, engagement, stagedSnapshot,
+		// The delegation probe's own scope delegates whatever the arm's does.
+		loadsSubagents: inputs.loadsSubagents, delegationOff: probe?.mode === "delegation" ? false : delegationOff(armSettings(options, arm)),
 		symlinkActions: targetCopy.symlinks, argv, env, errors, leakHits,
 		cellConfigSha256: { settings: sha256(settingsText), subagentConfig: sha256(subagentConfigText) },
 		...(probe ? { probe } : {}),
@@ -2341,7 +2400,7 @@ export function childProviderFailure(child: Pick<SubagentChild, "childKey" | "st
  * extension is not loaded, so any subagent call or child session means the
  * wrong snapshot ran and its tokens would land in the wrong arm.
  */
-export async function accountCellUsage(events: JsonRecord[], cell: { arm: Arm; childSessionDir: string }, expect: { provider: string; model: string; thinking: string }, stream: Pick<StreamObservation, "subagentCalls">, retryPolicy?: RetryPolicy, ceiling: { cut?: boolean } = {}): Promise<CellUsage> {
+export async function accountCellUsage(events: JsonRecord[], cell: { arm: Arm; childSessionDir: string; loadsSubagents?: boolean; delegationOff?: boolean }, expect: { provider: string; model: string; thinking: string }, stream: Pick<StreamObservation, "subagentCalls">, retryPolicy?: RetryPolicy, ceiling: { cut?: boolean } = {}): Promise<CellUsage> {
 	const errors: string[] = [];
 	const notes: string[] = [];
 	const observations: UsageObservation[] = [];
@@ -2368,9 +2427,12 @@ export async function accountCellUsage(events: JsonRecord[], cell: { arm: Arm; c
 	const children: ChildAccount[] = [];
 	const childProviderErrors: CellUsage["childProviderErrors"] = [];
 	let reconciliation: SubagentReconciliation | undefined;
-	if (cell.arm === "baseline") {
-		if (childSessionFiles.length) errors.push(`baseline arm produced ${childSessionFiles.length} child session file(s)`);
-		if (stream.subagentCalls) errors.push(`baseline arm made ${stream.subagentCalls} ${SUBAGENT_TOOL} call(s)`);
+	// Absent, the arms load what they always did: everything but the baseline, and only the matched arm is off.
+	const loads = cell.loadsSubagents ?? cell.arm !== "baseline";
+	const off = cell.delegationOff ?? cell.arm === "matched";
+	if (!loads) {
+		if (childSessionFiles.length) errors.push(`${cell.arm} arm produced ${childSessionFiles.length} child session file(s)`);
+		if (stream.subagentCalls) errors.push(`${cell.arm} arm made ${stream.subagentCalls} ${SUBAGENT_TOOL} call(s)`);
 	} else {
 		try {
 			reconciliation = reconcileSubagentCalls(events, childSessionFiles, { sessionDir: cell.childSessionDir, toolName: SUBAGENT_TOOL });
@@ -2379,11 +2441,12 @@ export async function accountCellUsage(events: JsonRecord[], cell: { arm: Arm; c
 		} catch (error) {
 			errors.push(`subagent reconciliation failed: ${message(error)}`);
 		}
-		// The matched arm's scope states maxAgents 0: a worker it launched means
-		// delegation was not off, and the run is not the single agent it stands for.
+		// The matched arm's scope states maxAgents 0, as does S's (plan item 2.8): a
+		// worker it launched means delegation was not off, and the run is not the
+		// single agent it stands for.
 		const workers = reconciliation?.children.length ?? 0;
-		if (cell.arm === "matched" && (workers || childSessionFiles.length)) {
-			errors.push(`matched arm launched ${workers} worker(s) (${childSessionFiles.length} child session file(s)); its scope states maxAgents 0`);
+		if (off && (workers || childSessionFiles.length)) {
+			errors.push(`${cell.arm} arm launched ${workers} worker(s) (${childSessionFiles.length} child session file(s)); its scope states maxAgents 0`);
 		}
 		const callText = new Map((reconciliation?.calls ?? []).map((c) => [c.toolCallId, c.resultText]));
 		for (const child of reconciliation?.children ?? []) {
@@ -3046,15 +3109,18 @@ async function runOne(ctx: Context, target: Target, pass: number, arm: Arm, atte
  * which is what pi-subagents falls back to when it cannot find the host pi
  * package; and none of the tools pired hides.
  */
-export function toolSurfaceErrors(arm: Arm, tools: string[], off = false): string[] {
+export function toolSurfaceErrors(arm: Arm, tools: string[], off = false, loads: boolean = arm !== "baseline"): string[] {
 	const errors: string[] = [];
-	// A candidate whose scope switches delegation off (plan item 2.8: stage 1's S,
-	// maxAgents 0 and maxVerifiers 0) is shown no launcher by pired since ADR-029;
-	// like the matched arm, the loader is then allowed, not required.
-	const optional = arm === "matched" || (arm === "candidate" && off);
-	const expected: string[] = arm === "candidate" && !optional ? [...BASE_TOOLS, ENABLE_TOOL] : [...BASE_TOOLS];
+	// An arm that loads pi-subagents with its scope switching delegation off (plan
+	// item 2.8: S, maxAgents 0 and maxVerifiers 0, as stage 1's candidate or stage
+	// 2's baseline) is shown no launcher by pired since ADR-029; like the matched
+	// arm, the loader is then allowed, not required. Any other arm that loads it
+	// must show it.
+	const requiresLoader = loads && !off && arm !== "matched";
+	const optional = loads && !requiresLoader;
+	const expected: string[] = requiresLoader ? [...BASE_TOOLS, ENABLE_TOOL] : [...BASE_TOOLS];
 	for (const name of expected) if (!tools.includes(name)) errors.push(`${arm} arm does not expose ${name}`);
-	if (loadsSubagents(arm)) {
+	if (loads) {
 		for (const name of CANDIDATE_HIDDEN_TOOLS) if (tools.includes(name)) errors.push(`${arm} arm exposes ${name}, which pired hides`);
 		if (tools.includes(SUBAGENT_TOOL)) errors.push(`${arm} arm exposes ${SUBAGENT_TOOL} eagerly instead of through ${ENABLE_TOOL}`);
 	}
@@ -3062,7 +3128,7 @@ export function toolSurfaceErrors(arm: Arm, tools: string[], off = false): strin
 	// keeps the lazy loader out of such a session, but a snapshot cut before that
 	// may still show it; it is allowed, not required, and a worker it launched
 	// would fail the run (accountCellUsage).
-	const known = new Set<string>([...expected, ...(loadsSubagents(arm) ? [...CANDIDATE_HIDDEN_TOOLS, SUBAGENT_TOOL] : []), ...(optional ? [ENABLE_TOOL] : [])]);
+	const known = new Set<string>([...expected, ...(loads ? [...CANDIDATE_HIDDEN_TOOLS, SUBAGENT_TOOL] : []), ...(optional ? [ENABLE_TOOL] : [])]);
 	const extra = tools.filter((name) => !known.has(name));
 	if (extra.length) errors.push(`${arm} arm exposes unexpected tool(s) ${[...new Set(extra)].join(", ")}`);
 	return errors;
@@ -3135,7 +3201,7 @@ async function inspectProbe(ctx: Context, cell: PreparedCell, launched: Launch):
 	if (report.workspace !== cell.workspaceDir) errors.push(`pired resolved workspace ${String(report.workspace)}, not the cell workspace`);
 	const tools = Array.isArray(report.extensionTools) ? report.extensionTools.map(String) : undefined;
 	if (!tools) errors.push("probe did not list active tools");
-	else errors.push(...toolSurfaceErrors(cell.arm, tools, delegationOff(armSettings(ctx.options, cell.arm))));
+	else errors.push(...toolSurfaceErrors(cell.arm, tools, delegationOff(armSettings(ctx.options, cell.arm)), loadsSubagents(ctx.options, cell.arm)));
 	const unique = [...new Set(errors)];
 	const runtime = runtimes.length === 1 ? benchmarkRuntimeOf(runtimes[0]!) : undefined;
 	return {
@@ -3591,7 +3657,7 @@ async function runPreflight(options: Options, manifest: JsonRecord, saveManifest
 						join(decoyDir, "run.json"), decoyDir,
 						...(previous ? [previous.configPath, previous.transcriptPath, previous.cellDir, previous.workspaceDir, previous.stagedSnapshot, previous.childSessionDir] : []),
 						// Granted to the candidate alone; the baseline must not see it.
-						...(arm === "baseline" ? [ctx.piSubagents.entry] : []),
+						...(!loadsSubagents(options, arm) ? [ctx.piSubagents.entry] : []),
 						join(HOME, ".pired/engagements"), "/tmp/pired-research",
 						join(AGENT_BASE, "sessions"), join(AGENT_BASE, "run-history.jsonl"),
 					];
@@ -3604,7 +3670,7 @@ async function runPreflight(options: Options, manifest: JsonRecord, saveManifest
 						...[...truth.map((t) => t.file), ...fixed].filter((f): f is string => typeof f === "string"), "README.md",
 					]);
 					if (!sourceFile) throw new Error(`${target.id}: target copy has no readable file`);
-					return { readDenied, readAllowed: [sourceFile, paths.workspaceDir, paths.configPath, ...(loadsSubagents(arm) ? [ctx.piSubagents.entry] : [])] };
+					return { readDenied, readAllowed: [sourceFile, paths.workspaceDir, paths.configPath, ...(loadsSubagents(options, arm) ? [ctx.piSubagents.entry] : [])] };
 				});
 				const launched = await launch(ctx, cell, PROBE_TIMEOUT_MS, () => !runState.aborted);
 				const verdict = await inspectProbe(ctx, cell, launched);
@@ -3806,6 +3872,7 @@ export function resumeMismatches(prior: JsonRecord, fresh: JsonRecord): string[]
 	eq("baselineMaxAgents", prior.baselineMaxAgents, fresh.baselineMaxAgents);
 	eq("maxVerifiers", prior.maxVerifiers, fresh.maxVerifiers);
 	eq("budgetArms", prior.budgetArms, fresh.budgetArms);
+	eq("subagentsArms", prior.subagentsArms, fresh.subagentsArms);
 	// Twin runs under two sets of arms, or of two twins files, would not add up to one control.
 	eq("twinArms", prior.twinArms, fresh.twinArms);
 	// A grid that claimed a kind is judged by it; resumed as another it would be two grids.
@@ -4013,6 +4080,7 @@ export function newManifest(options: Options, mode: string): JsonRecord {
 		...(options.baselineMaxAgents === undefined ? {} : { baselineMaxAgents: options.baselineMaxAgents }),
 		...(options.maxVerifiers === undefined ? {} : { maxVerifiers: options.maxVerifiers }),
 		...(options.budgetArms === undefined ? {} : { budgetArms: options.budgetArms }),
+		...(options.subagentsArms === undefined ? {} : { subagentsArms: options.subagentsArms }),
 		...(options.twinArms === undefined ? {} : { twinArms: options.twinArms }),
 		...(options.gridKind === undefined ? {} : { gridKind: options.gridKind }),
 		...(options.breaker === undefined ? {} : { breaker: options.breaker }),

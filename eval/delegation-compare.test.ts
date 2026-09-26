@@ -6,7 +6,7 @@ import {
 	accountCellUsage, atHighestAttempt, attemptReport, AUTH_HORIZON_CAP_MS, AUTH_MARGIN_MS, benchmarkRuntimeOf, checkAuthHorizon, childProviderFailure, classifyInfra,
 	credentialExpiry, decideInfra, DEFAULT_CANDIDATE_MAX_AGENTS, fetchErrorsFromStderr, gridWorstCaseMs, isBrokerEnvVar, loadTargets, metricFromRecord, notLaunchedOutcome, ownerIsLive,
 	newManifest, optionsFromManifest, parseBreakerSpec, parseComparePins, parseOptions, parseOwnerRecord, planResume, providerFailureTexts, requestLogFromStderr,
-	armOptionsFromManifest, manifestTargetEntry, probeDelegationScope, resumeMismatches, splitTwinRuns, twinOptionsFromManifest, retryPolicyFromManifest, reviewScope, runPairs, runStop, runtimeMismatch, scopedSealCommand, startTimeFromStat, subagentConfigFor,
+	armOptionsFromManifest, cellModelInputs, manifestTargetEntry, probeDelegationScope, resumeMismatches, splitTwinRuns, twinOptionsFromManifest, retryPolicyFromManifest, reviewScope, runPairs, runStop, runtimeMismatch, scopedSealCommand, startTimeFromStat, subagentConfigFor,
 	toolSurfaceErrors, trackStream, workerCapReason,
 	ceilingOf, ceilingProbeErrors, latestMatchedSessions, planMatchedResume, sessionRunOf, verifyCeiling,
 	type GridStopState, type MatchedSessionSpec, type ProviderFailures, type RunOutcome,
@@ -2178,7 +2178,7 @@ describe("grid kinds on the command line (plan 2.8)", () => {
 	const shippedPins = async () => parseComparePins(await readFile(new URL("./delegation-compare.pins.json", import.meta.url), "utf8"));
 	const STAGE1 = ["--candidate-max-agents", "0", "--max-verifiers", "candidate=0", "--twins", "/twins.json", "--twin-arms", "baseline,candidate",
 		"--retry", "--breaker", "default", "--timeout", "14400000", "--passes", "6", "--grid-kind", "v6-stage1"];
-	const STAGE2 = ["--baseline-max-agents", "0", "--max-verifiers", "baseline=0,candidate=2", "--budget-arms", "baseline,candidate,matched",
+	const STAGE2 = ["--baseline-max-agents", "0", "--max-verifiers", "baseline=0,candidate=2", "--budget-arms", "baseline,candidate,matched", "--subagents-arms", "baseline,candidate,matched",
 		"--matched", "follow", "--retry", "--breaker", "default", "--auth-horizon-hours", "200", "--timeout", "14400000", "--passes", "6", "--grid-kind", "v6-stage2"];
 
 	// The command lines the operator will type for the two stages must be the
@@ -2205,5 +2205,72 @@ describe("grid kinds on the command line (plan 2.8)", () => {
 		expect(resumeMismatches({ gridKind: "v6-stage1" }, {})).toEqual(["gridKind"]);
 		expect(() => optionsFromManifest("/out", { ...manifest, gridKind: 3 })).toThrow(/gridKind/);
 		expect(() => parseOptions(argv("--grid-kind", "v6 stage1"))).toThrow(/--grid-kind/);
+	});
+});
+
+describe("S is the same arm in both stages (plan 2.8)", () => {
+	const argv = (...extra: string[]): string[] => [
+		"--baseline", "/snap/A", "--candidate", "/snap/S", "--corpus", "/corpus", "--truth", "/truth", "--out", "/out",
+		"--provider", "openai-codex", "--model", "gpt-6-luna", "--retry", "--timeout", "14400000", ...extra,
+	];
+	const options = (...extra: string[]) => {
+		const parsed = parseOptions(argv(...extra));
+		if (parsed === "help" || parsed.kind !== "run") throw new Error("expected a run");
+		return parsed.options;
+	};
+	const target = { id: "CVE-2031-0001", name: "acme_shop-aaaaaa", package: "acme/shop", target: "/corpus/acme_shop-aaaaaa", truth: "/truth/acme_shop-aaaaaa.truth.json", scope: ["."] };
+	const cell = { engagement: "review-0123456789abcdef", workspaceDir: "/cell/ws", childSessionDir: "/cell/child-sessions" };
+	const now = Date.parse("2026-09-27T10:00:00.000Z");
+	const stage1 = options("--candidate-max-agents", "0", "--max-verifiers", "candidate=0");
+	// Stage 2 names the candidate snapshot as its baseline, so --baseline is S's path.
+	const stage2 = { ...options("--baseline-max-agents", "0", "--max-verifiers", "baseline=0,candidate=2", "--budget-arms", "baseline,candidate,matched", "--subagents-arms", "baseline,candidate,matched", "--matched", "follow"), baseline: "/snap/S" };
+
+	// Every input the harness writes or passes that could reach the model: the
+	// snapshot, scope bytes, pi's settings, the pi-subagents config, whether
+	// pi-subagents is loaded and the extension list, the prompt, model, effort
+	// and retry policy. If any differed, stage 2's baseline would not be the S
+	// that stage 1 measured.
+	it("gives S the same model-facing inputs as stage 1's candidate and stage 2's baseline", () => {
+		const asCandidate = cellModelInputs(stage1, "candidate", target, cell, "/pinned/pi-subagents/index.js", now);
+		const asBaseline = cellModelInputs(stage2, "baseline", target, cell, "/pinned/pi-subagents/index.js", now);
+		expect(asBaseline).toEqual(asCandidate);
+		expect(JSON.stringify(asBaseline.scope)).toBe(JSON.stringify(asCandidate.scope));
+		expect(asBaseline).toMatchObject({ snapshot: "/snap/S", loadsSubagents: true, scope: { maxAgents: 0, maxVerifiers: 0, budget: { minutes: 240 } } });
+		expect(asBaseline.extensionPaths).toHaveLength(2);
+		// D, the stage-2 candidate, differs from S only in its caps.
+		const d = cellModelInputs(stage2, "candidate", target, cell, "/pinned/pi-subagents/index.js", now);
+		expect({ ...d, scope: undefined }).toEqual({ ...asBaseline, scope: undefined });
+		expect(d.scope).toMatchObject({ maxAgents: 8, maxVerifiers: 2 });
+	});
+
+	// Unset, the baseline loads nothing but pired and the bash default, as in every earlier grid.
+	it("keeps the default baseline without pi-subagents", () => {
+		const plain = cellModelInputs(options(), "baseline", target, cell, "/pinned/pi-subagents/index.js", now);
+		expect(plain.loadsSubagents).toBe(false);
+		expect(plain.extensionPaths).toHaveLength(1);
+		expect(options()).not.toHaveProperty("subagentsArms");
+		expect(options("--subagents-arms", "matched,candidate")).not.toHaveProperty("subagentsArms");
+		expect(newManifest(options(), "live")).not.toHaveProperty("subagentsArms");
+	});
+
+	it("pins the arms that load pi-subagents, restores them, and refuses a resume that changes them", () => {
+		expect(newManifest(stage2, "live").subagentsArms).toEqual(["baseline", "candidate", "matched"]);
+		expect(armOptionsFromManifest({ subagentsArms: ["baseline", "candidate", "matched"] }).subagentsArms).toEqual(["baseline", "candidate", "matched"]);
+		expect(() => armOptionsFromManifest({ subagentsArms: ["worker"] })).toThrow(/subagentsArms/);
+		expect(resumeMismatches({ subagentsArms: ["baseline", "candidate", "matched"] }, {})).toEqual(["subagentsArms"]);
+	});
+
+	// A baseline that loads pi-subagents with delegation off is shown no launcher,
+	// and one that launched a worker anyway is not the single agent it stands for.
+	it("checks a baseline that loads pi-subagents as it checks the matched arm", async () => {
+		const base = ["read", "bash", "edit", "write", "record", "recall"];
+		expect(toolSurfaceErrors("baseline", base, true, true)).toEqual([]);
+		expect(toolSurfaceErrors("baseline", [...base, "subagents_enable"], true, true)).toEqual([]);
+		expect(toolSurfaceErrors("baseline", [...base, "bg_wait"], true, true)).toEqual(["baseline arm exposes bg_wait, which pired hides"]);
+		expect(toolSurfaceErrors("baseline", base, false, true)).toEqual(["baseline arm does not expose subagents_enable"]);
+		const dir = await mkdtemp(join(tmpdir(), "pired-s-baseline-"));
+		await writeFile(join(dir, "child.jsonl"), "");
+		const account = await accountCellUsage([], { arm: "baseline", childSessionDir: dir, loadsSubagents: true, delegationOff: true }, { provider: "p", model: "m", thinking: "medium" }, { subagentCalls: 0 });
+		expect(account.errors.some((e) => e.startsWith("baseline arm launched 0 worker(s) (1 child session file(s)); its scope states maxAgents 0"))).toBe(true);
 	});
 });

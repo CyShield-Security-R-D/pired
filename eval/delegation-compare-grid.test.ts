@@ -191,6 +191,10 @@ describe("each arm's scope", () => {
 	it("makes a grid without a kind exploratory when it configures an arm, and names how", () => {
 		expect(kindlessArmReasons({ candidateMaxAgents: 8 })).toEqual([]);
 		expect(kindlessArmReasons({ candidateMaxAgents: 8, budgetArms: ["matched", "candidate"] })).toEqual([]);
+		expect(kindlessArmReasons({ subagentsArms: ["candidate", "matched"] })).toEqual([]);
+		expect(kindlessArmReasons({ subagentsArms: ["baseline", "candidate", "matched"] })).toEqual([
+			"pi-subagents is loaded in baseline,candidate,matched, not candidate,matched; without --grid-kind the arms keep the default",
+		]);
 		expect(kindlessArmReasons({ baselineMaxAgents: 0, maxVerifiers: { baseline: 0, candidate: 2 }, budgetArms: [] })).toEqual([
 			"the baseline's scope states maxAgents 0; without --grid-kind the baseline runs at its snapshot's default",
 			"the baseline's scope states maxVerifiers 0; without --grid-kind no arm states a verifier cap",
@@ -284,12 +288,12 @@ describe("grid kinds", () => {
 	// A kind and the options that match it exactly, as a builder pair.
 	const kind = (over: Partial<GridKind> = {}): GridKind => ({
 		corpus: "c", baseline: { digest: sha("b") }, candidate: { digest: sha("c") }, baselineMaxAgents: 0, candidateMaxAgents: 8,
-		maxVerifiers: { baseline: 0, candidate: 2 }, budgetArms: ["baseline", "candidate", "matched"], twinArms: [],
+		maxVerifiers: { baseline: 0, candidate: 2 }, budgetArms: ["baseline", "candidate", "matched"], subagentsArms: ["baseline", "candidate", "matched"], twinArms: [],
 		matched: { mode: "follow", k: 3, kMax: 6, floorShare: 0.05 }, retry: true, breaker: { ...DEFAULT_BREAKER }, timeoutMs: 14_400_000, ...over,
 	});
 	const ran = (over: Partial<GridOptions> = {}): GridOptions => ({
 		candidateMaxAgents: 8, baselineMaxAgents: 0, maxVerifiers: { baseline: 0, candidate: 2 }, budgetArms: ["baseline", "candidate", "matched"],
-		matched: { mode: "follow", k: 3, kMax: 6, floorShare: 0.05 }, retry: true, breaker: { ...DEFAULT_BREAKER }, timeoutMs: 14_400_000, ...over,
+		subagentsArms: ["baseline", "candidate", "matched"], matched: { mode: "follow", k: 3, kMax: 6, floorShare: 0.05 }, retry: true, breaker: { ...DEFAULT_BREAKER }, timeoutMs: 14_400_000, ...over,
 	});
 
 	// The pre-registration's draft: stage 1 is A against S, stage 2 is S against
@@ -298,11 +302,11 @@ describe("grid kinds", () => {
 		const kinds = await shippedKinds();
 		expect(kinds["v6-stage1"]).toMatchObject({
 			corpus: "v6-fresh", baseline: { commit: null }, candidate: { digest: null }, baselineMaxAgents: null, candidateMaxAgents: 0,
-			maxVerifiers: { candidate: 0 }, budgetArms: ["candidate", "matched"], twinArms: ["baseline", "candidate"], matched: null, retry: true, timeoutMs: 14_400_000,
+			maxVerifiers: { candidate: 0 }, budgetArms: ["candidate", "matched"], subagentsArms: ["candidate", "matched"], twinArms: ["baseline", "candidate"], matched: null, retry: true, timeoutMs: 14_400_000,
 		});
 		expect(kinds["v6-stage2"]).toMatchObject({
 			corpus: "v6-fresh", baseline: { digest: null }, candidate: { digest: null }, baselineMaxAgents: 0, candidateMaxAgents: 8,
-			maxVerifiers: { baseline: 0, candidate: 2 }, budgetArms: ["baseline", "candidate", "matched"], twinArms: [], matched: { mode: "follow", k: 3 }, retry: true,
+			maxVerifiers: { baseline: 0, candidate: 2 }, budgetArms: ["baseline", "candidate", "matched"], subagentsArms: ["baseline", "candidate", "matched"], twinArms: [], matched: { mode: "follow", k: 3 }, retry: true,
 		});
 		expect(kinds["v6-stage1"]!.breaker).toEqual(DEFAULT_BREAKER);
 		expect(kinds["v6-stage2"]!.breaker).toEqual(DEFAULT_BREAKER);
@@ -344,6 +348,7 @@ describe("grid kinds", () => {
 			"grid kind v6-stage2: the baseline's maxVerifiers is unstated, not 0",
 			"grid kind v6-stage2: the candidate's maxVerifiers is 1, not 2",
 			"grid kind v6-stage2: the budget line is on candidate,matched, not baseline,candidate,matched",
+			"grid kind v6-stage2: pi-subagents is loaded in candidate,matched, not baseline,candidate,matched",
 			"grid kind v6-stage2: patched twins run in baseline, not no arm",
 			"grid kind v6-stage2: the matched arm is off, not on",
 			"grid kind v6-stage2: it requires --retry",
@@ -381,6 +386,7 @@ describe("grid kinds", () => {
 		expect(() => parseGridKinds(raw({ candidateMaxAgents: null }), corpora)).toThrow(/candidateMaxAgents/);
 		expect(() => parseGridKinds(raw({ maxVerifiers: { matched: 1 } }), corpora)).toThrow(/maxVerifiers/);
 		expect(() => parseGridKinds(raw({ twinArms: ["matched"] }), corpora)).toThrow(/twinArms/);
+		expect(() => parseGridKinds(raw({ subagentsArms: undefined }), corpora)).toThrow(/subagentsArms/);
 		expect(() => parseGridKinds(raw({ matched: { mode: "follow" } }), corpora)).toThrow(/matched/);
 		expect(() => parseGridKinds(raw({ breaker: { consecutive: 0 } }), corpora)).toThrow(/breaker/);
 		expect(() => parseGridKinds(raw({ retry: "yes" }), corpora)).toThrow(/retry/);

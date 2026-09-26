@@ -169,6 +169,13 @@ export const ARM_ORDER: readonly Arm[] = ["baseline", "candidate", "matched"];
 export const DEFAULT_BUDGET_ARMS: readonly Arm[] = ["candidate", "matched"];
 
 /**
+ * The arms that load the pinned pi-subagents extension when --subagents-arms
+ * is not given: the candidate, and the matched arm that runs its snapshot with
+ * the cap at 0. The baseline loads nothing else, as in every earlier grid.
+ */
+export const DEFAULT_SUBAGENTS_ARMS: readonly Arm[] = ["candidate", "matched"];
+
+/**
  * A comma-separated list of arms (or "none"), deduplicated into ARM_ORDER, so
  * that the same set always reads, pins and compares the same.
  */
@@ -218,6 +225,18 @@ export interface ArmOptions {
 	maxVerifiers?: Partial<Record<PairArm, number>>;
 	/** --budget-arms; absent, DEFAULT_BUDGET_ARMS. */
 	budgetArms?: readonly Arm[];
+	/** --subagents-arms; absent, DEFAULT_SUBAGENTS_ARMS. */
+	subagentsArms?: readonly Arm[];
+}
+
+/**
+ * Whether an arm's cell loads the pinned pi-subagents extension. It is part of
+ * what the model is shown, beside the scope: stage 2 runs S as its baseline, and
+ * S loaded pi-subagents as stage 1's candidate, so the baseline must be able to
+ * load it too, or the two stages' S would be two arms.
+ */
+export function loadsSubagentsFor(arm: Arm, options: Pick<ArmOptions, "subagentsArms">): boolean {
+	return (options.subagentsArms ?? DEFAULT_SUBAGENTS_ARMS).includes(arm);
 }
 
 /** What one arm's scope states beyond the research setup. */
@@ -289,6 +308,9 @@ export function kindlessArmReasons(options: ArmOptions): string[] {
 	}
 	if (options.budgetArms !== undefined && !sameArms(options.budgetArms, DEFAULT_BUDGET_ARMS)) {
 		reasons.push(`the budget line is on ${options.budgetArms.join(",") || "no arm"}, not ${DEFAULT_BUDGET_ARMS.join(",")}; without --grid-kind the arms keep the default`);
+	}
+	if (options.subagentsArms !== undefined && !sameArms(options.subagentsArms, DEFAULT_SUBAGENTS_ARMS)) {
+		reasons.push(`pi-subagents is loaded in ${options.subagentsArms.join(",") || "no arm"}, not ${DEFAULT_SUBAGENTS_ARMS.join(",")}; without --grid-kind the arms keep the default`);
 	}
 	return reasons;
 }
@@ -401,6 +423,8 @@ export interface GridKind {
 	maxVerifiers: Partial<Record<PairArm, number>>;
 	/** --budget-arms, in ARM_ORDER. */
 	budgetArms: Arm[];
+	/** --subagents-arms, in ARM_ORDER: the arms whose cells load the pinned pi-subagents. */
+	subagentsArms: Arm[];
 	/** --twin-arms, in ARM_ORDER; [] runs no twin. */
 	twinArms: PairArm[];
 	/** --matched, as the manifest stores it; null runs no matched arm. */
@@ -442,7 +466,7 @@ export function parseGridKinds(value: unknown, corpora: Record<string, PinnedCor
 		if (!isCap(raw.candidateMaxAgents)) throw new Error(`${where}.candidateMaxAgents must be a non-negative integer`);
 		const verifiers = raw.maxVerifiers;
 		if (!isRecord(verifiers) || Object.entries(verifiers).some(([arm, n]) => (arm !== "baseline" && arm !== "candidate") || !isCap(n))) throw new Error(`${where}.maxVerifiers must map baseline or candidate to a non-negative integer`);
-		const arms = (key: "budgetArms" | "twinArms", allowed: readonly Arm[]): Arm[] => {
+		const arms = (key: "budgetArms" | "subagentsArms" | "twinArms", allowed: readonly Arm[]): Arm[] => {
 			const list = raw[key];
 			if (!Array.isArray(list) || list.some((arm) => !allowed.includes(arm as Arm)) || new Set(list).size !== list.length) throw new Error(`${where}.${key} must be a list of distinct arms among ${allowed.join(", ")}`);
 			return ARM_ORDER.filter((arm) => list.includes(arm));
@@ -462,7 +486,8 @@ export function parseGridKinds(value: unknown, corpora: Record<string, PinnedCor
 		out[name] = {
 			corpus: raw.corpus, baseline: { ...baseline } as GridKind["baseline"], candidate: { digest: candidate.digest as string | null },
 			baselineMaxAgents: raw.baselineMaxAgents as number | null, candidateMaxAgents: raw.candidateMaxAgents,
-			maxVerifiers: { ...verifiers } as Partial<Record<PairArm, number>>, budgetArms: arms("budgetArms", ARM_ORDER), twinArms: arms("twinArms", ["baseline", "candidate"]) as PairArm[],
+			maxVerifiers: { ...verifiers } as Partial<Record<PairArm, number>>, budgetArms: arms("budgetArms", ARM_ORDER), subagentsArms: arms("subagentsArms", ARM_ORDER),
+			twinArms: arms("twinArms", ["baseline", "candidate"]) as PairArm[],
 			matched, retry: raw.retry, breaker, timeoutMs: raw.timeoutMs as number | null,
 		};
 	}
@@ -498,6 +523,8 @@ export function gridKindReasons(name: string, kind: GridKind, grid: GridOptions)
 	}
 	const budget = grid.budgetArms ?? DEFAULT_BUDGET_ARMS;
 	if (!sameArms(budget, kind.budgetArms)) say(`the budget line is on ${armList(budget)}, not ${armList(kind.budgetArms)}`);
+	const subagents = grid.subagentsArms ?? DEFAULT_SUBAGENTS_ARMS;
+	if (!sameArms(subagents, kind.subagentsArms)) say(`pi-subagents is loaded in ${armList(subagents)}, not ${armList(kind.subagentsArms)}`);
 	const twins = grid.twinArms ?? [];
 	if (!sameArms(twins, kind.twinArms)) say(`patched twins run in ${armList(twins)}, not ${armList(kind.twinArms)}`);
 	if (!grid.matched !== !kind.matched) say(`the matched arm is ${grid.matched ? "on" : "off"}, not ${kind.matched ? "on" : "off"}`);

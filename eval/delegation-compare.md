@@ -398,7 +398,9 @@ native-worker snapshot from ADR-025, which the candidate probe refuses because i
   lists them per arm with their cells, and `eval/rescore.ts` scores them against the
   `fixed_regions` the grid manifest carries.
 - **Per-arm scopes.** `--baseline-max-agents`, `--max-verifiers <arm>=<n>` and `--budget-arms`
-  configure each arm's scope; unset, every arm's scope is what it always was.
+  configure each arm's scope, and `--subagents-arms` which arms load pi-subagents; unset, every
+  arm is what it always was. Stage 2 loads pi-subagents in its baseline, so S's cells are the same
+  in both stages.
 - **Grid kinds.** `--grid-kind v6-stage1` or `v6-stage2` claims a kind pinned under `gridKinds`;
   the grid is official only when its corpus, snapshots and every option match it, and each
   difference is listed as an exploratory reason. Both kinds are drafts until the pre-registration
@@ -411,6 +413,7 @@ native-worker snapshot from ADR-025, which the candidate probe refuses because i
   --retry --breaker default --timeout 14400000 --passes <n> --grid-kind v6-stage1
   # stage 2: S against D, with the matched arm (--baseline and --candidate name the same snapshot)
   --baseline-max-agents 0 --max-verifiers baseline=0,candidate=2 --budget-arms baseline,candidate,matched \
+  --subagents-arms baseline,candidate,matched \
   --matched follow --retry --breaker default --auth-horizon-hours <h> --timeout 14400000 --passes <n> --grid-kind v6-stage2
   ```
 

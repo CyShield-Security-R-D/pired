@@ -62,6 +62,10 @@
 				"candidate",
 				"matched"
 			],
+			"subagentsArms": [
+				"candidate",
+				"matched"
+			],
 			"twinArms": [
 				"baseline",
 				"candidate"
@@ -79,7 +83,7 @@
 			"timeoutMs": 14400000
 		},
 		"v6-stage2": {
-			"_comment": "To be frozen. Arm S as the baseline (the candidate snapshot, with exactly the scope it had as stage 1's candidate) against arm D (the same snapshot, maxAgents 8, maxVerifiers 2, budget line on), with the matched arm M (follow, k 3). No twins. Retry and breaker required; run limit 4 h. baseline.digest and candidate.digest are both the candidate snapshot's digest.",
+			"_comment": "To be frozen. Arm S as the baseline (the candidate snapshot, with exactly the scope it had as stage 1's candidate, and loading pi-subagents as it did there) against arm D (the same snapshot, maxAgents 8, maxVerifiers 2, budget line on), with the matched arm M (follow, k 3). No twins. Retry and breaker required; run limit 4 h. baseline.digest and candidate.digest are both the candidate snapshot's digest.",
 			"corpus": "v6-fresh",
 			"baseline": {
 				"digest": null
@@ -94,6 +98,11 @@
 				"candidate": 2
 			},
 			"budgetArms": [
+				"baseline",
+				"candidate",
+				"matched"
+			],
+			"subagentsArms": [
 				"baseline",
 				"candidate",
 				"matched"
