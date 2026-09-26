@@ -2029,11 +2029,43 @@ This moves GLM's verdict onto a reseller whose upstream serving is not known. On
 GLM, with both arms on that endpoint, so the comparison stays fair within it. It is not comparable with
 GLM's research history or with the earlier z.ai grids.
 
+### Outcome — snapshot v4 is not accepted (2026-09-26)
+
+The luna gating grid (v5c) completed at 02:18 UTC on 2026-09-26. It was official, with the runtime
+stable throughout.
+
+| check | result |
+|---|---|
+| pass-mean true positives | 2.00 → 2.33, 117% of baseline |
+| grid-pooled precision | 0.103 → 0.061, 59% of baseline (floor 85%) |
+| pass-mean tokens | 27.0M → 43.8M, +62% |
+| any target wholly below its baseline range | none |
+
+- **Path 1 fails:** precision is below the floor and tokens rose.
+- **Path 2 fails:** precision is below the floor.
+- **The held-out guard did not veto luna.** On its 10 matched pairs, with timed-out runs scored at
+  the deadline, TP was 100% and precision 180% of baseline.
+
+Acceptance needs both priority models to approve, and luna did not. **ADR-027 as amended by ADR-028
+(snapshot v4) is not accepted.**
+
+GLM's grids stopped on commandcode's weekly usage limit before completing: official 10/15 pairs, held-out
+7/12. They are reported as evidence only, since they cannot change the outcome. On the pairs finished:
+- **official:** TP 92%, precision 101%, tokens −5%, with one target wholly below its baseline range;
+- **held-out:** TP 90%, precision 84%.
+
+DeepSeek V4.1 Flash (evidence) finished held-out with no veto. Its official grid was blocked by a
+16k output-cap failure.
+
+The measured outcome, the diagnosis and the literature are in
+`research/12-delegation-trial-2026-09.md`. The next attempt is planned in `docs/delegation-v6-plan.md`
+and starts with Luna alone.
+
 ---
 
 ## ADR-027 — Delegation is pi-subagents' in-process children, not a native worker
 
-**Status:** provisional · 2026-09-23 · supersedes ADR-025 · supersedes ADR-013 · reframes ADR-021
+**Status:** not accepted as it stands (ADR-026 outcome, 2026-09-26) · 2026-09-23 · supersedes ADR-025 · supersedes ADR-013 · reframes ADR-021
 
 > The design is settled, but whether the change is kept is not. Under ADR-026 it is kept only if
 > the matched comparison (`eval/delegation-compare.md`) approves on both priority models, GPT-6 Luna
@@ -2222,7 +2254,7 @@ recall and the gate, and nothing that writes engagement state.
 
 ## ADR-028 — Workers record verdicts, not rewrites; the ledger never loses an open lead
 
-**Status:** provisional · 2026-09-24 · amends ADR-027 · accepted only under ADR-026 and its held-out amendment
+**Status:** not accepted as it stands (ADR-026 outcome, 2026-09-26) · 2026-09-24 · amends ADR-027 · was accepted only under ADR-026 and its held-out amendment
 
 > The first measured candidate of ADR-027 (the v3 snapshot) was not accepted. In the v4 grids it
 > found as many true positives as the baseline on GPT-6 Luna, for about half the mean tokens, but at
