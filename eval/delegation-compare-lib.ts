@@ -1590,17 +1590,29 @@ export interface ScheduledPair {
 	target: string;
 	pass: number;
 	key: string;
-	order: [PairArm, PairArm];
+	/** Both arms for a gate pair; for a patched twin, only the arms that run twins, which may be one. */
+	order: PairArm[];
+	/** A patched twin's runs (plan item 2.8): never in the gate, never followed by the matched arm. */
+	twin?: true;
 }
+
+/** The patched twins a grid runs, and the arms that run them. */
+export interface ScheduledTwins { ids: readonly string[]; arms: readonly PairArm[] }
 
 /**
  * Pass-major, so pass 1 of every target finishes before pass 3 of any: a run
  * stopped part-way leaves whole passes, and repetitions of one target are not
  * all in flight together against the same provider window. Arm order flips by
  * pass and target, so each target runs baseline-first and candidate-first.
+ *
+ * Patched twins (plan item 2.8) follow the gate targets within each pass, so a
+ * grid stopped part-way has spent its passes on the gate first. Their arm
+ * order keeps flipping where the gate targets' left off. With no twins the
+ * schedule is the one every earlier grid pinned.
  */
-export function planSchedule(targetIds: string[], passes: number): ScheduledPair[] {
+export function planSchedule(targetIds: string[], passes: number, twins?: ScheduledTwins): ScheduledPair[] {
 	const pairs: ScheduledPair[] = [];
+	const twinIds = twins && twins.arms.length ? twins.ids : [];
 	for (let pass = 1; pass <= passes; pass++) {
 		for (const [t, target] of targetIds.entries()) {
 			const baselineFirst = (pass - 1 + t) % 2 === 0;
@@ -1609,8 +1621,18 @@ export function planSchedule(targetIds: string[], passes: number): ScheduledPair
 				order: baselineFirst ? ["baseline", "candidate"] : ["candidate", "baseline"],
 			});
 		}
+		for (const [w, target] of twinIds.entries()) {
+			const arms = [...twins!.arms];
+			const flip = (pass - 1 + targetIds.length + w) % 2 === 1;
+			pairs.push({ index: pairs.length, target, pass, key: `${target}#${pass}`, order: flip ? arms.reverse() : arms, twin: true });
+		}
 	}
 	return pairs;
+}
+
+/** The arms a pair must have valid at one attempt to count: both for a gate pair, the twin arms for a twin. */
+export function armsOfPair(pair: Pick<ScheduledPair, "order" | "twin">): PairArm[] {
+	return pair.twin ? pair.order : ["baseline", "candidate"];
 }
 
 /**

@@ -6,14 +6,14 @@ import {
 	accountCellUsage, atHighestAttempt, attemptReport, AUTH_HORIZON_CAP_MS, AUTH_MARGIN_MS, benchmarkRuntimeOf, checkAuthHorizon, childProviderFailure, classifyInfra,
 	credentialExpiry, decideInfra, DEFAULT_CANDIDATE_MAX_AGENTS, fetchErrorsFromStderr, gridWorstCaseMs, isBrokerEnvVar, loadTargets, metricFromRecord, notLaunchedOutcome, ownerIsLive,
 	newManifest, optionsFromManifest, parseBreakerSpec, parseComparePins, parseOptions, parseOwnerRecord, planResume, providerFailureTexts, requestLogFromStderr,
-	armOptionsFromManifest, probeDelegationScope, resumeMismatches, retryPolicyFromManifest, reviewScope, runPairs, runStop, runtimeMismatch, scopedSealCommand, startTimeFromStat, subagentConfigFor,
+	armOptionsFromManifest, manifestTargetEntry, probeDelegationScope, resumeMismatches, splitTwinRuns, twinOptionsFromManifest, retryPolicyFromManifest, reviewScope, runPairs, runStop, runtimeMismatch, scopedSealCommand, startTimeFromStat, subagentConfigFor,
 	toolSurfaceErrors, trackStream, workerCapReason,
 	ceilingOf, ceilingProbeErrors, latestMatchedSessions, planMatchedResume, sessionRunOf, verifyCeiling,
 	type GridStopState, type MatchedSessionSpec, type ProviderFailures, type RunOutcome,
 } from "./delegation-compare.ts";
 import { sessionBudget, type MatchedPolicy, type SessionState } from "./delegation-compare-matched.ts";
 import { BENCHMARK_SETTINGS, DEFAULT_RETRY_POLICY } from "./delegation-compare-entry.ts";
-import { DEFAULT_BREAKER, observationsFromChildSession, planSchedule, type Arm, type BreakerPolicy, type ScheduledPair } from "./delegation-compare-lib.ts";
+import { compareMatchedRuns, DEFAULT_BREAKER, observationsFromChildSession, planSchedule, type Arm, type BreakerPolicy, type ScheduledPair } from "./delegation-compare-lib.ts";
 
 // Per-file builders: a run record as the runner appends it to runs.jsonl, a
 // manifest fragment as resume reads it back, pi's transcript events, and the
@@ -1979,5 +1979,187 @@ describe("the delegation probe's scope", () => {
 		expect(probeDelegationScope("e", "/w")).toEqual({
 			engagement: "e", workspace: "/w", mode: "enforce", authorized: true, targets: { ips: ["127.0.0.1"] }, maxAgents: DEFAULT_CANDIDATE_MAX_AGENTS,
 		});
+	});
+});
+
+describe("patched twins (plan 2.8)", () => {
+	// A corpus on disk with two targets and a two-entry synthetic copy of the
+	// fresh corpus's twins.json: each twin has its target's advisory as id and
+	// its target's name as twin_of, and an answer key that is an empty list.
+	const corpusWithTwins = async (twinTruth = "[]\n") => {
+		const root = await mkdtemp(join(tmpdir(), "pired-twins-"));
+		const corpus = join(root, "targets");
+		const truth = join(root, "truth");
+		await mkdir(truth, { recursive: true });
+		const targets = [
+			{ id: "CVE-2031-0001", name: "acme_shop-aaaaaa", package: "acme/shop", scope: ["."], aliases: ["GHSA-2222-3333-4444"] },
+			{ id: "CVE-2031-0002", name: "acme_wiki-bbbbbb", package: "acme/wiki", scope: ["."], aliases: [] },
+		];
+		const twins = targets.map((t, i) => ({
+			id: t.id, package: t.package, repo: t.package, scope: ["."], cwe: ["CWE-79"], severity: "high", published: "2031-01-02", fix_commit: String(i).repeat(40),
+			variant: 2, entries: 0, name: `${t.name}-patched`, twin_of: t.name, scope_files: 10, scope_loc: 1000 * (i + 1), language: "Python",
+			target: `PLACEHOLDER/corpus/${t.name}-patched`, truth: `PLACEHOLDER/corpus/truth/${t.name}-patched.truth.json`, reviewed_commit: String(i).repeat(40),
+			twin: true, aliases: t.aliases, fixed_regions: [{ advisory: t.id, file: "app.py", line_range: [3, 5] }],
+		}));
+		for (const name of [...targets.map((t) => t.name), ...twins.map((t) => t.name)]) {
+			await mkdir(join(corpus, `${name}.pristine`), { recursive: true });
+			await writeFile(join(corpus, `${name}.pristine`, "app.py"), "print('x')\n");
+			await writeFile(join(truth, `${name}.truth.json`), name.endsWith("-patched") ? twinTruth : `${JSON.stringify([{ file: "app.py", line: 1 }])}\n`);
+		}
+		const manifestPath = join(root, "manifest.json");
+		const twinsPath = join(root, "twins.json");
+		await writeFile(manifestPath, JSON.stringify(targets));
+		await writeFile(twinsPath, JSON.stringify(twins));
+		return { manifestPath, twinsPath, truth, corpus };
+	};
+
+	it("loads the twins after the gate targets, each under its own name and carrying what the control score reads", async () => {
+		const files = await corpusWithTwins();
+		const loaded = await loadTargets({ ...files, selected: [] });
+		expect(loaded.targets.map((t) => [t.id, t.twinOf ?? null])).toEqual([
+			["CVE-2031-0001", null], ["CVE-2031-0002", null],
+			["acme_shop-aaaaaa-patched", "CVE-2031-0001"], ["acme_wiki-bbbbbb-patched", "CVE-2031-0002"],
+		]);
+		expect(loaded.twinsHash).toMatch(/^[0-9a-f]{64}$/);
+		// eval/rescore.ts reads a twin's fixed_regions and scope_loc from the grid manifest's targets.
+		expect(manifestTargetEntry(loaded.targets[2]!)).toEqual({
+			id: "acme_shop-aaaaaa-patched", name: "acme_shop-aaaaaa-patched", package: "acme/shop", scope: ["."],
+			twinOf: "CVE-2031-0001", fixed_regions: [{ advisory: "CVE-2031-0001", file: "app.py", line_range: [3, 5] }], scope_loc: 1000,
+		});
+		// A gate target's entry is the one every earlier grid wrote.
+		expect(manifestTargetEntry(loaded.targets[0]!)).toEqual({ id: "CVE-2031-0001", name: "acme_shop-aaaaaa", package: "acme/shop", scope: ["."] });
+		// The fix commit is where a changelog names the advisory, so the copy is stripped of it.
+		expect(loaded.targets[2]!.aliases).toContain("CVE-2031-0001");
+	});
+
+	it("refuses a twin whose answer key has labels, and an --only that leaves the gate empty", async () => {
+		await expect(loadTargets({ ...await corpusWithTwins(`${JSON.stringify([{ file: "app.py", line: 3 }])}\n`), selected: [] })).rejects.toThrow(/must be an empty list/);
+		await expect(loadTargets({ ...await corpusWithTwins(), selected: ["acme_shop-aaaaaa-patched"] })).rejects.toThrow(/only patched twins/);
+		const one = await loadTargets({ ...await corpusWithTwins(), selected: ["CVE-2031-0001", "acme_shop-aaaaaa-patched"] });
+		expect(one.targets.map((t) => t.id)).toEqual(["CVE-2031-0001", "acme_shop-aaaaaa-patched"]);
+	});
+
+	const argv = (...extra: string[]): string[] => [
+		"--baseline", "/b", "--candidate", "/c", "--corpus", "/corpus", "--truth", "/truth", "--out", "/out",
+		"--provider", "openai-codex", "--model", "gpt-6-luna", ...extra,
+	];
+	const options = (...extra: string[]) => {
+		const parsed = parseOptions(argv(...extra));
+		if (parsed === "help" || parsed.kind !== "run") throw new Error("expected a run");
+		return parsed.options;
+	};
+
+	it("takes the twins file only with the arms that run it, and pins both for the resume", () => {
+		expect(() => parseOptions(argv("--twin-arms", "baseline"))).toThrow(/--twin-arms needs --twins/);
+		expect(() => parseOptions(argv("--twins", "/t.json"))).toThrow(/--twins needs --twin-arms/);
+		expect(() => parseOptions(argv("--twins", "/t.json", "--twin-arms", "matched"))).toThrow(/--twin-arms: "matched"/);
+		const opts = options("--twins", "/t.json", "--twin-arms", "candidate,baseline");
+		expect(opts).toMatchObject({ twinsPath: "/t.json", twinArms: ["baseline", "candidate"] });
+		const manifest = { ...newManifest(opts, "live"), inputs: { twinsManifest: { path: "/t.json", sha256: "a".repeat(64) } } };
+		expect(twinOptionsFromManifest(manifest)).toEqual({ twinsPath: "/t.json", twinArms: ["baseline", "candidate"] });
+		// A grid without twins wrote no field and resumes without twins.
+		expect(newManifest(options(), "live")).not.toHaveProperty("twinArms");
+		expect(twinOptionsFromManifest({})).toEqual({});
+		expect(() => twinOptionsFromManifest({ twinArms: ["baseline"] })).toThrow(/twins file path/);
+		expect(() => twinOptionsFromManifest({ twinArms: [] })).toThrow(/twinArms/);
+	});
+
+	it("refuses a resume whose twin arms or twins file changed", () => {
+		expect(resumeMismatches({ twinArms: ["baseline"] }, { twinArms: ["baseline", "candidate"] })).toEqual(["twinArms"]);
+		expect(resumeMismatches({ inputs: { twinsManifest: { sha256: "a" } } }, { inputs: { twinsManifest: { sha256: "b" } } })).toEqual(["inputs.twinsManifest.sha256"]);
+	});
+
+	// A pair loop over fake launches: each launched arm takes ten minutes.
+	const loop = (pairs: ScheduledPair[], script: (key: string, arm: Arm) => "valid" | "broken" | "drop", opts: { official?: boolean; breaker?: BreakerPolicy } = {}) => {
+		let clock = Date.UTC(2026, 8, 26, 12, 0);
+		const launched: string[] = [];
+		const matched: string[] = [];
+		const state: GridStopState = { aborted: false, stopInvalid: false, stopReason: undefined, quotaExhausted: undefined };
+		const make = (pair: ScheduledPair, arm: Arm, attempt: number, kind: "valid" | "broken" | "drop"): RunOutcome => ({
+			metric: { key: pair.key, target: pair.target, pass: pair.pass, valid: kind === "valid", truePositives: 0, precision: 0, totalClaims: 1, totalTokens: 1000 },
+			arm, cellId: `cell-${pair.key}-${arm}`, seconds: 600, infraFailure: kind === "drop",
+			record: { key: pair.key, target: pair.target, pass: pair.pass, arm, attempt, valid: kind === "valid", infraFailure: kind === "drop" },
+		});
+		const run = () => runPairs({
+			pairs, firstAttempt: () => 1, concurrency: 1, official: opts.official ?? false, state,
+			...(opts.breaker ? { breaker: opts.breaker } : {}),
+			launch: async (pair, arm, attempt) => { launched.push(`${pair.key} ${arm}`); clock += 600_000; return make(pair, arm, attempt, script(pair.key, arm)); },
+			settle: async () => undefined, report: async () => undefined,
+			nowMs: () => clock, sleep: async (ms) => { clock += ms; }, log: () => undefined, warn: () => undefined, out: "/grid",
+			matched: {
+				policy: { k: 1, kMax: 1, floorShare: 0.05 },
+				budget: () => ({ ok: true, budget: 1000, source: "candidate" }),
+				launch: async (pair, attempt, session) => { matched.push(pair.key); return { ...make(pair, "matched", attempt, "valid"), record: { ...make(pair, "matched", attempt, "valid").record, matchedSession: session } }; },
+			},
+		});
+		return { run, launched, matched, state };
+	};
+
+	// Twins run only for the arms named, and never bring the matched arm along.
+	it("launches a twin only in its twin arms and never runs the matched arm after it", async () => {
+		const g = loop(planSchedule(["A"], 1, { ids: ["A-patched"], arms: ["baseline"] }), () => "valid");
+		await g.run();
+		expect(g.launched).toEqual(["A#1 baseline", "A#1 candidate", "A-patched#1 baseline"]);
+		expect(g.matched).toEqual(["A#1"]);
+	});
+
+	// A twin is outside the decision: its failure must not stop an official grid
+	// at once, as a gate arm's does, but it still counts toward the breaker.
+	it("lets an official grid go on past a twin that fails for a non-infrastructure reason, and counts it toward the breaker", async () => {
+		const pairs = planSchedule(["A", "B"], 1, { ids: ["A-patched"], arms: ["baseline"] });
+		const g = loop(pairs, (key) => key === "A-patched#1" ? "broken" : "valid", { official: true, breaker: { ...DEFAULT_BREAKER, consecutive: 1 } });
+		const result = await g.run();
+		// consecutive=1 trips on the twin's failure itself, by count, not as a blocked gate run.
+		expect(result.breaker?.reason).toMatch(/^1 consecutive launched runs failed \(0 infrastructure\)/);
+		expect(g.state.stoppedBy).toBe("twin");
+		const g2 = loop(pairs, (key) => key === "A-patched#1" ? "broken" : "valid", { official: true, breaker: DEFAULT_BREAKER });
+		const r2 = await g2.run();
+		expect(r2.breaker?.tripped).toBe(false);
+		expect(r2.blocked.map((b) => b.key)).toEqual(["A-patched#1"]);
+		expect(g2.launched).toContain("B#1 candidate");
+	});
+
+	it("re-runs a twin pair on its own arms at the next attempt, and keeps one whose arms are valid", () => {
+		const pairs = planSchedule(["A"], 1, { ids: ["A-patched"], arms: ["baseline"] });
+		const rows = [
+			{ key: "A#1", arm: "baseline", attempt: 1, valid: true }, { key: "A#1", arm: "candidate", attempt: 1, valid: true },
+			{ key: "A-patched#1", arm: "baseline", attempt: 1, valid: false, infraFailure: true },
+		];
+		expect(planResume(pairs, rows)).toMatchObject({ keepKeys: ["A#1"], rerunKeys: ["A-patched#1"], nextAttempt: { "A-patched#1": 2 } });
+		const kept = planResume(pairs, [...rows.slice(0, 2), { key: "A-patched#1", arm: "baseline", attempt: 1, valid: true }]);
+		expect(kept.keepKeys).toEqual(["A#1", "A-patched#1"]);
+	});
+
+	// A twin's run in the comparison is a key the gate does not expect, which
+	// would leave every grid with twins incomplete and undecided.
+	it("keeps twin runs out of the gate comparison, which is then complete on the gate's own runs", () => {
+		const cells = [{ key: "A#1", target: "A", pass: 1 }];
+		const metric = (key: string, target: string) => ({ key, target, pass: 1, valid: true, truePositives: 1, precision: 0.5, totalClaims: 2, totalTokens: 1000 });
+		const runs = [
+			{ arm: "baseline", metric: metric("A#1", "A") }, { arm: "candidate", metric: metric("A#1", "A") },
+			{ arm: "baseline", metric: metric("A-patched#1", "A-patched") }, { arm: "candidate", metric: metric("A-patched#1", "A-patched") },
+		];
+		const pooled = compareMatchedRuns(runs.filter((r) => r.arm === "baseline").map((r) => r.metric), runs.filter((r) => r.arm === "candidate").map((r) => r.metric), cells);
+		expect(pooled.complete).toBe(false);
+		const { gate, twins } = splitTwinRuns(runs, new Set(["A-patched"]));
+		expect(twins.map((r) => r.metric.key)).toEqual(["A-patched#1", "A-patched#1"]);
+		const comparison = compareMatchedRuns(gate.filter((r) => r.arm === "baseline").map((r) => r.metric), gate.filter((r) => r.arm === "candidate").map((r) => r.metric), cells);
+		expect(comparison.complete).toBe(true);
+	});
+
+	// The OAuth horizon must cover the twins' runs too: twelve targets and twelve
+	// twins are twice the pairs of the gate alone.
+	it("sizes the worst case over the gate targets and the twins, and unchanged without twins", () => {
+		const HOUR = 3_600_000;
+		const base = { passes: 6, targets: 12, concurrency: 2, timeoutMs: 4 * HOUR };
+		expect(gridWorstCaseMs(base)).toBe(6 * 6 * 2 * 4 * HOUR);
+		expect(gridWorstCaseMs({ ...base, twins: 0, twinArms: 2 })).toBe(gridWorstCaseMs(base));
+		expect(gridWorstCaseMs({ ...base, twins: 12, twinArms: 2 })).toBe(6 * 12 * 2 * 4 * HOUR);
+		// A one-arm twin pair is shorter than a gate pair, so the gate pair bounds each wave.
+		expect(gridWorstCaseMs({ ...base, twins: 12, twinArms: 1 })).toBe(6 * 12 * 2 * 4 * HOUR);
+		// With the matched arm a gate pair is longer still, and a breaker multiplies every pair.
+		expect(gridWorstCaseMs({ ...base, matchedSessions: 6, twins: 12, twinArms: 2 })).toBe(6 * 12 * 8 * 4 * HOUR);
+		const breaker = { maxAttempts: 4, cooldownMs: 60_000 };
+		expect(gridWorstCaseMs({ ...base, breaker, twins: 12, twinArms: 2 })).toBe(6 * 12 * (4 * 2 * 4 * HOUR + 60_000 * 6));
 	});
 });

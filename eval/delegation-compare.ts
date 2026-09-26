@@ -32,15 +32,15 @@ import {
 import {
 	accountUsage, APPROVAL_DECISION, compareMatchedRuns, contentText, createBreaker, DEFAULT_BREAKER, findLeaks, isOfficialGrid, leakTermsFor,
 	meteredCallCount, nextPairAction, observationsFromChildSession, observationsFromPiEvents,
-	parseBreakerPolicy, planSchedule, reconcileChildSession, reconcileSubagentCalls, SUBAGENT_TOOL, summarizeRetries,
+	armsOfPair, parseBreakerPolicy, planSchedule, reconcileChildSession, reconcileSubagentCalls, SUBAGENT_TOOL, summarizeRetries,
 	type Arm, type BreakerPolicy, type PairArm, type BreakerVerdict, type ChildSessionExtraction, type ChildVerdict, type ExpectedCell, type PiUsageExtraction,
-	type OfficialShape, type RetriedAttempt, type RetrySummary, type RunMetric, type ScheduledPair, type SubagentChild, type SubagentReconciliation,
+	type OfficialShape, type ScheduledTwins, type RetriedAttempt, type RetrySummary, type RunMetric, type ScheduledPair, type SubagentChild, type SubagentReconciliation,
 	type UsageAccounting, type UsageObservation,
 } from "./delegation-compare-lib.ts";
 // The grid's shape and identity (plan item 2.8): the pinned official corpora.
 import {
 	ARM_ORDER, corpusReasons, DEFAULT_BUDGET_ARMS, delegationOff, kindlessArmReasons, kindlessCorpus, parseArmList, parseCorpora, parseMaxVerifiers,
-	sameArms, scopeFor, scopeSettingsFor, shapeOf, type PinnedCorpus, type ScopeSettings,
+	sameArms, scopeFor, scopeSettingsFor, shapeOf, summarizeTwins, twinTargets, type PinnedCorpus, type ScopeSettings,
 } from "./delegation-compare-grid.ts";
 // The staging, target-copy and tree-hash helpers moved to their own module so
 // the same digest rule draws the panel here, in the preflight and in tests.
@@ -227,6 +227,11 @@ export type Target = {
 	scope?: string[];
 	aliases?: string[];
 	entries?: number;
+	/**
+	 * A patched twin's target (plan item 2.8): the id of the target whose fix
+	 * commit this tree is. Set only on entries read from the --twins file.
+	 */
+	twinOf?: string;
 	[key: string]: unknown;
 };
 
@@ -270,6 +275,16 @@ type Options = {
 	 * grid wrote; it is set only when it differs, so the manifest keeps its bytes.
 	 */
 	budgetArms?: Arm[];
+	/**
+	 * --twins (plan item 2.8): the patched twins file, in the fresh corpus's
+	 * shape (eval/corpus/fresh/twins.json). Given only with --twin-arms.
+	 */
+	twinsPath?: string;
+	/**
+	 * --twin-arms (plan item 2.8): the arms that run the patched twins. Absent,
+	 * no twin runs and every output is what it was before the option.
+	 */
+	twinArms?: PairArm[];
 	/**
 	 * --breaker: re-queue infrastructure-failed pairs and stop on the circuit
 	 * breaker instead of on the first invalid run. Absent: fail-fast, exactly as
@@ -395,6 +410,14 @@ Options:
                         --resume, and without --grid-kind make a grid exploratory.
                         One snapshot may run in both arms only when their
                         scopes differ
+  --twins <file>        Patched twins, in the fresh corpus's twins.json shape
+                        (name, twin_of = the target's name, fixed_regions, ...);
+                        each twin runs under its name as its id, and its answer
+                        key must be an empty list. Needs --twin-arms
+  --twin-arms <arm,...> Arms that run the twins (baseline, candidate). Twin runs
+                        never enter the gate or the matched arm; they count
+                        toward progress and the breaker, and summary.json lists
+                        them per arm with their cells. Pinned in the manifest
   --breaker <spec>      Stop on a circuit breaker instead of the first invalid
                         run, and re-queue pairs that fail for infrastructure.
                         <spec> is "default", or comma-separated k=v pairs
@@ -548,7 +571,7 @@ export function parseOptions(argv: string[]): Parsed {
 		"--baseline", "--candidate", "--corpus", "--truth", "--out", "--provider", "--model",
 		"--thinking", "--passes", "--only", "--concurrency", "--timeout", "--manifest", "--fs-seal", "--auth-horizon-hours",
 		"--candidate-max-agents", "--breaker", "--matched", "--matched-snapshot",
-		"--baseline-max-agents", "--max-verifiers", "--budget-arms",
+		"--baseline-max-agents", "--max-verifiers", "--budget-arms", "--twins", "--twin-arms",
 	]);
 	const values = new Map<string, string>();
 	let dryRun = false;
@@ -592,6 +615,12 @@ export function parseOptions(argv: string[]): Parsed {
 	const budgetList = budgetText === undefined ? undefined : parseArmList(budgetText, ARM_ORDER, "--budget-arms");
 	// The default set is stored as absent, so a grid that names it writes the manifest every earlier grid wrote.
 	const budgetArms = budgetList === undefined || sameArms(budgetList, DEFAULT_BUDGET_ARMS) ? undefined : budgetList;
+	const twinsText = values.get("--twins");
+	const twinArmsText = values.get("--twin-arms");
+	const twinList = twinArmsText === undefined ? [] : parseArmList(twinArmsText, ["baseline", "candidate"], "--twin-arms") as PairArm[];
+	// Either alone would be a grid that loads twins it never runs, or runs twins it never loaded.
+	if (twinList.length && twinsText === undefined) throw new Error("--twin-arms needs --twins <file>, the patched twins to run");
+	if (twinsText !== undefined && !twinList.length) throw new Error("--twins needs --twin-arms <arm,...>: no arm would run the twins");
 	const breakerText = values.get("--breaker");
 	const breaker = breakerText === undefined ? undefined : parseBreakerSpec(breakerText);
 	const matchedText = values.get("--matched");
@@ -620,6 +649,7 @@ export function parseOptions(argv: string[]): Parsed {
 			...(baselineMaxAgents === undefined ? {} : { baselineMaxAgents }),
 			...(maxVerifiers === undefined ? {} : { maxVerifiers }),
 			...(budgetArms === undefined ? {} : { budgetArms }),
+			...(twinsText === undefined ? {} : { twinsPath: resolve(twinsText), twinArms: twinList }),
 			...(breaker === undefined ? {} : { breaker }),
 			...(retry ? { retryPolicy: { ...DEFAULT_RETRY_POLICY } } : {}),
 			...(matched === undefined ? {} : { matched }),
@@ -698,6 +728,7 @@ export function optionsFromManifest(dir: string, manifest: JsonRecord): Options 
 	if (manifest.candidateMaxAgents !== undefined && !isWorkerCap(manifest.candidateMaxAgents)) throw new Error("--resume manifest has an invalid candidateMaxAgents");
 	const candidateMaxAgents = manifest.candidateMaxAgents as number | undefined;
 	const arms = armOptionsFromManifest(manifest);
+	const twins = twinOptionsFromManifest(manifest);
 	// Absent: the grid ran fail-fast, and so does its resume. A present policy is
 	// read strictly, for the same reason as the cap above.
 	let breaker: BreakerPolicy | undefined;
@@ -720,6 +751,7 @@ export function optionsFromManifest(dir: string, manifest: JsonRecord): Options 
 		...(authHorizonHours === undefined ? {} : { authHorizonHours }),
 		...(candidateMaxAgents === undefined ? {} : { candidateMaxAgents }),
 		...arms,
+		...twins,
 		...(breaker === undefined ? {} : { breaker }),
 		...(retryPolicy === undefined ? {} : { retryPolicy }),
 		...(matched === undefined ? {} : { matched }),
@@ -731,6 +763,23 @@ export function optionsFromManifest(dir: string, manifest: JsonRecord): Options 
  * without a field predates it or left it at its default, and a present but
  * malformed one refuses the resume rather than silently changing an arm.
  */
+/**
+ * The patched twins a grid ran (plan item 2.8): its twin arms and the twins
+ * file its preflight recorded. A manifest without `twinArms` ran none, and its
+ * resume runs none; one with them but no recorded file cannot be resumed.
+ */
+export function twinOptionsFromManifest(manifest: JsonRecord): Pick<Options, "twinsPath" | "twinArms"> {
+	if (manifest.twinArms === undefined) return {};
+	const raw = manifest.twinArms;
+	if (!Array.isArray(raw) || !raw.length || raw.some((arm) => arm !== "baseline" && arm !== "candidate") || new Set(raw).size !== raw.length) {
+		throw new Error("--resume manifest has an invalid twinArms");
+	}
+	const inputs = (manifest.inputs ?? {}) as JsonRecord;
+	const file = (inputs.twinsManifest ?? {}) as JsonRecord;
+	if (typeof file.path !== "string" || !file.path) throw new Error("--resume manifest is missing the twins file path");
+	return { twinsPath: file.path, twinArms: raw as PairArm[] };
+}
+
 export function armOptionsFromManifest(manifest: JsonRecord): Pick<Options, "baselineMaxAgents" | "maxVerifiers" | "budgetArms"> {
 	const out: Pick<Options, "baselineMaxAgents" | "maxVerifiers" | "budgetArms"> = {};
 	if (manifest.baselineMaxAgents !== undefined) {
@@ -835,15 +884,26 @@ export const AUTH_HORIZON_CAP_MS = 7 * 24 * 60 * 60 * 1000;
  * its full timeout. With a breaker each pair may run maxAttempts times and wait
  * its cooldowns in between: a horizon sized for one attempt would let a grid
  * that re-queues outlive its OAuth token and refresh it inside a cell.
+ *
+ * `targets` is any number of gate targets (plan item 2.8). Patched twins are
+ * pairs of their own in the same passes, with one or two arms and no matched
+ * sessions, so a pass holds targets + twins pairs, each no longer than the
+ * longest kind. Waves of `concurrency` pairs bound a pool of workers taking
+ * pairs in order: each worker finishes a pair at least every longest-pair
+ * time while any is queued. With no twins this is the earlier formula.
  */
-export function gridWorstCaseMs(grid: { passes: number; targets: number; concurrency: number; timeoutMs: number; breaker?: Pick<BreakerPolicy, "maxAttempts" | "cooldownMs">; matchedSessions?: number }): number {
+export function gridWorstCaseMs(grid: { passes: number; targets: number; concurrency: number; timeoutMs: number; breaker?: Pick<BreakerPolicy, "maxAttempts" | "cooldownMs">; matchedSessions?: number; twins?: number; twinArms?: number }): number {
 	// The matched arm's k sessions run in the pair's slot after its two arms, each
 	// bounded by the same per-arm timeout (its token ceiling usually ends it first).
 	const arms = 2 + (grid.matchedSessions ?? 0);
-	if (!grid.breaker) return grid.passes * Math.ceil(grid.targets / grid.concurrency) * arms * grid.timeoutMs;
-	const { maxAttempts, cooldownMs } = grid.breaker;
-	const pairMs = maxAttempts * arms * grid.timeoutMs + cooldownMs * (maxAttempts * (maxAttempts - 1)) / 2;
-	return grid.passes * Math.ceil(grid.targets / grid.concurrency) * pairMs;
+	const twins = grid.twins ?? 0;
+	const pairMs = (n: number): number => {
+		if (!grid.breaker) return n * grid.timeoutMs;
+		const { maxAttempts, cooldownMs } = grid.breaker;
+		return maxAttempts * n * grid.timeoutMs + cooldownMs * (maxAttempts * (maxAttempts - 1)) / 2;
+	};
+	const longest = twins > 0 ? Math.max(pairMs(arms), pairMs(grid.twinArms ?? 2)) : pairMs(arms);
+	return grid.passes * Math.ceil((grid.targets + twins) / grid.concurrency) * longest;
 }
 
 /**
@@ -1463,25 +1523,39 @@ async function checkNetwork(options: Options, provider: Provider, nodePath: stri
 	return { ok: true, origin, status: typeof report.status === "number" ? report.status : null, note: "unauthenticated GET; any status proves reachability and spends no tokens" };
 }
 
-export async function loadTargets(options: Pick<Options, "manifestPath" | "truth" | "corpus" | "selected">): Promise<{ manifestHash: string; targets: Target[]; truthHashes: Record<string, string>; sourceHashes: Record<string, string> }> {
+export async function loadTargets(options: Pick<Options, "manifestPath" | "truth" | "corpus" | "selected" | "twinsPath">): Promise<{ manifestHash: string; twinsHash?: string; targets: Target[]; truthHashes: Record<string, string>; sourceHashes: Record<string, string> }> {
 	const raw = await readFile(options.manifestPath, "utf8");
 	const manifest = JSON.parse(raw.replaceAll("PLACEHOLDER", dirname(options.truth))) as Target[];
-	const wanted = options.selected;
-	const selected = wanted.length ? manifest.filter((t) => wanted.includes(t.id)) : manifest;
-	if (selected.length !== (wanted.length || manifest.length)) {
-		const found = new Set(selected.map((t) => t.id));
-		throw new Error(`Unknown --only target ID(s): ${wanted.filter((id) => !found.has(id)).join(", ")}`);
-	}
 	// Any number of targets (plan item 2.8): the fresh v6 corpus has twelve. What
 	// makes a grid official is its pinned corpus, not a count. Ids key every cell,
 	// pin and pair, so two entries under one id would silently merge.
-	if (!selected.length) throw new Error("Research manifest resolves no target.");
 	const seen = new Set<string>();
 	for (const target of manifest) {
 		if (typeof target.id !== "string" || !target.id) throw new Error("Research manifest has a target without an id.");
 		if (seen.has(target.id)) throw new Error(`Research manifest lists target id ${target.id} more than once.`);
 		seen.add(target.id);
 	}
+	// The patched twins follow the gate targets, so the first target (the one the
+	// delegation and ceiling probes use) is always a gate target.
+	let twinsHash: string | undefined;
+	let twins: Target[] = [];
+	if (options.twinsPath !== undefined) {
+		const twinsText = await readFile(options.twinsPath, "utf8");
+		twinsHash = sha256(twinsText);
+		try {
+			twins = twinTargets(JSON.parse(twinsText.replaceAll("PLACEHOLDER", dirname(options.truth))), manifest) as unknown as Target[];
+		} catch (error) {
+			throw new Error(`--twins ${options.twinsPath}: ${message(error)}`);
+		}
+	}
+	const all = [...manifest, ...twins];
+	const wanted = options.selected;
+	const selected = wanted.length ? all.filter((t) => wanted.includes(t.id)) : all;
+	if (selected.length !== (wanted.length || all.length)) {
+		const found = new Set(selected.map((t) => t.id));
+		throw new Error(`Unknown --only target ID(s): ${wanted.filter((id) => !found.has(id)).join(", ")}`);
+	}
+	if (!selected.some((t) => t.twinOf === undefined)) throw new Error(twins.length && wanted.length ? "--only names only patched twins; a grid needs a target for its gate." : "Research manifest resolves no target.");
 	const truthHashes: Record<string, string> = {};
 	const sourceHashes: Record<string, string> = {};
 	for (const target of selected) {
@@ -1492,11 +1566,31 @@ export async function loadTargets(options: Pick<Options, "manifestPath" | "truth
 		if (!await exists(target.truth)) throw new Error(`Missing answer key for ${target.id}: ${target.truth}`);
 		truthHashes[target.id] = await hashFile(target.truth);
 		sourceHashes[target.id] = (await treeManifest(pristine)).digest;
+		// A patched twin has no labels: a claim on it can only be a re-flag of the
+		// fixed code, which eval/rescore.ts counts against its fixed regions.
+		if (target.twinOf !== undefined) {
+			let truth: unknown;
+			try { truth = JSON.parse(await readFile(target.truth, "utf8")); } catch { truth = undefined; }
+			if (!Array.isArray(truth) || truth.length) throw new Error(`Patched twin ${target.id}'s answer key must be an empty list: ${target.truth}`);
+		}
 	}
-	return { manifestHash: sha256(raw), targets: selected, truthHashes, sourceHashes };
+	return { manifestHash: sha256(raw), ...(twinsHash === undefined ? {} : { twinsHash }), targets: selected, truthHashes, sourceHashes };
 }
 
 function promptFor(target: Target): string { return REVIEW_PROMPT + scopeClause(target.scope); }
+
+/**
+ * A target as the grid's manifest.json lists it. A patched twin's entry also
+ * carries what eval/rescore.ts's control score reads from it: its target, its
+ * fixed regions and its size (plan item 2.8). A gate target's entry is the one
+ * every earlier grid wrote.
+ */
+export function manifestTargetEntry(t: Target): JsonRecord {
+	return {
+		id: t.id, name: t.name, package: t.package, scope: t.scope ?? null,
+		...(t.twinOf === undefined ? {} : { twinOf: t.twinOf, fixed_regions: t.fixed_regions, scope_loc: t.scope_loc ?? null }),
+	};
+}
 
 /**
  * The strings redacted from every staged snapshot before the model reads it.
@@ -1614,7 +1708,7 @@ const runState = {
 	/** A provider quota or usage window is spent: nothing launched before it resets can succeed. */
 	quotaExhausted: undefined as string | undefined,
 	/** The stop came from a matched session (plan item 2.5); it does not by itself withhold the gate's approval. */
-	stoppedBy: undefined as "matched" | undefined,
+	stoppedBy: undefined as "matched" | "twin" | undefined,
 };
 
 async function runOwned(command: string, args: string[], config: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number; stdoutPath: string; stderrPath: string; onLine?: LineSink; scopeUnit?: string }): Promise<OwnedResult> {
@@ -1940,6 +2034,18 @@ export function reviewScope(engagement: string, workspace: string, arm: Arm, can
 	// bytes they always wrote: the matched arm is the candidate with delegation
 	// switched off, and the budget line belongs to the candidate snapshot's arms.
 	return scopeFor(engagement, workspace, scopeSettingsFor(arm, candidateMaxAgents === undefined ? {} : { candidateMaxAgents }), timeoutMs, nowMs);
+}
+
+/** The twins a grid schedules: none unless --twin-arms names an arm. */
+function twinSchedule(options: Pick<Options, "twinArms">, twinIds: string[]): ScheduledTwins | undefined {
+	return options.twinArms?.length && twinIds.length ? { ids: twinIds, arms: options.twinArms } : undefined;
+}
+
+/** The grid's pinned schedule: its gate pairs, then in each pass its twins in their arms. */
+function gridSchedule(pre: Pick<Preflight, "targets">, options: Pick<Options, "passes" | "twinArms">): ScheduledPair[] {
+	const gate = pre.targets.filter((t) => t.twinOf === undefined).map((t) => t.id);
+	const twins = pre.targets.filter((t) => t.twinOf !== undefined).map((t) => t.id);
+	return planSchedule(gate, options.passes, twinSchedule(options, twins));
 }
 
 /** The scope settings an arm runs under in this grid (plan item 2.8). */
@@ -2652,7 +2758,7 @@ async function inspectRun(ctx: Context, cell: PreparedCell, launched: Launch, at
 	const stream = launched.stream;
 	const since = (at: number | undefined): number | null => at === undefined || !result ? null : (at - result.startedAt) / 1000;
 	const record: JsonRecord = {
-		key: cell.key, target: cell.target.id, pass: cell.pass, arm: cell.arm, cellId: cell.cellId, engagement: cell.engagement,
+		key: cell.key, target: cell.target.id, ...(cell.target.twinOf === undefined ? {} : { twinOf: cell.target.twinOf }), pass: cell.pass, arm: cell.arm, cellId: cell.cellId, engagement: cell.engagement,
 		attempt, ...(cell.matchedSession ? { matchedSession: cell.matchedSession } : {}), infraFailure, infraReason: infraReason ?? null, infraEvidence: infraFailure ? classified.evidence ?? null : null,
 		quotaExhausted: infraFailure && classified.exhausted === true,
 		providerFailures: failures,
@@ -2902,7 +3008,7 @@ async function inspectCeilingProbe(ctx: Context, cell: PreparedCell, launched: L
 async function runOne(ctx: Context, target: Target, pass: number, arm: Arm, attempt: number, session?: MatchedSessionSpec): Promise<RunOutcome> {
 	const cell = await prepareCell(ctx, target, pass, arm, join(ctx.out, "runs"), undefined, session);
 	await appendJsonl(join(ctx.out, "cells.jsonl"), {
-		cellId: cell.cellId, key: cell.key, target: target.id, pass, arm, attempt, ...(session ? { matchedSession: session } : {}), preparedAt: new Date().toISOString(), errors: cell.errors,
+		cellId: cell.cellId, key: cell.key, target: target.id, ...(target.twinOf === undefined ? {} : { twinOf: target.twinOf }), pass, arm, attempt, ...(session ? { matchedSession: session } : {}), preparedAt: new Date().toISOString(), errors: cell.errors,
 	});
 	const launched = await launch(ctx, cell, ctx.options.timeoutMs, () => !runState.aborted);
 	return await inspectRun(ctx, cell, launched, attempt);
@@ -3183,9 +3289,14 @@ async function runPreflight(options: Options, manifest: JsonRecord, saveManifest
 		const hits = findLeaks({ "--out": options.out }, terms);
 		if (hits.length) throw new Error(`advisory label in the output path every cell sits under: ${hits.join("; ")}`);
 		const provider = await providerMetadata(options.provider, options.model);
-		const expectedCells: ExpectedCell[] = info.targets.flatMap((target) =>
+		// Only the gate targets' cells are expected by the comparison; a patched
+		// twin's runs are summarised apart and never enter it (plan item 2.8).
+		const gateTargets = info.targets.filter((t) => t.twinOf === undefined);
+		const twinTargetsRun = info.targets.filter((t) => t.twinOf !== undefined);
+		const expectedCells: ExpectedCell[] = gateTargets.flatMap((target) =>
 			Array.from({ length: options.passes }, (_, i) => ({ target: target.id, pass: i + 1, key: `${target.id}#${i + 1}` })));
-		const ids = info.targets.map((t) => t.id);
+		const ids = gateTargets.map((t) => t.id);
+		const twinIds = twinTargetsRun.map((t) => t.id);
 		// The official definition is pinned (plan item 2.8): the grid is judged
 		// against the corpus its identity names, and read as official only when its
 		// cells are exactly that corpus's shape and every pinned input matches.
@@ -3198,21 +3309,23 @@ async function runPreflight(options: Options, manifest: JsonRecord, saveManifest
 			exploratoryReasons.push(...corpusReasons(judged[0], judged[1], {
 				gateIds: ids, passes: options.passes, selected: options.selected.length > 0, manifestSha256: info.manifestHash,
 				targets: info.targets.map((t) => ({ id: t.id, name: t.name, truthSha256: info.truthHashes[t.id]! })),
+				...(info.twinsHash === undefined ? {} : { twinsSha256: info.twinsHash }),
 			}));
 		}
 		manifest.provider = provider;
-		manifest.targets = info.targets.map((t) => ({ id: t.id, name: t.name, package: t.package, scope: t.scope ?? null }));
+		manifest.targets = info.targets.map(manifestTargetEntry);
 		manifest.promptSha256ByTarget = Object.fromEntries(info.targets.map((t) => [t.id, sha256(promptFor(t))]));
 		manifest.expectedCells = expectedCells;
-		manifest.schedule = planSchedule(ids, options.passes).map((p) => ({ key: p.key, order: p.order }));
+		manifest.schedule = planSchedule(ids, options.passes, twinSchedule(options, twinIds)).map((p) => ({ key: p.key, order: p.order, ...(p.twin ? { twin: true } : {}) }));
 		manifest.inputs = {
 			corpusManifest: { path: options.manifestPath, sha256: info.manifestHash },
+			...(info.twinsHash === undefined ? {} : { twinsManifest: { path: options.twinsPath, sha256: info.twinsHash } }),
 			corpus: options.corpus, truth: options.truth,
 			sourceSha256: info.sourceHashes, truthSha256: info.truthHashes,
 		};
 		return {
-			value: { ...info, provider, expectedCells, gridOfficial, officialShapes, comparePins },
-			record: { targets: ids.length, gridOfficial },
+			value: { ...info, provider, expectedCells, gridOfficial, officialShapes, comparePins, twinIds },
+			record: { targets: ids.length, ...(twinIds.length ? { twins: twinIds.length } : {}), gridOfficial },
 		};
 	});
 
@@ -3225,9 +3338,10 @@ async function runPreflight(options: Options, manifest: JsonRecord, saveManifest
 			throw error;
 		});
 		const worstCaseMs = gridWorstCaseMs({
-			passes: options.passes, targets: inputs.targets.length, concurrency: options.concurrency, timeoutMs: options.timeoutMs,
+			passes: options.passes, targets: inputs.targets.length - inputs.twinIds.length, concurrency: options.concurrency, timeoutMs: options.timeoutMs,
 			...(options.breaker === undefined ? {} : { breaker: options.breaker }),
 			...(options.matched === undefined ? {} : { matchedSessions: options.matched.kMax }),
+			...(inputs.twinIds.length && options.twinArms ? { twins: inputs.twinIds.length, twinArms: options.twinArms.length } : {}),
 		});
 		const verdict = checkAuthHorizon({
 			provider: options.provider, credential: credentialExpiry(authText, options.provider), worstCaseMs,
@@ -3372,6 +3486,16 @@ async function runPreflight(options: Options, manifest: JsonRecord, saveManifest
 			const empty = await scoreWorkspace(emptyWorkspace, join(dir, "empty.score.json"), target.truth);
 			if (!empty.graded.ok) throw new Error(`${target.id}: empty ledger: ${empty.graded.error}`);
 			if (empty.graded.totalFindings !== 0 || empty.graded.truePositives !== 0) throw new Error(`${target.id}: empty ledger scored ${empty.graded.truePositives}/${empty.graded.totalFindings}`);
+			if (target.twinOf !== undefined) {
+				// A patched twin's key has no labels (plan item 2.8), so there is no
+				// oracle: a claim must count as a claim and never as a true positive.
+				const decoy: Finding = { file: "README.md", line: 1 };
+				const graded = await gradeWithPinnedScorer([decoy], join(dir, "decoy.score.json"), target.truth);
+				if (!graded.ok) throw new Error(`${target.id}: decoy on a patched twin: ${graded.error}`);
+				if (graded.truePositives !== 0 || graded.totalFindings !== 1) throw new Error(`${target.id}: a claim on a patched twin scored ${graded.truePositives}/${graded.totalFindings}, not 0/1`);
+				records.push({ target: target.id, twinOf: target.twinOf, empty: { totalFindings: 0, truePositives: 0 }, decoy: { ...decoy, truePositives: 0, totalFindings: 1 } });
+				continue;
+			}
 			const truth = JSON.parse(await readFile(target.truth, "utf8")) as Array<{ file?: unknown; line?: unknown; line_range?: unknown }>;
 			const first = truth[0];
 			const range = Array.isArray(first?.line_range) ? first.line_range.map(Number) : [Number(first?.line), Number(first?.line)];
@@ -3406,7 +3530,8 @@ async function runPreflight(options: Options, manifest: JsonRecord, saveManifest
 		// surface (pi-subagents loaded, cap 0) are checked before any token.
 		const probeArms: Arm[] = ["baseline", "candidate", ...(options.matched ? ["matched" as const] : [])];
 		for (const target of inputs.targets) {
-			for (const arm of probeArms) {
+			// A patched twin runs only in its twin arms, so only those are probed on it.
+			for (const arm of target.twinOf === undefined ? probeArms : options.twinArms ?? []) {
 				const absent: string[] = [];
 				const cell = await prepareCell(ctx, target, 0, arm, probesRoot, async (paths) => {
 					// Each cell now stages its own snapshot under its own cellDir, so there is
@@ -3578,7 +3703,8 @@ export function planResume(pairs: ScheduledPair[], runs: JsonRecord[], attemptCe
 	for (const row of rows) if (row.attempt === maxAttempt[row.key]) latest[`${row.key}\u0000${row.arm}`] = row.run;
 	const plan: ResumePlan = { rerunKeys: [], blockedKeys: [], keepKeys: [], abandonedKeys: [], nextAttempt: {}, latest, reasons: {} };
 	for (const pair of pairs) {
-		const arms = (["baseline", "candidate"] as const).map((arm) => latest[`${pair.key}\u0000${arm}`])
+		// A patched twin counts when its twin arms are valid at one attempt (plan item 2.8).
+		const arms = armsOfPair(pair).map((arm) => latest[`${pair.key}\u0000${arm}`])
 			.map((r) => r && { valid: r.valid === true, infra: r.infraFailure === true });
 		const attempt = maxAttempt[pair.key] ?? 0;
 		// No requeue context: a resume is the operator's decision to spend more on
@@ -3630,6 +3756,8 @@ export function resumeMismatches(prior: JsonRecord, fresh: JsonRecord): string[]
 	eq("baselineMaxAgents", prior.baselineMaxAgents, fresh.baselineMaxAgents);
 	eq("maxVerifiers", prior.maxVerifiers, fresh.maxVerifiers);
 	eq("budgetArms", prior.budgetArms, fresh.budgetArms);
+	// Twin runs under two sets of arms, or of two twins files, would not add up to one control.
+	eq("twinArms", prior.twinArms, fresh.twinArms);
 	// A grid that re-queued and stopped under one policy, then resumed under
 	// another, would be one grid run under two stopping rules.
 	eq("breaker", prior.breaker, fresh.breaker);
@@ -3647,6 +3775,7 @@ export function resumeMismatches(prior: JsonRecord, fresh: JsonRecord): string[]
 	eq("inputs.sourceSha256", pi.sourceSha256, fi.sourceSha256);
 	eq("inputs.truthSha256", pi.truthSha256, fi.truthSha256);
 	eq("inputs.corpusManifest.sha256", (pi.corpusManifest as JsonRecord | undefined)?.sha256, (fi.corpusManifest as JsonRecord | undefined)?.sha256);
+	eq("inputs.twinsManifest.sha256", (pi.twinsManifest as JsonRecord | undefined)?.sha256, (fi.twinsManifest as JsonRecord | undefined)?.sha256);
 	for (const arm of ["baseline", "candidate", ...(prior.matched !== undefined || fresh.matched !== undefined ? ["matched"] : [])]) {
 		const pa = (pi[arm] ?? {}) as JsonRecord;
 		const fa = (fi[arm] ?? {}) as JsonRecord;
@@ -3832,6 +3961,7 @@ export function newManifest(options: Options, mode: string): JsonRecord {
 		...(options.baselineMaxAgents === undefined ? {} : { baselineMaxAgents: options.baselineMaxAgents }),
 		...(options.maxVerifiers === undefined ? {} : { maxVerifiers: options.maxVerifiers }),
 		...(options.budgetArms === undefined ? {} : { budgetArms: options.budgetArms }),
+		...(options.twinArms === undefined ? {} : { twinArms: options.twinArms }),
 		...(options.breaker === undefined ? {} : { breaker: options.breaker }),
 		// Only a grid that asked for retries records a policy, so a grid without
 		// one writes the v5 manifest, and a v5 manifest resumes with retries off.
@@ -3961,12 +4091,18 @@ async function driveGrid(options: Options, manifest: JsonRecord, resume: ResumeI
 		if (!pre.official) console.log(`EXPLORATORY — not an acceptance decision (${pre.exploratoryReasons.join("; ") || "grid is not the official five targets x three passes"})`);
 		if (options.dryRun) {
 			await reportStatus({ status: "dry-run-complete", official: pre.official, expectedArms: 0, completedRuns: 0 });
-			console.log(`dry-run passed · ${pre.targets.length} targets · ${options.passes} passes configured · scopes reap strays · answer keys sealed · escape vectors denied · provider network reachable · grader verified · ${pre.targets.length * (options.matched ? 3 : 2)} sealed tool probes · 1 sealed delegation probe (faux model: a worker that hands back, one pired's turn budget stops)${options.matched ? " · 1 sealed ceiling probe (faux model: the crossing reply's record lands, no second request)" : ""} · no model calls`);
+			const twinCount = pre.targets.filter((t) => t.twinOf !== undefined).length;
+			const probes = (pre.targets.length - twinCount) * (options.matched ? 3 : 2) + twinCount * (options.twinArms?.length ?? 0);
+			console.log(`dry-run passed · ${pre.targets.length - twinCount} targets${twinCount ? ` + ${twinCount} patched twins (${options.twinArms?.join(",")})` : ""} · ${options.passes} passes configured · scopes reap strays · answer keys sealed · escape vectors denied · provider network reachable · grader verified · ${probes} sealed tool probes · 1 sealed delegation probe (faux model: a worker that hands back, one pired's turn budget stops)${options.matched ? " · 1 sealed ceiling probe (faux model: the crossing reply's record lands, no second request)" : ""} · no model calls`);
 			console.log(`manifest ${paths.manifestPath}`);
 			gridFinished = true;
 			return;
 		}
-		const plan = resume ? planResume(planSchedule(pre.targets.map((t) => t.id), options.passes), resume.priorRuns, options.breaker?.attemptCeiling) : undefined;
+		const schedule = gridSchedule(pre, options);
+		const plan = resume ? planResume(schedule, resume.priorRuns, options.breaker?.attemptCeiling) : undefined;
+		// A patched twin never enters the gate, so a blocked or abandoned twin does
+		// not fix an official grid's decision and does not refuse its resume.
+		const twinKeys = new Set(schedule.filter((p) => p.twin).map((p) => p.key));
 		if (plan && resume) {
 			console.log(`resume: ${plan.rerunKeys.length} pair(s) to re-run, ${plan.keepKeys.length} kept, ${plan.blockedKeys.length} blocked (invalid, non-infra)${options.breaker ? `, ${plan.abandonedKeys.length} abandoned (attempt ceiling ${options.breaker.attemptCeiling})` : ""}`);
 			for (const key of plan.blockedKeys) console.log(`  blocked ${key}: ${plan.reasons[key] ?? ""}`);
@@ -3974,17 +4110,19 @@ async function driveGrid(options: Options, manifest: JsonRecord, resume: ResumeI
 			// A blocked pair already fixes an official grid's decision at
 			// incomplete_or_invalid; fail-fast only watched new outcomes, so a resume
 			// used to spend every remaining pair (up to ~50 two-hour sessions) anyway.
-			if (plan.blockedKeys.length && pre.official) {
+			const gateBlocked = plan.blockedKeys.filter((k) => !twinKeys.has(k));
+			const gateAbandoned = plan.abandonedKeys.filter((k) => !twinKeys.has(k));
+			if (gateBlocked.length && pre.official) {
 				await refuseResume(manifest, saveManifest,
-					`--resume refused: ${plan.blockedKeys.length} pair(s) of this official grid are invalid for a non-infrastructure reason (${plan.blockedKeys.map((k) => `${k}: ${plan.reasons[k] ?? ""}`).join("; ")}), so its decision is already incomplete_or_invalid and launching the remaining pairs would spend tokens on a fixed outcome.`,
-					{ blocked: plan.blockedKeys });
+					`--resume refused: ${gateBlocked.length} pair(s) of this official grid are invalid for a non-infrastructure reason (${gateBlocked.map((k) => `${k}: ${plan.reasons[k] ?? ""}`).join("; ")}), so its decision is already incomplete_or_invalid and launching the remaining pairs would spend tokens on a fixed outcome.`,
+					{ blocked: gateBlocked });
 			}
 			// An abandoned pair fixes the decision the same way, and refusing is what
 			// ends an auto-resume loop that would otherwise re-run it forever.
-			if (plan.abandonedKeys.length && pre.official) {
+			if (gateAbandoned.length && pre.official) {
 				await refuseResume(manifest, saveManifest,
-					`--resume refused: ${plan.abandonedKeys.length} pair(s) of this official grid reached the attempt ceiling (${plan.abandonedKeys.map((k) => `${k}: ${plan.reasons[k] ?? ""}`).join("; ")}), so its decision is already incomplete_or_invalid.`,
-					{ abandoned: plan.abandonedKeys });
+					`--resume refused: ${gateAbandoned.length} pair(s) of this official grid reached the attempt ceiling (${gateAbandoned.map((k) => `${k}: ${plan.reasons[k] ?? ""}`).join("; ")}), so its decision is already incomplete_or_invalid.`,
+					{ abandoned: gateAbandoned });
 			}
 			manifest.resumeDecision = { status: "accepted", rerun: plan.rerunKeys, kept: plan.keepKeys, blocked: plan.blockedKeys, ...(options.breaker ? { abandoned: plan.abandonedKeys } : {}) };
 			await saveManifest();
@@ -4109,7 +4247,7 @@ function runnerFaultOutcome(pair: ScheduledPair, arm: Arm, attempt: number, erro
 }
 
 /** The part of runState the pair loop reads and sets; the signal handlers share the same object. */
-export type GridStopState = { aborted: boolean; stopInvalid: boolean; stopReason: string | undefined; quotaExhausted: string | undefined; stoppedBy?: "matched" | undefined };
+export type GridStopState = { aborted: boolean; stopInvalid: boolean; stopReason: string | undefined; quotaExhausted: string | undefined; stoppedBy?: "matched" | "twin" | undefined };
 
 /** What the pair loop needs from the grid around it. runGrid passes the real runner; the tests pass fakes and a fake clock. */
 export interface PairLoop {
@@ -4223,10 +4361,11 @@ export async function runPairs(loop: PairLoop): Promise<PairLoopResult> {
 		`provider quota exhausted on the ${arm} run of ${pair.target} pass ${pair.pass} (${state.quotaExhausted ?? ""}); the quota must reset before --resume`;
 	/**
 	 * Keep one arm's outcome and apply the stop rules to it: the quota stop, and
-	 * the fail-fast rule or the breaker. `gate` is false for a matched session:
-	 * a non-infrastructure failure there leaves the gate's decision open, so it
-	 * does not trip an official grid's breaker at once the way a pair's arm does;
-	 * it still counts as a failed launch. A throw is a bookkeeping failure.
+	 * the fail-fast rule or the breaker. `gate` is false for a matched session
+	 * and for a patched twin's run (plan item 2.8): a non-infrastructure failure
+	 * there leaves the gate's decision open, so it does not trip an official
+	 * grid's breaker at once the way a pair's arm does; it still counts as a
+	 * failed launch. A throw is a bookkeeping failure.
 	 */
 	const keep = async (outcome: RunOutcome, pair: ScheduledPair, arm: Arm, attempt: number, launched: boolean, gate: boolean): Promise<void> => {
 		await loop.settle(outcome);
@@ -4237,7 +4376,7 @@ export async function runPairs(loop: PairLoop): Promise<PairLoopResult> {
 		if (!breaker) {
 			if (!outcome.metric.valid && !state.stopInvalid && !state.aborted) {
 				state.stopInvalid = true;
-				if (!gate) state.stoppedBy = "matched";
+				if (!gate) state.stoppedBy = pair.twin ? "twin" : "matched";
 				state.stopReason = outcome.quotaExhausted
 					? quotaStop(arm, pair)
 					: `stopped after an invalid ${arm} run of ${pair.target} pass ${pair.pass}${outcome.infraFailure ? ` (infra: ${String(outcome.record.infraReason ?? "")})` : ""}`;
@@ -4251,7 +4390,7 @@ export async function runPairs(loop: PairLoop): Promise<PairLoopResult> {
 			});
 			if (verdict.tripped && !state.stopInvalid && !state.aborted) {
 				state.stopInvalid = true;
-				if (!gate) state.stoppedBy = "matched";
+				if (!gate) state.stoppedBy = pair.twin ? "twin" : "matched";
 				state.stopReason = outcome.quotaExhausted
 					? quotaStop(arm, pair)
 					: `circuit breaker tripped on the ${arm} run of ${pair.target} pass ${pair.pass} attempt ${attempt}: ${verdict.reason ?? ""}`;
@@ -4293,7 +4432,7 @@ export async function runPairs(loop: PairLoop): Promise<PairLoopResult> {
 				}
 				first ??= outcome;
 				byArm[arm] = outcome;
-				await keep(outcome, pair, arm, attempt, launched, true);
+				await keep(outcome, pair, arm, attempt, launched, !pair.twin);
 			} catch (error) {
 				// The bookkeeping itself failed; stop launching and keep draining.
 				if (!state.stopInvalid) { state.stopInvalid = true; state.stopReason = `bookkeeping write failed: ${message(error)}`; }
@@ -4301,14 +4440,15 @@ export async function runPairs(loop: PairLoop): Promise<PairLoopResult> {
 			}
 		}
 		// The matched arm follows a pair whose two arms are valid at this attempt,
-		// the only pairs the comparison keeps. A grid already stopping launches none.
-		if (loop.matched && byArm.baseline?.metric.valid && byArm.candidate?.metric.valid) {
+		// the only pairs the comparison keeps. A grid already stopping launches none,
+		// and a patched twin never has one.
+		if (loop.matched && !pair.twin && byArm.baseline?.metric.valid && byArm.candidate?.metric.valid) {
 			await runMatched(pair, attempt, byArm.candidate, []);
 		}
 		// A signal leaves the pair as it is; its resume decides from runs.jsonl.
 		if (!policy || state.aborted) return;
 		const now = loop.nowMs();
-		const arms = [byArm.baseline, byArm.candidate].map((o) => o && { valid: o.metric.valid, infra: o.infraFailure });
+		const arms = armsOfPair(pair).map((arm) => byArm[arm]).map((o) => o && { valid: o.metric.valid, infra: o.infraFailure });
 		const action = nextPairAction(attempt, arms, { attemptCeiling: policy.attemptCeiling, requeue: { policy, atMs: now, attemptsThisRun: attempt - firstAttempt + 1 } });
 		if (action.kind === "blocked") {
 			result.blocked.push({ key: pair.key, attempt, reason: action.reason });
@@ -4316,8 +4456,9 @@ export async function runPairs(loop: PairLoop): Promise<PairLoopResult> {
 			result.abandoned.push({ key: pair.key, attempt, reason: action.reason });
 			loop.log(`ABANDONED ${pair.target} pass ${pair.pass} · ${action.reason}`);
 			// Like a blocked run, an abandoned pair fixes an official grid's decision,
-			// so the pairs after it would spend tokens on a known outcome.
-			if (loop.official && !state.stopInvalid) {
+			// so the pairs after it would spend tokens on a known outcome. A patched
+			// twin is outside the decision, so it does not stop the grid.
+			if (loop.official && !pair.twin && !state.stopInvalid) {
 				state.stopInvalid = true;
 				state.stopReason = `${pair.key} failed at the attempt ceiling of ${policy.attemptCeiling}, so this official grid's decision is already incomplete_or_invalid`;
 			}
@@ -4430,6 +4571,16 @@ export async function runPairs(loop: PairLoop): Promise<PairLoopResult> {
 	await Promise.all(Array.from({ length: Math.min(loop.concurrency, Math.max(1, loop.pairs.length)) }, worker));
 	result.breaker = breaker ? breaker.verdict : null;
 	return result;
+}
+
+/**
+ * A grid's runs split into the gate's and the patched twins' (plan item 2.8).
+ * compareMatchedRuns reads a run whose key it does not expect as "unexpected",
+ * which makes the grid incomplete, so a twin's run left in would keep every
+ * grid with twins from a decision.
+ */
+export function splitTwinRuns<T extends { metric: { target: string } }>(outcomes: readonly T[], twinIds: ReadonlySet<string>): { gate: T[]; twins: T[] } {
+	return { gate: outcomes.filter((o) => !twinIds.has(o.metric.target)), twins: outcomes.filter((o) => twinIds.has(o.metric.target)) };
 }
 
 /** A persisted run record as the loop's outcome, the way a resume seeds the pairs it keeps. */
@@ -4585,8 +4736,12 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 	const { ctx, expectedCells, official } = pre;
 	const output = ctx.out;
 	const targetById = new Map(pre.targets.map((t) => [t.id, t]));
-	const pairs = planSchedule(pre.targets.map((t) => t.id), options.passes);
-	const expectedArms = pairs.length * (2 + (options.matched?.k ?? 0));
+	const pairs = gridSchedule(pre, options);
+	// A patched twin's runs (plan item 2.8) count toward progress, in their own arms, and never toward the gate.
+	const twinIds = new Set(pre.targets.filter((t) => t.twinOf !== undefined).map((t) => t.id));
+	const gatePairs = pairs.filter((p) => !p.twin);
+	const expectedArms = gatePairs.length * (2 + (options.matched?.k ?? 0)) + pairs.filter((p) => p.twin).reduce((n, p) => n + p.order.length, 0);
+	const onGate = (o: RunOutcome): boolean => !twinIds.has(o.metric.target);
 	// On a resume, seed the outcomes with the latest attempt of every pair not
 	// being re-run, so the comparison sees the whole grid. Only the re-run pairs
 	// are launched; a blocked pair carries its invalid record and keeps the grid
@@ -4603,9 +4758,11 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 	}
 	// The matched sessions of the pairs a resume keeps: their latest runs are
 	// carried, and the ones still missing or failed for infrastructure are queued.
-	const matchedResume = plan && options.matched ? planMatchedResume(plan, priorRuns, options.matched, options.breaker?.attemptCeiling) : undefined;
+	// A kept twin pair has no matched sessions: only the gate pairs a resume keeps are read for them.
+	const gateKeep = plan ? plan.keepKeys.filter((key) => gatePairs.some((p) => p.key === key)) : [];
+	const matchedResume = plan && options.matched ? planMatchedResume({ ...plan, keepKeys: gateKeep }, priorRuns, options.matched, options.breaker?.attemptCeiling) : undefined;
 	if (plan && options.matched) {
-		for (const key of plan.keepKeys) {
+		for (const key of gateKeep) {
 			const candidate = plan.latest[`${key}\u0000candidate`];
 			const attempt = typeof candidate?.attempt === "number" ? candidate.attempt : 1;
 			for (const record of latestMatchedSessions(priorRuns, key, attempt)) outcomes.push(outcomeFromRecord(record, "matched"));
@@ -4674,7 +4831,8 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 	const interrupted = runState.aborted;
 	const stoppedInvalid = runState.stopInvalid;
 	const abandonedKeys = [...new Set([...(plan?.abandonedKeys ?? []), ...loop.abandoned.map((a) => a.key)])];
-	const compared = atHighestAttempt(outcomes);
+	// The gate reads the gate targets' runs only; a twin's are summarised apart.
+	const { gate: compared, twins: twinOutcomes } = splitTwinRuns(atHighestAttempt(outcomes), twinIds);
 	const comparison = compareMatchedRuns(
 		compared.filter((o) => o.arm === "baseline").map((o) => o.metric),
 		compared.filter((o) => o.arm === "candidate").map((o) => o.metric),
@@ -4684,11 +4842,15 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 	// unmetered attempts; the same comparison on metered tokens alone is reported
 	// beside it, so a verdict that rests on the estimate shows as one.
 	const meteredOnlyComparison = options.retryPolicy ? compareMatchedRuns(
-		outcomes.filter((o) => o.arm === "baseline").map((o) => metricFromRecord(o.record, "metered")),
-		outcomes.filter((o) => o.arm === "candidate").map((o) => metricFromRecord(o.record, "metered")),
+		outcomes.filter((o) => o.arm === "baseline" && onGate(o)).map((o) => metricFromRecord(o.record, "metered")),
+		outcomes.filter((o) => o.arm === "candidate" && onGate(o)).map((o) => metricFromRecord(o.record, "metered")),
 		expectedCells, pre.officialShapes,
 	) : undefined;
-	const matchedSummary = options.matched ? await summarizeMatched(options.matched, pairs, compared, outcomes, expectedCells, targetById, output, loop.matched, matchedResume) : undefined;
+	const matchedSummary = options.matched ? await summarizeMatched(options.matched, gatePairs, compared, outcomes, expectedCells, targetById, output, loop.matched, matchedResume) : undefined;
+	const twinSummary = options.twinArms?.length && twinIds.size ? {
+		...summarizeTwins(options.twinArms, pre.targets.filter((t) => t.twinOf !== undefined).map((t) => ({ id: t.id, twinOf: t.twinOf! })), options.passes, twinOutcomes.map((o) => o.record)),
+		stops: summarizeStops(twinOutcomes.map((o) => ({ arm: o.arm, key: String((o.record as JsonRecord).key ?? o.cellId), valid: o.metric.valid, stop: (o.record as JsonRecord).stop }))),
+	} : undefined;
 	// Each cell loads node_modules afresh, and hashing it (~25k files) per launch
 	// is too slow, so it is re-hashed once at the end: a runtime that moved during
 	// the grid means the arms may not have run the same pi, and nothing is approved.
@@ -4699,8 +4861,14 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 	// comparison row present, and the approval could count a row runs.jsonl never got.
 	// A stop a matched session caused leaves every gate row it did not prevent
 	// written; the gate's own completeness decides, as the arm never enters it.
-	const stopWithholdsApproval = stoppedInvalid && runState.stoppedBy !== "matched";
+	// So does a stop a patched twin's run caused (plan item 2.8).
+	const stopWithholdsApproval = stoppedInvalid && runState.stoppedBy === undefined;
 	const approved = official && !interrupted && !stopWithholdsApproval && runtimeStable && comparison.complete && comparison.decision === APPROVAL;
+	// A patched twin that gave up or was abandoned is no reason the gate did not
+	// approve; it is listed in the breaker block and the twins block instead.
+	const twinKeys = new Set(pairs.filter((p) => p.twin).map((p) => p.key));
+	const gateGaveUp = loop.gaveUp.filter((g) => !twinKeys.has(g.key));
+	const gateAbandoned = abandonedKeys.filter((k) => !twinKeys.has(k));
 	// Why a non-approval is a non-approval, so the console and summary never show
 	// the approval string alone when the candidate was not approved.
 	const notApprovedReasons = [
@@ -4708,8 +4876,8 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 		...(interrupted ? ["interrupted before the grid finished"] : []),
 		...(stoppedInvalid && !interrupted ? [`stopped early: ${runState.stopReason ?? "an invalid run"}`] : []),
 		...(runState.quotaExhausted ? [`provider quota exhausted (${runState.quotaExhausted}); it must reset before --resume`] : []),
-		...(loop.gaveUp.length ? [`${loop.gaveUp.length} pair(s) reached the attempt cap (${loop.gaveUp.map((g) => g.key).join(", ")}); --resume re-runs them`] : []),
-		...(abandonedKeys.length ? [`${abandonedKeys.length} pair(s) abandoned at the attempt ceiling (${abandonedKeys.join(", ")}); no resume re-runs them`] : []),
+		...(gateGaveUp.length ? [`${gateGaveUp.length} pair(s) reached the attempt cap (${gateGaveUp.map((g) => g.key).join(", ")}); --resume re-runs them`] : []),
+		...(gateAbandoned.length ? [`${gateAbandoned.length} pair(s) abandoned at the attempt ceiling (${gateAbandoned.join(", ")}); no resume re-runs them`] : []),
 		...(!runtimeStable ? ["the pi runtime changed during the grid"] : []),
 		...(!comparison.complete ? [`grid incomplete or invalid: ${comparison.missingOrInvalid.slice(0, 4).join("; ") || "missing pairs"}`] : []),
 		...(comparison.complete && comparison.decision !== APPROVAL ? [`comparison decision: ${comparison.decision}`] : []),
@@ -4744,6 +4912,8 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 		...(options.retryPolicy ? { retryPolicy: options.retryPolicy, meteredOnlyComparison } : {}),
 		// Only a grid run with --matched has this block; the gate above never reads it.
 		...(matchedSummary ? { matched: matchedSummary } : {}),
+		// Only a grid run with --twin-arms has this block; the gate above never reads it.
+		...(twinSummary ? { twins: twinSummary } : {}),
 		interpretation: {
 			precision: "lower bound against patch-localized keys; unmatched claims are unadjudicated and are not confirmed false positives",
 			passes: "ranges are across complete five-target pooled passes; three passes are coarse and are not a significance test",
@@ -4751,12 +4921,13 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 			tokens: "an invalid run carries no token count; it is excluded from the comparison and the grid is then incomplete",
 			...(options.retryPolicy ? { retryTokens: "the comparison's tokens are metered tokens plus a lower-bound estimate for failed attempts pi retried that reported no usage (the previous reply's prompt plus output); meteredOnlyComparison reads metered tokens alone" } : {}),
 		},
-		delegationAudit: summarizeAudits(outcomes.flatMap((o) => {
+		// The gate targets' runs only: a patched twin's are in the twins block.
+		delegationAudit: summarizeAudits(outcomes.filter(onGate).flatMap((o) => {
 			const audit = (o.record as JsonRecord).delegationAudit as DelegationAudit | { error: string } | null | undefined;
 			return o.arm === "candidate" && audit && !("error" in audit) ? [{ label: `${String((o.record as JsonRecord).key ?? o.cellId)}`, audit }] : [];
 		})),
 		// Per arm, so an arm that hands the turn back early is visible next to its TP.
-		stops: summarizeStops(outcomes.map((o) => ({ arm: o.arm, key: String((o.record as JsonRecord).key ?? o.cellId), valid: o.metric.valid, stop: (o.record as JsonRecord).stop }))),
+		stops: summarizeStops(outcomes.filter(onGate).map((o) => ({ arm: o.arm, key: String((o.record as JsonRecord).key ?? o.cellId), valid: o.metric.valid, stop: (o.record as JsonRecord).stop }))),
 		rows: outcomes.map((o) => o.record),
 	};
 	await serially(() => writeJson(join(output, "summary.json"), summary));
@@ -4785,6 +4956,13 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 		const mc = matchedSummary.comparisons.matchedVsCandidate;
 		const ratio = matchedSummary.budgetRatio.median;
 		console.log(`matched (${matchedSummary.policy.mode}, k=${matchedSummary.policy.k}): ${matchedSummary.unions.filter((u) => u.valid).length}/${matchedSummary.unions.length} pairs valid · pass-mean TP matched ${(mc.arms.matched?.truePositives.mean ?? 0).toFixed(2)} vs candidate ${(mc.arms.candidate?.truePositives.mean ?? 0).toFixed(2)} (${mc.complete ? "complete" : "incomplete"}) · pooled precision ${fmt(mc.arms.matched?.pooledPrecision ?? null)} vs ${fmt(mc.arms.candidate?.pooledPrecision ?? null)} · median budget ratio ${ratio === null ? "n/a" : ratio.toFixed(3)} over ${matchedSummary.budgetRatio.perPair.length} pair(s) · reported beside the gate, not in it`);
+	}
+	if (twinSummary) {
+		const line = twinSummary.arms.map((arm) => {
+			const a = twinSummary.byArm[arm]!;
+			return `${arm} ${a.valid}/${a.runs} valid, ${a.claims} claims`;
+		}).join(" · ");
+		console.log(`patched twins (${twinSummary.targets.length}, beside the gate): ${line} · control score: eval/rescore.ts`);
 	}
 	// When not approved, print the reason, never the bare approval decision string.
 	if (approved) console.log(`APPROVED (this model) · ${comparison.decision}`);

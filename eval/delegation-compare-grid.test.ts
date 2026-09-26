@@ -2,9 +2,9 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import {
 	corpusReasons, DEFAULT_BUDGET_ARMS, delegationOff, kindlessArmReasons, kindlessCorpus, parseArmList, parseCorpora, parseMaxVerifiers, scopeFor, scopeSettingsFor, shapeOf,
-	type CorpusInput, type PinnedCorpus,
+	summarizeTwins, twinTargets, type CorpusInput, type PinnedCorpus,
 } from "./delegation-compare-grid.ts";
-import { isOfficialGrid, OFFICIAL_PASSES, OFFICIAL_TARGET_IDS, planSchedule, type ExpectedCell } from "./delegation-compare-lib.ts";
+import { armsOfPair, isOfficialGrid, OFFICIAL_PASSES, OFFICIAL_TARGET_IDS, planSchedule, type ExpectedCell } from "./delegation-compare-lib.ts";
 
 // Per-file builders, by house rule: a pinned corpus, the runner's measurement
 // of a grid's inputs, and the gate cells a grid expects.
@@ -43,7 +43,7 @@ describe("pinned corpora", () => {
 	// it must never be official without a grid kind fixing its arms.
 	it("ships the fresh v6 corpus unfrozen and reachable only through a grid kind", async () => {
 		const v6 = parseCorpora((await shipped()).corpora)["v6-fresh"]!;
-		expect(v6).toMatchObject({ targets: null, passes: null, manifestSha256: null, truthSha256: null, kindless: false });
+		expect(v6).toMatchObject({ targets: null, passes: null, manifestSha256: null, truthSha256: null, twinsSha256: null, kindless: false });
 		expect(shapeOf(v6)).toBeUndefined();
 	});
 
@@ -115,6 +115,18 @@ describe("the official grid, judged against the pinned corpus", () => {
 		expect(reasons).toEqual(["corpus v6-fresh is not frozen: eval/delegation-compare.pins.json has no targets, passes, manifestSha256, truthSha256 for it"]);
 	});
 
+	// The v5 official grid ran no twins; a grid that adds them has runs its
+	// official grid never had, on trees nobody froze.
+	it("makes twins exploratory on a corpus without them, and checks the twins file where one is pinned", () => {
+		expect(corpusReasons("v5", corpus(), input({ twinsSha256: sha("c") }))).toEqual(["corpus v5 has no patched twins; --twins adds runs its official grid did not have"]);
+		expect(corpusReasons("c", corpus({ twinsSha256: sha("c") }), input({ twinsSha256: sha("c") }))).toEqual([]);
+		expect(corpusReasons("c", corpus({ twinsSha256: sha("c") }), input({ twinsSha256: sha("d") }))).toEqual([`twins file sha256 ${"d".repeat(12)} is not the pinned ${"c".repeat(12)}`]);
+		// A grid that runs no twins is judged by its kind's twin arms, not here.
+		expect(corpusReasons("c", corpus({ twinsSha256: sha("c") }), input())).toEqual([]);
+		expect(corpusReasons("c", corpus({ twinsSha256: null }), input())[0]).toMatch(/has no twinsSha256 for it/);
+		expect(() => parseCorpora({ x: { label: "x", twinsSha256: "zz" } })).toThrow(/twinsSha256/);
+	});
+
 	it("judges a grid without a kind against the kindless corpus with its targets, else the first kindless one", () => {
 		const corpora = { k: corpus({ kindless: false }), v5: corpus({ kindless: true, targets: ["X"] }), other: corpus({ kindless: true }) };
 		expect(kindlessCorpus(corpora, ["B", "A"])?.[0]).toBe("other");
@@ -184,5 +196,81 @@ describe("each arm's scope", () => {
 			"the candidate's scope states maxVerifiers 2; without --grid-kind no arm states a verifier cap",
 			"the budget line is on no arm, not candidate,matched; without --grid-kind the arms keep the default",
 		]);
+	});
+});
+
+describe("patched twins", () => {
+	// A two-entry synthetic copy of eval/corpus/fresh/twins.json's shape: each
+	// twin carries its target's advisory as id and its target's name as twin_of.
+	const targets = [{ id: "CVE-2031-0001", name: "acme_shop-aaaaaa" }, { id: "CVE-2031-0002", name: "acme_wiki-bbbbbb" }];
+	const twinsFile = (): Array<Record<string, unknown>> => [
+		{
+			id: "CVE-2031-0001", package: "acme/shop", repo: "acme/shop", scope: ["."], cwe: ["CWE-79"], severity: "high", published: "2031-01-02",
+			fix_commit: "a".repeat(40), variant: 2, entries: 0, name: "acme_shop-aaaaaa-patched", twin_of: "acme_shop-aaaaaa", scope_files: 12, scope_loc: 3400,
+			language: "Python", target: "PLACEHOLDER/corpus/acme_shop-aaaaaa-patched", truth: "PLACEHOLDER/corpus/truth/acme_shop-aaaaaa-patched.truth.json",
+			reviewed_commit: "a".repeat(40), twin: true, aliases: ["GHSA-2222-3333-4444"],
+			fixed_regions: [{ advisory: "CVE-2031-0001", file: "shop/views.py", line_range: [40, 44] }, { advisory: "CVE-2031-0001", file: "shop/forms.py", line_range: [9, 9] }],
+		},
+		{
+			id: "CVE-2031-0002", package: "acme/wiki", repo: "acme/wiki", scope: ["."], cwe: ["CWE-22"], severity: "medium", published: "2031-02-03",
+			fix_commit: "b".repeat(40), variant: 2, entries: 0, name: "acme_wiki-bbbbbb-patched", twin_of: "acme_wiki-bbbbbb", scope_files: 30, scope_loc: 9100,
+			language: "Go", target: "PLACEHOLDER/corpus/acme_wiki-bbbbbb-patched", truth: "PLACEHOLDER/corpus/truth/acme_wiki-bbbbbb-patched.truth.json",
+			reviewed_commit: "b".repeat(40), twin: true, aliases: [],
+			fixed_regions: [{ advisory: "CVE-2031-0002", file: "wiki/files.go", line_range: [120, 131] }],
+		},
+	];
+
+	// Under its target's id a twin's runs would merge with its target's, since
+	// ids key every cell, pair and record.
+	it("keys each twin by its own name, names its target by id, and keeps the advisory as a leak term", () => {
+		const twins = twinTargets(twinsFile(), targets);
+		expect(twins.map((t) => [t.id, t.twinOf])).toEqual([["acme_shop-aaaaaa-patched", "CVE-2031-0001"], ["acme_wiki-bbbbbb-patched", "CVE-2031-0002"]]);
+		expect(twins[0]!.aliases).toEqual(["CVE-2031-0001", "GHSA-2222-3333-4444"]);
+		expect(twins[1]!.aliases).toEqual(["CVE-2031-0002"]);
+		// What eval/rescore.ts's control score reads is carried through unchanged.
+		expect(twins[0]).toMatchObject({ scope_loc: 3400, twin_of: "acme_shop-aaaaaa", fixed_regions: twinsFile()[0]!.fixed_regions, scope: ["."] });
+	});
+
+	it("refuses a twins file whose twin names no target, lacks fixed regions or reuses a name", () => {
+		expect(() => twinTargets([], targets)).toThrow(/non-empty list/);
+		expect(() => twinTargets([{ ...twinsFile()[0], twin_of: "nobody" }], targets)).toThrow(/names no target/);
+		expect(() => twinTargets([{ ...twinsFile()[0], fixed_regions: [{ file: "a.py", line_range: [9, 3] }] }], targets)).toThrow(/fixed_regions/);
+		expect(() => twinTargets([{ ...twinsFile()[0], fixed_regions: undefined }], targets)).toThrow(/fixed_regions/);
+		expect(() => twinTargets([twinsFile()[0], twinsFile()[0]], targets)).toThrow(/reuses/);
+		expect(() => twinTargets([{ ...twinsFile()[0], name: "acme_shop-aaaaaa" }], targets)).toThrow(/reuses/);
+		expect(() => twinTargets([{ ...twinsFile()[0], id: "" }], targets)).toThrow(/advisory id/);
+		expect(() => twinTargets([{ ...twinsFile()[0], scope_loc: -1 }], targets)).toThrow(/scope_loc/);
+	});
+
+	// Twins follow the gate pairs within a pass, in the twin arms only; with no
+	// twins the schedule is the one every earlier grid pinned.
+	it("schedules each twin after the gate pairs of its pass, in its arms only", () => {
+		expect(planSchedule(["A", "B"], 2, { ids: ["A-patched"], arms: [] })).toEqual(planSchedule(["A", "B"], 2));
+		const one = planSchedule(["A", "B"], 2, { ids: ["A-patched", "B-patched"], arms: ["baseline"] });
+		expect(one.map((p) => [p.key, p.order.join(","), p.twin === true])).toEqual([
+			["A#1", "baseline,candidate", false], ["B#1", "candidate,baseline", false], ["A-patched#1", "baseline", true], ["B-patched#1", "baseline", true],
+			["A#2", "candidate,baseline", false], ["B#2", "baseline,candidate", false], ["A-patched#2", "baseline", true], ["B-patched#2", "baseline", true],
+		]);
+		const both = planSchedule(["A", "B"], 1, { ids: ["A-patched", "B-patched"], arms: ["baseline", "candidate"] });
+		expect(both.filter((p) => p.twin).map((p) => p.order.join(","))).toEqual(["baseline,candidate", "candidate,baseline"]);
+		expect(armsOfPair(one[2]!)).toEqual(["baseline"]);
+		expect(armsOfPair(one[1]!)).toEqual(["baseline", "candidate"]);
+	});
+
+	it("summarises each twin arm's runs, valid runs, claims and cells, apart from the gate", () => {
+		const rows = [
+			{ key: "acme_shop-aaaaaa-patched#1", target: "acme_shop-aaaaaa-patched", pass: 1, arm: "baseline", attempt: 2, cellId: "c1", valid: true, findings: 3 },
+			{ key: "acme_shop-aaaaaa-patched#1", target: "acme_shop-aaaaaa-patched", pass: 1, arm: "candidate", attempt: 2, cellId: "c2", valid: false, findings: 7 },
+			{ key: "CVE-2031-0001#1", target: "CVE-2031-0001", pass: 1, arm: "baseline", cellId: "g1", valid: true, findings: 9 },
+		];
+		const summary = summarizeTwins(["baseline", "candidate"], [{ id: "acme_shop-aaaaaa-patched", twinOf: "CVE-2031-0001" }], 3, rows);
+		expect(summary.expectedRuns).toBe(6);
+		expect(summary.byArm.baseline).toEqual({
+			runs: 1, valid: 1, claims: 3,
+			cells: [{ key: "acme_shop-aaaaaa-patched#1", target: "acme_shop-aaaaaa-patched", twinOf: "CVE-2031-0001", pass: 1, attempt: 2, cellId: "c1", valid: true, claims: 3 }],
+		});
+		// An invalid run's claims are not counted: its ledger is not a finished review.
+		expect(summary.byArm.candidate).toMatchObject({ runs: 1, valid: 0, claims: 0 });
+		expect(summary.interpretation.gate).toMatch(/never enter the gate/);
 	});
 });

@@ -32,13 +32,14 @@
 			}
 		},
 		"v6-fresh": {
-			"_comment": "To be frozen: the twelve fresh targets (twins are covered by the manifest and truth hashes, not listed here), the pass count the pilot fixes, the manifest's sha256 and every truth file's, twins included.",
+			"_comment": "To be frozen: the twelve fresh targets (twins are not listed; they are pinned by the twins file's sha256 and their truth files), the pass count the pilot fixes, the manifest's and the twins file's sha256, and every truth file's, twins included.",
 			"label": "the twelve fresh targets",
 			"kindless": false,
 			"targets": null,
 			"passes": null,
 			"manifestSha256": null,
-			"truthSha256": null
+			"truthSha256": null,
+			"twinsSha256": null
 		}
 	}
 }
