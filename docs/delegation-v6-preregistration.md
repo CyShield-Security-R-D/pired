@@ -22,7 +22,7 @@ dated and logged, and it is written before the results it could affect are read.
 | **A · incumbent** | `main` at the freeze, currently 84c7965 | single agent: delegation off by default (ADR-029) | what users get today |
 | **S · candidate solo** | `p3/candidate-v5` at the freeze | `maxAgents: 0`, `maxVerifiers: 0`, budget line on | Phase 3's single-agent changes alone |
 | **D · candidate delegating** | same as S | `maxAgents: 8`, `maxVerifiers: 2` **[operator: the verifier cap]**, budget line on | the full candidate |
-| **M · matched compute** | same as S | delegation off, k = 3 sessions, total tokens capped at D's realised tokens for the same pair (follow mode, ADR draft 2.5), findings unioned | D's compute without delegation |
+| **M · matched compute** | same as S | delegation off, k = 3 sessions, total tokens capped at D's realised tokens for the same pair (follow mode, ADR-034), findings unioned | D's compute without delegation |
 
 **The comparisons:**
 - S vs A (primary).
