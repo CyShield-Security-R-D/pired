@@ -1,0 +1,182 @@
+[
+  {
+    "id": "CVE-2026-72713-1",
+    "title": "CVE-2026-72713",
+    "severity": "unknown",
+    "file": "ToolServer/ToolServerNode/main.py",
+    "line": 57,
+    "line_range": [
+      57,
+      60
+    ],
+    "advisory": "CVE-2026-72713",
+    "cwes": [
+      "CWE-22"
+    ]
+  },
+  {
+    "id": "CVE-2026-72713-2",
+    "title": "CVE-2026-72713",
+    "severity": "unknown",
+    "file": "ToolServer/ToolServerNode/main.py",
+    "line": 78,
+    "line_range": [
+      78,
+      80
+    ],
+    "advisory": "CVE-2026-72713",
+    "cwes": [
+      "CWE-22"
+    ]
+  },
+  {
+    "id": "CVE-2026-72713-3",
+    "title": "CVE-2026-72713",
+    "severity": "unknown",
+    "file": "ToolServer/ToolServerNode/main.py",
+    "line": 226,
+    "line_range": [
+      226,
+      250
+    ],
+    "advisory": "CVE-2026-72713",
+    "cwes": [
+      "CWE-22"
+    ]
+  },
+  {
+    "id": "CVE-2026-72713-4",
+    "title": "CVE-2026-72713",
+    "severity": "unknown",
+    "file": "XAgentServer/application/routers/conv.py",
+    "line": 183,
+    "line_range": [
+      183,
+      183
+    ],
+    "advisory": "CVE-2026-72713",
+    "cwes": [
+      "CWE-22"
+    ]
+  },
+  {
+    "id": "CVE-2026-72713-5",
+    "title": "CVE-2026-72713",
+    "severity": "unknown",
+    "file": "XAgentServer/application/routers/conv.py",
+    "line": 200,
+    "line_range": [
+      200,
+      205
+    ],
+    "advisory": "CVE-2026-72713",
+    "cwes": [
+      "CWE-22"
+    ]
+  },
+  {
+    "id": "CVE-2026-72713-6",
+    "title": "CVE-2026-72713",
+    "severity": "unknown",
+    "file": "XAgentServer/application/routers/conv.py",
+    "line": 216,
+    "line_range": [
+      216,
+      218
+    ],
+    "advisory": "CVE-2026-72713",
+    "cwes": [
+      "CWE-22"
+    ]
+  },
+  {
+    "id": "CVE-2026-72713-7",
+    "title": "CVE-2026-72713",
+    "severity": "unknown",
+    "file": "XAgentServer/application/routers/workspace.py",
+    "line": 60,
+    "line_range": [
+      60,
+      64
+    ],
+    "advisory": "CVE-2026-72713",
+    "cwes": [
+      "CWE-22"
+    ]
+  },
+  {
+    "id": "CVE-2026-72713-8",
+    "title": "CVE-2026-72713",
+    "severity": "unknown",
+    "file": "XAgentServer/application/routers/workspace.py",
+    "line": 80,
+    "line_range": [
+      80,
+      80
+    ],
+    "advisory": "CVE-2026-72713",
+    "cwes": [
+      "CWE-22"
+    ]
+  },
+  {
+    "id": "CVE-2026-72713-9",
+    "title": "CVE-2026-72713",
+    "severity": "unknown",
+    "file": "XAgentServer/application/routers/workspace.py",
+    "line": 94,
+    "line_range": [
+      94,
+      98
+    ],
+    "advisory": "CVE-2026-72713",
+    "cwes": [
+      "CWE-22"
+    ]
+  },
+  {
+    "id": "CVE-2026-72713-10",
+    "title": "CVE-2026-72713",
+    "severity": "unknown",
+    "file": "XAgentServer/application/routers/workspace.py",
+    "line": 108,
+    "line_range": [
+      108,
+      122
+    ],
+    "advisory": "CVE-2026-72713",
+    "cwes": [
+      "CWE-22"
+    ]
+  },
+  {
+    "id": "CVE-2026-72713-11",
+    "title": "CVE-2026-72713",
+    "severity": "unknown",
+    "file": "XAgentServer/application/routers/workspace.py",
+    "line": 132,
+    "line_range": [
+      132,
+      136
+    ],
+    "advisory": "CVE-2026-72713",
+    "cwes": [
+      "CWE-22"
+    ]
+  },
+  {
+    "id": "CVE-2026-72713-12",
+    "title": "CVE-2026-72713",
+    "severity": "unknown",
+    "file": "XAgentServer/server.py",
+    "line": 77,
+    "line_range": [
+      77,
+      90
+    ],
+    "advisory": "CVE-2026-72713",
+    "cwes": [
+      "CWE-22"
+    ]
+  }
+]

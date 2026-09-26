@@ -1,0 +1,1327 @@
+{
+ "rules_version": 2,
+ "variant": 2,
+ "selection_sha256": "9420948c1e2e9289c319ec62c30baa66c526a49afbee7b92889624ced29a0e0f",
+ "osv_by_commit": true,
+ "targets": [
+  {
+   "name": "Quenary_tugtainer-f4dh8w",
+   "id": "CVE-2026-23846",
+   "repo": "Quenary/tugtainer",
+   "labels": [
+    {
+     "advisory": "CVE-2026-23846",
+     "file": "backend/core/auth/auth_password_provider.py",
+     "range": [
+      17,
+      17
+     ],
+     "raw": [
+      17,
+      17
+     ],
+     "capped": false,
+     "hunks": 1
+    },
+    {
+     "advisory": "CVE-2026-23846",
+     "file": "frontend/src/app/features/auth-page/auth-page.ts",
+     "range": [
+      127,
+      127
+     ],
+     "raw": [
+      127,
+      127
+     ],
+     "capped": false,
+     "hunks": 1
+    }
+   ],
+   "credited": [
+    "CVE-2026-23846"
+   ],
+   "dropped": [],
+   "neutral": [
+    {
+     "advisory": "CVE-2026-47752",
+     "why": "reported open by OSV's by-commit query; no FIX commit to place it",
+     "regions": 0
+    }
+   ],
+   "osv_notes": [],
+   "twin": {
+    "name": "Quenary_tugtainer-f4dh8w-patched",
+    "fixed_regions": 2
+   }
+  },
+  {
+   "name": "OpenBMB_XAgent-f73set",
+   "id": "CVE-2026-72713",
+   "repo": "OpenBMB/XAgent",
+   "labels": [
+    {
+     "advisory": "CVE-2026-72713",
+     "file": "ToolServer/ToolServerNode/main.py",
+     "range": [
+      57,
+      60
+     ],
+     "raw": [
+      57,
+      60
+     ],
+     "capped": false,
+     "hunks": 2
+    },
+    {
+     "advisory": "CVE-2026-72713",
+     "file": "ToolServer/ToolServerNode/main.py",
+     "range": [
+      78,
+      80
+     ],
+     "raw": [
+      78,
+      80
+     ],
+     "capped": false,
+     "hunks": 2
+    },
+    {
+     "advisory": "CVE-2026-72713",
+     "file": "ToolServer/ToolServerNode/main.py",
+     "range": [
+      226,
+      250
+     ],
+     "raw": [
+      226,
+      250
+     ],
+     "capped": false,
+     "hunks": 1
+    },
+    {
+     "advisory": "CVE-2026-72713",
+     "file": "XAgentServer/application/routers/conv.py",
+     "range": [
+      183,
+      183
+     ],
+     "raw": [
+      183,
+      183
+     ],
+     "capped": false,
+     "hunks": 1
+    },
+    {
+     "advisory": "CVE-2026-72713",
+     "file": "XAgentServer/application/routers/conv.py",
+     "range": [
+      200,
+      205
+     ],
+     "raw": [
+      200,
+      205
+     ],
+     "capped": false,
+     "hunks": 1
+    },
+    {
+     "advisory": "CVE-2026-72713",
+     "file": "XAgentServer/application/routers/conv.py",
+     "range": [
+      216,
+      218
+     ],
+     "raw": [
+      216,
+      218
+     ],
+     "capped": false,
+     "hunks": 1
+    },
+    {
+     "advisory": "CVE-2026-72713",
+     "file": "XAgentServer/application/routers/workspace.py",
+     "range": [
+      60,
+      64
+     ],
+     "raw": [
+      60,
+      64
+     ],
+     "capped": false,
+     "hunks": 2
+    },
+    {
+     "advisory": "CVE-2026-72713",
+     "file": "XAgentServer/application/routers/workspace.py",
+     "range": [
+      80,
+      80
+     ],
+     "raw": [
+      80,
+      80
+     ],
+     "capped": false,
+     "hunks": 1
+    },
+    {
+     "advisory": "CVE-2026-72713",
+     "file": "XAgentServer/application/routers/workspace.py",
+     "range": [
+      94,
+      98
+     ],
+     "raw": [
+      94,
+      98
+     ],
+     "capped": false,
+     "hunks": 2
+    },
+    {
+     "advisory": "CVE-2026-72713",
+     "file": "XAgentServer/application/routers/workspace.py",
+     "range": [
+      108,
+      122
+     ],
+     "raw": [
+      108,
+      122
+     ],
+     "capped": false,
+     "hunks": 4
+    },
+    {
+     "advisory": "CVE-2026-72713",
+     "file": "XAgentServer/application/routers/workspace.py",
+     "range": [
+      132,
+      136
+     ],
+     "raw": [
+      132,
+      136
+     ],
+     "capped": false,
+     "hunks": 2
+    },
+    {
+     "advisory": "CVE-2026-72713",
+     "file": "XAgentServer/server.py",
+     "range": [
+      77,
+      90
+     ],
+     "raw": [
+      77,
+      90
+     ],
+     "capped": false,
+     "hunks": 5
+    }
+   ],
+   "credited": [
+    "CVE-2026-72713"
+   ],
+   "dropped": [],
+   "neutral": [],
+   "osv_notes": [],
+   "twin": {
+    "name": "OpenBMB_XAgent-f73set-patched",
+    "fixed_regions": 15
+   }
+  },
+  {
+   "name": "wooey_Wooey-rzhxdt",
+   "id": "CVE-2026-7142",
+   "repo": "wooey/Wooey",
+   "labels": [
+    {
+     "advisory": "CVE-2026-7142",
+     "file": "wooey/api/scripts.py",
+     "range": [
+      186,
+      186
+     ],
+     "raw": [
+      186,
+      186
+     ],
+     "capped": false,
+     "hunks": 1
+    }
+   ],
+   "credited": [
+    "CVE-2026-7142"
+   ],
+   "dropped": [],
+   "neutral": [],
+   "osv_notes": [],
+   "twin": {
+    "name": "wooey_Wooey-rzhxdt-patched",
+    "fixed_regions": 1
+   }
+  },
+  {
+   "name": "go-shiori_shiori-f6jaq5",
+   "id": "CVE-2026-61463",
+   "repo": "go-shiori/shiori",
+   "labels": [
+    {
+     "advisory": "CVE-2026-61463",
+     "file": "internal/http/handlers/api/v1/auth.go",
+     "range": [
+      179,
+      179
+     ],
+     "raw": [
+      179,
+      179
+     ],
+     "capped": false,
+     "hunks": 1
+    }
+   ],
+   "credited": [
+    "CVE-2026-61463"
+   ],
+   "dropped": [],
+   "neutral": [],
+   "osv_notes": [],
+   "twin": {
+    "name": "go-shiori_shiori-f6jaq5-patched",
+    "fixed_regions": 1
+   }
+  },
+  {
+   "name": "feiyuchuixue_sz-boot-parent-rzfdja",
+   "id": "CVE-2026-3187",
+   "repo": "feiyuchuixue/sz-boot-parent",
+   "labels": [
+    {
+     "advisory": "CVE-2026-3187",
+     "file": "sz-common/sz-common-core/src/main/java/com/sz/core/common/enums/CommonResponseEnum.java",
+     "range": [
+      25,
+      25
+     ],
+     "raw": [
+      25,
+      25
+     ],
+     "capped": false,
+     "hunks": 1
+    },
+    {
+     "advisory": "CVE-2026-3187",
+     "file": "sz-common/sz-common-core/src/main/java/com/sz/core/common/enums/CommonResponseEnum.java",
+     "range": [
+      36,
+      36
+     ],
+     "raw": [
+      36,
+      36
+     ],
+     "capped": false,
+     "hunks": 1
+    },
+    {
+     "advisory": "CVE-2026-3187",
+     "file": "sz-common/sz-common-core/src/main/java/com/sz/core/util/Utils.java",
+     "range": [
+      154,
+      154
+     ],
+     "raw": [
+      154,
+      154
+     ],
+     "capped": false,
+     "hunks": 1
+    },
+    {
+     "advisory": "CVE-2026-3187",
+     "file": "sz-common/sz-common-oss/src/main/java/com/sz/oss/OssClient.java",
+     "range": [
+      122,
+      122
+     ],
+     "raw": [
+      122,
+      122
+     ],
+     "capped": false,
+     "hunks": 1
+    },
+    {
+     "advisory": "CVE-2026-3187",
+     "file": "sz-common/sz-common-oss/src/main/java/com/sz/oss/OssClient.java",
+     "range": [
+      356,
+      356
+     ],
+     "raw": [
+      356,
+      356
+     ],
+     "capped": false,
+     "hunks": 1
+    },
+    {
+     "advisory": "CVE-2026-3187",
+     "file": "sz-common/sz-common-oss/src/main/java/com/sz/oss/OssProperties.java",
+     "range": [
+      41,
+      41
+     ],
+     "raw": [
+      41,
+      41
+     ],
+     "capped": false,
+     "hunks": 1
+    },
+    {
+     "advisory": "CVE-2026-3187",
+     "file": "sz-service/sz-service-admin/src/main/java/com/sz/admin/system/service/impl/CommonServiceImpl.java",
+     "range": [
+      50,
+      50
+     ],
+     "raw": [
+      50,
+      50
+     ],
+     "capped": false,
+     "hunks": 1
+    },
+    {
+     "advisory": "CVE-2026-3187",
+     "file": "sz-service/sz-service-admin/src/main/java/com/sz/admin/system/service/impl/CommonServiceImpl.java",
+     "range": [
+      157,
+      157
+     ],
+     "raw": [
+      157,
+      157
+     ],
+     "capped": false,
+     "hunks": 1
+    },
+    {
+     "advisory": "CVE-2026-3187",
+     "file": "sz-service/sz-service-admin/src/main/java/com/sz/admin/system/service/impl/SysFileServiceImpl.java",
+     "range": [
+      67,
+      67
+     ],
+     "raw": [
+      67,
+      67
+     ],
+     "capped": false,
+     "hunks": 1
+    },
+    {
+     "advisory": "CVE-2026-3187",
+     "file": "sz-service/sz-service-admin/src/main/java/com/sz/admin/system/service/impl/SysFileServiceImpl.java",
+     "range": [
+      76,
+      83
+     ],
+     "raw": [
+      76,
+      83
+     ],
+     "capped": false,
+     "hunks": 1
+    }
+   ],
+   "credited": [
+    "CVE-2026-3187",
+    "CVE-2026-3185",
+    "CVE-2026-3186",
+    "CVE-2026-3188",
+    "CVE-2026-3189"
+   ],
+   "dropped": [],
+   "neutral": [
+    {
+     "advisory": "CVE-2026-3185",
+     "why": "shares the drawn advisory's fix commit",
+     "regions": 10
+    },
+    {
+     "advisory": "CVE-2026-3186",
+     "why": "shares the drawn advisory's fix commit",
+     "regions": 10
+    },
+    {
+     "advisory": "CVE-2026-3188",
+     "why": "shares the drawn advisory's fix commit",
+     "regions": 10
+    },
+    {
+     "advisory": "CVE-2026-3189",
+     "why": "shares the drawn advisory's fix commit",
+     "regions": 10
+    }
+   ],
+   "osv_notes": [],
+   "twin": {
+    "name": "feiyuchuixue_sz-boot-parent-rzfdja-patched",
+    "fixed_regions": 10
+   }
+  },
+  {
+   "name": "geopython_pygeoapi-f5gbrd",
+   "id": "CVE-2026-42352",
+   "repo": "geopython/pygeoapi",
+   "labels": [
+    {
+     "advisory": "CVE-2026-42352",
+     "file": "pygeoapi/process/base.py",
+     "range": [
+      55,
+      55
+     ],
+     "raw": [
+      55,
+      55
+     ],
+     "capped": false,
+     "hunks": 1
+    },
+    {
+     "advisory": "CVE-2026-42352",
+     "file": "pygeoapi/process/manager/base.py",
+     "range": [
+      108,
+      108
+     ],
+     "raw": [
+      108,
+      108
+     ],
+     "capped": false,
+     "hunks": 1
+    },
+    {
+     "advisory": "CVE-2026-42352",
+     "file": "pygeoapi/process/manager/base.py",
+     "range": [
+      398,
+      404
+     ],
+     "raw": [
+      398,
+      404
+     ],
+     "capped": false,
+     "hunks": 2
+    },
+    {
+     "advisory": "CVE-2026-42352",
+     "file": "pygeoapi/process/manager/base.py",
+     "range": [
+      477,
+      477
+     ],
+     "raw": [
+      477,
+      477
+     ],
+     "capped": false,
+     "hunks": 1
+    },
+    {
+     "advisory": "CVE-2026-42352",
+     "file": "pygeoapi/process/manager/base.py",
+     "range": [
+      487,
+      506
+     ],
+     "raw": [
+      487,
+      506
+     ],
+     "capped": false,
+     "hunks": 3
+    },
+    {
+     "advisory": "CVE-2026-42352",
+     "file": "pygeoapi/provider/filesystem.py",
+     "range": [
+      81,
+      81
+     ],
+     "raw": [
+      81,
+      81
+     ],
+     "capped": false,
+     "hunks": 1
+    },
+    {
+     "advisory": "CVE-2026-42352",
+     "file": "pygeoapi/util.py",
+     "range": [
+      757,
+      757
+     ],
+     "raw": [
+      757,
+      757
+     ],
+     "capped": false,
+     "hunks": 1
+    }
+   ],
+   "credited": [
+    "CVE-2026-42352"
+   ],
+   "dropped": [],
+   "neutral": [],
+   "osv_notes": [],
+   "twin": {
+    "name": "geopython_pygeoapi-f5gbrd-patched",
+    "fixed_regions": 7
+   }
+  },
+  {
+   "name": "juice-shop_multi-juicer-f5k72n",
+   "id": "CVE-2026-48518",
+   "repo": "juice-shop/multi-juicer",
+   "labels": [
+    {
+     "advisory": "CVE-2026-48518",
+     "file": "internal/routes/private/routes.go",
+     "range": [
+      12,
+      12
+     ],
+     "raw": [
+      12,
+      12
+     ],
+     "capped": false,
+     "hunks": 1
+    },
+    {
+     "advisory": "CVE-2026-48518",
+     "file": "internal/routes/public/routes.go",
+     "range": [
+      16,
+      21
+     ],
+     "raw": [
+      16,
+      21
+     ],
+     "capped": false,
+     "hunks": 2
+    },
+    {
+     "advisory": "CVE-2026-48518",
+     "file": "internal/routes/public/routes.go",
+     "range": [
+      35,
+      36
+     ],
+     "raw": [
+      35,
+      36
+     ],
+     "capped": false,
+     "hunks": 1
+    }
+   ],
+   "credited": [
+    "CVE-2026-48518"
+   ],
+   "dropped": [],
+   "neutral": [],
+   "osv_notes": [],
+   "twin": {
+    "name": "juice-shop_multi-juicer-f5k72n-patched",
+    "fixed_regions": 4
+   }
+  },
+  {
+   "name": "vmDeshpande_ai-agent-automation-f61fpx",
+   "id": "CVE-2026-54519",
+   "repo": "vmDeshpande/ai-agent-automation",
+   "labels": [
+    {
+     "advisory": "CVE-2026-54519",
+     "file": "backend/src/controllers/memory.controller.js",
+     "range": [
+      2,
+      13
+     ],
+     "raw": [
+      2,
+      13
+     ],
+     "capped": false,
+     "hunks": 4
+    },
+    {
+     "advisory": "CVE-2026-54519",
+     "file": "backend/src/controllers/memory.controller.js",
+     "range": [
+      29,
+      29
+     ],
+     "raw": [
+      29,
+      29
+     ],
+     "capped": false,
+     "hunks": 1
+    },
+    {
+     "advisory": "CVE-2026-54519",
+     "file": "backend/src/controllers/memory.controller.js",
+     "range": [
+      38,
+      38
+     ],
+     "raw": [
+      38,
+      38
+     ],
+     "capped": false,
+     "hunks": 1
+    },
+    {
+     "advisory": "CVE-2026-54519",
+     "file": "backend/src/controllers/memory.controller.js",
+     "range": [
+      52,
+      54
+     ],
+     "raw": [
+      52,
+      54
+     ],
+     "capped": false,
+     "hunks": 2
+    },
+    {
+     "advisory": "CVE-2026-54519",
+     "file": "backend/src/controllers/memory.controller.js",
+     "range": [
+      63,
+      63
+     ],
+     "raw": [
+      63,
+      63
+     ],
+     "capped": false,
+     "hunks": 1
+    },
+    {
+     "advisory": "CVE-2026-54519",
+     "file": "backend/src/controllers/memory.controller.js",
+     "range": [
+      72,
+      72
+     ],
+     "raw": [
+      72,
+      72
+     ],
+     "capped": false,
+     "hunks": 1
+    },
+    {
+     "advisory": "CVE-2026-54519",
+     "file": "backend/src/controllers/memory.controller.js",
+     "range": [
+      85,
+      93
+     ],
+     "raw": [
+      85,
+      93
+     ],
+     "capped": false,
+     "hunks": 4
+    },
+    {
+     "advisory": "CVE-2026-54519",
+     "file": "backend/src/controllers/memory.controller.js",
+     "range": [
+      101,
+      101
+     ],
+     "raw": [
+      101,
+      101
+     ],
+     "capped": false,
+     "hunks": 1
+    },
+    {
+     "advisory": "CVE-2026-54519",
+     "file": "backend/src/controllers/memory.controller.js",
+     "range": [
+      114,
+      122
+     ],
+     "raw": [
+      114,
+      122
+     ],
+     "capped": false,
+     "hunks": 4
+    },
+    {
+     "advisory": "CVE-2026-54519",
+     "file": "backend/src/controllers/memory.controller.js",
+     "range": [
+      130,
+      130
+     ],
+     "raw": [
+      130,
+      130
+     ],
+     "capped": false,
+     "hunks": 1
+    },
+    {
+     "advisory": "CVE-2026-54519",
+     "file": "backend/src/controllers/memory.controller.js",
+     "range": [
+      142,
+      142
+     ],
+     "raw": [
+      142,
+      142
+     ],
+     "capped": false,
+     "hunks": 1
+    },
+    {
+     "advisory": "CVE-2026-54520",
+     "file": "backend/src/agents/executor.js",
+     "range": [
+      10,
+      10
+     ],
+     "raw": [
+      10,
+      10
+     ],
+     "capped": false,
+     "hunks": 1
+    },
+    {
+     "advisory": "CVE-2026-54520",
+     "file": "backend/src/agents/executor.js",
+     "range": [
+      214,
+      218
+     ],
+     "raw": [
+      214,
+      218
+     ],
+     "capped": false,
+     "hunks": 3
+    },
+    {
+     "advisory": "CVE-2026-54520",
+     "file": "backend/src/agents/executor.js",
+     "range": [
+      545,
+      545
+     ],
+     "raw": [
+      545,
+      545
+     ],
+     "capped": false,
+     "hunks": 1
+    },
+    {
+     "advisory": "CVE-2026-54520",
+     "file": "backend/src/agents/executor.js",
+     "range": [
+      718,
+      718
+     ],
+     "raw": [
+      718,
+      718
+     ],
+     "capped": false,
+     "hunks": 1
+    }
+   ],
+   "credited": [
+    "CVE-2026-54519",
+    "CVE-2026-54520"
+   ],
+   "dropped": [],
+   "neutral": [],
+   "osv_notes": [],
+   "twin": {
+    "name": "vmDeshpande_ai-agent-automation-f61fpx-patched",
+    "fixed_regions": 12
+   }
+  },
+  {
+   "name": "zhenorzz_goploy-f60sto",
+   "id": "CVE-2026-53553",
+   "repo": "zhenorzz/goploy",
+   "labels": [
+    {
+     "advisory": "CVE-2026-53553",
+     "file": "cmd/server/api/deploy/handler.go",
+     "range": [
+      300,
+      300
+     ],
+     "raw": [
+      300,
+      300
+     ],
+     "capped": false,
+     "hunks": 1
+    },
+    {
+     "advisory": "CVE-2026-53553",
+     "file": "cmd/server/api/deploy/handler.go",
+     "range": [
+      399,
+      399
+     ],
+     "raw": [
+      399,
+      399
+     ],
+     "capped": false,
+     "hunks": 1
+    },
+    {
+     "advisory": "CVE-2026-53553",
+     "file": "cmd/server/api/project/handler.go",
+     "range": [
+      359,
+      359
+     ],
+     "raw": [
+      359,
+      359
+     ],
+     "capped": false,
+     "hunks": 1
+    },
+    {
+     "advisory": "CVE-2026-53553",
+     "file": "cmd/server/api/repository/handler.go",
+     "range": [
+      181,
+      181
+     ],
+     "raw": [
+      181,
+      181
+     ],
+     "capped": false,
+     "hunks": 1
+    },
+    {
+     "advisory": "CVE-2026-53553",
+     "file": "cmd/server/api/repository/handler.go",
+     "range": [
+      222,
+      222
+     ],
+     "raw": [
+      222,
+      222
+     ],
+     "capped": false,
+     "hunks": 1
+    },
+    {
+     "advisory": "CVE-2026-53553",
+     "file": "cmd/server/api/repository/handler.go",
+     "range": [
+      243,
+      243
+     ],
+     "raw": [
+      243,
+      243
+     ],
+     "capped": false,
+     "hunks": 1
+    },
+    {
+     "advisory": "CVE-2026-53553",
+     "file": "cmd/server/api/repository/handler.go",
+     "range": [
+      263,
+      263
+     ],
+     "raw": [
+      263,
+      263
+     ],
+     "capped": false,
+     "hunks": 1
+    },
+    {
+     "advisory": "CVE-2026-53553",
+     "file": "internal/pkg/util.go",
+     "range": [
+      12,
+      12
+     ],
+     "raw": [
+      12,
+      12
+     ],
+     "capped": false,
+     "hunks": 1
+    }
+   ],
+   "credited": [
+    "CVE-2026-53553"
+   ],
+   "dropped": [],
+   "neutral": [],
+   "osv_notes": [],
+   "twin": {
+    "name": "zhenorzz_goploy-f60sto-patched",
+    "fixed_regions": 8
+   }
+  },
+  {
+   "name": "ShaneIsrael_fireshare-f4xw32",
+   "id": "CVE-2026-34745",
+   "repo": "ShaneIsrael/fireshare",
+   "labels": [
+    {
+     "advisory": "CVE-2026-34745",
+     "file": "app/server/fireshare/api.py",
+     "range": [
+      1518,
+      1518
+     ],
+     "raw": [
+      1518,
+      1518
+     ],
+     "capped": false,
+     "hunks": 1
+    },
+    {
+     "advisory": "CVE-2026-34745",
+     "file": "app/server/fireshare/api.py",
+     "range": [
+      1530,
+      1531
+     ],
+     "raw": [
+      1530,
+      1531
+     ],
+     "capped": false,
+     "hunks": 2
+    }
+   ],
+   "credited": [
+    "CVE-2026-34745"
+   ],
+   "dropped": [
+    {
+     "advisory": "CVE-2026-54544",
+     "file": "app/server/fireshare/api/misc.py",
+     "range": [
+      255,
+      255
+     ],
+     "why": "region changed between the reviewed tree and this fix"
+    },
+    {
+     "advisory": "CVE-2026-54544",
+     "file": "app/server/fireshare/api/misc.py",
+     "range": [
+      278,
+      278
+     ],
+     "why": "region changed between the reviewed tree and this fix"
+    }
+   ],
+   "neutral": [
+    {
+     "advisory": "CVE-2026-54544",
+     "why": "every labelled region changed since the reviewed tree",
+     "regions": 0
+    },
+    {
+     "advisory": "CVE-2026-54337",
+     "why": "reported open by OSV's by-commit query; no FIX commit to place it",
+     "regions": 0
+    }
+   ],
+   "osv_notes": [],
+   "twin": {
+    "name": "ShaneIsrael_fireshare-f4xw32-patched",
+    "fixed_regions": 2
+   }
+  },
+  {
+   "name": "denpiligrim_3dp-manager-f4er4f",
+   "id": "CVE-2026-25803",
+   "repo": "denpiligrim/3dp-manager",
+   "labels": [
+    {
+     "advisory": "CVE-2026-25803",
+     "file": "server/src/auth/auth.service.ts",
+     "range": [
+      15,
+      15
+     ],
+     "raw": [
+      15,
+      15
+     ],
+     "capped": false,
+     "hunks": 1
+    },
+    {
+     "advisory": "CVE-2026-25803",
+     "file": "server/src/auth/auth.service.ts",
+     "range": [
+      88,
+      93
+     ],
+     "raw": [
+      88,
+      93
+     ],
+     "capped": false,
+     "hunks": 3
+    }
+   ],
+   "credited": [
+    "CVE-2026-25803"
+   ],
+   "dropped": [],
+   "neutral": [],
+   "osv_notes": [],
+   "twin": {
+    "name": "denpiligrim_3dp-manager-f4er4f-patched",
+    "fixed_regions": 2
+   }
+  },
+  {
+   "name": "vastsa_FileCodeBox-f6l91z",
+   "id": "CVE-2026-64619",
+   "repo": "vastsa/FileCodeBox",
+   "labels": [
+    {
+     "advisory": "CVE-2026-64619",
+     "file": "apps/base/dependencies.py",
+     "range": [
+      4,
+      4
+     ],
+     "raw": [
+      4,
+      4
+     ],
+     "capped": false,
+     "hunks": 1
+    },
+    {
+     "advisory": "CVE-2026-64619",
+     "file": "apps/base/dependencies.py",
+     "range": [
+      38,
+      42
+     ],
+     "raw": [
+      38,
+      42
+     ],
+     "capped": false,
+     "hunks": 1
+    },
+    {
+     "advisory": "CVE-2026-64619",
+     "file": "apps/base/utils.py",
+     "range": [
+      79,
+      80
+     ],
+     "raw": [
+      79,
+      80
+     ],
+     "capped": false,
+     "hunks": 1
+    },
+    {
+     "advisory": "CVE-2026-64619",
+     "file": "apps/base/utils.py",
+     "range": [
+      94,
+      96
+     ],
+     "raw": [
+      94,
+      96
+     ],
+     "capped": false,
+     "hunks": 2
+    },
+    {
+     "advisory": "CVE-2026-64619",
+     "file": "core/settings.py",
+     "range": [
+      45,
+      45
+     ],
+     "raw": [
+      45,
+      45
+     ],
+     "capped": false,
+     "hunks": 1
+    },
+    {
+     "advisory": "CVE-2026-64619",
+     "file": "core/settings.py",
+     "range": [
+      75,
+      75
+     ],
+     "raw": [
+      75,
+      75
+     ],
+     "capped": false,
+     "hunks": 1
+    },
+    {
+     "advisory": "CVE-2026-64619",
+     "file": "core/utils.py",
+     "range": [
+      21,
+      21
+     ],
+     "raw": [
+      21,
+      21
+     ],
+     "capped": false,
+     "hunks": 1
+    },
+    {
+     "advisory": "CVE-2026-64619",
+     "file": "core/utils.py",
+     "range": [
+      32,
+      32
+     ],
+     "raw": [
+      32,
+      32
+     ],
+     "capped": false,
+     "hunks": 1
+    }
+   ],
+   "credited": [
+    "CVE-2026-64619"
+   ],
+   "dropped": [
+    {
+     "advisory": "CVE-2026-82543",
+     "file": "apps/base/utils.py",
+     "range": [
+      93,
+      93
+     ],
+     "why": "region changed between the reviewed tree and this fix"
+    },
+    {
+     "advisory": "CVE-2026-82543",
+     "file": "core/settings.py",
+     "range": [
+      47,
+      47
+     ],
+     "why": "region changed between the reviewed tree and this fix"
+    },
+    {
+     "advisory": "CVE-2026-82543",
+     "file": "main.py",
+     "range": [
+      156,
+      156
+     ],
+     "why": "region changed between the reviewed tree and this fix"
+    },
+    {
+     "advisory": "CVE-2026-82543",
+     "file": "main.py",
+     "range": [
+      225,
+      225
+     ],
+     "why": "region changed between the reviewed tree and this fix"
+    },
+    {
+     "advisory": "CVE-2026-82543",
+     "why": "diffuse: its fix yields 16 labels"
+    }
+   ],
+   "neutral": [
+    {
+     "advisory": "CVE-2026-82543",
+     "why": "diffuse: its fix yields 16 labels",
+     "regions": 12
+    }
+   ],
+   "osv_notes": [],
+   "twin": {
+    "name": "vastsa_FileCodeBox-f6l91z-patched",
+    "fixed_regions": 8
+   }
+  }
+ ],
+ "controls_considered": [
+  {
+   "name": "mesop-dev_mesop-f87yds",
+   "kept": false,
+   "why": "rules v2: not a framework or library: README: \"a Python-based UI framework\""
+  },
+  {
+   "name": "toxicbishop_DSA-with-tsx-f4gmrs",
+   "kept": true,
+   "why": "passes rules v2"
+  }
+ ]
+}

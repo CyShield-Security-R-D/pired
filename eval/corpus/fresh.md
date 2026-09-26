@@ -142,7 +142,10 @@ curl -sS -D headers.txt -o GIT-all.zip https://osv-vulnerabilities.storage.googl
 node --experimental-strip-types eval/corpus/select-fresh.ts pool --zip GIT-all.zip --headers headers.txt
 node --experimental-strip-types eval/corpus/select-fresh.ts exclusions
 node --experimental-strip-types eval/corpus/select-fresh.ts draw --seed 20260926 --work /tmp/pired-fresh-work
-node --experimental-strip-types eval/corpus/select-fresh.ts truth --work /tmp/pired-fresh-work
+# variant 2, what v6 uses:
+node --experimental-strip-types eval/corpus/select-fresh.ts draw --seed 20260926 --work /tmp/pired-fresh-work \
+  --controls 0 --variant --variant-reason "review found non-applications before any run"
+node --experimental-strip-types eval/corpus/select-fresh.ts truth --work /tmp/pired-fresh-work --variant-index 2 --carry-controls-from 1
 node --experimental-strip-types eval/corpus/select-fresh.ts materialise --work /tmp/pired-fresh-work --out <corpus>
 ```
 
@@ -226,6 +229,75 @@ After 121 repositories it was stopped once more, again before writing anything. 
 tarballs and grepping every file in them was the new bottleneck, so the tarball is now unpacked for
 code files and READMEs only — the same files the sparse git checkout holds. A second recheck, of 30
 cached verdicts with all six eligible ones included, found all 30 identical.
+
+## Results (variant 2) — what v6 uses
+
+*Added after the second walk (`7c772a6`) and its truth step.*
+
+**Counts.** The metadata filters are unchanged (23,279 → 6,387 advisories, 6,642 → 2,107
+repositories; table under *Results (variant 1)*). The walk examined 314 repositories and 12 were
+eligible, all admitted; no language reached its cap of 6. Advisories that failed, by the first rule
+they failed:
+
+| rule | failed |
+|---|---:|
+| source obtainable at the parent commit | 1 |
+| size within the official range | 406 |
+| served application | 94 |
+| deployable service | 0 |
+| not a framework or library | 1 |
+| language in the scorer's list | 3 |
+| labellable fix | 1 |
+| fix not diffuse | 2 |
+| labels survive leak stripping | 0 |
+
+**Date rule:** 12 eligible of 314, Wilson 95% lower bound 2.2%, times 2,107 candidates gives 46
+against the 36 required. The cutoff held, and every drawn advisory is from 2026 (January to
+September).
+
+| name | repository | advisory | language | CWEs | published | loc | labels | import-only hunks dropped | open without labels / neutral regions | twin fixed regions |
+|---|---|---|---|---|---|---:|---:|---:|---:|---:|
+| Quenary_tugtainer-f4dh8w | Quenary/tugtainer | CVE-2026-23846 | Python | CWE-598 | 2026-01-19 | 10,054 | 2 | 0 | 1 / 0 | 2 |
+| OpenBMB_XAgent-f73set | OpenBMB/XAgent | CVE-2026-72713 | Python | CWE-22 | 2026-08-11 | 20,522 | 12 | 4 | 0 / 0 | 15 |
+| wooey_Wooey-rzhxdt | wooey/Wooey | CVE-2026-7142 | Python | CWE-266, CWE-285 | 2026-04-27 | 6,542 | 1 | 0 | 0 / 0 | 1 |
+| go-shiori_shiori-f6jaq5 | go-shiori/shiori | CVE-2026-61463 | Go | CWE-269 | 2026-07-13 | 18,207 | 1 | 0 | 0 / 0 | 1 |
+| feiyuchuixue_sz-boot-parent-rzfdja | feiyuchuixue/sz-boot-parent | CVE-2026-3187 | Java | CWE-284, CWE-434 | 2026-02-25 | 29,822 | 10 | 8 | 4 / 40 | 10 |
+| geopython_pygeoapi-f5gbrd | geopython/pygeoapi | CVE-2026-42352 | Python | CWE-918 | 2026-05-08 | 32,155 | 7 | 4 | 0 / 0 | 7 |
+| juice-shop_multi-juicer-f5k72n | juice-shop/multi-juicer | CVE-2026-48518 | JavaScript/TypeScript | CWE-352 | 2026-06-15 | 13,572 | 3 | 2 | 0 / 0 | 4 |
+| vmDeshpande_ai-agent-automation-f61fpx | vmDeshpande/ai-agent-automation | CVE-2026-54519 | JavaScript/TypeScript | CWE-862 | 2026-09-17 | 23,644 | 15 | 1 | 0 / 0 | 12 |
+| zhenorzz_goploy-f60sto | zhenorzz/goploy | CVE-2026-53553 | Go | CWE-22, CWE-200 | 2026-08-31 | 24,931 | 8 | 3 | 0 / 0 | 8 |
+| ShaneIsrael_fireshare-f4xw32 | ShaneIsrael/fireshare | CVE-2026-34745 | JavaScript/TypeScript | CWE-22 | 2026-04-02 | 20,699 | 2 | 0 | 2 / 0 | 2 |
+| denpiligrim_3dp-manager-f4er4f | denpiligrim/3dp-manager | CVE-2026-25803 | JavaScript/TypeScript | CWE-798 | 2026-02-06 | 5,119 | 2 | 1 | 0 / 0 | 2 |
+| vastsa_FileCodeBox-f6l91z | vastsa/FileCodeBox | CVE-2026-64619 | Python | CWE-348 | 2026-07-20 | 5,899 | 8 | 3 | 1 / 12 | 8 |
+
+Languages: Python 5, JavaScript/TypeScript 4, Go 2, Java 1. The language is the one with the most
+lines; `fireshare`'s label is in its Python server, but its frontend has more lines. Eight targets
+were also drawn in variant 1 ( tugtainer, Wooey, shiori, pygeoapi, multi-juicer,
+ai-agent-automation, goploy, FileCodeBox); four are new. "loc" is `scope_loc` at the reviewed commit, vendored
+files left out.
+
+**Truth.** 71 labels. The widest is 25 lines, the median 1, and none needed capping. Every label
+lies inside its file at the reviewed commit, carries `advisory` and `cwes`, and no label carries
+`cwe` or `vuln_class`. `ai-agent-automation` has labels from a second advisory still open in the
+reviewed tree.
+
+**Neutral regions** (`truth/<name>.neutral.json`): 8 open advisories without labels, 52 regions.
+- 40 of the regions belong to four `sz-boot-parent` advisories that share the drawn advisory's fix
+  commit, so they coincide with its labels, and a claim there is a true positive regardless.
+- The 12 that add area belong to `FileCodeBox`'s diffuse advisory, whose fix yields 16 labels.
+- Three advisories are listed with no region: two that OSV's by-commit query reports open but whose
+  records type no FIX commit (`tugtainer`, `fireshare`), and one whose every region changed between
+  the reviewed tree and its fix (`fireshare`).
+
+**Patched twins** (`twins.json`, `truth/<name>-patched.truth.json` = `[]`): 12 twins with 72
+fixed regions in all, scored by `rescore.ts` `controlScore`.
+
+**Separate controls:** variant 1's `mesop` fails rules v2 (its README calls it "a Python-based UI
+framework") and is dropped. `DSA-with-tsx` passes rules v2 and the control rules, so it is kept
+(`controls.json`).
+
+All 25 trees (12 targets, 12 twins, 1 control) were built with `materialise`; leak stripping
+removed 0 to 5 files per tree and no labelled or fixed-region file.
 
 ## Results (variant 1)
 

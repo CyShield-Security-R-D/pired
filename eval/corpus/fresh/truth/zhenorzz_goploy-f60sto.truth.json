@@ -1,0 +1,130 @@
+[
+  {
+    "id": "CVE-2026-53553-1",
+    "title": "CVE-2026-53553",
+    "severity": "high",
+    "file": "cmd/server/api/deploy/handler.go",
+    "line": 300,
+    "line_range": [
+      300,
+      300
+    ],
+    "advisory": "CVE-2026-53553",
+    "cwes": [
+      "CWE-22",
+      "CWE-200"
+    ]
+  },
+  {
+    "id": "CVE-2026-53553-2",
+    "title": "CVE-2026-53553",
+    "severity": "high",
+    "file": "cmd/server/api/deploy/handler.go",
+    "line": 399,
+    "line_range": [
+      399,
+      399
+    ],
+    "advisory": "CVE-2026-53553",
+    "cwes": [
+      "CWE-22",
+      "CWE-200"
+    ]
+  },
+  {
+    "id": "CVE-2026-53553-3",
+    "title": "CVE-2026-53553",
+    "severity": "high",
+    "file": "cmd/server/api/project/handler.go",
+    "line": 359,
+    "line_range": [
+      359,
+      359
+    ],
+    "advisory": "CVE-2026-53553",
+    "cwes": [
+      "CWE-22",
+      "CWE-200"
+    ]
+  },
+  {
+    "id": "CVE-2026-53553-4",
+    "title": "CVE-2026-53553",
+    "severity": "high",
+    "file": "cmd/server/api/repository/handler.go",
+    "line": 181,
+    "line_range": [
+      181,
+      181
+    ],
+    "advisory": "CVE-2026-53553",
+    "cwes": [
+      "CWE-22",
+      "CWE-200"
+    ]
+  },
+  {
+    "id": "CVE-2026-53553-5",
+    "title": "CVE-2026-53553",
+    "severity": "high",
+    "file": "cmd/server/api/repository/handler.go",
+    "line": 222,
+    "line_range": [
+      222,
+      222
+    ],
+    "advisory": "CVE-2026-53553",
+    "cwes": [
+      "CWE-22",
+      "CWE-200"
+    ]
+  },
+  {
+    "id": "CVE-2026-53553-6",
+    "title": "CVE-2026-53553",
+    "severity": "high",
+    "file": "cmd/server/api/repository/handler.go",
+    "line": 243,
+    "line_range": [
+      243,
+      243
+    ],
+    "advisory": "CVE-2026-53553",
+    "cwes": [
+      "CWE-22",
+      "CWE-200"
+    ]
+  },
+  {
+    "id": "CVE-2026-53553-7",
+    "title": "CVE-2026-53553",
+    "severity": "high",
+    "file": "cmd/server/api/repository/handler.go",
+    "line": 263,
+    "line_range": [
+      263,
+      263
+    ],
+    "advisory": "CVE-2026-53553",
+    "cwes": [
+      "CWE-22",
+      "CWE-200"
+    ]
+  },
+  {
+    "id": "CVE-2026-53553-8",
+    "title": "CVE-2026-53553",
+    "severity": "high",
+    "file": "internal/pkg/util.go",
+    "line": 12,
+    "line_range": [
+      12,
+      12
+    ],
+    "advisory": "CVE-2026-53553",
+    "cwes": [
+      "CWE-22",
+      "CWE-200"
+    ]
+  }
+]

@@ -1,0 +1,80 @@
+[
+  {
+    "id": "CVE-2026-28678",
+    "package": "toxicbishop/DSA-with-tsx",
+    "repo": "toxicbishop/DSA-with-tsx",
+    "entries": 0,
+    "scope": [
+      "."
+    ],
+    "cwe": [
+      "CWE-311",
+      "CWE-522"
+    ],
+    "severity": "high",
+    "published": "2026-03-07",
+    "fix_commit": "d527fba3b3c15f185b9d1e730322dff9248391e4",
+    "scope_files": 34,
+    "scope_loc": 10060,
+    "name": "toxicbishop_DSA-with-tsx-f4gmrs",
+    "target": "PLACEHOLDER/corpus/toxicbishop_DSA-with-tsx-f4gmrs",
+    "truth": "PLACEHOLDER/corpus/truth/toxicbishop_DSA-with-tsx-f4gmrs.truth.json",
+    "reviewed_commit": "d527fba3b3c15f185b9d1e730322dff9248391e4",
+    "language": "JavaScript/TypeScript",
+    "control": true,
+    "carried_from_variant": 1,
+    "aliases": [
+      "GHSA-vmxr-562h-rcgg"
+    ],
+    "fixed_regions": [
+      {
+        "advisory": "CVE-2026-28678",
+        "file": "server/middleware/auth.js",
+        "line_range": [
+          5,
+          17
+        ]
+      },
+      {
+        "advisory": "CVE-2026-28678",
+        "file": "server/routes/auth.js",
+        "line_range": [
+          61,
+          61
+        ]
+      },
+      {
+        "advisory": "CVE-2026-28678",
+        "file": "server/routes/auth.js",
+        "line_range": [
+          158,
+          158
+        ]
+      },
+      {
+        "advisory": "CVE-2026-28678",
+        "file": "server/routes/auth.js",
+        "line_range": [
+          251,
+          251
+        ]
+      },
+      {
+        "advisory": "CVE-2026-28678",
+        "file": "server/routes/auth.js",
+        "line_range": [
+          313,
+          313
+        ]
+      },
+      {
+        "advisory": "CVE-2026-28678",
+        "file": "server/utils/cookieCrypto.js",
+        "line_range": [
+          1,
+          31
+        ]
+      }
+    ]
+  }
+]

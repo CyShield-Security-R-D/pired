@@ -1,0 +1,32 @@
+[
+  {
+    "id": "CVE-2026-25803-1",
+    "title": "CVE-2026-25803",
+    "severity": "critical",
+    "file": "server/src/auth/auth.service.ts",
+    "line": 15,
+    "line_range": [
+      15,
+      15
+    ],
+    "advisory": "CVE-2026-25803",
+    "cwes": [
+      "CWE-798"
+    ]
+  },
+  {
+    "id": "CVE-2026-25803-2",
+    "title": "CVE-2026-25803",
+    "severity": "critical",
+    "file": "server/src/auth/auth.service.ts",
+    "line": 88,
+    "line_range": [
+      88,
+      93
+    ],
+    "advisory": "CVE-2026-25803",
+    "cwes": [
+      "CWE-798"
+    ]
+  }
+]
