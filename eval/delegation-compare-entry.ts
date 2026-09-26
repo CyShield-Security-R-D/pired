@@ -56,10 +56,29 @@ export interface ProbeConfig {
 	readDenied: string[];
 	/** Absolute paths that MUST stay readable (the target copy, the config, the node binary). */
 	readAllowed: string[];
-	/** "seal" (the default) answers the first request at once; "delegation" drives two scripted worker launches. */
-	mode?: "seal" | "delegation";
+	/**
+	 * "seal" (the default) answers the first request at once; "delegation" drives
+	 * two scripted worker launches; "ceiling" runs a matched session's token
+	 * ceiling against a scripted reply that records one element and crosses it.
+	 */
+	mode?: "seal" | "delegation" | "ceiling";
 	/** Required with mode "delegation". */
 	delegation?: DelegationProbePlan;
+	/** Required with mode "ceiling". */
+	ceiling?: CeilingProbePlan;
+}
+
+/**
+ * The token-ceiling probe (plan item 2.5). The scripted model's first reply
+ * calls `record` and, under a ceiling of one token, crosses it. The record must
+ * land in the ledger (the abort waits for the turn's tools), and no second
+ * request may be made (the abort lands before it). A second request would record
+ * `<recordPath>-after`, so a ceiling that failed to stop the run is visible in the
+ * ledger as well as in the request count.
+ */
+export interface CeilingProbePlan {
+	recordFile: string;
+	recordPath: string;
 }
 
 export interface CompareEntryConfig {
@@ -251,7 +270,9 @@ export function tokenCeilingMeter(ceiling: number): { observe(event: unknown): b
 				tokens = tokensOf(row.result?.usage);
 				on = "compaction";
 			} else return false;
-			if (tokens === undefined) return false;
+			// A reply that reports no tokens is not a metered request: the empty reply
+			// pi writes for the request an abort kept from being sent is one.
+			if (tokens === undefined || tokens === 0) return false;
 			state.metered += tokens;
 			state.requests++;
 			if (state.reached || state.metered < ceiling) return false;
@@ -268,24 +289,64 @@ export function tokenCeilingMeter(ceiling: number): { observe(event: unknown): b
 export interface CeilingSession {
 	subscribe(listener: (event: unknown) => void): () => void;
 	abort(): Promise<void>;
+	/** pi 0.87.1 AgentSession.abortCompaction: aborts a running manual or automatic compaction. */
+	abortCompaction(): void;
 }
 
 /**
- * Watch a session and abort it once the ceiling is reached. pi calls a session
- * listener synchronously while the agent loop awaits its own listeners
- * (agent-session.js `_handleAgentEvent`, pi-agent-core agent.js), so the abort
- * lands after the reaching reply's `message_end` and before its tool calls
- * run: the tools see an aborted signal, and the next request is never sent (pi
- * writes the empty "This operation was aborted" reply the accounting already
- * recognises for workers). The abort is not awaited here, because it waits for
- * the very run that is delivering this event.
+ * Watch a session and abort it once the ceiling is reached, between requests.
+ *
+ * - **A reply that reaches it** is metered at its `message_end`, and the abort
+ *   waits for that turn's `turn_end`. Its tool calls run first, so a `record`
+ *   in the crossing reply lands in the ledger; running a tool costs no tokens.
+ *   An abort at `message_end` turned every one of those calls into "Operation
+ *   aborted" and threw the reply's findings away.
+ * - **A compaction that reaches it** aborts at once: its `compaction_end` comes
+ *   between requests.
+ * - **A compaction that starts after it** (pi runs a threshold compaction
+ *   before the next request, and an overflow one in the turn's finish) is
+ *   aborted at its `compaction_start`. pi emits that event and then checks the
+ *   compaction's signal before resolving auth (agent-session.js
+ *   `_runAutoCompaction`), so the summary request is never sent.
+ *
+ * pi calls a session listener synchronously while the agent loop awaits its own
+ * listeners (agent-session.js `_handleAgentEvent`, pi-agent-core agent.js), so
+ * the abort lands before the next request: pi writes the empty "This operation
+ * was aborted" reply for it, which the accounting drops. What is left is the
+ * crossing request's own overshoot, at most one request's full context (cache
+ * reads included, since they are in its totalTokens) plus its output. The abort
+ * is not awaited, because it waits for the very run delivering this event.
  */
 export function watchTokenCeiling(session: CeilingSession, ceiling: number): { readonly state: TokenCeilingState; stop(): void } {
 	const meter = tokenCeilingMeter(ceiling);
+	let abortAtTurnEnd = false;
+	const abort = (): void => { void session.abort().catch(() => undefined); };
 	const unsubscribe = session.subscribe((event) => {
-		if (meter.observe(event)) void session.abort().catch(() => undefined);
+		const type = (event as { type?: unknown } | undefined)?.type;
+		if (meter.observe(event)) {
+			if (type === "compaction_end") abort();
+			else abortAtTurnEnd = true;
+			return;
+		}
+		if (!meter.state.reached) return;
+		if (type === "compaction_start") session.abortCompaction();
+		else if (type === "turn_end" && abortAtTurnEnd) {
+			abortAtTurnEnd = false;
+			abort();
+		}
 	});
 	return { state: meter.state, stop: unsubscribe };
+}
+
+/** The ceiling probe's script: every request records one element; only the first may ever be made. */
+function scriptCeilingProbe(ai: FauxAi, plan: CeilingProbePlan, calls: ProbeCall[]): Array<(context: { messages: unknown[] }) => unknown> {
+	const step = (context: { messages: unknown[] }): unknown => {
+		calls.push({ n: calls.length + 1, side: "parent", tools: ai.getCurrentTools(context.messages).map((t) => t.name), results: [] });
+		const path = calls.length === 1 ? plan.recordPath : `${plan.recordPath}-after`;
+		return ai.fauxAssistantMessage([ai.fauxText("Recording the entry point."), ai.fauxToolCall("record", { kind: "endpoint", method: "GET", path, file: plan.recordFile })],
+			{ responseId: `probe-ceiling-${calls.length}`, stopReason: "toolUse" });
+	};
+	return Array.from({ length: 4 }, () => step);
 }
 
 /** The scripted model the delegation probe registers; its name cannot collide with a real provider. */
@@ -508,7 +569,8 @@ function validateConfig(config: CompareEntryConfig): void {
 	if (config.tokenCeiling !== undefined && (!Number.isSafeInteger(config.tokenCeiling) || config.tokenCeiling < 1)) {
 		throw new Error("Invalid tokenCeiling: expected a positive integer token count");
 	}
-	if (config.tokenCeiling !== undefined && config.probe !== undefined) throw new Error("tokenCeiling is for a scored run; a probe takes none");
+	if (config.tokenCeiling !== undefined && config.probe !== undefined && config.probe.mode !== "ceiling") throw new Error("tokenCeiling is for a scored run or the ceiling probe; another probe takes none");
+	if (config.probe?.mode === "ceiling" && config.tokenCeiling === undefined) throw new Error("the ceiling probe needs a tokenCeiling");
 	if (config.probe !== undefined) {
 		const probe = config.probe as Partial<ProbeConfig>;
 		for (const key of ["readDenied", "readAllowed"] as const) {
@@ -517,7 +579,11 @@ function validateConfig(config: CompareEntryConfig): void {
 				throw new Error(`Invalid probe.${key}: expected an array of absolute path strings`);
 			}
 		}
-		if (probe.mode !== undefined && probe.mode !== "seal" && probe.mode !== "delegation") throw new Error(`Invalid probe.mode: ${String(probe.mode)}`);
+		if (probe.mode !== undefined && probe.mode !== "seal" && probe.mode !== "delegation" && probe.mode !== "ceiling") throw new Error(`Invalid probe.mode: ${String(probe.mode)}`);
+		if (probe.mode === "ceiling") {
+			const plan = (probe.ceiling ?? {}) as Partial<CeilingProbePlan>;
+			for (const key of ["recordFile", "recordPath"] as const) if (typeof plan[key] !== "string" || !plan[key]) throw new Error(`Missing probe.ceiling.${key}`);
+		}
 		if (probe.mode === "delegation") {
 			const plan = (probe.delegation ?? {}) as Partial<DelegationProbePlan>;
 			for (const key of ["agent", "recordFile", "recordPath", "blockedCommand", "markerPath", "childSessionDir"] as const) {
@@ -532,6 +598,7 @@ async function main() {
 	const config: CompareEntryConfig = JSON.parse(await readFile(process.argv[2]!, "utf8"));
 	validateConfig(config);
 	const delegationPlan = config.probe?.mode === "delegation" ? config.probe.delegation : undefined;
+	const ceilingPlan = config.probe?.mode === "ceiling" ? config.probe.ceiling : undefined;
 	const {
 		createAgentSessionFromServices, createAgentSessionRuntime, createAgentSessionServices,
 		ModelRuntime, runPrintMode, SessionManager, SettingsManager,
@@ -576,7 +643,9 @@ async function main() {
 	const faux = probe
 		? (() => {
 			const handle = hostAi.fauxProvider({ provider: PROBE_FAUX_PROVIDER, models: [{ id: PROBE_FAUX_MODEL, reasoning: true, contextWindow: 200_000, maxTokens: 8192 }] });
-			handle.setResponses(delegationPlan ? scriptFaux(hostAi, delegationPlan, probeCalls) : scriptSealProbe(hostAi, probe, probeCalls, sealSeen));
+			handle.setResponses(delegationPlan ? scriptFaux(hostAi, delegationPlan, probeCalls)
+				: ceilingPlan ? scriptCeilingProbe(hostAi, ceilingPlan, probeCalls)
+				: scriptSealProbe(hostAi, probe, probeCalls, sealSeen));
 			return handle;
 		})()
 		: undefined;
@@ -626,6 +695,16 @@ async function main() {
 	}, { cwd: config.cwd, agentDir: config.agentDir, sessionManager: SessionManager.inMemory(config.cwd) });
 	if (probe && delegationPlan) {
 		process.exitCode = await runDelegationProbe(runtime, runPrintMode, probe, delegationPlan, probeCalls, config.prompt);
+		return;
+	}
+	if (probe && ceilingPlan) {
+		// The scored path's own watcher and print mode, against the scripted model.
+		const watch = watchTokenCeiling(runtime.session as unknown as CeilingSession, config.tokenCeiling!);
+		const exitCode = await runPrintMode(runtime, { mode: "json", initialMessage: config.prompt });
+		watch.stop();
+		console.log(JSON.stringify({ type: "benchmark_token_ceiling", ...watch.state }));
+		console.log(JSON.stringify({ type: "benchmark_probe_ceiling", exitCode, requests: probeCalls.length }));
+		process.exitCode = exitCode;
 		return;
 	}
 	if (probe) {

@@ -82,31 +82,56 @@ describe("tokenCeilingMeter", () => {
 });
 
 describe("watchTokenCeiling", () => {
-	it("aborts between requests: once, right after the reaching reply ends, so no request is left unmetered", () => {
+	// A fake session that logs what the watcher does between the events it is sent.
+	const fakeSession = () => {
 		const listeners: Array<(event: unknown) => void> = [];
 		const log: string[] = [];
 		const session = {
 			subscribe(listener: (event: unknown) => void) { listeners.push(listener); return () => { listeners.length = 0; }; },
 			abort: async () => { log.push("abort"); },
+			abortCompaction: () => { log.push("abort compaction"); },
 		};
-		const watch = watchTokenCeiling(session, 1000);
 		const emit = (event: unknown, label: string) => { log.push(label); for (const l of [...listeners]) l(event); };
-		emit(reply(600), "reply 1");
-		emit({ type: "tool_execution_end" }, "tool 1");
-		emit(reply(600), "reply 2");
-		emit({ type: "message_end", message: { role: "assistant", stopReason: "error", usage: { totalTokens: 0 } } }, "aborted before request");
-		expect(log).toEqual(["reply 1", "tool 1", "reply 2", "abort", "aborted before request"]);
-		expect(watch.state).toMatchObject({ metered: 1200, requests: 3, reachedAtRequest: 2, cut: true });
+		return { session, emit, log, listeners };
+	};
+	const recordCall = { type: "toolCall", id: "t1", name: "record", arguments: { kind: "endpoint", path: "/login" } };
+	const crossing = { type: "message_end", message: { role: "assistant", stopReason: "toolUse", content: [recordCall], usage: { totalTokens: 600 } } };
+
+	it("lets the crossing reply's record call run, and aborts at that turn's end, before the next request", () => {
+		const f = fakeSession();
+		const watch = watchTokenCeiling(f.session, 1000);
+		f.emit(reply(600), "reply 1");
+		f.emit({ type: "turn_end" }, "turn 1 end");
+		f.emit(crossing, "reply 2 (crosses, calls record)");
+		f.emit({ type: "tool_execution_start", toolName: "record" }, "record runs");
+		f.emit({ type: "tool_execution_end", toolName: "record", isError: false }, "record lands");
+		f.emit({ type: "turn_end" }, "turn 2 end");
+		f.emit({ type: "message_end", message: { role: "assistant", stopReason: "error", errorMessage: "This operation was aborted", content: [], usage: { totalTokens: 0 } } }, "request 3 never sent");
+		// The abort comes after the record call finished, never between the reply and its tools.
+		expect(f.log).toEqual(["reply 1", "turn 1 end", "reply 2 (crosses, calls record)", "record runs", "record lands", "turn 2 end", "abort", "request 3 never sent"]);
+		// The empty reply of the request never sent is not a metered request.
+		expect(watch.state).toMatchObject({ metered: 1200, requests: 2, reachedAtRequest: 2, cut: true });
 		watch.stop();
-		expect(listeners).toHaveLength(0);
+		expect(f.listeners).toHaveLength(0);
 	});
 
-	it("never aborts a session that stays under its ceiling", () => {
-		let aborted = 0;
-		let listener: ((event: unknown) => void) | undefined;
-		watchTokenCeiling({ subscribe: (l) => { listener = l; return () => undefined; }, abort: async () => { aborted++; } }, 10_000);
-		for (let i = 0; i < 5; i++) listener?.(reply(1000));
-		listener?.(reply(1000, "stop"));
-		expect(aborted).toBe(0);
+	it("aborts at once when a compaction reaches the ceiling, and aborts any compaction that starts after it", () => {
+		const f = fakeSession();
+		watchTokenCeiling(f.session, 1000);
+		f.emit(reply(900), "reply 1");
+		f.emit({ type: "compaction_start", reason: "threshold" }, "compaction 1 starts");
+		f.emit({ type: "compaction_end", result: { usage: { totalTokens: 200 } } }, "compaction 1 ends (crosses)");
+		f.emit({ type: "compaction_start", reason: "threshold" }, "compaction 2 starts");
+		expect(f.log).toEqual(["reply 1", "compaction 1 starts", "compaction 1 ends (crosses)", "abort", "compaction 2 starts", "abort compaction"]);
+	});
+
+	it("never aborts a session that stays under its ceiling, nor a compaction before it", () => {
+		const f = fakeSession();
+		watchTokenCeiling(f.session, 10_000);
+		for (let i = 0; i < 5; i++) { f.emit(reply(1000), `reply ${i}`); f.emit({ type: "turn_end" }, "turn end"); }
+		f.emit({ type: "compaction_start" }, "compaction starts");
+		f.emit(reply(1000, "stop"), "last reply");
+		f.emit({ type: "turn_end" }, "turn end");
+		expect(f.log.filter((l) => l.startsWith("abort"))).toEqual([]);
 	});
 });
