@@ -870,7 +870,7 @@ export const QUOTE_WINDOW = 3;
  * A quote proves the line was read only if it could not have been guessed, and
  * what makes a quote guessable is how common it is in that file, not how long
  * it is. A length rule measured the wrong thing both ways: twelve characters
- * passed `return nil, err`, which sits near half the lines of a Go handler, and
+ * passed `return nil, err`, which a Go handler repeats after most error-returning calls, and
  * failed `if not user:`, which is a guard a file has once. So a quote grounds
  * when it is in the window AND occurs at most this many times in the whole file
  * (whitespace normalised). Three allows the same guard repeated on a handful of
