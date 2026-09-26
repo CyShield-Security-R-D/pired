@@ -144,6 +144,12 @@ export interface ToolContext {
 	cwd: string;
 	services: HostServices;
 	signal?: AbortSignalLike;
+	/**
+	 * Who is writing through this call, when it is not whoever the tool was built
+	 * for (`ToolDeps.author`). The scribe writes through the lead's own `record`
+	 * tool — one write path, one set of rules — so its rows are told apart here.
+	 */
+	author?: string;
 }
 
 /**

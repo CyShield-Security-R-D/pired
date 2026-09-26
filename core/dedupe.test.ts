@@ -65,6 +65,23 @@ describe("planning a sweep", () => {
 		expect(plan.writes[0]?.records[0]).toMatchObject({ id: "f1", severity: "high", cwe: "CWE-639" });
 	});
 
+	it("keeps the keeper's author through a fold, and invents none for a keeper that had none", () => {
+		// The fold is a merge like `record`'s, and a merge keeps the creator: letting
+		// the newest loser's `by` win would credit a worker's lead to the lead that
+		// repeated it, which is the one distinction the field exists to keep.
+		const plan = planCompaction(ledgers({
+			findings: [
+				row({ kind: "finding", title: "IDOR", severity: "low", target: "share.go:88", status: "open", by: "pired-investigate" }, "f1"),
+				row({ kind: "finding", title: "IDOR", severity: "high", target: "share.go:88", status: "open", by: "lead" }, "f2"),
+				row({ kind: "finding", title: "SSRF", severity: "high", target: "fetch.go:12", status: "open" }, "f3"),
+				row({ kind: "finding", title: "SSRF", severity: "high", target: "fetch.go:12", cwe: "CWE-918", status: "open", by: "lead" }, "f4"),
+			],
+		}), NOW);
+		const written = plan.writes[0]?.records ?? [];
+		expect(written.find((r) => r.id === "f1" && !r.deleted)?.by).toBe("pired-investigate");
+		expect(written.find((r) => r.id === "f3" && !r.deleted)).not.toHaveProperty("by");
+	});
+
 	it("moves every reference onto the surviving id", () => {
 		// Tombstoning an element that hypotheses target would strand their cells:
 		// they would point at a row no read returns, and the matrix would quietly

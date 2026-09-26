@@ -161,6 +161,22 @@ describe("openChildWorkspace", () => {
 		expect(rows).toEqual([expect.objectContaining({ kind: "endpoint", path: "/child-probe", file: "src/routes.ts" })]);
 	});
 
+	it("stamps a worker's rows with its agent name, read at the write, and never leaves one unattributed", async () => {
+		// The role can be learned after the tools are built, so the name is read
+		// when the row is written. A worker whose role never resolved is still a
+		// worker: its row must not read as the lead's, nor as nobody's.
+		const { svc, registry } = await parentWorkspace();
+		let name: string | undefined;
+		const setup = await openChildWorkspace(DIR, svc, { scopeRegistry: registry, author: () => name });
+		const record = setup.tools.find((t) => t.name === "record");
+		const ctx: ToolContext = { cwd: "/target", services: svc };
+		await record?.execute({ kind: "finding", title: "Verbose stack traces", severity: "low", target: "src/errors.ts:3" }, ctx);
+		name = "pired-investigate";
+		await record?.execute({ kind: "finding", title: "Missing owner check on invoice export", severity: "high", target: "src/export.ts:40" }, ctx);
+		const rows = await new Workspace(DIR, svc).read("findings");
+		expect(rows.map((r) => r.by)).toEqual(["worker", "pired-investigate"]);
+	});
+
 	/**
 	 * The reserve and the settle reminder used to count every `record` call that
 	 * resolved, so `record kind=evidence` — a file, not a ledger row — or a repeat

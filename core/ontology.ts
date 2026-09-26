@@ -257,7 +257,31 @@ export interface RecordBase {
 	 * what makes the per-pass delta a measurement rather than a restatement.
 	 */
 	pass?: number;
+	/**
+	 * Who created this row: `lead`, a worker's agent name (`pired-investigate`,
+	 * …), `scribe` or `operator` — see the AUTHOR constants below. Absent on every
+	 * row written before it existed, and absent means unknown.
+	 *
+	 * Stamped by the record path from what the host says is writing, and deleted
+	 * from caller input, the rule `pass` and `verification` follow: a worker that
+	 * could name its author could pass its own lead off as the lead's. Set on
+	 * creation only, so a merge, an update by id and the duplicate sweep keep the
+	 * creator. ADR-028 left it out because nothing depended on it; the stop
+	 * classifier's fairness note (ADR-030) and the verification tier now do.
+	 */
+	by?: string;
 }
+
+/**
+ * The `by` values the host stamps, besides a worker's agent name.
+ *
+ * `worker` is the fallback for a child whose role could not be read from its
+ * prompt, so a worker's row never reads as the lead's.
+ */
+export const LEAD_AUTHOR = "lead";
+export const SCRIBE_AUTHOR = "scribe";
+export const OPERATOR_AUTHOR = "operator";
+export const UNNAMED_WORKER_AUTHOR = "worker";
 
 // ---------------------------------------------------------------------------
 // Workspace manifest

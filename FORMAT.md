@@ -86,6 +86,27 @@ never. It is written by the record path and deleted from caller input: a caller
 that could assert which pass it was on could assert the coverage that goes with
 it, the same rule `verification` follows (§8.3).
 
+One more, on every row created since Phase 3 of delegation v6:
+
+```jsonc
+{ "v":1, "id":"f3a9", "kind":"finding", "createdAt":"...", "by": "pired-investigate" }
+```
+
+`by` is who **created** the row:
+
+| `by` | written by |
+|---|---|
+| `lead` | the session's own model, through `record` |
+| a worker's agent name (`pired-scout`, `pired-investigate`, `pired-verify`, `pired-escalate`) | a pired worker, named by its gate's identity; `worker` when the role could not be read |
+| `scribe` | the scribe, writing the review into the ledger |
+| `operator` | the `pired-ledger` CLI, run from outside any pired session |
+
+The record path stamps it from what the host says is writing, and deletes it from
+caller input, as it does `pass`. A caller that could name its author could pass a
+worker's lead off as the lead's. It is set on creation only: a merge, an update by
+id and the `/dedupe` sweep keep the creator. **Absent means unknown**, which is
+every row written before it existed.
+
 ## 5. `manifest.json`
 
 Single JSON object at the workspace root.
@@ -378,5 +399,8 @@ Login uses a legacy session cookie without SameSite. Worth an CSRF pass on state
 ## 13. Migration log
 
 - `formatVersion 1` — initial specification. No prior versions.
+- `formatVersion 1`, Phase 3 groundwork — `by` on every created row (§4). Additive
+  and optional, so no version bump: a ledger written before it reads unchanged, its
+  rows with no author.
 
 *(Future breaking changes append here with the old→new field mapping and reader behavior.)*

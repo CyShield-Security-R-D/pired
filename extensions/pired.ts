@@ -30,7 +30,7 @@ import { challengeCommand, unchallengedBrief, unchallengedQueue } from "../core/
 import { promptBlocker } from "./lib/blocker-prompt.ts";
 import { exportFindingsMarkdown, notReportReady } from "../core/export.ts";
 import { bannerColumns, browserBodyRows, OVERLAY, OVERLAY_HEIGHT_SHARE, panelHeight, railColumns } from "../core/layout.ts";
-import type { BlockerRecord, Checklist, EngagementScope, FindingRecord, PassLens, Severity, TargetType } from "../core/ontology.ts";
+import { type BlockerRecord, type Checklist, type EngagementScope, type FindingRecord, LEAD_AUTHOR, type PassLens, SCRIBE_AUTHOR, type Severity, type TargetType } from "../core/ontology.ts";
 import type { ToolContext, ToolDefinition } from "../core/ports.ts";
 import { buildSystemPrompt, PIRED_PROFILES, type PiredProfile } from "../core/prompts.ts";
 import { publishParentScope } from "../core/child.ts";
@@ -1454,8 +1454,9 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		// verdict rather than when it was built: any reassignment of `scope` reaches
 		// it with no second wiring. A source-only engagement (no live target) does
 		// not hold a refutation to a live-target bar it cannot meet — see
-		// core/scope.ts `isSourceOnly`.
-		for (const tool of createCoreTools({ workspace, pass: passNow, sourceOnly: () => isSourceOnly(scope) })) {
+		// core/scope.ts `isSourceOnly`. Rows this session's model creates are the
+		// lead's; the scribe, writing through the same tool, says so on its call.
+		for (const tool of createCoreTools({ workspace, pass: passNow, sourceOnly: () => isSourceOnly(scope), author: () => LEAD_AUTHOR })) {
 			const presentation = tool.name === "record" ? { renderResult: renderRecordResult } : undefined;
 			// Held so phase two can write through the same tool the model would have
 			// called: same validation, same ids, same coverage effect. A second write
@@ -1973,8 +1974,9 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		// lookup returns immediately — which is why every finding this pass wrote
 		// across a whole corpus run carried a filename and no line, and every one
 		// was dropped before scoring. The tool context the agent's own calls arrive
-		// with has it; this synthetic one has to supply it too.
-		const toolCtx: ToolContext = { cwd: ctx.cwd, services, mode: ctx.mode } as unknown as ToolContext;
+		// with has it; this synthetic one has to supply it too. So does `author`:
+		// the tool was built for the lead, and these rows are the scribe's.
+		const toolCtx: ToolContext = { cwd: ctx.cwd, services, mode: ctx.mode, author: SCRIBE_AUTHOR } as unknown as ToolContext;
 
 		// Surface first: hypotheses and findings target elements by label, so the
 		// elements have to exist before anything can point at them.

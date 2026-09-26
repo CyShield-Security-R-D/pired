@@ -55,8 +55,12 @@ export interface CompactionPlan {
 	removed: number;
 }
 
-/** Meta a merge must not carry over from a loser. */
-const META = ["v", "id", "kind", "createdAt", "updatedAt", "deleted", "deletedReason", "duplicateOf"];
+/**
+ * Meta a merge must not carry over from a loser. `by` among it: the keeper is the
+ * oldest row, so its author is the creator, and a fold that let the newest
+ * loser's author win would credit the bug to whoever repeated it.
+ */
+const META = ["v", "id", "kind", "createdAt", "updatedAt", "deleted", "deletedReason", "duplicateOf", "by"];
 
 function content(rec: Fields): Fields {
 	const out: Fields = {};
@@ -103,6 +107,7 @@ function fold(group: DuplicateGroup, now: string): LedgerRecord {
 		...merged,
 		v: RECORD_VERSION, id: group.keeper.id, kind: group.keeper.kind,
 		createdAt: group.keeper.createdAt, updatedAt: now,
+		...(group.keeper.by === undefined ? {} : { by: group.keeper.by }),
 	} as unknown as LedgerRecord;
 }
 

@@ -320,6 +320,18 @@ describe("pired child extension wiring", () => {
 		expect(await toolCall(fire, ctx, "record", { kind: "finding", id: "f-2", status: "suspected", basis: ["src/errors.ts:1"] })).toBeUndefined();
 	});
 
+	it("stamps the rows a worker creates with the agent name its gate identified", async () => {
+		const { ws } = await parentSession();
+		const { fire, tools } = fakePi();
+		const ctx = ctxFor(root, agentMarker("pired-investigate"));
+		await fire("session_start", {}, ctx);
+		await tools.find((t) => t.name === "record")?.execute("r1", {
+			kind: "finding", title: "Export CSV includes other tenants' totals", severity: "high", target: "src/export.ts:88", by: "lead",
+		}, undefined, undefined, { cwd: root });
+		const rows = await new Workspace(ws, makeHostServices()).read("findings");
+		expect(rows).toEqual([expect.objectContaining({ title: "Export CSV includes other tenants' totals", by: "pired-investigate" })]);
+	});
+
 	it("learns its role from before_agent_start when the session_start prompt has no marker", async () => {
 		await parentSession();
 		const { fire } = fakePi();

@@ -113,6 +113,7 @@ async function main() {
   const { Workspace } = await import(pathToFileURL(join(src, "core", "workspace.ts")).href);
   const { createCoreTools } = await import(pathToFileURL(join(src, "core", "tools.ts")).href);
   const { parseLenses, passState, resolveLadder } = await import(pathToFileURL(join(src, "core", "passes.ts")).href);
+  const { OPERATOR_AUTHOR } = await import(pathToFileURL(join(src, "core", "ontology.ts")).href);
   const { makeHostServices } = await import(pathToFileURL(join(src, "extensions", "lib", "host.ts")).href);
 
   const services = makeHostServices();
@@ -171,7 +172,9 @@ async function main() {
     process.exit(0);
   }
 
-  const tools = createCoreTools({ workspace, pass: () => pass });
+  // Rows written from outside any session pired runs — a script, CI, an agent the
+  // operator started by hand — are the operator's: no lead or worker made them.
+  const tools = createCoreTools({ workspace, pass: () => pass, author: () => OPERATOR_AUTHOR });
   const tool = tools.find((t) => t.name === plan.verb);
   if (!tool) {
     process.stderr.write(`pired-ledger: no ${plan.verb} tool\n`);

@@ -19,7 +19,7 @@
 
 import { hasGrounds } from "./challenge.ts";
 import { type Fields, findDuplicate } from "./identity.ts";
-import type { EngagementScope, FindingRecord, HypothesisRecord, StoreName, StoreRecordMap } from "./ontology.ts";
+import { type EngagementScope, type FindingRecord, type HypothesisRecord, type StoreName, type StoreRecordMap, UNNAMED_WORKER_AUTHOR } from "./ontology.ts";
 import { parseLenses, passState, resolveLadder } from "./passes.ts";
 import type { Gate, GateDecision, ToolCall, ToolDefinition } from "./ports.ts";
 import { createScopeGate, isSourceOnly } from "./scope.ts";
@@ -256,6 +256,13 @@ export interface ChildSetupOptions {
 	 * already there.
 	 */
 	onWrite?: (store: StoreName) => void;
+	/**
+	 * The worker's agent name, stamped as `by` on the rows it creates — the
+	 * guard's identity (`ChildGuard.status.agent`), read at each write because the
+	 * role can be learned after the tools are built. Unknown, the row is stamped
+	 * UNNAMED_WORKER_AUTHOR: a worker's row never reads as the lead's.
+	 */
+	author?: () => string | undefined;
 }
 
 /**
@@ -409,6 +416,7 @@ export async function openChildWorkspace(
 		// 'unresolved', or the only way to refute is to claim a target that does
 		// not exist.
 		sourceOnly: () => isSourceOnly(scope),
+		author: () => options.author?.() ?? UNNAMED_WORKER_AUTHOR,
 	}).filter((t) => CHILD_TOOLS.has(t.name));
 	const ledger: ChildLedger = {
 		findings: () => workspace.read("findings"),

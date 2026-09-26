@@ -57,10 +57,11 @@ function host() {
 	const notes: string[] = [];
 	/** The last line pi was handed for its own status area. */
 	let status = "";
+	const tools = new Map<string, { execute: (id: string, params: unknown, signal: undefined, onUpdate: undefined, ctx: unknown) => Promise<unknown> }>();
 	const api = {
 		registerCommand: (n: string, o: { handler: (a: string, c: unknown) => unknown }) => commands.set(n, o.handler),
 		registerShortcut: () => {},
-		registerTool: () => {},
+		registerTool: (t: { name: string; execute: (id: string, params: unknown, signal: undefined, onUpdate: undefined, ctx: unknown) => Promise<unknown> }) => tools.set(t.name, t),
 		registerFlag: () => {},
 		registerProvider: () => {},
 		registerEntryRenderer: () => {},
@@ -103,6 +104,8 @@ function host() {
 		said: () => notes.join(" | "),
 		fire: async (event: string, payload: unknown = {}) => await events.get(event)?.(payload, ctx),
 		run: async (name: string, args = "") => await commands.get(name)?.(args, ctx),
+		/** A tool call as the session's own model would make it. */
+		call: async (name: string, params: unknown) => await tools.get(name)?.execute("t1", params, undefined, undefined, ctx),
 		has: (event: string) => events.has(event),
 	};
 }
@@ -254,6 +257,24 @@ describe("where the scribe runs", () => {
 		await h.fire("turn_end", turn(1));
 		await h.run("scribe");
 		expect(h.said()).toContain("1 findings");
+	});
+
+	it("stamps its rows scribe, and the session model's own rows lead, though both go through one record tool", async () => {
+		reset();
+		llm.reply = JSON.stringify({
+			surface: [{ kind: "endpoint", label: "POST /api/login" }],
+			findings: [{ title: "SQL injection in login", severity: "critical", cwe: "CWE-89", file: "backend/auth.py", description: "f-string SQL" }],
+		});
+		const h = host();
+		await h.fire("session_start");
+		await h.call("record", { kind: "finding", title: "Session cookie lacks SameSite", severity: "low", target: "backend/session.py:12" });
+		await h.fire("turn_end", turn(1));
+		await h.run("scribe");
+		const by = Object.fromEntries(h.rows("findings").map((r) => [r.title, r.by]));
+		expect(by).toEqual({ "Session cookie lacks SameSite": "lead", "SQL injection in login": "scribe" });
+		const surface = h.rows("inventory");
+		expect(surface.length).toBeGreaterThan(0);
+		expect(surface.every((r) => r.by === "scribe")).toBe(true);
 	});
 });
 

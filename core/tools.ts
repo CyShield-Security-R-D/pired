@@ -71,6 +71,17 @@ export interface ToolDeps {
 	 * `pass` is one: the host reads it from the scope, which can change mid-session.
 	 */
 	sourceOnly?: () => boolean;
+	/**
+	 * Who writes through these tools, stamped as `by` on every row they create:
+	 * `lead` in the parent session, the worker's agent name in a child, `operator`
+	 * from the CLI. A `ToolContext.author` on the call wins, which is how the
+	 * scribe's writes through the lead's tool are told apart. Undefined stamps
+	 * nothing, as a ledger written before `by` existed reads.
+	 *
+	 * A function because a child learns its role from a system prompt that may
+	 * arrive after its tools are built.
+	 */
+	author?: () => string | undefined;
 }
 
 const RECORD_KINDS = [
@@ -548,7 +559,7 @@ async function writeRecord(
 			const dup = findDuplicate(kind, merged, current as unknown as Fields[]);
 			if (dup) { id = (dup as unknown as InventoryRecord).id; return undefined; }
 			id = ctx.services.ids.newId();
-			return [{ v: RECORD_VERSION, id, kind, createdAt: ctx.services.clock.nowIso(), ...passStamp(deps), ...merged } as unknown as InventoryRecord];
+			return [{ v: RECORD_VERSION, id, kind, createdAt: ctx.services.clock.nowIso(), ...passStamp(deps), ...authorStamp(deps, ctx), ...merged } as unknown as InventoryRecord];
 		});
 		return id;
 	} catch {
@@ -568,6 +579,16 @@ async function writeRecord(
 function passStamp(deps: ToolDeps): { pass?: number } {
 	const n = deps.pass?.()?.pass ?? 1;
 	return n > 1 ? { pass: n } : {};
+}
+
+/**
+ * The author to stamp on a row being created, or nothing when the host named
+ * none. Spread beside `passStamp` at every create, and never on a merge or an
+ * update, which keep the row's creator.
+ */
+function authorStamp(deps: ToolDeps, ctx: ToolContext): { by?: string } {
+	const by = ctx.author ?? deps.author?.();
+	return by ? { by } : {};
 }
 
 /** Resolve one target to an element id, or leave it as written. */
@@ -861,6 +882,10 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 			// further pass paid for itself — would be reporting what it was told
 			// rather than what happened.
 			delete a.pass;
+			// Who created a row, likewise: the host says, from where the call ran. A
+			// worker that could name its author could pass its lead off as the
+			// lead's, which is the one distinction `by` exists to keep.
+			delete a.by;
 
 			// A re-record carrying a basis is a second look at a settled cell, not a
 			// first one. Writing it down is what makes the challenge reportable —
@@ -1018,7 +1043,7 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 							}
 							const id = ctx.services.ids.newId();
 							const record = defined({
-								v: RECORD_VERSION, id, kind: "hypothesis", createdAt: stamp, ...passStamp(deps), ...patch,
+								v: RECORD_VERSION, id, kind: "hypothesis", createdAt: stamp, ...passStamp(deps), ...authorStamp(deps, ctx), ...patch,
 							}) as unknown as HypothesisRecord;
 							working.push(record as unknown as Fields);
 							out.push(record);
@@ -1264,7 +1289,7 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 							parked = ctx.services.ids.newId();
 							return [{
 								v: RECORD_VERSION, id: parked, kind: "blocker", createdAt: ctx.services.clock.nowIso(),
-								...passStamp(deps),
+								...passStamp(deps), ...authorStamp(deps, ctx),
 								type: outcome.blocker?.type, question: outcome.blocker?.question,
 								context: outcome.blocker?.context, priority: "high", status: "open",
 							} as unknown as BlockerRecord];
@@ -1526,7 +1551,7 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 				// recall is the one thing that cannot be recovered later.
 				if (kind === "finding") near = findNearDuplicate(patch, current as unknown as Fields[]) as unknown as LedgerRecord | undefined;
 				const id = existingId ?? ctx.services.ids.newId();
-				record = defined({ v: RECORD_VERSION, id, kind, createdAt: now, ...passStamp(deps), ...(DEFAULTS[kind] ?? {}), ...patch }) as unknown as LedgerRecord;
+				record = defined({ v: RECORD_VERSION, id, kind, createdAt: now, ...passStamp(deps), ...authorStamp(deps, ctx), ...(DEFAULTS[kind] ?? {}), ...patch }) as unknown as LedgerRecord;
 				return [record];
 			});
 

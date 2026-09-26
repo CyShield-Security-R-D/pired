@@ -2314,3 +2314,75 @@ describe("passes, and the ledger's record of which one found what", () => {
 		expect(out).toContain("`file` lens");
 	});
 });
+
+describe("who created a row", () => {
+	/** A workspace and a record tool per author, all on the one ledger. */
+	async function authors() {
+		const svc = makeFakeServices();
+		const ws = await Workspace.open("/ws/acme", "acme", svc);
+		const ctx: ToolContext = { cwd: "/target", services: svc };
+		const as = (by?: string) => createRecordTool({ workspace: ws, ...(by === undefined ? {} : { author: () => by }) });
+		return { svc, ws, ctx, as };
+	}
+
+	it("stamps the creating author on a finding and keeps it through a merge and an update by id", async () => {
+		// The creator is the fact the verification tier and the stop classifier's
+		// fairness note read. A merge or a later edit that re-stamped it would
+		// credit a worker's lead to whoever repeated or corrected it.
+		const { svc, ws, ctx, as } = await authors();
+		const made = await as("pired-investigate").execute({ kind: "finding", title: "IDOR on notes", severity: "high", target: "notes.py:42", class: "idor" }, ctx);
+		const id = (made.details as { id: string }).id;
+		expect((await ws.read("findings"))[0]?.by).toBe("pired-investigate");
+
+		svc.clock.advance(1000);
+		const again = await as("lead").execute({ kind: "finding", title: "IDOR on notes", severity: "high", target: "notes.py:42", class: "idor", impact: "reads any tenant's notes" }, ctx);
+		expect((again.details as { outcome?: string; id: string }).id).toBe(id);
+		svc.clock.advance(1000);
+		await as("pired-verify").execute({ kind: "finding", id, remediation: "compare the note owner to the caller" }, ctx);
+
+		const rows = await ws.read("findings");
+		expect(rows).toHaveLength(1);
+		expect(rows[0]).toMatchObject({ impact: "reads any tenant's notes", remediation: "compare the note owner to the caller", by: "pired-investigate" });
+	});
+
+	it("drops a caller-sent by as it drops pass", async () => {
+		// A worker that could name its author could pass its own lead off as the
+		// lead's — the same forgery `pass` and `verification` are closed to.
+		const { ws, ctx, as } = await authors();
+		await as("pired-investigate").execute({ kind: "finding", title: "SSRF in fetch", severity: "high", target: "fetch.py:9", by: "lead", pass: 4 }, ctx);
+		const row = (await ws.read("findings"))[0];
+		expect(row?.by).toBe("pired-investigate");
+		expect(row).not.toHaveProperty("pass");
+	});
+
+	it("stamps every row a call creates: a cross product, an element made from a hypothesis's target, a parked blocker", async () => {
+		const { ws, ctx, as } = await authors();
+		const record = as("pired-escalate");
+		await record.execute({ kind: "hypothesis", statement: "the search route builds SQL from the query string", target: "e1", class: ["sqli", "xss"] }, ctx);
+		await record.execute({ kind: "hypothesis", statement: "the notes route checks the owner", target: "GET /api/notes", class: "idor" }, ctx);
+		const made = await record.execute({ kind: "finding", title: "IDOR on notes", severity: "high", target: "notes.py:42", class: "idor" }, ctx);
+		const id = (made.details as { id: string }).id;
+		// Confirming an access-control finding without entitlement parks the question.
+		await record.execute({ kind: "finding", id, status: "confirmed", live: true, control: "no-cookie request returned 401" }, ctx);
+
+		const hypotheses = await ws.read("hypotheses");
+		expect(hypotheses).toHaveLength(3);
+		expect(hypotheses.every((h) => h.by === "pired-escalate")).toBe(true);
+		expect(await ws.read("inventory")).toEqual([expect.objectContaining({ kind: "endpoint", path: "/api/notes", by: "pired-escalate" })]);
+		expect(await ws.read("blockers")).toEqual([expect.objectContaining({ status: "open", by: "pired-escalate" })]);
+	});
+
+	it("lets the call name its author over the tool's, which is how the scribe's rows are told apart", async () => {
+		const { ws, ctx, as } = await authors();
+		await as("lead").execute({ kind: "endpoint", method: "POST", path: "/api/login" }, { ...ctx, author: "scribe" });
+		expect((await ws.read("inventory"))[0]?.by).toBe("scribe");
+	});
+
+	it("writes no by at all when the host names no author", async () => {
+		// Absent means unknown, as it does on every row written before the field
+		// existed; a default here would claim an author nobody established.
+		const { ws, ctx, as } = await authors();
+		await as().execute({ kind: "finding", title: "IDOR", severity: "high", target: "e1" }, ctx);
+		expect((await ws.read("findings"))[0]).not.toHaveProperty("by");
+	});
+});

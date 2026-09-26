@@ -111,6 +111,9 @@ export default function piredChild(pi: ExtensionAPI): void {
 				// evidence file, a note or a repeat that matched a row already there
 				// writes no row, and must not release the recording reserve.
 				onWrite: (store) => guard.recorded(store),
+				// The rows it creates carry its agent name, as the guard learned it
+				// from the prompt — read per write, since the role may arrive later.
+				author: () => guard.status.agent,
 			});
 		} catch (error) {
 			guard.fail(error instanceof Error ? error.message : String(error));
