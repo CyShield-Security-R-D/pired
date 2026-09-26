@@ -2895,6 +2895,27 @@ The procedure, its counts and its limitations are in `eval/corpus/fresh.md`.
 - Keys are patch-derived: precise about where the maintainer changed code, silent about undisclosed
   bugs, which count as false positives.
 
+### Amendment — variant 2 (2026-09-26, before any model run)
+
+An independent review of the first draw found non-applications admitted (a server entry under an
+archive folder, templates from examples and fixtures, a framework, HTTP client calls counted as
+routes, a vendored 12k-line `vue.js` deciding a Go project's language) and import statements
+labelled. Decided:
+
+- **Rules v2 are committed before a second walk**: service evidence only outside tests, docs,
+  examples, fixtures, mocks and archives; a deployable-service marker (Dockerfile, compose,
+  `Chart.yaml`, `Procfile`); no README calling the project a framework, library, SDK or toolkit;
+  server-only route shapes (also fixed in `lib.ts`); vendored files left out of size and language;
+  import-only hunks not labelled. The five official targets pass every rule.
+- **The second walk is appended as variant 2**, same seed, pool and exclusions; v6 uses it. Variant
+  1 stays on record.
+- **Fresh truth is classless for the pinned grader.** OSV sorts CWE ids as text, so "the first CWE"
+  was not the primary one. Labels carry `advisory` and all `cwes` for re-scoring instead.
+- **Open advisories without labels are neutral** — a claim at them is neither a true nor a false
+  positive (`rescore.ts` `claimOutcomes`).
+- **Patched twins replace separate controls**: each target's fix commit, scored by claims within ±3
+  lines of the fixed regions and by claims per KLOC, never folded into precision.
+
 ### Rejected
 
 - **Drawing from the old pool anyway.** Every repository in it has been named in pired's research.

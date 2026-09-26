@@ -1585,7 +1585,11 @@ async function extractTarball(repo: string, commit: string, dest: string): Promi
 	const abort = new AbortController();
 	let timer = setTimeout(() => abort.abort(), TARBALL_STALL_MS);
 	const touch = (): void => { clearTimeout(timer); timer = setTimeout(() => abort.abort(), TARBALL_STALL_MS); };
-	const tar = spawn("tar", ["-xzf", "-", "--strip-components=1", "-C", dest], { stdio: ["pipe", "ignore", "ignore"] });
+	// Only what the sparse git checkout holds: code files and READMEs. tar exits
+	// 2 when an include pattern matches nothing, so its status is not the test
+	// of success; holdsListing is.
+	const patterns = [...sparsePatterns().filter((p) => p.startsWith("*.")), "*/[rR][eE][aA][dD][mM][eE]*"];
+	const tar = spawn("tar", ["-xzf", "-", "--strip-components=1", "-C", dest, "--wildcards", "--wildcards-match-slash", ...patterns], { stdio: ["pipe", "ignore", "ignore"] });
 	tar.stdin.on("error", () => undefined);
 	const closed = new Promise<number>((done) => tar.on("close", (code) => done(code ?? 1)));
 	const give = async (): Promise<boolean> => { tar.kill(); await closed; return false; };
@@ -1600,7 +1604,7 @@ async function extractTarball(repo: string, commit: string, dest: string): Promi
 			if (!tar.stdin.write(chunk)) await new Promise((r) => tar.stdin.once("drain", r));
 		}
 		tar.stdin.end();
-		return (await closed) === 0;
+		return (await closed) <= 2;
 	} catch {
 		return await give();
 	} finally {
@@ -1609,13 +1613,15 @@ async function extractTarball(repo: string, commit: string, dest: string): Promi
 }
 
 /**
- * Does the extracted tree hold every path the listing names? `git archive`,
- * which codeload serves, leaves out paths marked `export-ignore`; such a tree
- * is not the reviewed tree, and the git path is used instead.
+ * Does the extracted tree hold every code file and the root README the
+ * listing names — everything the rules read? `git archive`, which codeload
+ * serves, leaves out paths marked `export-ignore`; such a tree is not the
+ * reviewed tree, and the git path is used instead.
  */
 async function holdsListing(root: string, entries: readonly TreeEntry[]): Promise<boolean> {
 	for (const e of entries) {
 		if (e.mode === "160000") continue;
+		if (!languageOf(e.path) && !(!e.path.includes("/") && /^readme/i.test(e.path))) continue;
 		if (!(await lstat(join(root, e.path)).then(() => true, () => false))) return false;
 	}
 	return true;
@@ -1624,10 +1630,10 @@ async function holdsListing(root: string, entries: readonly TreeEntry[]): Promis
 /**
  * Measure the tree at `commit` the way the corpus measures a target.
  *
- * Paths come from the tree's git listing. Contents come from the codeload
- * tarball when `repo` and `treeDir` are given and the tarball holds the
- * listing exactly; otherwise from a sparse git checkout of code and the root
- * README. Every rule reads a path, a code file or the README, so both give the
+ * Paths come from the tree's git listing. Contents — code files and READMEs
+ * only — come from the codeload tarball when `repo` and `treeDir` are given and
+ * the tarball holds every such path of the listing; otherwise from a sparse git
+ * checkout of code and the root README. Every rule reads a path, a code file or the README, so both give the
  * same facts; `recheck` compares verdicts across the two. Each code file is
  * read once, for its line count and for whether it is vendored
  * (isVendoredFile); vendored files are left out of size, language and routes.

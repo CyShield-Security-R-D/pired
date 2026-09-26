@@ -222,6 +222,10 @@ ones included, and all 40 came back identical. The recheck also found one cached
 obtainable") that recorded a connection failure the transient-failure pattern did not yet know
 ("Failed to connect … Couldn't connect to server"). That verdict was a network failure, not a fact, so
 it was removed from the cache, and the pattern was widened. The walk then resumed from the cache.
+After 121 repositories it was stopped once more, again before writing anything. Extracting whole
+tarballs and grepping every file in them was the new bottleneck, so the tarball is now unpacked for
+code files and READMEs only — the same files the sparse git checkout holds. A second recheck, of 30
+cached verdicts with all six eligible ones included, found all 30 identical.
 
 ## Results (variant 1)
 
