@@ -54,9 +54,10 @@ its ADR.
 | 2.2 | **Run a pair's two arms concurrently, in random start order.** | Removes night-to-night drift within a pair. Makes the next item safe. | needs an operator decision: network isolation per cell |
 | 2.3 | **Circuit breaker** (consecutive failures, or failure rate within a window) instead of stopping on the first failed run. | Keeps the protection during outages without stalling the grid on single drops. | done: ADR-031 (breaker, attempt ceiling 16) |
 | 2.4 | **Reuse a valid arm** when only its partner failed for infrastructure, both started in the same window, and runs are concurrent. Results are reported with and without reuse. | 17 valid runs (135M tokens, 7.2 run-hours) were discarded. | after 2.2 |
-| 2.5 | **Matched-compute arm:** the single agent run *k* times at the candidate's token budget, with findings combined. | Tests whether delegation adds anything beyond spending more tokens. | not started |
+| 2.5 | **Matched-compute arm:** the single agent run *k* times at the candidate's token budget, with findings combined. | Tests whether delegation adds anything beyond spending more tokens. | done: ADR-034 (candidate solo ×k, follow budget with rollover) |
 | 2.6 | **Stop reason as a first-class outcome**, recorded per run: finished, offered to continue, budget, turn cap, error. | Luna ends about 80% of runs by offering to continue. | done: ADR-030 |
 | 2.7 | **The candidate's scope states its worker cap.** The review scope sets no `maxAgents`, and since ADR-029 the default is 0. | A candidate cut from `main` would otherwise run with delegation silently off. | done: ADR-032 (cap pinned at 8) |
+| 2.8 | **N targets plus clean controls.** The harness accepts exactly five targets today. | The fresh corpus has 12 targets and 2 controls. | not started |
 
 ## Phase 3 — Product changes (candidate snapshot v5; each its own ADR)
 
@@ -74,7 +75,7 @@ Design for 3.1 and 3.2: [`delegation-v6-phase3-design.md`](delegation-v6-phase3-
 | # | item |
 |---|---|
 | 4.1 | **Fresh applications** outside the graded corpus. Label hygiene: cap label width and split wide labels; within a target, either every label carries a class or none does (a classless label beside a classed one could not be matched by any claim that names a CWE — research/12). Clean-code controls where nothing should be reported. |
-| 4.2 | **Pre-registration, written before any v6 run:** arms (baseline, candidate v5, single agent × k at matched compute); metrics (unique labelled locations at every scoring level, with and without the class rule; adjudicated precision; cost in tokens and dollars, compared per pair with a statistic robust to single long runs, such as the median of per-pair log ratios with a bootstrap interval, because Luna's pooled sums swung from 0.51 to 2.86 on single runs; stop reasons); sample size from 1.2's power analysis; ship rule (TP non-inferior within a stated margin at no higher cost, or TP superior); held-out guard. |
+| 4.2 | **Pre-registration, written before any v6 run** (draft: [`delegation-v6-preregistration.md`](delegation-v6-preregistration.md)): arms (baseline, candidate v5, single agent × k at matched compute); metrics (unique labelled locations at every scoring level, with and without the class rule; adjudicated precision; cost in tokens and dollars, compared per pair with a statistic robust to single long runs, such as the median of per-pair log ratios with a bootstrap interval, because Luna's pooled sums swung from 0.51 to 2.86 on single runs; stop reasons); sample size from 1.2's power analysis; ship rule (TP non-inferior within a stated margin at no higher cost, or TP superior); held-out guard. |
 | 4.3 | **Run on Luna.** Then add GLM-5.3 Flash and DeepSeek V4.1 Flash under the same pre-registration. |
 
 ## Order of work

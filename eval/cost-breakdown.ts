@@ -278,6 +278,13 @@ export interface RunMeta {
 	valid: boolean;
 	/** run.json's usage.parent.totalTokens, when it carries one: what the matched comparison counted. */
 	canonicalParentTotal?: number;
+	/**
+	 * A matched-arm session's index (plan item 2.5). The arm runs k sessions per
+	 * pair, so without it the k sessions of one pair would collapse into one run.
+	 */
+	session?: number;
+	/** That session's own attempt: a failed session re-runs alone, inside its pair's attempt. */
+	sessionAttempt?: number;
 }
 
 export interface GridRun<B = RunBreakdown> {
@@ -296,9 +303,11 @@ export interface GridRun<B = RunBreakdown> {
 export function selectRuns<B>(runs: Array<GridRun<B>>): { latest: Array<GridRun<B>>; pairs: Array<{ baseline: GridRun<B>; candidate: GridRun<B> }> } {
 	const best = new Map<string, GridRun<B>>();
 	for (const run of runs) {
-		const key = JSON.stringify([run.meta.target, run.meta.pass, run.meta.arm]);
+		const key = JSON.stringify([run.meta.target, run.meta.pass, run.meta.arm, ...(run.meta.session === undefined ? [] : [run.meta.session])]);
 		const seen = best.get(key);
-		if (!seen || run.meta.attempt > seen.meta.attempt) best.set(key, run);
+		const later = !seen || run.meta.attempt > seen.meta.attempt ||
+			(run.meta.attempt === seen.meta.attempt && (run.meta.sessionAttempt ?? 0) > (seen.meta.sessionAttempt ?? 0));
+		if (later) best.set(key, run);
 	}
 	const latest = [...best.values()].filter((run) => run.meta.valid);
 	const pairs: Array<{ baseline: GridRun<B>; candidate: GridRun<B> }> = [];
@@ -444,7 +453,8 @@ export interface Reconciliation {
 
 export interface GridReport {
 	grid: string;
-	runs: { baseline: number; candidate: number };
+	/** `matched` counts matched-arm sessions, present only in a grid that ran them; they never enter the pairs. */
+	runs: { baseline: number; candidate: number; matched?: number };
 	pairs: number;
 	means: { baseline: Partial<Record<keyof Numbers, number | null>>; candidate: Partial<Record<keyof Numbers, number | null>> };
 	/** Σ candidate / Σ baseline over matched pairs; null when the baseline sum is zero. */
@@ -503,9 +513,12 @@ export function reportGrid(grid: string, runs: Array<GridRun<Numbers>>): GridRep
 			reconciliation.gap += canonical - run.breakdown.parentTotal;
 		}
 	}
+	// The matched arm is a single agent at the candidate's budget: its spend has
+	// no delegation to split, so it is counted, not broken down against a partner.
+	const matchedSessions = latest.filter((r) => r.meta.arm === "matched").length;
 	return {
 		grid,
-		runs: { baseline: baseline.length, candidate: candidate.length },
+		runs: { baseline: baseline.length, candidate: candidate.length, ...(matchedSessions ? { matched: matchedSessions } : {}) },
 		pairs: pairs.length,
 		means,
 		ratios,
@@ -521,6 +534,10 @@ function readMeta(runDir: string): RunMeta | null {
 		const run = JSON.parse(readFileSync(join(runDir, "run.json"), "utf8")) as Row;
 		if (typeof run.arm !== "string" || typeof run.target !== "string") return null;
 		const meta: RunMeta = { arm: run.arm, target: run.target, pass: num(run.pass), attempt: num(run.attempt), valid: run.valid === true };
+		if (isRow(run.matchedSession) && typeof run.matchedSession.index === "number") {
+			meta.session = run.matchedSession.index;
+			if (typeof run.matchedSession.sessionAttempt === "number") meta.sessionAttempt = run.matchedSession.sessionAttempt;
+		}
 		const parent = isRow(run.usage) && isRow(run.usage.parent) ? run.usage.parent : undefined;
 		if (parent && typeof parent.totalTokens === "number") meta.canonicalParentTotal = parent.totalTokens;
 		return meta;
@@ -549,6 +566,7 @@ const LABELS: Partial<Record<keyof Numbers, string>> = { rereads: "rereads (read
 
 export function formatReport(report: GridReport): string {
 	const lines = [`${report.grid}: valid runs baseline ${report.runs.baseline}, candidate ${report.runs.candidate}; matched pairs ${report.pairs}`];
+	if (report.runs.matched) lines.push(`  matched-arm sessions ${report.runs.matched} (a single agent at the candidate's budget; not paired or broken down here)`);
 	lines.push(`  ${"field (mean per run)".padEnd(30)}${"baseline".padStart(14)}${"candidate".padStart(14)}${"ratio".padStart(8)}`);
 	for (const field of FIELDS) {
 		lines.push(`  ${(LABELS[field] ?? field).padEnd(30)}${fmt(report.means.baseline[field]).padStart(14)}${fmt(report.means.candidate[field]).padStart(14)}${fmt(report.ratios[field]).padStart(8)}`);
