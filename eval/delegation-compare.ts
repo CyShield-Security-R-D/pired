@@ -12,7 +12,7 @@
 import { execFile, execFileSync, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream, createWriteStream, readFileSync } from "node:fs";
-import { access, appendFile, cp, link, lstat, mkdir, open, readdir, readFile, realpath, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { access, appendFile, chmod, cp, link, lstat, mkdir, open, readdir, readFile, realpath, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { homedir, hostname, userInfo } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { StringDecoder } from "node:string_decoder";
@@ -40,7 +40,7 @@ import {
 // The grid's shape and identity (plan item 2.8): the pinned official corpora.
 import {
 	ARM_ORDER, corpusReasons, DEFAULT_BUDGET_ARMS, DEFAULT_SUBAGENTS_ARMS, delegationOff, loadsSubagentsFor, gridKindReasons, kindlessArmReasons, kindlessCorpus, kindSnapshotReasons, parseArmList, parseCorpora,
-	amendmentsMismatch, currentPasses, extensionRefusal, kindPassesReasons, parseAmendments, parseGridKinds, parseMaxVerifiers, scheduleExtends, type PassesAmendment, sameArms, scopeFor, scopeSettingsFor, shapeOf, summarizeTwins, twinTargets, type GridKind, type PinnedCorpus, type ScopeSettings,
+	amendmentsMismatch, blindSummary, currentPasses, pilotPairedSd, extensionRefusal, kindPassesReasons, parseAmendments, parseGridKinds, parseMaxVerifiers, scheduleExtends, type PassesAmendment, sameArms, scopeFor, scopeSettingsFor, shapeOf, summarizeTwins, twinTargets, type GridKind, type PinnedCorpus, type ScopeSettings,
 } from "./delegation-compare-grid.ts";
 // The staging, target-copy and tree-hash helpers moved to their own module so
 // the same digest rule draws the panel here, in the preflight and in tests.
@@ -1843,6 +1843,20 @@ function baselineMismatchReason(rows: Array<{ path: string; sha256: string; kind
 		return `baseline snapshot differs from git ${commit.slice(0, 7)}: ${parts.join("; ")}`;
 	}
 	return "";
+}
+
+/**
+ * The pilot's sealed comparison (plan item 2.8 review): owner-only, in an
+ * owner-only directory, written through a rename like any grid file, and
+ * never printed; eval/v6-decision.ts reads it once the pass count is fixed.
+ */
+export async function writeSealed(path: string, value: unknown): Promise<void> {
+	await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+	await chmod(dirname(path), 0o700);
+	const tmp = `${path}.${opaqueToken()}.tmp`;
+	await writeFile(tmp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+	await chmod(tmp, 0o600);
+	await rename(tmp, path);
 }
 
 /** Written through a rename, so concurrent pair-workers never leave a half-written progress file. */
@@ -5150,6 +5164,9 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 	const output = ctx.out;
 	const targetById = new Map(pre.targets.map((t) => [t.id, t]));
 	const pairs = gridSchedule(pre, options);
+	// A pilot's grid is blind until its one amendment fixes the pass count (plan
+	// item 2.8 review): nothing that shows an arm's numbers is printed or summarised.
+	const blinded = pre.kind?.extendablePasses === true && !(Array.isArray(manifest.amendments) && manifest.amendments.length);
 	// A patched twin's runs (plan item 2.8) count toward progress, in their own arms, and never toward the gate.
 	const twinIds = new Set(pre.targets.filter((t) => t.twinOf !== undefined).map((t) => t.id));
 	const gatePairs = pairs.filter((p) => !p.twin);
@@ -5222,7 +5239,8 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 			const state = outcome.metric.valid ? "valid" : outcome.record.notLaunched === true ? "NOT LAUNCHED" : "INVALID";
 			const session = sessionOf(outcome.record);
 			const label = session && options.matched ? `${arm} session ${session.index} (k=${options.matched.k}, up to ${options.matched.kMax}; session attempt ${session.sessionAttempt})` : arm;
-			console.log(`${state} ${label} ${pair.target} pass ${pair.pass} attempt ${attempt} · ${outcome.seconds.toFixed(0)}s · tokens ${tokens}${outcome.infraFailure ? ` · infra: ${String(outcome.record.infraReason ?? "")}` : ""}`);
+			// A blind pilot prints no run's time or tokens: they are an arm's cost.
+			console.log(`${state} ${label} ${pair.target} pass ${pair.pass} attempt ${attempt}${blinded ? "" : ` · ${outcome.seconds.toFixed(0)}s · tokens ${tokens}`}${outcome.infraFailure ? ` · infra: ${String(outcome.record.infraReason ?? "")}` : ""}`);
 		},
 		nowMs: () => Date.now(),
 		sleep: (ms) => new Promise((done) => { setTimeout(done, ms); }),
@@ -5368,7 +5386,16 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 		stops: summarizeStops(outcomes.filter(onGate).map((o) => ({ arm: o.arm, key: String((o.record as JsonRecord).key ?? o.cellId), valid: o.metric.valid, stop: (o.record as JsonRecord).stop }))),
 		rows: outcomes.map((o) => o.record),
 	};
-	await serially(() => writeJson(join(output, "summary.json"), summary));
+	// A blind pilot's summary holds the paired SD only; the rest is sealed.
+	const pilot = blinded ? pilotPairedSd(compared.filter((o) => o.arm === "baseline").map((o) => o.metric), compared.filter((o) => o.arm === "candidate").map((o) => o.metric)) : undefined;
+	const sealedPath = join(output, "sealed", "comparison.json");
+	if (pilot) {
+		const view = blindSummary(summary, pilot, sealedPath);
+		await writeSealed(sealedPath, view.sealed);
+		await serially(() => writeJson(join(output, "summary.json"), view.summary));
+	} else {
+		await serially(() => writeJson(join(output, "summary.json"), summary));
+	}
 	await progress(interrupted ? "interrupted" : stoppedInvalid ? "stopped-invalid" : comparison.complete ? "complete" : "incomplete");
 	if (!official) console.log("EXPLORATORY — not an acceptance decision");
 	if (interrupted) console.log("INTERRUPTED — grid incomplete");
@@ -5377,32 +5404,36 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 	if (runState.credentialExpiring) console.log(`CREDENTIAL EXPIRING — refresh the token outside the grid, then: node --experimental-strip-types eval/delegation-compare.ts --resume ${output}`);
 	if (loop.gaveUp.length) console.log(`ATTEMPT CAP — ${loop.gaveUp.length} pair(s) left for --resume: ${loop.gaveUp.map((g) => g.key).join(", ")}`);
 	if (abandonedKeys.length) console.log(`ABANDONED — ${abandonedKeys.length} pair(s) failed at the attempt ceiling and will not be re-run: ${abandonedKeys.join(", ")}`);
-	console.log(`pass-mean TP ${comparison.baseline.truePositives.mean.toFixed(2)} → ${comparison.candidate.truePositives.mean.toFixed(2)}; precision ${comparison.baseline.precision.mean.toFixed(3)} → ${comparison.candidate.precision.mean.toFixed(3)}`);
-	const fmt = (x: number | null) => x === null ? "n/a" : x.toFixed(3);
-	// A stopped or partial grid is not evaluated, which is not the same as failed:
-	// printing BELOW there read as a quality failure the candidate did not have.
-	const verdict = (within: boolean | null | undefined): string => !comparison.complete || within === null || within === undefined ? "n/a (grid incomplete)" : within ? "ok" : "BELOW";
-	// ADR-026's gate is not the rule a kind grid is decided by, so it is not printed there.
-	if (options.gridKind === undefined) console.log(`gate: TP ${comparison.candidate.truePositives.mean.toFixed(2)} vs floor ${comparison.gate.truePositiveFloor.toFixed(2)} (${verdict(comparison.gate.truePositivesWithinMargin)}); pooled precision ${fmt(comparison.baseline.pooledPrecision)} → ${fmt(comparison.candidate.pooledPrecision)} vs floor ${fmt(comparison.gate.precisionFloor)} (${verdict(comparison.gate.precisionWithinMargin)}); targets below baseline range: ${comparison.gate.targetsBelowBaselineRange.join(", ") || "none"}`);
-	for (const t of comparison.targets) {
-		console.log(`  ${t.target}: TP ${t.baseline.truePositives.min}–${t.baseline.truePositives.max} → ${t.candidate.truePositives.min}–${t.candidate.truePositives.max}; precision ${fmt(t.baseline.pooledPrecision)} → ${fmt(t.candidate.pooledPrecision)}; tokens ${t.baseline.totalTokens.mean.toFixed(0)} → ${t.candidate.totalTokens.mean.toFixed(0)}`);
-	}
-	console.log(`pass-mean tokens ${comparison.baseline.totalTokens.mean.toFixed(0)} → ${comparison.candidate.totalTokens.mean.toFixed(0)}; ranges ${comparison.baseline.totalTokens.min.toFixed(0)}–${comparison.baseline.totalTokens.max.toFixed(0)} / ${comparison.candidate.totalTokens.min.toFixed(0)}–${comparison.candidate.totalTokens.max.toFixed(0)}; separated=${comparison.tokenRangesSeparated}`);
-	const d = summary.delegationAudit;
-	console.log(`delegation: ${d.runsThatDelegated}/${d.runs} candidate runs delegated · ${d.workers} workers ${JSON.stringify(d.workersByAgent)} ${JSON.stringify(d.workersByStatus)} outcomes ${JSON.stringify(d.workersByOutcome)} · worker share of candidate tokens ${d.workerTokenShare === null ? "n/a" : `${(100 * d.workerTokenShare).toFixed(1)}%`} · ${d.runsWithViolations} run(s) with contract violations`);
-	for (const v of d.violations.slice(0, 10)) console.log(`  delegation violation ${v}`);
-	for (const [arm, counts] of Object.entries(summary.stops.runs)) console.log(`stops ${arm}: ${JSON.stringify(counts)}`);
-	if (matchedSummary) {
-		const mc = matchedSummary.comparisons.matchedVsCandidate;
-		const ratio = matchedSummary.budgetRatio.median;
-		console.log(`matched (${matchedSummary.policy.mode}, k=${matchedSummary.policy.k}): ${matchedSummary.unions.filter((u) => u.valid).length}/${matchedSummary.unions.length} pairs valid · pass-mean TP matched ${(mc.arms.matched?.truePositives.mean ?? 0).toFixed(2)} vs candidate ${(mc.arms.candidate?.truePositives.mean ?? 0).toFixed(2)} (${mc.complete ? "complete" : "incomplete"}) · pooled precision ${fmt(mc.arms.matched?.pooledPrecision ?? null)} vs ${fmt(mc.arms.candidate?.pooledPrecision ?? null)} · median budget ratio ${ratio === null ? "n/a" : ratio.toFixed(3)} over ${matchedSummary.budgetRatio.perPair.length} pair(s) · reported beside the gate, not in it`);
-	}
-	if (twinSummary) {
-		const line = twinSummary.arms.map((arm) => {
-			const a = twinSummary.byArm[arm]!;
-			return `${arm} ${a.valid}/${a.runs} valid, ${a.claims} claims`;
-		}).join(" · ");
-		console.log(`patched twins (${twinSummary.targets.length}, beside the gate): ${line} · control score: eval/rescore.ts`);
+	if (pilot) {
+		console.log(`PILOT (blind until the pass count is fixed): ${pilot.validPairs} valid pair(s) · paired SD of ${pilot.metric}: ${pilot.sd === null ? "n/a (fewer than 2 pairs)" : pilot.sd.toFixed(3)} · the arms' numbers are sealed in ${sealedPath}, not printed`);
+	} else {
+		console.log(`pass-mean TP ${comparison.baseline.truePositives.mean.toFixed(2)} → ${comparison.candidate.truePositives.mean.toFixed(2)}; precision ${comparison.baseline.precision.mean.toFixed(3)} → ${comparison.candidate.precision.mean.toFixed(3)}`);
+		const fmt = (x: number | null) => x === null ? "n/a" : x.toFixed(3);
+		// A stopped or partial grid is not evaluated, which is not the same as failed:
+		// printing BELOW there read as a quality failure the candidate did not have.
+		const verdict = (within: boolean | null | undefined): string => !comparison.complete || within === null || within === undefined ? "n/a (grid incomplete)" : within ? "ok" : "BELOW";
+		// ADR-026's gate is not the rule a kind grid is decided by, so it is not printed there.
+		if (options.gridKind === undefined) console.log(`gate: TP ${comparison.candidate.truePositives.mean.toFixed(2)} vs floor ${comparison.gate.truePositiveFloor.toFixed(2)} (${verdict(comparison.gate.truePositivesWithinMargin)}); pooled precision ${fmt(comparison.baseline.pooledPrecision)} → ${fmt(comparison.candidate.pooledPrecision)} vs floor ${fmt(comparison.gate.precisionFloor)} (${verdict(comparison.gate.precisionWithinMargin)}); targets below baseline range: ${comparison.gate.targetsBelowBaselineRange.join(", ") || "none"}`);
+		for (const t of comparison.targets) {
+			console.log(`  ${t.target}: TP ${t.baseline.truePositives.min}–${t.baseline.truePositives.max} → ${t.candidate.truePositives.min}–${t.candidate.truePositives.max}; precision ${fmt(t.baseline.pooledPrecision)} → ${fmt(t.candidate.pooledPrecision)}; tokens ${t.baseline.totalTokens.mean.toFixed(0)} → ${t.candidate.totalTokens.mean.toFixed(0)}`);
+		}
+		console.log(`pass-mean tokens ${comparison.baseline.totalTokens.mean.toFixed(0)} → ${comparison.candidate.totalTokens.mean.toFixed(0)}; ranges ${comparison.baseline.totalTokens.min.toFixed(0)}–${comparison.baseline.totalTokens.max.toFixed(0)} / ${comparison.candidate.totalTokens.min.toFixed(0)}–${comparison.candidate.totalTokens.max.toFixed(0)}; separated=${comparison.tokenRangesSeparated}`);
+		const d = summary.delegationAudit;
+		console.log(`delegation: ${d.runsThatDelegated}/${d.runs} candidate runs delegated · ${d.workers} workers ${JSON.stringify(d.workersByAgent)} ${JSON.stringify(d.workersByStatus)} outcomes ${JSON.stringify(d.workersByOutcome)} · worker share of candidate tokens ${d.workerTokenShare === null ? "n/a" : `${(100 * d.workerTokenShare).toFixed(1)}%`} · ${d.runsWithViolations} run(s) with contract violations`);
+		for (const v of d.violations.slice(0, 10)) console.log(`  delegation violation ${v}`);
+		for (const [arm, counts] of Object.entries(summary.stops.runs)) console.log(`stops ${arm}: ${JSON.stringify(counts)}`);
+		if (matchedSummary) {
+			const mc = matchedSummary.comparisons.matchedVsCandidate;
+			const ratio = matchedSummary.budgetRatio.median;
+			console.log(`matched (${matchedSummary.policy.mode}, k=${matchedSummary.policy.k}): ${matchedSummary.unions.filter((u) => u.valid).length}/${matchedSummary.unions.length} pairs valid · pass-mean TP matched ${(mc.arms.matched?.truePositives.mean ?? 0).toFixed(2)} vs candidate ${(mc.arms.candidate?.truePositives.mean ?? 0).toFixed(2)} (${mc.complete ? "complete" : "incomplete"}) · pooled precision ${fmt(mc.arms.matched?.pooledPrecision ?? null)} vs ${fmt(mc.arms.candidate?.pooledPrecision ?? null)} · median budget ratio ${ratio === null ? "n/a" : ratio.toFixed(3)} over ${matchedSummary.budgetRatio.perPair.length} pair(s) · reported beside the gate, not in it`);
+		}
+		if (twinSummary) {
+			const line = twinSummary.arms.map((arm) => {
+				const a = twinSummary.byArm[arm]!;
+				return `${arm} ${a.valid}/${a.runs} valid, ${a.claims} claims`;
+			}).join(" · ");
+			console.log(`patched twins (${twinSummary.targets.length}, beside the gate): ${line} · control score: eval/rescore.ts`);
+		}
 	}
 	if (options.gridKind !== undefined) {
 		// No ADR-026 verdict for a kind grid: only whether it is ready for its own rule.

@@ -832,3 +832,52 @@ export function kindFlags(name: string, kind: GridKind, paths: { twins?: string;
 	flags.push("--grid-kind", name);
 	return flags;
 }
+
+/** A run's gate metric as the pilot's SD reads it. */
+export interface PilotRun { key: string; valid: boolean; truePositives: number }
+
+/**
+ * What a pilot grid may show before its pass count is fixed (plan item 2.8
+ * review): the pre-registration reads only the pooled paired SD of the primary
+ * metric, blind to the direction of the difference, to fix the pass count. So
+ * no arm mean, no per-target range and no sign is shown; only how many pairs
+ * are valid and the SD of their differences, which is the same whichever arm
+ * is ahead. The metric is the official true positives per pair; the
+ * pre-registration's advisories-found SD is computed from the sealed runs by
+ * eval/v6-decision.ts.
+ */
+export function pilotPairedSd(baseline: readonly PilotRun[], candidate: readonly PilotRun[]): { metric: string; validPairs: number; sd: number | null } {
+	const byKey = new Map(baseline.filter((r) => r.valid).map((r) => [r.key, r.truePositives]));
+	const diffs = candidate.filter((r) => r.valid && byKey.has(r.key)).map((r) => r.truePositives - byKey.get(r.key)!);
+	const n = diffs.length;
+	const mean = n ? diffs.reduce((a, b) => a + b, 0) / n : 0;
+	const sd = n >= 2 ? Math.sqrt(diffs.reduce((a, d) => a + (d - mean) ** 2, 0) / (n - 1)) : null;
+	return { metric: "official true positives per pair, paired difference (sign withheld)", validPairs: n, sd };
+}
+
+/**
+ * summary.json while a pilot is blind: every field that carries an arm's
+ * numbers (the comparison and its metered twin, stops, the delegation audit,
+ * the matched and twin blocks, the rows, and each abandoned attempt's tokens)
+ * moves to the sealed file, and the pilot block takes their place.
+ */
+export function blindSummary(summary: Record<string, unknown>, pilot: ReturnType<typeof pilotPairedSd>, sealedPath: string): { summary: Record<string, unknown>; sealed: Record<string, unknown> } {
+	const SEALED = ["comparison", "meteredOnlyComparison", "stops", "delegationAudit", "matched", "twins", "rows"];
+	const out: Record<string, unknown> = {};
+	const sealed: Record<string, unknown> = { id: summary.id ?? null };
+	for (const [key, value] of Object.entries(summary)) {
+		if (SEALED.includes(key)) { sealed[key] = value; continue; }
+		if (key === "breaker" && isRecord(value)) {
+			const { abandoned, ...rest } = value;
+			sealed.breakerAbandoned = abandoned ?? null;
+			out.breaker = { ...rest, abandoned: Array.isArray(abandoned) ? abandoned.map((a) => (isRecord(a) ? { key: a.key } : a)) : abandoned };
+			continue;
+		}
+		out[key] = value;
+	}
+	out.pilot = {
+		blinded: true, ...pilot, sealed: sealedPath,
+		note: "until the pass count is fixed, only the paired SD is shown; the arms' numbers are sealed, never printed, and read by eval/v6-decision.ts",
+	};
+	return { summary: out, sealed };
+}

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -6,7 +6,7 @@ import {
 	accountCellUsage, atHighestAttempt, attemptReport, AUTH_HORIZON_CAP_MS, AUTH_MARGIN_MS, benchmarkRuntimeOf, checkAuthHorizon, childProviderFailure, classifyInfra,
 	credentialExpiry, decideInfra, DEFAULT_CANDIDATE_MAX_AGENTS, fetchErrorsFromStderr, gridWorstCaseMs, isBrokerEnvVar, loadTargets, metricFromRecord, notLaunchedOutcome, ownerIsLive,
 	newManifest, optionsFromManifest, parseBreakerSpec, parseComparePins, parseOptions, parseOwnerRecord, planResume, providerFailureTexts, requestLogFromStderr,
-	adoptPasses, armOptionsFromManifest, cellModelInputs, credentialStopOutcome, gridAmendments, credentialStopReason, horizonRefusal, redactTermsFor, V6_DECISION, verdictFields, manifestTargetEntry, probeDelegationScope, resumeMismatches, splitTwinRuns, twinOptionsFromManifest, retryPolicyFromManifest, reviewScope, runPairs, runStop, runtimeMismatch, scopedSealCommand, startTimeFromStat, subagentConfigFor,
+	adoptPasses, writeSealed, armOptionsFromManifest, cellModelInputs, credentialStopOutcome, gridAmendments, credentialStopReason, horizonRefusal, redactTermsFor, V6_DECISION, verdictFields, manifestTargetEntry, probeDelegationScope, resumeMismatches, splitTwinRuns, twinOptionsFromManifest, retryPolicyFromManifest, reviewScope, runPairs, runStop, runtimeMismatch, scopedSealCommand, startTimeFromStat, subagentConfigFor,
 	toolSurfaceErrors, trackStream, workerCapReason,
 	ceilingOf, ceilingProbeErrors, latestMatchedSessions, planMatchedResume, sessionRunOf, verifyCeiling,
 	type GridStopState, type MatchedSessionSpec, type ProviderFailures, type RunOutcome,
@@ -2496,5 +2496,18 @@ describe("the pilot's one amendment and stage 2's adopted passes (plan 2.8 revie
 		expect(optionsFromManifest("/out", manifest).passesFrom).toEqual(passesFrom);
 		expect(resumeMismatches({ passesFrom }, { passesFrom: { ...passesFrom, passes: 8 } })).toEqual(["passesFrom"]);
 		expect(() => optionsFromManifest("/out", { ...manifest, passesFrom: { ...passesFrom, amendment: {} } })).toThrow(/row 1/);
+	});
+});
+
+describe("the pilot's sealed file (plan 2.8 review)", () => {
+	// The arms' numbers must not be read before the pass count is fixed: the file
+	// is owner-only in an owner-only directory, and the runner never prints it.
+	it("writes the sealed comparison owner-only", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "pired-sealed-"));
+		const path = join(dir, "sealed", "comparison.json");
+		await writeSealed(path, { comparison: { x: 1 } });
+		expect((await stat(path)).mode & 0o777).toBe(0o600);
+		expect((await stat(join(dir, "sealed"))).mode & 0o777).toBe(0o700);
+		expect(JSON.parse(await readFile(path, "utf8"))).toEqual({ comparison: { x: 1 } });
 	});
 });

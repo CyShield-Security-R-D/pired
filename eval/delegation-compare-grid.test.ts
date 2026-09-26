@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import {
 	corpusReasons, DEFAULT_BUDGET_ARMS, delegationOff, kindlessArmReasons, kindlessCorpus, parseArmList, parseCorpora, parseMaxVerifiers, scopeFor, scopeSettingsFor, shapeOf,
-	amendmentsMismatch, currentPasses, extensionRefusal, gridKindReasons, kindFlags, kindPassesReasons, kindSnapshotReasons, parseAmendments, parseGridKinds, scheduleExtends, summarizeTwins, twinTargets, type CorpusInput, type GridKind, type GridOptions, type PinnedCorpus,
+	amendmentsMismatch, blindSummary, currentPasses, pilotPairedSd, extensionRefusal, gridKindReasons, kindFlags, kindPassesReasons, kindSnapshotReasons, parseAmendments, parseGridKinds, scheduleExtends, summarizeTwins, twinTargets, type CorpusInput, type GridKind, type GridOptions, type PinnedCorpus,
 } from "./delegation-compare-grid.ts";
 import { armsOfPair, DEFAULT_BREAKER, isOfficialGrid, OFFICIAL_PASSES, OFFICIAL_TARGET_IDS, planSchedule, type ExpectedCell } from "./delegation-compare-lib.ts";
 
@@ -514,5 +514,36 @@ describe("extending a grid's passes", () => {
 		expect(corpusReasons("c", corpus({ passes: 3 }), input({ passes: 2, passesByGrid: true }))).toEqual([]);
 		const kinds = parseGridKinds((await shipped()).gridKinds, parseCorpora((await shipped()).corpora));
 		expect(kinds["v6-stage1"]!.extendablePasses).toBe(true);
+	});
+});
+
+describe("the pilot's blinding", () => {
+	const run = (key: string, tp: number, valid = true) => ({ key, valid, truePositives: tp });
+
+	// Only the SD of the paired differences is read before the pass count is
+	// fixed; it must not change with which arm is ahead.
+	it("gives the paired SD and the count of valid pairs, the same whichever arm is ahead", () => {
+		const baseline = [run("A#1", 1), run("A#2", 3), run("B#1", 0), run("B#2", 2, false)];
+		const candidate = [run("A#1", 2), run("A#2", 2), run("B#1", 2), run("B#2", 5)];
+		const forward = pilotPairedSd(baseline, candidate);
+		expect(forward.validPairs).toBe(3);
+		expect(forward.sd).toBeCloseTo(Math.sqrt(((1 - 2 / 3) ** 2 + (-1 - 2 / 3) ** 2 + (2 - 2 / 3) ** 2) / 2), 10);
+		expect(pilotPairedSd(candidate, baseline).sd).toBeCloseTo(forward.sd!, 10);
+		expect(pilotPairedSd([run("A#1", 1)], [run("A#1", 2)])).toMatchObject({ validPairs: 1, sd: null });
+		expect(Object.keys(forward).sort()).toEqual(["metric", "sd", "validPairs"]);
+	});
+
+	it("moves every field with an arm's numbers into the sealed file, and keeps the rest of the summary", () => {
+		const summary = {
+			id: "g", official: true, decision: { rule: "v6 pre-registration" }, comparison: { baseline: { truePositives: { mean: 1 } } }, meteredOnlyComparison: {},
+			stops: { runs: {} }, delegationAudit: { runs: 3 }, twins: { byArm: {} }, rows: [{ truePositives: 2 }],
+			breaker: { tripped: false, requeued: [], abandoned: [{ key: "A#1", attempts: [{ attempt: 1, baseline: { tokens: 5 } }] }] },
+		};
+		const { summary: shown, sealed } = blindSummary(summary, { metric: "m", validPairs: 3, sd: 0.8 }, "/g/sealed/comparison.json");
+		expect(Object.keys(shown)).toEqual(["id", "official", "decision", "breaker", "pilot"]);
+		expect(shown.breaker).toEqual({ tripped: false, requeued: [], abandoned: [{ key: "A#1" }] });
+		expect(shown.pilot).toMatchObject({ blinded: true, validPairs: 3, sd: 0.8, sealed: "/g/sealed/comparison.json" });
+		expect(JSON.stringify(shown)).not.toMatch(/mean|truePositives|tokens/);
+		expect(Object.keys(sealed).sort()).toEqual(["breakerAbandoned", "comparison", "delegationAudit", "id", "meteredOnlyComparison", "rows", "stops", "twins"]);
 	});
 });
