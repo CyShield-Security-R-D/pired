@@ -35,7 +35,7 @@ import type { ToolContext, ToolDefinition } from "../core/ports.ts";
 import { buildSystemPrompt, PIRED_PROFILES, type PiredProfile } from "../core/prompts.ts";
 import { publishParentScope } from "../core/child.ts";
 import { createScopeGate, isSourceOnly, pickTargetType, type ScopeGate, scopeGuidance, summarizeScope } from "../core/scope.ts";
-import { buildPiredAgentDefinitions, eagerSubagentSchema, hiddenParentTools, SUBAGENTS_ABSENT_NOTICE, SUBAGENTS_EAGER_NOTICE, workerCap } from "../core/subagents.ts";
+import { buildPiredAgentDefinitions, eagerSubagentSchema, hiddenParentTools, SUBAGENTS_ABSENT_NOTICE, SUBAGENTS_EAGER_NOTICE, verifierCap, verifierModel, workerCap } from "../core/subagents.ts";
 import { renderCoveragePanel, type Tone } from "../core/coverage-panel.ts";
 import { complete } from "@earendil-works/pi-ai/compat";
 import type { AssistantMessage, Message, UserMessage } from "@earendil-works/pi-ai/compat";
@@ -386,7 +386,7 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	};
 
 	/** The model+thinking the workers should be built for this turn. */
-	const delegationSignature = (model: string | undefined, thinking: string): string => `${model ?? ""}|${thinking}`;
+	const delegationSignature = (model: string | undefined, thinking: string): string => `${model ?? ""}|${thinking}|${verifierModel(scope) ?? ""}`;
 
 	/**
 	 * Register (or re-register) the four pired workers with pi-subagents.
@@ -413,6 +413,7 @@ export default function piredExtension(pi: ExtensionAPI): void {
 			thinking,
 			workspace: workspace.dir,
 			scopeGuidance: scopeGuidance(scope),
+			...(verifierModel(scope) ? { verifierModel: verifierModel(scope) } : {}),
 		});
 		let absent = false;
 		let error: string | undefined;
@@ -1677,7 +1678,7 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		// pi-subagents registers them fine but puts its whole `subagent` schema in
 		// front of every request. Checked here, not at session_start, because the
 		// lazy loader settles the active set in its own session_start handler.
-		if (delegationAvailable && workerCap(scope) > 0 && !eagerSchemaNotified) {
+		if (delegationAvailable && (workerCap(scope) > 0 || verifierCap(scope) > 0) && !eagerSchemaNotified) {
 			try {
 				const all = typeof pi.getAllTools === "function" ? pi.getAllTools().map((t) => t.name) : undefined;
 				const active = typeof pi.getActiveTools === "function" ? pi.getActiveTools() : undefined;

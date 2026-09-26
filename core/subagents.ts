@@ -31,11 +31,13 @@ export type PiredRole = "scout" | "investigate" | "verify" | "escalate";
  * role actually needs: scouting an area and escalating impact are broad (20),
  * and a deep single-module dive is long (24). A refutation of one record is
  * still a tight check — one that sprawls has stopped being a check — but a
- * verifier now takes a batch, one record at a time, and 24 turns fits two or
- * three: in the 2026-09-24 v4 grid a five-finding verify batch settled 2 within
- * 16–18 turns. When each launch covered one record — 23 of 25 gpt-6-luna verify
- * launches did — verification spent the session's worker launches one record at
- * a time: all 5 launches the cap refused were verifiers.
+ * verifier takes one late batch (3.1), one record at a time, and 40 turns fits
+ * about five: in the 2026-09-24 v4 grid a five-finding verify batch settled 2
+ * within 16–18 turns, about eight turns a finding (ADR-028). When each launch
+ * covered one record — 23 of 25 gpt-6-luna verify launches did — verification
+ * spent the session's worker launches one record at a time: all 5 launches the
+ * cap refused were verifiers. The measured cost driver is the parent's turns at
+ * full context, so fewer, larger verify launches are the cheaper shape.
  */
 export interface PiredAgent {
 	name: string;
@@ -136,15 +138,15 @@ export const PIRED_AGENTS: readonly PiredAgent[] = [
 		maxTurns: 24,
 		description: "Deep-dive one module or lead. Records hypotheses with verdicts and findings (suspected until verified), citing exact file:line.",
 		mission:
-			"You are investigating the one module or lead named in your task, in depth. Trace untrusted input from source to sink, reason about the code by hand where a scanner is blind (access control, IDOR, business logic), and run tools over `bash` where they are more complete than reading. `record kind=hypothesis` with an `outcome` as you settle each test case, and `record kind=finding` as soon as a flaw is supported — `suspected` until you have run the control case that had to fail for it to mean anything. Cite exact `file:line` in every description and save raw output under evidence. Stay on the assigned lead; a general coverage reminder is not a new assignment. Return the record IDs and evidence paths.",
+			"You are investigating the one module or lead named in your task, in depth. Trace untrusted input from source to sink, reason about the code by hand where a scanner is blind (access control, IDOR, business logic), and run tools over `bash` where they are more complete than reading. `record kind=hypothesis` with an `outcome` as you settle each test case, and `record kind=finding` as soon as a flaw is supported. Your findings land `suspected` and someone who did not write them settles them — a verifier or the lead — because a finder checking its own claim agrees with it; pired refuses `status=confirmed` or `refuted` from you, and changes to a finding another worker or the lead recorded (record it again without an id to add a location). So make the claim easy to check: cite exact `file:line` in every description, say what control case you ran and what it returned, and save raw output under evidence. Stay on the assigned lead; a general coverage reminder is not a new assignment. Return the record IDs and evidence paths.",
 	},
 	{
 		name: "pired-verify",
 		role: "verify",
-		maxTurns: 24,
-		description: "Fresh adversarial check of findings or cleared hypotheses, one at a time. Tries to refute each from source or a control case; records each verdict on the record.",
+		maxTurns: 40,
+		description: "Fresh adversarial check of a batch of findings or cleared hypotheses, one at a time. Tries to refute each from source or a control case; records each verdict on the record, grounded in quoted lines.",
 		mission:
-			"You are a fresh, skeptical pair of eyes. Your job is to REFUTE each finding or cleared hypothesis named in your task, not to agree with it: read `recall challenge id=<id>` for its brief, then find the input it did not consider or the call path it did not follow. When the task names several records, take them one at a time and record each verdict before you start the next; if your turns run out, hand back the ones you did not reach as unchallenged. Record the verdict whatever it is — an unsettled one too — by the record's id: a finding's `status` is `confirmed` (with the `control` case you ran, and `entitlement` where the brief asks), `refuted` (with a `basis`: `file:line`; `live=true` only when you tested a running target; leave it out when your basis is the source), or, when it is unsettled, `suspected` with what you checked in `basis` or `control` (a `reason` alone is only a note); a hypothesis's `outcome` likewise, with a `statement` and a `basis` (`inconclusive` when unsettled; a hypothesis keeps no `control` or `reason`). Your handoff is not durable; the ledger is. Save raw output with `record kind=evidence` and cite its path in `basis` or `control`. If a cleared hypothesis turns out vulnerable, record its `outcome=confirmed` by id, then — unless a finding already covers it — the finding with its `hypothesisId`: it lands `suspected` unless it carries `status=confirmed` with the control case. You do not edit a finding's title, description, location or severity (pired refuses that from a verifier): if one is wrong, say so in `reason` and in your handoff, and the operator amends it. Do not widen the check — a verification that sprawls has stopped being one. Return each verdict, what it was grounded in, and the evidence path.",
+			"You are a fresh, skeptical pair of eyes. Your job is to REFUTE each finding or cleared hypothesis named in your task, not to agree with it: read `recall challenge id=<id>` for its brief, then find the input it did not consider or the call path it did not follow. When the task names several records, take them one at a time and record each verdict before you start the next; if your turns run out, hand back the ones you did not reach as unchallenged. Record the verdict whatever it is — an unsettled one too — by the record's id: a finding's `status` is `confirmed` (with the `control` case you ran, and `entitlement` where the brief asks), `refuted` (with a `basis`: `file:line`; `live=true` only when you tested a running target; leave it out when your basis is the source), or, when it is unsettled, `suspected` with what you checked in `basis` or `control` (a `reason` alone is only a note); a hypothesis's `outcome` likewise, with a `statement` and a `basis` (`inconclusive` when unsettled; a hypothesis keeps no `control` or `reason`). On a review of source your proof is what you quote. A confirmation carries `path`: the line where untrusted input enters, through to the line where it is used. A refutation quotes the guard that stops it, in `basis` or `guards`. Each is `file:line: verbatim text`, copied from the file as it reads, because pired checks every quote against that file within 3 lines of the line you cite: a paraphrase, a quote from the twin function next door or a guessed line number settles nothing, and the reply shows what the line actually says so you can correct it. A quote proves you read the line; a line number alone does not. Your handoff is not durable; the ledger is. Save raw output with `record kind=evidence` and cite its path in `basis` or `control`. If a cleared hypothesis turns out vulnerable, record its `outcome=confirmed` by id, then — unless a finding already covers it — the finding with its `hypothesisId`: it lands `suspected`, and your verdict on it is a second write on its id. You do not edit a finding's title, description, location or severity (pired refuses that from a verifier): if one is wrong, say so in `reason` and in your handoff, and the operator amends it. Do not widen the check — a verification that sprawls has stopped being one.",
 	},
 	{
 		name: "pired-escalate",
@@ -152,12 +154,15 @@ export const PIRED_AGENTS: readonly PiredAgent[] = [
 		maxTurns: 20,
 		description: "Amplify impact: trace what findings and open hypotheses unlock, try chains, scan for amplifiers. Records a chained finding only with a concrete path.",
 		mission:
-			"You are amplifying impact. `recall` the existing findings and the open or suspected hypotheses, then trace what each one unlocks: reachable sinks, privileged operations, secrets, trust boundaries it lets an attacker cross. Try combinations — a low-severity primitive plus another can be a chain worth more than the sum. Scan the code for amplifiers (an SSRF that reaches metadata, an upload that lands in a served path). `record kind=finding` for a chain ONLY when you have a concrete path: cite the component record IDs and each hop's `file:line`. If the path is plausible but unproven, record it as a hypothesis instead. Never inflate severity without evidence for the reach you are claiming. Return the chain and the records you wrote.",
+			"You are amplifying impact. `recall` the existing findings and the open or suspected hypotheses, then trace what each one unlocks: reachable sinks, privileged operations, secrets, trust boundaries it lets an attacker cross. Try combinations — a low-severity primitive plus another can be a chain worth more than the sum. Scan the code for amplifiers (an SSRF that reaches metadata, an upload that lands in a served path). `record kind=finding` for a chain ONLY when you have a concrete path: cite the component record IDs and each hop's `file:line`. If the path is plausible but unproven, record it as a hypothesis instead. A chain you record lands `suspected` for a verifier or the lead to settle — pired refuses `status=confirmed` or `refuted` from you, and changes to findings you did not record. Never inflate severity without evidence for the reach you are claiming. Return the chain and the records you wrote.",
 	},
 ] as const;
 
 /** The agent names the parent gate treats as pired's own, in a set for O(1) checks. */
 export const PIRED_AGENT_NAMES: ReadonlySet<string> = new Set(PIRED_AGENTS.map((a) => a.name));
+
+/** The workers whose launches `maxVerifiers` counts: the verify role. */
+export const VERIFIER_AGENT_NAMES: ReadonlySet<string> = new Set(PIRED_AGENTS.filter((a) => a.role === "verify").map((a) => a.name));
 
 /**
  * How many workers one session may launch before the gate says no.
@@ -220,6 +225,20 @@ export function verifierCap(scope: EngagementScope | undefined): number {
 }
 
 /**
+ * The scope's `verifier.model`, when it names one as `provider/id`; otherwise
+ * undefined, and the verifier runs on the parent's model like every worker.
+ * Checked for the shape only: whether the provider is configured is pi's to
+ * say, and a model it cannot resolve fails the registration, which pired
+ * already reports and rolls back.
+ */
+export function verifierModel(scope: EngagementScope | undefined): string | undefined {
+	const model = scope?.verifier?.model;
+	if (typeof model !== "string") return undefined;
+	const trimmed = model.trim();
+	return /^[^\s/]+\/\S+$/.test(trimmed) ? trimmed : undefined;
+}
+
+/**
  * The pi-subagents tools pired takes out of the parent's active set, re-applied
  * every turn because pi-subagents' lazy loader can put them back.
  *
@@ -231,7 +250,9 @@ export function verifierCap(scope: EngagementScope | undefined): number {
  * opted in.
  */
 export function hiddenParentTools(scope: EngagementScope | undefined): ReadonlySet<string> {
-	return workerCap(scope) === 0 ? HIDDEN_WHEN_OFF : HIDDEN_ALWAYS;
+	// A verify-only session (maxAgents 0, maxVerifiers above it) still launches
+	// through `subagent`, so the launcher stays visible there.
+	return workerCap(scope) === 0 && verifierCap(scope) === 0 ? HIDDEN_WHEN_OFF : HIDDEN_ALWAYS;
 }
 const HIDDEN_ALWAYS: ReadonlySet<string> = new Set(["bg_wait", "subagent_supervisor"]);
 const HIDDEN_WHEN_OFF: ReadonlySet<string> = new Set([...HIDDEN_ALWAYS, "subagent", "subagents_enable"]);
@@ -279,6 +300,13 @@ export interface AgentBuildContext {
 	workspace: string;
 	/** The operator prompt's own scope wording (`scopeGuidance`), so a worker never reads the engagement differently from its parent. */
 	scopeGuidance: string;
+	/**
+	 * The verifier's model as `provider/id`, from the scope's `verifier.model`,
+	 * when the operator wants verification from another model than the finder's
+	 * (3.1). Operator-only, like every other launch setting: a per-launch
+	 * override is still refused. It sends client code to that provider.
+	 */
+	verifierModel?: string;
 }
 
 /** The agent-name marker the parent writes into the prompt for the child to read back. */
@@ -318,8 +346,23 @@ export function workerPrompt(agent: PiredAgent, ctx: AgentBuildContext): string 
 		"Read the shared state before you start: `recall context` (narrow it with the exact IDs and paths from your task) gives the model, checklist, surface, hypotheses, findings and open blockers as they stand now. Trust the ledger over your own assumptions; it does not forget.",
 		"Record as you go, not at the end: surface the moment you find it (with its source file), a hypothesis before you test it, a finding as soon as it is supported. A finding is `suspected` until the control case that had to fail has been run. Never fabricate output or a CVE, and never claim a severity you cannot show the reach for. A worker that reaches its last few turns with nothing recorded is refused every other tool until it records what it has established — or, if it established nothing, hands back and says so.",
 		agent.mission,
-		`You have at most ${agent.maxTurns} turns; when they run out the harness stops you, so finish and hand back before then. Your handoff is your final message and must be at most 200 words: list the record IDs you wrote, the evidence paths, your verdicts, and anything you left unresolved. Do not paste transcripts or re-list what is already in the ledger — the operator reads the records, not your steps.`,
+		`You have at most ${agent.maxTurns} turns; when they run out the harness stops you, so finish and hand back before then. ${handoffRule(agent)} Do not paste transcripts or re-list what is already in the ledger — the operator reads the records, not your steps.`,
 	].join("\n\n").trim();
+}
+
+/**
+ * How long the handoff may be, by role.
+ *
+ * A verifier's verdicts and their grounds are already on the ledger when it
+ * hands back, and the parent reads the handoff at full context: the measured
+ * cost driver of delegation is the parent's turns, not the worker's (3.1). So a
+ * verifier returns ids and verdict words and nothing the ledger already says.
+ */
+function handoffRule(agent: PiredAgent): string {
+	if (agent.role === "verify") {
+		return "Your handoff is your final message and must be at most 60 words: each record ID and its verdict word — confirmed, refuted, unsettled, or not reached. The grounds are on the ledger already, where the operator reads them.";
+	}
+	return "Your handoff is your final message and must be at most 200 words: list the record IDs you wrote, the evidence paths, your verdicts, and anything you left unresolved.";
 }
 
 /**
@@ -343,7 +386,7 @@ export function buildPiredAgentDefinitions(ctx: AgentBuildContext): Array<{ name
 			systemPromptMode: "replace",
 			tools: [...WORKER_TOOLS],
 			extensions: [ctx.childExtension],
-			...(ctx.model ? { model: ctx.model } : {}),
+			...(agent.role === "verify" && ctx.verifierModel ? { model: ctx.verifierModel } : ctx.model ? { model: ctx.model } : {}),
 			thinking,
 			defaultContext: "fresh",
 			defaultAsync: false,
@@ -403,19 +446,37 @@ export function buildPiredAgentDefinitions(ctx: AgentBuildContext): Array<{ name
  */
 export function delegationBlock(scope?: EngagementScope): string {
 	const cap = workerCap(scope);
-	if (cap === 0) {
+	const verifiers = verifierCap(scope);
+	if (cap === 0 && verifiers === 0) {
 		return `<delegation>
 Delegation is turned off for this engagement (maxAgents=0). Do the work in this session.
 </delegation>`;
 	}
+	if (cap === 0) return verifyOnlyBlock(verifiers);
 	return `<delegation>
 Standing authorization from the operator for this engagement: delegation to the four pired workers below is authorized. These are the applicable instructions pi-subagents asks for, so you do not need a request in the current message. Call \`subagents_enable\` once to load the \`subagent\` tool.
 How your context works: every file you read and every tool output stays in it and is sent again with every later request. A worker reads in a fresh context and hands back at most 200 words plus the records it wrote to this same ledger — you keep the conclusions, not the reading. So a filling context is a reason to hand the next area to a worker; whether you are done is decided by the method in your instructions, not by how much context you have used.
 - \`pired-scout\` — map an area's attack surface (routes, handlers, inputs, trust boundaries, sinks) and record it. A natural first move on each large area of an unfamiliar codebase, before you choose where to dig.
 - \`pired-investigate\` — take one module or lead to a verdict in isolation.
-- \`pired-verify\` — try to refute findings or cleared cells with fresh eyes before they reach a report; one launch takes several, settled one at a time.
+- \`pired-verify\` — try to refute findings or cleared cells with fresh eyes before they reach a report; one launch takes a batch of about five, settled one at a time.
 - \`pired-escalate\` — once findings exist, trace what they unlock and whether they chain.
-This engagement allows ${cap} worker launch${cap === 1 ? "" : "es"} per session; the work after the last one is yours. Record what you already know first, then launch with \`{ agent, task }\` and put the exact file paths and record IDs in the task — the worker sees a bounded snapshot, not your transcript; its model, context and limits are fixed, and a call that overrides them is refused. Workers run one at a time, in the foreground (one launch per message; a second while one runs is refused); read their records after the handoff. A verifier's verdict goes onto the record through the same evidence checks yours does, so it needs no instruction to leave a status alone; you keep the plan, the cross-component reasoning and the final severity judgment — a worker's return is a lead to weigh, not tested coverage. A check you can settle in a few reads costs less here than briefing a worker; a large area's reading never enters your context if a worker does it.
+This engagement allows ${cap} worker launch${cap === 1 ? "" : "es"} per session; the work after the last one is yours.${verifiers > 0 ? ` Verifier launches are counted apart: ${verifiers} \`pired-verify\` launch${verifiers === 1 ? "" : "es"} per session (maxVerifiers), which do not spend the work launches.` : ""} A finding a worker records lands suspected, and a verifier or you settle it — its finder does not. Record what you already know first, then launch with \`{ agent, task }\` and put the exact file paths and record IDs in the task — the worker sees a bounded snapshot, not your transcript; its model, context and limits are fixed, and a call that overrides them is refused. Workers run one at a time, in the foreground (one launch per message; a second while one runs is refused); read their records after the handoff. A verifier's verdict goes onto the record through the same evidence checks yours does, so it needs no instruction to leave a status alone, and a verified row needs no re-reading: its verdict, its quoted grounds and who made it are on the ledger; you keep the plan, the cross-component reasoning and the final severity judgment — a worker's return is a lead to weigh, not tested coverage. A check you can settle in a few reads costs less here than briefing a worker; a large area's reading never enters your context if a worker does it.
+</delegation>`;
+}
+
+/**
+ * The delegation block for a session that may launch verifiers only
+ * (`maxAgents: 0`, `maxVerifiers` above it): the independent tier opted into
+ * for a single agent (3.1). It states the authorization in pi-subagents' terms,
+ * as the full block does, and what makes a verifier worth its cost — a fresh
+ * context that has not read the reasoning — without telling the model when to
+ * launch one. Measured: its benefit for a single competent agent is not, which
+ * is why this is its own configuration.
+ */
+function verifyOnlyBlock(verifiers: number): string {
+	return `<delegation>
+Work delegation is off for this engagement (maxAgents=0): the scouting, investigating and escalating are yours, in this session. One kind of launch is authorized by the operator: \`pired-verify\`, up to ${verifiers} per session (maxVerifiers=${verifiers}). This is the applicable instruction pi-subagents asks for; call \`subagents_enable\` once to load the \`subagent\` tool.
+A verifier reads in a fresh context and has not seen your reasoning, which is what makes its check worth having: a finder that checks its own claim tends to agree with it. It tries to refute each finding it is given, quotes the lines its verdict rests on, and records the verdict on the finding through the same checks yours go through. One launch takes a batch of about five findings, so one late launch over what is still unverified (\`recall challenge\` lists it) costs you fewer turns than one launch per finding. Launch with \`{ agent: "pired-verify", task }\` and put the finding ids in the task. Its handoff is the ids and their verdict words; the verdicts, their quoted grounds and who made them are on the ledger, so a verified row needs no re-reading.
 </delegation>`;
 }
 

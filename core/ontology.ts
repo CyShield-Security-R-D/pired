@@ -415,6 +415,14 @@ export interface EngagementScope {
 	 * the Phase 3 groundwork; enforced by 3.1.
 	 */
 	maxVerifiers?: number;
+	/**
+	 * The verifier's own settings (3.1). `model` (`provider/id`) registers
+	 * pired-verify on another model than the parent's, for a check from a
+	 * different model family. Operator-only: a per-launch override is still
+	 * refused. It sends client code to that model's provider. Read through
+	 * core/subagents.ts `verifierModel`.
+	 */
+	verifier?: { model?: string };
 }
 
 /** A session's ceilings. Tokens count every model call the session pays for; minutes are wall clock. */

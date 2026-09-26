@@ -13,6 +13,8 @@ import {
 	SUBAGENTS_ABSENT_NOTICE,
 	SUBAGENTS_EAGER_NOTICE,
 	SUGGESTED_MAX_AGENTS,
+	VERIFIER_AGENT_NAMES,
+	verifierModel,
 	verifierCap,
 	WORKER_TOOLS,
 	workerCap,
@@ -112,13 +114,46 @@ describe("buildPiredAgentDefinitions", () => {
 		}
 	});
 
-	it("gives the verifier 24 turns, room for two or three records rather than exactly one", () => {
+	it("gives the verifier 40 turns, room for one late batch of about five rather than one record a launch", () => {
 		// v4 grid, 2026-09-24: a five-finding verify batch settled 2 in the 16–18
-		// turns it had, and 23 of 25 gpt-6-luna verify launches covered a single
-		// finding — all 5 launches the cap refused were verifiers.
+		// turns it had — about eight a finding (ADR-028) — and 23 of 25 gpt-6-luna
+		// verify launches covered a single finding; all 5 launches the cap refused
+		// were verifiers. The parent's turns are the cost driver, so one batch (3.1).
 		const verify = PIRED_AGENTS.find((a) => a.role === "verify")!;
-		expect(verify.maxTurns).toBe(24);
-		expect(workerPrompt(verify, ctx())).toMatch(/at most 24 turns/);
+		expect(verify.maxTurns).toBe(40);
+		expect(workerPrompt(verify, ctx())).toMatch(/at most 40 turns/);
+	});
+
+	it("bounds the verifier's handoff to ids and verdict words, and leaves the other workers at 200 words", () => {
+		const verify = workerPrompt(PIRED_AGENTS.find((a) => a.role === "verify")!, ctx());
+		expect(verify).toMatch(/at most 60 words: each record ID and its verdict word/);
+		expect(verify).not.toMatch(/at most 200 words/);
+		const investigate = workerPrompt(PIRED_AGENTS.find((a) => a.role === "investigate")!, ctx());
+		expect(investigate).toMatch(/at most 200 words/);
+	});
+
+	it("tells the verifier what a grounded quote is and why a line number alone is not one", () => {
+		const verify = workerPrompt(PIRED_AGENTS.find((a) => a.role === "verify")!, ctx());
+		expect(verify).toContain("`file:line: verbatim text`");
+		expect(verify).toMatch(/A confirmation carries `path`/);
+		expect(verify).toMatch(/quotes the guard that stops it, in `basis` or `guards`/);
+		expect(verify).toMatch(/within 3 lines/);
+		expect(verify).toMatch(/the reply shows what the line actually says/);
+	});
+
+	it("tells the investigator and the escalator their findings land suspected for someone else to settle", () => {
+		for (const role of ["investigate", "escalate"] as const) {
+			const prompt = workerPrompt(PIRED_AGENTS.find((a) => a.role === role)!, ctx());
+			expect(prompt).toMatch(/lands? `suspected`/);
+			expect(prompt).toMatch(/pired refuses `status=confirmed` or `refuted` from you/);
+		}
+	});
+
+	it("registers the verifier on the scope's verifier model and every other worker on the parent's", () => {
+		const defs = buildPiredAgentDefinitions({ ...ctx(), model: "local/glm", verifierModel: "other/judge" });
+		for (const { name, definition } of defs) expect(definition.model).toBe(name === "pired-verify" ? "other/judge" : "local/glm");
+		const same = buildPiredAgentDefinitions({ ...ctx(), model: "local/glm" });
+		expect(same.find((d) => d.name === "pired-verify")?.definition.model).toBe("local/glm");
 	});
 
 	it("trims the description and system prompt, which the registry requires untrimmed to reject", () => {
@@ -215,7 +250,7 @@ describe("the worker prompt", () => {
 		// nowhere to go but the handoff; linked, it meets the same bar as any
 		// investigator's finding.
 		const prompt = workerPrompt(PIRED_AGENTS.find((a) => a.role === "verify")!, ctx());
-		expect(prompt).toMatch(/the finding with its `hypothesisId`: it lands `suspected` unless it carries `status=confirmed` with the control case/);
+		expect(prompt).toMatch(/the finding with its `hypothesisId`: it lands `suspected`, and your verdict on it is a second write on its id/);
 		expect(prompt).not.toMatch(/do not promote/i);
 	});
 
@@ -366,7 +401,9 @@ describe("the delegation prompt block", () => {
 		expect(block).toMatch(/needs no instruction to leave a status alone/);
 		expect(block).toMatch(/final severity judgment/);
 		// And that one launch can carry several records, settled one at a time.
-		expect(block).toMatch(/one launch takes several, settled one at a time/);
+		expect(block).toMatch(/one launch takes a batch of about five, settled one at a time/);
+		// And the verdict's grounds are on the ledger, so the parent does not re-read the row (3.1).
+		expect(block).toMatch(/a verified row needs no re-reading/);
 	});
 
 	it("says delegation is off, without listing workers, when the engagement disables it", () => {
@@ -420,5 +457,50 @@ describe("the pi-subagents tools the parent does not see", () => {
 		expect(hidden.has("subagents_enable")).toBe(false);
 		expect(hidden.has("bg_wait")).toBe(true);
 		expect(hidden.has("subagent_supervisor")).toBe(true);
+	});
+});
+
+describe("verifier launches (3.1)", () => {
+	const scope = (over: Partial<EngagementScope> = {}): EngagementScope => ({
+		v: 1, engagement: "acme", authorized: true, mode: "enforce", targets: {}, ...over,
+	});
+
+	it("keeps the launcher visible for a verify-only session, and hides it only when both caps are 0", () => {
+		expect(hiddenParentTools(scope({ maxAgents: 0, maxVerifiers: 2 })).has("subagent")).toBe(false);
+		expect(hiddenParentTools(scope({ maxAgents: 0, maxVerifiers: 0 })).has("subagent")).toBe(true);
+		expect(hiddenParentTools(scope({ maxAgents: 0 })).has("subagent")).toBe(true);
+	});
+
+	it("gives a verify-only session its own block: the one launch it may make, and why a fresh context is worth it", () => {
+		const block = delegationBlock(scope({ maxAgents: 0, maxVerifiers: 2 }));
+		expect(block).toMatch(/Work delegation is off for this engagement \(maxAgents=0\)/);
+		expect(block).toMatch(/`pired-verify`, up to 2 per session \(maxVerifiers=2\)/);
+		expect(block).toMatch(/has not seen your reasoning/);
+		expect(block).toMatch(/a verified row needs no re-reading/);
+		expect(block).not.toMatch(/pired-scout|pired-investigate|pired-escalate/);
+	});
+
+	it("says verifier launches are counted apart when the scope sets both caps", () => {
+		expect(delegationBlock(scope({ maxAgents: 4, maxVerifiers: 1 }))).toMatch(/Verifier launches are counted apart: 1 `pired-verify` launch per session \(maxVerifiers\), which do not spend the work launches/);
+		expect(delegationBlock(scope({ maxAgents: 4 }))).not.toMatch(/counted apart/);
+		expect(delegationBlock(scope({ maxAgents: 4 }))).toMatch(/A finding a worker records lands suspected, and a verifier or you settle it/);
+	});
+
+	it("names the verify role's agents as the ones maxVerifiers counts", () => {
+		expect([...VERIFIER_AGENT_NAMES]).toEqual(["pired-verify"]);
+	});
+});
+
+describe("the verifier's model (3.1)", () => {
+	const scope = (verifier?: EngagementScope["verifier"]): EngagementScope => ({
+		v: 1, engagement: "acme", authorized: true, mode: "enforce", targets: {}, ...(verifier ? { verifier } : {}),
+	});
+
+	it("reads verifier.model only in provider/id form, and leaves the verifier on the parent's model otherwise", () => {
+		expect(verifierModel(scope({ model: " other/judge-1 " }))).toBe("other/judge-1");
+		for (const model of ["judge-1", "other/", "/judge", "other judge/x", ""]) expect(verifierModel(scope({ model }))).toBeUndefined();
+		expect(verifierModel(scope({ model: 42 as unknown as string }))).toBeUndefined();
+		expect(verifierModel(scope())).toBeUndefined();
+		expect(verifierModel(undefined)).toBeUndefined();
 	});
 });

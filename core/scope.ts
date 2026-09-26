@@ -11,7 +11,7 @@
 
 import type { EngagementScope, ScopeTargets, TargetType } from "./ontology.ts";
 import type { GateDecision, ToolCall } from "./ports.ts";
-import { PIRED_AGENT_NAMES, workerCap } from "./subagents.ts";
+import { PIRED_AGENT_NAMES, VERIFIER_AGENT_NAMES, verifierCap, workerCap } from "./subagents.ts";
 
 // --- IPv4 helpers -----------------------------------------------------------
 
@@ -308,6 +308,23 @@ function workersSpent(maxAgents: number, spawned: number): string {
 }
 
 /**
+ * The refusal once the session's verifier launches are spent. Verification has
+ * its own cap so it does not compete with work launches (3.1); it does not
+ * fall back on `maxAgents` when spent, or the two caps would be one.
+ */
+function verifiersSpent(maxVerifiers: number, spawned: number): string {
+	return `Verifier budget spent: ${maxVerifiers} pired-verify launch${maxVerifiers === 1 ? "" : "es"} per session, ${spawned} already launched. ` +
+		"Settle what is still unverified yourself: `recall challenge` lists it, and a finding you confirm or refute goes through the same checks. " +
+		"For more verifiers, raise maxVerifiers in the scope file.";
+}
+
+/** The refusal of a work launch in a session that allows only verifiers. */
+function verifyOnly(maxVerifiers: number): string {
+	return `This engagement allows only verifier launches (maxAgents=0, maxVerifiers=${maxVerifiers}): pired-verify. ` +
+		"Do the scouting, investigating and escalating in this session.";
+}
+
+/**
  * The pi-subagents lazy-loader tool. It only makes the `subagent` tool active;
  * it launches nothing, so it is always allowed and never charged to the budget.
  */
@@ -417,6 +434,8 @@ export interface SubagentLaunchDecision {
 	reason?: string;
 	/** Children this call would launch, to charge against the session budget (0 for a non-launch). */
 	count: number;
+	/** The launch is charged to the verifier cap (`maxVerifiers`), not to `maxAgents`. */
+	verifier?: boolean;
 }
 
 /** What `checkSubagentLaunch` needs from the session to decide. */
@@ -429,6 +448,16 @@ export interface SubagentGateContext {
 	spawned: number;
 	/** The per-session cap (0 disables delegation). */
 	maxAgents: number;
+	/**
+	 * The per-session verifier cap. Above 0, a launch of a verifier agent is
+	 * charged here and not to `maxAgents`; at 0 (the default) verifiers share
+	 * `maxAgents` with every other worker, as before 3.1.
+	 */
+	maxVerifiers?: number;
+	/** Verifier launches already charged to `maxVerifiers` this session. */
+	verifiersSpawned?: number;
+	/** The agent names charged to `maxVerifiers`; defaults to pired-verify. */
+	verifiers?: ReadonlySet<string>;
 	/** A launch this gate allowed has not finished executing yet. */
 	running?: boolean;
 }
@@ -486,7 +515,8 @@ export function checkSubagentLaunch(rawArgs: unknown, ctx: SubagentGateContext):
 		};
 	}
 
-	if (ctx.maxAgents === 0) {
+	const maxVerifiers = ctx.maxVerifiers ?? 0;
+	if (ctx.maxAgents === 0 && maxVerifiers === 0) {
 		return { allow: false, count: 0, reason: "Delegation is disabled for this engagement (maxAgents=0). Do the work in this session." };
 	}
 
@@ -523,6 +553,15 @@ export function checkSubagentLaunch(rawArgs: unknown, ctx: SubagentGateContext):
 		};
 	}
 
+	// A verifier launch is charged to its own cap when the scope sets one, so a
+	// late batch of verification is not refused because the work launches were
+	// spent, and does not spend them either (3.1).
+	if (maxVerifiers > 0 && (ctx.verifiers ?? VERIFIER_AGENT_NAMES).has(agent)) {
+		const used = ctx.verifiersSpawned ?? 0;
+		if (used + 1 > maxVerifiers) return { allow: false, count: 0, reason: verifiersSpent(maxVerifiers, used) };
+		return { allow: true, count: 1, verifier: true };
+	}
+	if (ctx.maxAgents === 0) return { allow: false, count: 0, reason: verifyOnly(maxVerifiers) };
 	if (ctx.spawned + 1 > ctx.maxAgents) {
 		return { allow: false, count: 0, reason: workersSpent(ctx.maxAgents, ctx.spawned) };
 	}
@@ -626,12 +665,14 @@ function childrenInResult(result: unknown): number {
  */
 export function createScopeGate(scope: EngagementScope, options: ScopeGateOptions = {}): ScopeGate {
 	const maxAgents = workerCap(scope);
+	const maxVerifiers = verifierCap(scope);
 	// Custom external tools extend the defaults; they never uncap the built-ins.
 	const agentTools = new Set([...AGENT_TOOLS, ...(scope.agentTools ?? [])]);
 	const piredAgents = options.agents ?? PIRED_AGENT_NAMES;
 	let spawned = 0;
-	/** The allowed `subagent` launch whose execution has not ended, with what it was charged. */
-	let running: { id?: string; count: number } | undefined;
+	let verifiersSpawned = 0;
+	/** The allowed `subagent` launch whose execution has not ended, with what it was charged, and to which cap. */
+	let running: { id?: string; count: number; verifier: boolean } | undefined;
 
 	const gate = (call: GatedToolCall): GateDecision => {
 		// The lazy loader only makes `subagent` active; it launches nothing.
@@ -642,12 +683,16 @@ export function createScopeGate(scope: EngagementScope, options: ScopeGateOption
 				...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
 				spawned,
 				maxAgents,
+				maxVerifiers,
+				verifiersSpawned,
 				running: running !== undefined,
 			});
 			if (!decision.allow) return { allow: false, reason: decision.reason };
 			if (decision.count > 0) {
-				spawned += decision.count;
-				running = { ...(call.id !== undefined ? { id: call.id } : {}), count: decision.count };
+				const verifier = decision.verifier === true;
+				if (verifier) verifiersSpawned += decision.count;
+				else spawned += decision.count;
+				running = { ...(call.id !== undefined ? { id: call.id } : {}), count: decision.count, verifier };
 			}
 			return { allow: true };
 		}
@@ -712,7 +757,10 @@ export function createScopeGate(scope: EngagementScope, options: ScopeGateOption
 	const settle = (end: ToolCallEnd): void => {
 		if (end.name !== "subagent" || running === undefined) return;
 		if (running.id !== undefined && end.id !== running.id) return;
-		if (end.isError && childrenInResult(end.result) === 0) spawned = Math.max(0, spawned - running.count);
+		if (end.isError && childrenInResult(end.result) === 0) {
+			if (running.verifier) verifiersSpawned = Math.max(0, verifiersSpawned - running.count);
+			else spawned = Math.max(0, spawned - running.count);
+		}
 		running = undefined;
 	};
 

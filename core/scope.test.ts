@@ -678,6 +678,63 @@ describe("the subagent gate", () => {
 		gate.settle(ran("1"));
 		expect(decide(gate, launch()).allow).toBe(false);
 	});
+
+	describe("verifier launches have their own cap (3.1)", () => {
+		const verify = (id: string) => ({ ...launch({}, "pired-verify"), id });
+		const rejected = (id: string) => ({ id, name: "subagent", isError: true, result: { details: { results: [] } } });
+
+		it("counts a verify launch against maxVerifiers, not maxAgents", () => {
+			const gate = at({ maxAgents: 1, maxVerifiers: 2 });
+			expect(decide(gate, verify("v1"))).toEqual({ allow: true });
+			gate.settle(ran("v1"));
+			expect(decide(gate, verify("v2"))).toEqual({ allow: true });
+			gate.settle(ran("v2"));
+			// Two verifiers spent nothing of the one work launch.
+			expect(decide(gate, { ...launch(), id: "w1" })).toEqual({ allow: true });
+			gate.settle(ran("w1"));
+			const third = decide(gate, verify("v3"));
+			expect(third.allow).toBe(false);
+			expect(third.reason).toMatch(/Verifier budget spent: 2 pired-verify launches per session, 2 already launched/);
+			expect(third.reason).toMatch(/raise maxVerifiers/);
+		});
+
+		it("does not fall back on the work launches when the verifier launches are spent", () => {
+			const gate = at({ maxAgents: 8, maxVerifiers: 1 });
+			expect(decide(gate, verify("v1"))).toEqual({ allow: true });
+			gate.settle(ran("v1"));
+			expect(decide(gate, verify("v2")).reason).toMatch(/Verifier budget spent: 1 pired-verify launch per session/);
+		});
+
+		it("lets a verify-only session launch verifiers and nothing else", () => {
+			const gate = at({ maxAgents: 0, maxVerifiers: 1 });
+			const scout = decide(gate, launch());
+			expect(scout.allow).toBe(false);
+			expect(scout.reason).toMatch(/allows only verifier launches \(maxAgents=0, maxVerifiers=1\): pired-verify/);
+			expect(decide(gate, verify("v1"))).toEqual({ allow: true });
+		});
+
+		it("gives back a verifier launch that started nothing to the verifier cap, not the work cap", () => {
+			const gate = at({ maxAgents: 1, maxVerifiers: 1 });
+			expect(decide(gate, verify("v1"))).toEqual({ allow: true });
+			gate.settle(rejected("v1"));
+			expect(decide(gate, verify("v2"))).toEqual({ allow: true });
+			gate.settle(ran("v2"));
+			expect(decide(gate, { ...launch(), id: "w1" })).toEqual({ allow: true });
+			gate.settle(rejected("w1"));
+			expect(decide(gate, { ...launch(), id: "w2" })).toEqual({ allow: true });
+		});
+
+		it("charges verifiers to maxAgents as before when the scope sets no maxVerifiers", () => {
+			const gate = at({ maxAgents: 1 });
+			expect(decide(gate, verify("v1"))).toEqual({ allow: true });
+			gate.settle(ran("v1"));
+			expect(decide(gate, launch()).reason).toMatch(/Subagent budget spent: 1 per session/);
+		});
+
+		it("still refuses everything when both caps are 0", () => {
+			expect(decide(at({ maxAgents: 0, maxVerifiers: 0 }), verify("v1")).reason).toMatch(/Delegation is disabled/);
+		});
+	});
 });
 
 describe("isWithinDir", () => {

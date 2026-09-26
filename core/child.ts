@@ -886,7 +886,8 @@ function countsFor(agent: PiredAgent | undefined, store: StoreName): boolean {
  * budget with nothing recorded may only `record` and `recall`; a `record` outside
  * the worker's role is refused; everything else — the ledger calls the steps
  * above let through included — goes through pired's own scope gate with
- * `maxAgents: 0`, so a scope-declared `agentTools` name is refused as well.
+ * `maxAgents: 0` and `maxVerifiers: 0`, so a scope-declared `agentTools` name,
+ * or a verifier launch the parent's scope allows, is refused as well.
  *
  * Turns are counted from `turn_start`, not tool calls: a turn that reads three
  * files is one step of the investigation, and pi-subagents' `toolBudget.hard`
@@ -912,7 +913,7 @@ export function createChildGuard(): ChildGuard {
 
 	return {
 		arm(scope, reads) {
-			gate = createScopeGate({ ...scope, maxAgents: 0 });
+			gate = createScopeGate({ ...scope, maxAgents: 0, maxVerifiers: 0 });
 			ledger = reads ?? EMPTY_LEDGER;
 			failure = undefined;
 		},
