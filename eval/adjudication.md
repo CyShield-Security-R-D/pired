@@ -26,8 +26,9 @@ process that cannot see which arm made the claim.
 ## What is judged
 
 **Unit: the unique issue per target.**
-- Collect every live (not deleted, not disposed) finding from every run on a target: both arms,
-  all passes, all attempts that count.
+- Collect every live (not deleted, not disposed of by the operator) finding from every run on a
+  target: both arms, all passes, all attempts that count. **Refuted rows are included**, with their
+  status blinded (see *Refuted rows* below).
 - Group the claims into issues. An issue is one weakness at one sink. The same sink reached from
   two routes is one issue; two sinks in one function are two issues.
 - Precision and yield are counted over issues, not raw claims. Duplicates count once, so an arm
@@ -40,6 +41,29 @@ process that cannot see which arm made the claim.
 - The judge confirms or splits each group with the code in front of it.
 - Grouping by text similarity alone is rejected: two workers describing one sink in different
   words would count as two issues, and that is exactly the inflation being measured.
+
+## Refuted rows
+
+*Amendment for delegation-v6 Phase 3, item 3.1 (the independent verification tier).*
+
+A verifier's refutation keeps the row: `status=refuted`, with a verification carrying who refuted
+it, the basis and the quoted guard. The official scorer ignores status, so a refutation cannot move
+the official count. Left out of adjudication, it would be invisible here too: a verifier that
+rejects a real issue the key does not list would cost nothing on any number.
+
+So refuted rows are judged like every other claim:
+- They are collected with the rest and grouped into issues by the same blind process.
+- Their `status` and `verification` are removed, as for every claim (*Blinding*). The judge cannot
+  tell a refuted claim from a suspected or confirmed one.
+- The verifier's quoted guard is not shown. The judge finds its own guard or does not; the
+  rubric's `guarded` label asks for a quote either way.
+
+After judging, each issue is joined back to its rows' statuses to give, per arm:
+- **adjudicated precision per claim tier**: all rows, presented rows (not refuted or disposed of),
+  and confirmed rows, the same tiers `eval/rescore.ts` reports against the key;
+- **rejected valid issues**: `valid` issues the arm claimed only in rows that were refuted, over
+  `valid` issues the arm claimed. A row is counted as refuted if any line of its history says so,
+  even after a later re-confirmation. Its ceiling is pre-registered in plan item 4.2.
 
 ## Blinding
 
