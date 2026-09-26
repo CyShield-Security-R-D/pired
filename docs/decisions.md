@@ -2075,8 +2075,8 @@ and starts with Luna alone.
 >
 > On 2026-09-24 the operator merged this work to `main` while the grids were still running and
 > before their verdict. The merge does not change what the grids measure, because they run the
-> frozen snapshot, not `main`. Delegation ships on by default (`maxAgents` 8); `maxAgents: 0` turns
-> it off (see `docs/delegation.md`).
+> frozen snapshot, not `main`. Delegation shipped on by default (`maxAgents` 8); after the verdict
+> [ADR-029](#adr-029--delegation-is-opt-in-until-a-design-beats-the-single-agent) made it opt-in.
 
 ### Context
 
@@ -2374,3 +2374,70 @@ following mechanisms is general; the corpus appears here only as evidence.
   sensitivity check and is a separate decision.
 - **Row provenance (`by` on every ledger write).** It would make "who vetted what" answerable, but it
   changes FORMAT.md, and nothing above depends on it.
+
+## ADR-029 — Delegation is opt-in until a design beats the single agent
+
+**Status:** accepted · 2026-09-26 · amends ADR-027 · follows the ADR-026 outcome
+
+### Context
+
+ADR-027 shipped delegation on by default: an engagement that said nothing got `maxAgents` 8, the
+`<delegation>` block with its standing authorization, and pi-subagents' `subagents_enable` stub on
+every request. ADR-026 pre-registered how that change would be judged, and on 2026-09-26 it failed
+(ADR-026, *Outcome*). The measured costs:
+- **GPT-6 Luna, the gating grid:** 7 true positives against the baseline's 6, but 115 claims
+  against 58 and 62% more tokens. That is 1.7× in dollars, since 96% of the tokens were cache reads.
+- **Across the six official grids:** 58 true positives against the baseline's 69.
+- **GLM-5.3 Flash and DeepSeek V4.1 Flash:** no gain in true positives in either grid, and no
+  precision loss either.
+
+The details are in `research/12-delegation-trial-2026-09.md`.
+
+A default is what every engagement that never considered the question runs. After the trial, the
+default was the configuration measured to cost more for no more findings.
+
+### Decision
+
+- **`DEFAULT_MAX_AGENTS` is 0.** An engagement delegates only when its scope file sets
+  `maxAgents`. `SUGGESTED_MAX_AGENTS` (8) is the cap the docs suggest for opting in.
+- **At a cap of zero, the parent does not see `subagent` or `subagents_enable`.**
+  - The gate already refused every launch at zero. Leaving the tools active only cost the stub's
+    ~0.5k characters on every request and invited a call that had to fail.
+  - The decision is `hiddenParentTools()` in `core/subagents.ts`, re-applied each turn, because
+    pi-subagents' lazy loader can re-add the tools.
+  - The notice about an eager `subagent` schema is not shown when delegation is off: nothing is sent.
+- **Everything else stays as it was.**
+  - pired still registers its four workers when pi-subagents is present, so an operator can opt in
+    per engagement and keep the TUI monitoring ADR-027 was built for.
+  - The prompt keeps a one-line block saying delegation is off, so a model that reads
+    `ops-delegation` does not try.
+
+### Consequences
+
+- **The benchmark harness must state the candidate's cap.**
+  - `eval/delegation-compare.ts` writes a review scope with no `maxAgents`. The frozen snapshots it
+    has measured (v3, v4) still delegate at their own default of 8.
+  - A candidate cut from `main` after this change would silently run with delegation off.
+  - The v6 harness writes the cap into the candidate's scope explicitly
+    (`docs/delegation-v6-plan.md`, Phase 2).
+- **The delegation audit follows automatically.**
+  - `eval/delegation-audit.ts` reads the cap from the run's scope file, or from this default when
+    the file sets none. It pins that value into a new grid's manifest, so it keeps matching what
+    the gate enforced.
+  - An old grid's manifest pins 8. It is resumed from its own worktree, as before.
+- **This is a default, not a verdict on delegation.** A design that passes a pre-registered trial
+  on fresh applications (the v6 plan) can make it the default again, by an ADR that cites the
+  trial.
+
+### Rejected
+
+- **Uninstalling or unregistering pi-subagents by default.**
+  - The operator wants delegation built on pi-subagents, with its live TUI monitoring.
+  - Registration costs nothing per request once the launcher is hidden.
+  - An engagement that opts in should not need a reinstall.
+- **Keeping it on and fixing it in place.** The v5 trial is the evidence that the current design
+  does not earn the default. A fix is a new design, and it is judged by the v6 trial before it
+  becomes the default again.
+- **A global switch in `~/.pired/`.** It was rejected in ADR-018 for the same reason as every other
+  engagement policy: `maxAgents` already lives in the scope file, and one knob in two places is two
+  answers to one question.

@@ -431,14 +431,14 @@ describe("delegation in a live session", () => {
 	 * `subagents` is what the host has: nothing (`absent`), 0.71's lazy loader on
 	 * a pi >= 0.86.1 (`lazy`), or an eager `subagent` with no loader (`eager`).
 	 */
-	function sessionHost(subagents: "absent" | "lazy" | "eager") {
+	function sessionHost(subagents: "absent" | "lazy" | "eager", optIn: { maxAgents?: number } = { maxAgents: 8 }) {
 		const root = mkdtempSync(join(tmpdir(), "pired-session-"));
 		const target = join(root, "target");
 		const ws = join(root, "ws");
 		mkdirSync(target, { recursive: true });
 		writeFileSync(join(target, "pired.scope.json"), JSON.stringify({
 			v: 1, engagement: "live", authorized: true, mode: "enforce", workspace: ws,
-			targets: { domains: ["app.live.test"] },
+			targets: { domains: ["app.live.test"] }, ...optIn,
 		}));
 		const handlers = new Map<string, Handler[]>();
 		const notices: string[] = [];
@@ -483,7 +483,7 @@ describe("delegation in a live session", () => {
 			(await fire("tool_call", { type: "tool_call", toolCallId: id, toolName: "subagent", input: { agent, task: "map src/" } }))[0] as { block?: boolean; reason?: string } | undefined;
 		const end = (id: string, isError = false, results: unknown[] = [{ agent: "pired-scout", exitCode: 0 }], on: unknown = ctx()) =>
 			fire("tool_execution_end", { type: "tool_execution_end", toolCallId: id, toolName: "subagent", isError, result: { content: [], details: { results } } }, on);
-		return { root, target, ws, notices, fire, ctx, launch, end };
+		return { root, target, ws, notices, fire, ctx, launch, end, active: () => active };
 	}
 
 	let host: ReturnType<typeof sessionHost> | undefined;
@@ -524,6 +524,18 @@ describe("delegation in a live session", () => {
 			await lazy.fire("session_shutdown", {});
 			rmSync(lazy.root, { recursive: true, force: true });
 		}
+	});
+
+	it("keeps the launcher and its loader out of an engagement that never opted in, and says nothing about their cost", async () => {
+		// ADR-029: delegation is off by default. The gate would refuse every
+		// launch, so an active stub is ~0.5k characters a request for a call that must fail.
+		host = sessionHost("eager", {});
+		await host.fire("session_start", { type: "session_start" });
+		await host.fire("before_agent_start", { systemPrompt: "base" });
+		expect(host.active()).not.toContain("subagent");
+		expect(host.active()).not.toContain("subagents_enable");
+		expect(host.notices).not.toContain(SUBAGENTS_EAGER_NOTICE);
+		expect((await host.launch("t1"))?.block).toBe(true);
 	});
 
 	it("publishes the session's scope for its workers under the workspace, and withdraws it at shutdown", async () => {

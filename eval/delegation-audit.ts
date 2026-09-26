@@ -32,7 +32,6 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { HANDOFF_GRACE_TURNS } from "../core/child.ts";
-import { DEFAULT_MAX_AGENTS } from "../core/scope.ts";
 import { PIRED_AGENTS } from "../core/subagents.ts";
 import {
 	childOutcome, childRecordIds, observationsFromChildSession, reconcileSubagentCalls,
@@ -58,10 +57,20 @@ export const PROMPT_GROWTH_NOTE = 6000;
  * The bounds a worker is held to, read from the product modules that set them:
  * each role's `maxTurns` (core/subagents.ts), the grace turns after it before
  * pired's gate ends the run (core/child.ts), and the per-session worker budget
- * when the scope sets none (core/scope.ts). The runner pins these values in the
- * manifest, so a resume refuses across a change to them rather than auditing
- * two halves of a grid by different limits.
+ * when the scope sets none (UNSTATED_MAX_AGENTS below). The runner pins these
+ * values in the manifest, so a resume refuses across a change to them rather
+ * than auditing two halves of a grid by different limits.
  */
+/**
+ * The worker budget a cell's scope implies when it sets none. It is the default
+ * of the snapshots this audit has measured (v3, v4), which was 8, and not
+ * `main`'s: since ADR-029 `main` defaults to 0, and reading that here flagged
+ * every launch in every v4 cell as over budget. A candidate cut from `main`
+ * states its cap in its scope (docs/delegation-v6-plan.md 2.7), so this fallback
+ * applies only to snapshots that relied on their own default.
+ */
+const UNSTATED_MAX_AGENTS = 8;
+
 export interface AuditLimits {
 	maxTurns: Record<string, number>;
 	handoffGraceTurns: number;
@@ -72,7 +81,7 @@ export function auditLimits(): AuditLimits {
 	return {
 		maxTurns: Object.fromEntries(PIRED_AGENTS.map((agent) => [agent.name, agent.maxTurns])),
 		handoffGraceTurns: HANDOFF_GRACE_TURNS,
-		maxAgents: DEFAULT_MAX_AGENTS,
+		maxAgents: UNSTATED_MAX_AGENTS,
 	};
 }
 

@@ -1,8 +1,9 @@
 # Delegation
 
 pired delegates through [pi-subagents](https://github.com/nicobailon/pi-subagents). When
-the package is present, pired registers four security-operator agents at session start and
-authorizes the model to use them. pired has no worker of its own and no delegation CLI. See
+the package is present, pired registers four security-operator agents at session start. An
+engagement that opts in by setting `maxAgents` in its scope file authorizes the model to use them;
+by default delegation is off ([ADR-029](decisions.md)). pired has no worker of its own and no delegation CLI. See
 [ADR-027](decisions.md).
 
 ## Versions
@@ -103,7 +104,11 @@ trusted. pi runs the tool calls of one assistant message in parallel, and `subag
 declare itself sequential, so two launches in one message used to run two workers at once. The
 gate refuses a launch while another is running.
 
-`maxAgents` (default 8) caps how many workers a session may launch, and `0` disables delegation.
+**Delegation is opt-in.** `maxAgents` in the scope file caps how many workers a session may launch.
+It defaults to `0`, which disables delegation: the model sees a one-line block saying so, and neither
+`subagent` nor `subagents_enable`. `8` is the suggested cap for an engagement that opts in. The
+default was 8 until the pre-registered trial found delegation matched the single agent's true
+positives at a higher cost and lower precision ([ADR-029](decisions.md), ADR-026 outcome).
 The delegation block states the number. Each launch the gate allows counts against it. A launch
 that pi-subagents rejects before any worker starts is refunded. A launch past the cap is refused
 with wrap-up guidance, not a stop: the rest is the parent's, starting with what the ledger already

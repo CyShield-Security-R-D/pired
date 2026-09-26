@@ -31,7 +31,7 @@ then the product. Each product change is judged by a pre-registered test on fres
 | 0.1 | Research note with the measured outcome, the critic's corrections and the literature (`research/12`) | done |
 | 0.2 | ADR-026: record the verdict (Luna not approved; delegation v4 not accepted); GLM stopped at 10/15 + 7/12 as evidence | done |
 | 0.3 | ADR-027/028 status: not accepted as they stand | done |
-| 0.4 | **Operator decision:** delegation is on by default on `main` (`maxAgents` 8). ADR-027 says a rejection means the change is not kept as it stands. Proposal: default `maxAgents: 0` (opt-in) on `main` until v6 passes. | awaiting decision |
+| 0.4 | Delegation becomes opt-in on `main`: `maxAgents` defaults to 0, and at 0 the launcher is hidden from the model (ADR-029). The operator's direction: the best harness, not any earlier decision. | done |
 
 ## Phase 1 — Measurement instruments (no model calls)
 
@@ -55,6 +55,7 @@ its ADR.
 | 2.4 | **Reuse a valid arm** when only its partner failed for infrastructure, both started in the same window, and runs are concurrent. Results are reported with and without reuse. | 17 valid runs (135M tokens, 7.2 run-hours) were discarded. |
 | 2.5 | **Matched-compute arm:** the single agent run *k* times at the candidate's token budget, with findings combined. | Tests whether delegation adds anything beyond spending more tokens. |
 | 2.6 | **Stop reason as a first-class outcome**, recorded per run: finished, offered to continue, budget, turn cap, error. | Luna ends about 80% of runs by offering to continue. |
+| 2.7 | **The candidate's scope states its worker cap.** The review scope sets no `maxAgents`, and since ADR-029 the default is 0. | A candidate cut from `main` would otherwise run with delegation silently off. |
 
 ## Phase 3 — Product changes (candidate snapshot v5; each its own ADR)
 

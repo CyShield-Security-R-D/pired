@@ -318,9 +318,18 @@ describe("the subagent budget", () => {
 		expect(denied.reason).toMatch(/maxAgents/);
 	});
 
-	it("defaults to eight when the engagement does not say", () => {
-		const gate = createScopeGate(eng());
-		for (let i = 0; i < DEFAULT_MAX_AGENTS; i++) expect(decide(gate, spawn).allow, `spawn ${i + 1}`).toBe(true);
+	it("refuses delegation when the engagement never opted in, because the default is off", () => {
+		// ADR-029: the trial that was to justify delegation on by default did not
+		// (ADR-026 outcome), so an engagement that says nothing does the work itself.
+		expect(DEFAULT_MAX_AGENTS).toBe(0);
+		const denied = decide(createScopeGate(eng()), spawn);
+		expect(denied.allow).toBe(false);
+		expect(denied.reason).toMatch(/Delegation is disabled/);
+	});
+
+	it("gives an engagement that opts in exactly the cap it set", () => {
+		const gate = createScopeGate(eng({ maxAgents: 8 }));
+		for (let i = 0; i < 8; i++) expect(decide(gate, spawn).allow, `spawn ${i + 1}`).toBe(true);
 		expect(decide(gate, spawn).allow).toBe(false);
 	});
 
@@ -356,8 +365,8 @@ describe("the subagent budget", () => {
 		expect(decide(createScopeGate(scope), spawn).allow).toBe(true);
 	});
 
-	it("ignores a nonsense budget rather than locking delegation out", () => {
-		expect(decide(createScopeGate(eng({ maxAgents: -3 })), spawn).allow).toBe(true);
+	it("reads a nonsense budget as the default rather than as a cap of its own", () => {
+		expect(decide(createScopeGate(eng({ maxAgents: -3 })), spawn).allow).toBe(DEFAULT_MAX_AGENTS > 0);
 	});
 
 	it("tells a parent past the cap how to finish, the same way whichever tool hit it", () => {
@@ -419,8 +428,9 @@ describe("the refusal at the worker cap", () => {
  * mutates state — is refused. It counts launched children, not tool calls.
  */
 describe("the subagent gate", () => {
+	/** An engagement that opted in to delegation: the gate below is only reached by one. */
 	const eng = (over: Partial<EngagementScope> = {}): EngagementScope => ({
-		v: 1, engagement: "e", authorized: true, mode: "enforce", targets: { domains: ["app.e.test"] }, ...over,
+		v: 1, engagement: "e", authorized: true, mode: "enforce", targets: { domains: ["app.e.test"] }, maxAgents: 8, ...over,
 	});
 	const decide = (gate: ReturnType<typeof createScopeGate>, call: { name: string; args: object; id?: string }): GateDecision =>
 		gate(call) as GateDecision;

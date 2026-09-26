@@ -56,12 +56,20 @@ describe("buildSystemPrompt", () => {
 		// The removed native tool must not linger in the identity text either.
 		expect(off).not.toContain("pired_delegate");
 
-		const on = buildSystemPrompt({ profile: "pentest", scope, delegation: true });
+		const on = buildSystemPrompt({ profile: "pentest", scope: { ...scope, maxAgents: 8 }, delegation: true });
 		expect(on).toContain("<delegation>\n");
 		expect(on).toContain("pired-scout");
 		expect(on).toMatch(/standing authorization/i);
 		// It still points at the recall-context handoff even with delegation off.
 		expect(off).toMatch(/recall context/i);
+	});
+
+	it("says delegation is off when the engagement never opted in, even with pi-subagents present", () => {
+		// ADR-029: delegation is opt-in, so the default engagement gets the off block.
+		const p = buildSystemPrompt({ profile: "pentest", scope, delegation: true });
+		expect(p).toMatch(/turned off/i);
+		expect(p).not.toContain("pired-scout");
+		expect(p).not.toContain("subagents_enable");
 	});
 
 	it("says delegation is off in the block when the engagement sets maxAgents to zero", () => {

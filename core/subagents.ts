@@ -169,26 +169,54 @@ export const PIRED_AGENT_NAMES: ReadonlySet<string> = new Set(PIRED_AGENTS.map((
  * unbounded work nobody asked for, on the operator's budget and the client's
  * systems — and the gate is already the place that says no to that.
  *
- * Eight is enough for the patterns `ops-delegation` describes (a verifier per
- * cleared cell of a class, a scout per host) and low enough that a loop is
- * caught in one session rather than one invoice.
+ * The default is **zero**: delegation is opt-in, per engagement, by setting
+ * `maxAgents` in the scope file (ADR-029). It shipped on at eight, and the
+ * pre-registered trial that was to justify that did not (ADR-026 outcome). On
+ * GPT-6 Luna the delegating build found 7 true positives to the baseline's 6
+ * while making 115 claims to 58 and spending 62% more tokens; across six
+ * official grids it found 58 to the baseline's 69. A default is what every
+ * engagement that never thought about it runs, so it is the measured-better
+ * configuration until a design beats it.
  *
- * It lives here, beside the workers, rather than in core/scope.ts, which
- * enforces it: the delegation block states it too, and core/scope.ts already
- * imports this module, so the reverse import would make a cycle.
+ * `SUGGESTED_MAX_AGENTS` is the cap to opt in with. Eight is enough for the
+ * patterns `ops-delegation` describes (a verifier per cleared cell of a class, a
+ * scout per host) and low enough that a loop is caught in one session rather
+ * than one invoice.
+ *
+ * Both live here, beside the workers, rather than in core/scope.ts, which
+ * enforces them: the delegation block states the cap too, and core/scope.ts
+ * already imports this module, so the reverse import would make a cycle.
  */
-export const DEFAULT_MAX_AGENTS = 8;
+export const DEFAULT_MAX_AGENTS = 0;
+export const SUGGESTED_MAX_AGENTS = 8;
 
 /**
  * The session's worker cap: the engagement's `maxAgents`, or the default when
- * it names none. A negative number is nonsense rather than a request to lock
- * delegation out, so it falls back to the default too; `0` disables delegation.
+ * it names none. A negative number is nonsense rather than a request, so it
+ * falls back to the default too; `0` disables delegation.
  * One function, so the number the prompt states is the number the gate holds.
  */
 export function workerCap(scope: EngagementScope | undefined): number {
 	const n = scope?.maxAgents;
 	return typeof n === "number" && n >= 0 ? n : DEFAULT_MAX_AGENTS;
 }
+
+/**
+ * The pi-subagents tools pired takes out of the parent's active set, re-applied
+ * every turn because pi-subagents' lazy loader can put them back.
+ *
+ * Always the wait and supervisor tools: pired delegates in the foreground only.
+ * With delegation off, the launcher and its loader stub as well. The gate
+ * refuses every launch at a cap of zero, so leaving them active only spends the
+ * stub's ~0.5k characters on every request and invites a call that must fail —
+ * and with delegation off by default, that is every engagement that never
+ * opted in.
+ */
+export function hiddenParentTools(scope: EngagementScope | undefined): ReadonlySet<string> {
+	return workerCap(scope) === 0 ? HIDDEN_WHEN_OFF : HIDDEN_ALWAYS;
+}
+const HIDDEN_ALWAYS: ReadonlySet<string> = new Set(["bg_wait", "subagent_supervisor"]);
+const HIDDEN_WHEN_OFF: ReadonlySet<string> = new Set([...HIDDEN_ALWAYS, "subagent", "subagents_enable"]);
 
 /**
  * The definition shape pi-subagents accepts, narrowed to the common subset this

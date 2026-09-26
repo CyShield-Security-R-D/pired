@@ -12,7 +12,7 @@ pired delegates through the **pi-subagents** package. It registers four workers 
 ## 0. Availability
 When pi-subagents is loaded and the workers registered, a `<delegation>` block in your prompt lists them, and that is your standing authorization to use them. Delegation is off in two cases:
 - **No `<delegation>` block:** pi-subagents is not loaded, or the workers did not register. The operator was shown the install command (`pi install npm:pi-subagents`).
-- **A block that says delegation is off:** the engagement set `maxAgents=0`, and the gate refuses every launch.
+- **A block that says delegation is off:** the engagement did not opt in (`maxAgents` is 0, the default), and the gate refuses every launch.
 
 Either way, do the work inline: capture raw output to `evidence/`, distill it into `record`, and review hypotheses adversarially yourself before promoting them.
 
@@ -77,7 +77,7 @@ Example launches (`subagent` tool):
 ## 4. Limits and the fleet view
 - **Foreground only, one at a time.** A worker blocks your turn until it returns, and there is no background/async delegation. Launch one worker per message: a second launch while one is still running is refused. This is deliberate, because it keeps the work accountable and sends one GPU one request at a time.
 - **Depth 1.** A worker cannot delegate again; the gate refuses it.
-- **Budgeted.** The engagement's `maxAgents` (default **8**, `0` disables delegation) caps the workers you may launch per session; the `<delegation>` block states the number. Each worker runs for a bounded number of turns (scout/escalate 20, investigate 24, verify 24) and at most 45 minutes. After the last launch the rest is yours: settle what the ledger already holds — unchallenged findings, inconclusive leads, worker verdicts not yet acted on — then carry on with the rest of the method.
+- **Budgeted.** The engagement's `maxAgents` (default **0**, off; 8 is the suggested opt-in) caps the workers you may launch per session; the `<delegation>` block states the number. Each worker runs for a bounded number of turns (scout/escalate 20, investigate 24, verify 24) and at most 45 minutes. After the last launch the rest is yours: settle what the ledger already holds — unchallenged findings, inconclusive leads, worker verdicts not yet acted on — then carry on with the rest of the method.
 - **Scoped.** Worker tool calls pass through pired's scope gate, the same one you run under.
 
 In the TUI, pi-subagents shows a persistent **FleetView** under the editor while work runs; from an empty editor its navigation keys expand it, and `/subagents-fleet` opens the live inspector to browse a child, read its transcript, or stop a run. pired refreshes its own panel when a worker finishes, and announces any blocker the worker parked.

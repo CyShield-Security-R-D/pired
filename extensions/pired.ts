@@ -35,7 +35,7 @@ import type { ToolContext, ToolDefinition } from "../core/ports.ts";
 import { buildSystemPrompt, PIRED_PROFILES, type PiredProfile } from "../core/prompts.ts";
 import { publishParentScope } from "../core/child.ts";
 import { createScopeGate, isSourceOnly, pickTargetType, type ScopeGate, scopeGuidance, summarizeScope } from "../core/scope.ts";
-import { buildPiredAgentDefinitions, eagerSubagentSchema, SUBAGENTS_ABSENT_NOTICE, SUBAGENTS_EAGER_NOTICE } from "../core/subagents.ts";
+import { buildPiredAgentDefinitions, eagerSubagentSchema, hiddenParentTools, SUBAGENTS_ABSENT_NOTICE, SUBAGENTS_EAGER_NOTICE, workerCap } from "../core/subagents.ts";
 import { renderCoveragePanel, type Tone } from "../core/coverage-panel.ts";
 import { complete } from "@earendil-works/pi-ai/compat";
 import type { AssistantMessage, Message, UserMessage } from "@earendil-works/pi-ai/compat";
@@ -86,8 +86,6 @@ const RUNTIME_AGENT_REGISTER_EVENT = "pi-subagents:runtime-agent-register:v1";
  * and announces blockers; this subscription only covers a detached one.
  */
 const SUBAGENT_FOREGROUND_COMPLETE_EVENT = "subagent:foreground-complete";
-/** pi-subagents tools pired hides: it delegates foreground only, so it wants no wait/supervisor tools. */
-const HIDDEN_SUBAGENT_TOOLS = new Set(["bg_wait", "subagent_supervisor"]);
 
 interface RuntimeAgentRegistration {
 	dispose(): void;
@@ -1678,7 +1676,7 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		// pi-subagents registers them fine but puts its whole `subagent` schema in
 		// front of every request. Checked here, not at session_start, because the
 		// lazy loader settles the active set in its own session_start handler.
-		if (delegationAvailable && !eagerSchemaNotified) {
+		if (delegationAvailable && workerCap(scope) > 0 && !eagerSchemaNotified) {
 			try {
 				const all = typeof pi.getAllTools === "function" ? pi.getAllTools().map((t) => t.name) : undefined;
 				const active = typeof pi.getActiveTools === "function" ? pi.getActiveTools() : undefined;
@@ -1688,13 +1686,13 @@ export default function piredExtension(pi: ExtensionAPI): void {
 				}
 			} catch {}
 		}
-		// pired delegates in the foreground only, so the wait/supervisor tools
-		// pi-subagents adds to the parent are hidden — re-applied each turn because
-		// the lazy loader can re-add them. `subagent`/`subagents_enable` stay.
+		// The pi-subagents tools the parent should not see (hiddenParentTools says
+		// which and why), re-applied each turn because the lazy loader can re-add them.
 		try {
+			const hidden = hiddenParentTools(scope);
 			const active = typeof pi.getActiveTools === "function" ? pi.getActiveTools() : undefined;
-			if (Array.isArray(active) && active.some((name) => HIDDEN_SUBAGENT_TOOLS.has(name))) {
-				pi.setActiveTools(active.filter((name) => !HIDDEN_SUBAGENT_TOOLS.has(name)));
+			if (Array.isArray(active) && active.some((name) => hidden.has(name))) {
+				pi.setActiveTools(active.filter((name) => !hidden.has(name)));
 			}
 		} catch {}
 		return {

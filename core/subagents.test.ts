@@ -6,10 +6,12 @@ import {
 	DEFAULT_MAX_AGENTS,
 	delegationBlock,
 	eagerSubagentSchema,
+	hiddenParentTools,
 	PIRED_AGENT_NAMES,
 	PIRED_AGENTS,
 	SUBAGENTS_ABSENT_NOTICE,
 	SUBAGENTS_EAGER_NOTICE,
+	SUGGESTED_MAX_AGENTS,
 	WORKER_TOOLS,
 	workerCap,
 	workerPrompt,
@@ -265,8 +267,9 @@ describe("the scope a worker is told", () => {
 });
 
 describe("the delegation prompt block", () => {
+	/** An engagement that opted in with the suggested cap; the default is off (ADR-029). */
 	const scope = (over: Partial<EngagementScope> = {}): EngagementScope => ({
-		v: 1, engagement: "acme", authorized: true, mode: "enforce", targets: {}, ...over,
+		v: 1, engagement: "acme", authorized: true, mode: "enforce", targets: {}, maxAgents: SUGGESTED_MAX_AGENTS, ...over,
 	});
 
 	it("names all four workers and grants standing authorization", () => {
@@ -328,11 +331,11 @@ describe("the delegation prompt block", () => {
 		// v4 grid, 2026-09-24: 43.5% of gpt-6-luna candidate parent tokens were
 		// spent after the last worker, and all 5 launches the cap refused were
 		// verifiers — a parent that is not told the number cannot plan for it.
-		expect(delegationBlock(scope())).toContain(`allows ${DEFAULT_MAX_AGENTS} worker launches per session`);
+		expect(delegationBlock(scope())).toContain(`allows ${SUGGESTED_MAX_AGENTS} worker launches per session`);
 		expect(delegationBlock(scope({ maxAgents: 3 }))).toContain("allows 3 worker launches per session");
 		expect(delegationBlock(scope({ maxAgents: 1 }))).toContain("allows 1 worker launch per session");
-		// A nonsense cap is the default, in the prompt as at the gate.
-		expect(delegationBlock(scope({ maxAgents: -3 }))).toContain(`allows ${DEFAULT_MAX_AGENTS} worker launches`);
+		// A nonsense cap is the default, in the prompt as at the gate: off.
+		expect(delegationBlock(scope({ maxAgents: -3 }))).toMatch(/turned off/);
 		expect(workerCap(undefined)).toBe(DEFAULT_MAX_AGENTS);
 		expect(workerCap(scope({ maxAgents: -3 }))).toBe(DEFAULT_MAX_AGENTS);
 		expect(workerCap(scope({ maxAgents: 0 }))).toBe(0);
@@ -378,5 +381,27 @@ describe("what the operator is told about pi-subagents", () => {
 		expect(eagerSubagentSchema(["read", "subagent", "subagents_enable"], ["read", "subagent", "subagents_enable"])).toBe(false);
 		// Registered but not active (an operator hid it): nothing is being paid.
 		expect(eagerSubagentSchema(["read", "subagent"], ["read"])).toBe(false);
+	});
+});
+
+describe("the pi-subagents tools the parent does not see", () => {
+	const scope = (over: Partial<EngagementScope> = {}): EngagementScope => ({
+		v: 1, engagement: "acme", authorized: true, mode: "enforce", targets: {}, ...over,
+	});
+
+	it("hides the launcher and its loader when delegation is off, so the stub costs nothing and invites no refused call", () => {
+		// ADR-029: off is the default, so this is every engagement that never opted in.
+		for (const off of [undefined, scope(), scope({ maxAgents: 0 })]) {
+			const hidden = hiddenParentTools(off);
+			for (const name of ["subagent", "subagents_enable", "bg_wait", "subagent_supervisor"]) expect(hidden.has(name), name).toBe(true);
+		}
+	});
+
+	it("keeps the launcher and its loader for an engagement that opted in, and still hides the background tools", () => {
+		const hidden = hiddenParentTools(scope({ maxAgents: SUGGESTED_MAX_AGENTS }));
+		expect(hidden.has("subagent")).toBe(false);
+		expect(hidden.has("subagents_enable")).toBe(false);
+		expect(hidden.has("bg_wait")).toBe(true);
+		expect(hidden.has("subagent_supervisor")).toBe(true);
 	});
 });
