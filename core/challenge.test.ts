@@ -993,7 +993,7 @@ describe("grounding a quote against the file it cites", () => {
 
 	it("refuses a line the file repeats too often to identify, which a length rule passed", async () => {
 		// `return nil, err` is thirteen non-space characters and a Go handler repeats it after most
-		// error-returning call: in the window, and proof of nothing.
+		// error-returning call it makes: in the window, and proof of nothing.
 		const body = Array.from({ length: 5 }, (_, i) => `\tv${i}, err := step${i}(ctx)\n\tif err != nil {\n\t\treturn nil, err\n\t}`).join("\n");
 		const [q] = await groundQuotes(["handler.go:3: return nil, err"], async () => ({ path: "handler.go", body }));
 		expect(q?.grounded).toBe(false);
