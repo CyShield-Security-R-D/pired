@@ -1,11 +1,12 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { createChildGuard, HANDOFF_GRACE_TURNS } from "../core/child.ts";
 import { agentMarker, PIRED_AGENTS } from "../core/subagents.ts";
 import {
 	accountUsage, APPROVAL_DECISION, childRecordIds, compareMatchedRuns, contentText, createBreaker, DEFAULT_BREAKER, findLeaks, isOfficialGrid,
-	leakTermsFor, nextPairAction, normalizePiUsage, observationsFromChildSession, observationsFromPiEvents, OFFICIAL_PASSES, OFFICIAL_TARGET_IDS,
-	parseBreakerPolicy, piCostUsd, PIRED_BUDGET_STOP, planSchedule, QUALITY_MARGIN, reconcileChildSession, reconcileSubagentCalls,
-	type ArmResult, type BreakerEvent, type ChildSessionExtraction, type ExpectedCell, type PairRules, type RunMetric, type SubagentChild,
+	leakTermsFor, meteredCallCount, nextPairAction, normalizePiUsage, observationsFromChildSession, observationsFromPiEvents, OFFICIAL_PASSES, OFFICIAL_TARGET_IDS,
+	parseBreakerPolicy, piCostUsd, PIRED_BUDGET_STOP, planSchedule, QUALITY_MARGIN, reconcileChildSession, reconcileSubagentCalls, summarizeRetries,
+	type ArmResult, type BreakerEvent, type ChildSessionExtraction, type ExpectedCell, type PairRules, type RetriedAttempt, type RunMetric, type SubagentChild,
 	type UsageObservation,
 } from "./delegation-compare-lib.ts";
 
@@ -373,6 +374,236 @@ describe("observationsFromPiEvents", () => {
 		}
 	});
 
+	it("accepts a transient failure pi retried and counts the failed attempt's reported usage", () => {
+		// v5 lost whole runs to one dropped stream pi could have retried; with a
+		// policy the failed attempt is kept, with the usage it did report.
+		const events = [
+			reply({ id: "r1", stop: "toolUse", usage: piUsage(100, 10, 50) }),
+			reply({ id: "r2", stop: "error", usage: piUsage(40, 0), errorMessage: "terminated" }),
+			{ type: "auto_retry_start", attempt: 1, maxAttempts: 4, delayMs: 2000, errorMessage: "terminated" },
+			{ type: "entry_appended", entry: { type: "context_edit", id: "e1", targetId: "m2", replacement: null } },
+			reply({ id: "r3" }),
+			{ type: "auto_retry_end", success: true, attempt: 1 },
+		];
+		const parsed = observationsFromPiEvents(events, { retry: true });
+		expect(parsed.errors).toEqual([]);
+		expect(parsed.providerErrors).toEqual([]);
+		expect(parsed.retries).toEqual([{ id: "r2", origin: "parent", errorMessage: "terminated", recovered: true, meteredTokens: 40, estimatedTokens: 0, estimateBasis: "none" }]);
+		const result = accountUsage(parsed.observations);
+		expect(result.valid).toBe(true);
+		expect(result.parent.totalTokens).toBe(160 + 40 + 12);
+	});
+
+	it("estimates an unmetered attempt from the prompt of the reply that recovered it", () => {
+		// pi omits the failed reply and resends the same context, so the recovering
+		// reply's prompt is the failed attempt's. Counting it as zero would flatter
+		// the arm that retries more.
+		const parsed = observationsFromPiEvents([
+			reply({ id: "r1", stop: "toolUse", usage: piUsage(100, 10, 50) }),
+			reply({ id: "r2", stop: "error", usage: zeroUsage(), errorMessage: "terminated" }),
+			{ type: "auto_retry_start", attempt: 1, errorMessage: "terminated" },
+			reply({ id: "r3", stop: "error", usage: zeroUsage(), errorMessage: "terminated" }),
+			{ type: "auto_retry_start", attempt: 2, errorMessage: "terminated" },
+			reply({ id: "r4", stop: "toolUse", usage: piUsage(140, 12, 60) }),
+			{ type: "auto_retry_end", success: true, attempt: 2 },
+		], { retry: true });
+		expect(parsed.providerErrors).toEqual([]);
+		expect(parsed.retries?.map((r) => [r.id, r.meteredTokens, r.estimatedTokens, r.estimateBasis])).toEqual([["r2", 0, 200, "recovering-prompt"], ["r3", 0, 200, "recovering-prompt"]]);
+	});
+
+	// The review found 75 of 1,095 v5c luna worker replies were first requests;
+	// with only the previous reply to go on, those were never estimated.
+	it("estimates a failed first request from the reply that recovered it", () => {
+		const parsed = observationsFromPiEvents([
+			reply({ id: "r1", stop: "error", usage: zeroUsage(), errorMessage: "terminated" }),
+			{ type: "auto_retry_start", attempt: 1 },
+			reply({ id: "r2", stop: "toolUse", usage: piUsage(4_400, 30) }),
+			reply({ id: "r3" }),
+		], { retry: true });
+		expect(parsed.retries?.map((r) => [r.estimatedTokens, r.estimateBasis])).toEqual([[4_400, "recovering-prompt"]]);
+	});
+
+	it("falls back to the previous reply's prompt plus output when no reply recovered the streak", () => {
+		const parsed = observationsFromPiEvents([
+			reply({ id: "r1", stop: "toolUse", usage: piUsage(100, 10, 50) }),
+			reply({ id: "r2", stop: "error", usage: zeroUsage(), errorMessage: "terminated" }),
+			{ type: "auto_retry_start", attempt: 1 },
+			{ type: "auto_retry_end", success: false, attempt: 1, finalError: "Retry cancelled" },
+		], { retry: true });
+		expect(parsed.retries?.map((r) => [r.estimatedTokens, r.estimateBasis, r.recovered])).toEqual([[160, "previous-reply", false]]);
+		// A first request no reply followed has nothing to size it.
+		const first = observationsFromPiEvents([
+			reply({ id: "r1", stop: "error", usage: zeroUsage(), errorMessage: "terminated" }),
+			{ type: "auto_retry_start", attempt: 1 },
+			{ type: "auto_retry_end", success: false, attempt: 1, finalError: "Retry cancelled" },
+		], { retry: true });
+		expect(first.retries?.map((r) => [r.estimatedTokens, r.estimateBasis])).toEqual([[0, "none"]]);
+	});
+
+	// The shape pi 0.87.1 prints in JSON mode: the failed reply's turn and agent
+	// run end before _prepareRetry emits auto_retry_start, and the context edit
+	// and the next run's start events come between the retry and its reply.
+	it("pairs a retry with its failed reply across the turn, agent and entry events pi prints between them", () => {
+		const parsed = observationsFromPiEvents([
+			{ type: "agent_start" }, { type: "turn_start" },
+			reply({ id: "r1", stop: "toolUse", usage: piUsage(100, 10) }),
+			{ type: "turn_end" }, { type: "turn_start" }, { type: "message_start", message: { role: "assistant" } },
+			reply({ id: "r2", stop: "error", usage: zeroUsage(), errorMessage: "terminated" }),
+			{ type: "turn_end" }, { type: "agent_end", messages: [] },
+			{ type: "auto_retry_start", attempt: 1, maxAttempts: 4, delayMs: 2000, errorMessage: "terminated" },
+			{ type: "entry_appended", entry: { type: "context_edit", id: "e7", parentId: "e6", timestamp: "t", targetId: "e6", replacement: null } },
+			{ type: "agent_start" }, { type: "turn_start" }, { type: "message_start", message: { role: "assistant" } },
+			reply({ id: "r3", stop: "stop", usage: piUsage(120, 8) }),
+			{ type: "auto_retry_end", success: true, attempt: 1 }, { type: "turn_end" }, { type: "agent_end", messages: [] },
+		], { retry: true });
+		expect(parsed.errors).toEqual([]);
+		expect(parsed.providerErrors).toEqual([]);
+		expect(parsed.retries?.map((r) => [r.id, r.recovered, r.estimatedTokens])).toEqual([["r2", true, 120]]);
+	});
+
+	// Hitting the retry limit used to book one failure twice: once at
+	// auto_retry_end and again for the same reply at the end of the stream.
+	it("fails a streak that ran out once, for its last reply", () => {
+		const parsed = observationsFromPiEvents([
+			reply({ id: "r1", stop: "error", usage: zeroUsage(), errorMessage: "terminated" }),
+			{ type: "auto_retry_start", attempt: 1 },
+			reply({ id: "r2", stop: "error", usage: zeroUsage(), errorMessage: "terminated" }),
+			{ type: "turn_end" }, { type: "agent_end" },
+			{ type: "auto_retry_end", success: false, attempt: 1, finalError: "terminated" },
+		], { retry: true });
+		expect(parsed.providerErrors).toEqual(["assistant reply r2 failed: terminated"]);
+		expect(parsed.observations.filter((o) => o.id.startsWith("unaccounted") || o.id.startsWith("retry-end"))).toHaveLength(1);
+	});
+
+	it("still refuses retry events when the retry policy is off", () => {
+		const events = [reply({ id: "r1", stop: "error", usage: zeroUsage(), errorMessage: "terminated" }), { type: "auto_retry_start", attempt: 1 }, reply({ id: "r2" })];
+		const off = observationsFromPiEvents(events);
+		expect(off.retries).toBeUndefined();
+		expect(off.providerErrors.length).toBeGreaterThan(0);
+		expect(accountUsage(off.observations).valid).toBe(false);
+	});
+
+	it("leaves the run invalid when the retries run out", () => {
+		// pi gives up after maxRetries: the last failed reply has no auto_retry_start and ends the run.
+		const exhausted = observationsFromPiEvents([
+			reply({ id: "r1", stop: "error", usage: zeroUsage(), errorMessage: "terminated" }),
+			{ type: "auto_retry_start", attempt: 1 },
+			reply({ id: "r2", stop: "error", usage: zeroUsage(), errorMessage: "terminated" }),
+		], { retry: true });
+		expect(exhausted.providerErrors.join(" ")).toContain("r2 failed: terminated");
+		expect(accountUsage(exhausted.observations).valid).toBe(false);
+		const cancelled = observationsFromPiEvents([
+			reply({ id: "r1", stop: "error", usage: zeroUsage(), errorMessage: "terminated" }),
+			{ type: "auto_retry_start", attempt: 1 },
+			{ type: "auto_retry_end", success: false, attempt: 1, finalError: "Retry cancelled" },
+		], { retry: true });
+		expect(cancelled.providerErrors.join(" ")).toContain("Retry cancelled");
+	});
+
+	it("refuses a retry event with no failed reply before it, which this reader does not understand", () => {
+		const parsed = observationsFromPiEvents([reply({ id: "r1", stop: "toolUse" }), { type: "auto_retry_start", attempt: 1 }, reply({ id: "r2" })], { retry: true });
+		expect(parsed.errors.join(" ")).toContain("no failed reply before it");
+	});
+
+	it("keeps an overflow recovery apart from a retry", () => {
+		const parsed = observationsFromPiEvents([
+			reply({ id: "r1", stop: "toolUse", usage: piUsage(100, 10) }),
+			reply({ id: "r2", stop: "error", usage: zeroUsage(), errorMessage: "context_length_exceeded" }),
+			compactionEnd("overflow", { summary: "s", usage: piUsage(50, 5) }, { willRetry: true }),
+			reply({ id: "r3" }),
+		], { retry: true });
+		expect(parsed.recoveredOverflows).toBe(1);
+		expect(parsed.retries).toEqual([]);
+		expect(parsed.providerErrors).toEqual([]);
+	});
+
+	it("estimates a failed summary call from the compaction that succeeded, since pi-ai resends the same request", () => {
+		// The previous reply's prompt includes kept messages a summary call does
+		// not send, so it would not be a lower bound; the successful call is.
+		const parsed = observationsFromPiEvents([
+			reply({ id: "r1", stop: "toolUse", usage: piUsage(100, 10) }),
+			{ type: "summarization_retry_scheduled", attempt: 1, errorMessage: "terminated" },
+			{ type: "summarization_retry_attempt_start", attempt: 2 },
+			{ type: "summarization_retry_finished" },
+			compactionEnd("threshold", { summary: "s", usage: piUsage(50, 5) }),
+			reply({ id: "r2" }),
+		], { retry: true });
+		expect(parsed.providerErrors).toEqual([]);
+		expect(parsed.retries).toEqual([{ id: "summary-retry:1", origin: "parent", errorMessage: "terminated", recovered: true, meteredTokens: 0, estimatedTokens: 50, estimateBasis: "recovering-prompt" }]);
+	});
+
+	it("leaves a split-turn compaction's failed call unestimated, since its usage sums two summary calls", () => {
+		const parsed = observationsFromPiEvents([
+			reply({ id: "r1", stop: "toolUse", usage: piUsage(100, 10) }),
+			{ type: "summarization_retry_scheduled", attempt: 1, errorMessage: "terminated" },
+			compactionEnd("threshold", { summary: "history\n\n---\n\n**Turn Context (split turn):**\n\nprefix", usage: piUsage(90, 9) }),
+			reply({ id: "r2" }),
+		], { retry: true });
+		expect(parsed.retries?.map((r) => [r.recovered, r.estimatedTokens, r.estimateBasis])).toEqual([[true, 0, "none"]]);
+	});
+
+	it("leaves a summary call's retry unrecovered when the compaction still fails", () => {
+		const parsed = observationsFromPiEvents([
+			reply({ id: "r1", stop: "toolUse", usage: piUsage(100, 10) }),
+			{ type: "summarization_retry_scheduled", attempt: 1, errorMessage: "terminated" },
+			{ type: "compaction_end", reason: "threshold", aborted: false, willRetry: false, errorMessage: "terminated" },
+			reply({ id: "r2" }),
+		], { retry: true });
+		expect(parsed.retries?.map((r) => r.recovered)).toEqual([false]);
+		expect(parsed.providerErrors.join(" ")).toContain("failed: terminated");
+	});
+
+	it("marks every attempt of a streak pi gave up on as unrecovered, so a failed run does not lose its count", () => {
+		const parsed = observationsFromPiEvents([
+			reply({ id: "r1", stop: "toolUse", usage: piUsage(100, 10) }),
+			reply({ id: "r2", stop: "error", usage: zeroUsage(), errorMessage: "terminated" }),
+			{ type: "auto_retry_start", attempt: 1 },
+			reply({ id: "r3", stop: "error", usage: zeroUsage(), errorMessage: "terminated" }),
+			{ type: "auto_retry_start", attempt: 2 },
+			reply({ id: "r4", stop: "error", usage: zeroUsage(), errorMessage: "terminated" }),
+			{ type: "auto_retry_end", success: false, attempt: 2, finalError: "terminated" },
+		], { retry: true });
+		expect(parsed.retries?.map((r) => [r.id, r.recovered])).toEqual([["r2", false], ["r3", false]]);
+		expect(accountUsage(parsed.observations).valid).toBe(false);
+	});
+
+	it("lowers the fallback after a compaction to the summary the next prompt still carries", () => {
+		// The history the summary replaced is not resent, so the reply before the
+		// compaction would overstate a later failed attempt and stop being a lower bound.
+		const parsed = observationsFromPiEvents([
+			reply({ id: "r1", stop: "toolUse", usage: piUsage(180_000, 900) }),
+			compactionEnd("threshold", { summary: "s", usage: piUsage(170_000, 3_000) }),
+			reply({ id: "r2", stop: "error", usage: zeroUsage(), errorMessage: "terminated" }),
+			{ type: "auto_retry_start", attempt: 1 },
+			{ type: "auto_retry_end", success: false, attempt: 1, finalError: "Retry cancelled" },
+		], { retry: true });
+		expect(parsed.retries?.map((r) => [r.estimatedTokens, r.estimateBasis])).toEqual([[3_000, "previous-reply"]]);
+	});
+
+	// A compaction between the retry and its reply changes what the reply sent,
+	// so the reply's prompt is not the failed attempt's; the fallback stands.
+	it("does not size an attempt from a reply a compaction came before", () => {
+		const parsed = observationsFromPiEvents([
+			reply({ id: "r1", stop: "toolUse", usage: piUsage(180_000, 900) }),
+			reply({ id: "r2", stop: "error", usage: zeroUsage(), errorMessage: "terminated" }),
+			{ type: "auto_retry_start", attempt: 1 },
+			compactionEnd("threshold", { summary: "s", usage: piUsage(170_000, 3_000) }),
+			reply({ id: "r3", stop: "stop", usage: piUsage(20_000, 50) }),
+		], { retry: true });
+		expect(parsed.retries?.map((r) => [r.recovered, r.estimatedTokens, r.estimateBasis])).toEqual([[true, 180_900, "previous-reply"]]);
+	});
+
+	it("gives the same output with the retry option off as with no option, for a stream with no retry in it", () => {
+		const events = [
+			reply({ id: "r1", stop: "toolUse", usage: piUsage(100, 10) }),
+			compactionEnd("threshold", { summary: "s", usage: piUsage(50, 5) }),
+			reply({ id: "r2", stop: "error", usage: zeroUsage(), errorMessage: "terminated" }),
+		];
+		expect(JSON.stringify(observationsFromPiEvents(events, { retry: false }))).toBe(JSON.stringify(observationsFromPiEvents(events)));
+		expect(JSON.stringify(observationsFromChildSession(jsonl([...preamble(), childReply({ id: "r1" })]), CHILD_KEY, { retry: false })))
+			.toBe(JSON.stringify(observationsFromChildSession(jsonl([...preamble(), childReply({ id: "r1" })]), CHILD_KEY)));
+	});
+
 	it("counts a branch summary once by entry ID and notes that print mode should not produce one", () => {
 		const summary = { type: "entry_appended", entry: { type: "branch_summary", id: "b1", usage: piUsage(7, 1) } };
 		const parsed = observationsFromPiEvents([summary, summary, reply({ id: "r1" })]);
@@ -682,6 +913,121 @@ describe("observationsFromChildSession", () => {
 		expect(parsed.recoveredOverflows).toBe(0);
 		const unretried = observationsFromChildSession(jsonl([...preamble(), failed, entry("compaction", { usage: childUsage(40, 8, 0, 0) })]), CHILD_KEY);
 		expect(unretried.providerErrors.join(" ")).toContain("429 rate limited");
+	});
+
+	it("treats a worker's error reply omitted by a context edit and followed by a reply as a retried attempt", () => {
+		// A worker's session file has no auto_retry events; the context edit pi
+		// appends for the failed attempt is the only mark the retry leaves.
+		const failed = childReply({ stop: "error", usage: childUsage(0, 0, 0, 0), errorMessage: "terminated" });
+		const rows = [
+			...preamble(),
+			childReply({ id: "r1", stop: "toolUse", usage: childUsage(28, 8, 1469, 28), content: [toolCall("tool:1", "bash", { command: "ls" })] }),
+			childResult("tool:1", "bash", "a\n"),
+			failed,
+			entry("context_edit", { targetId: failed.id, replacement: null }),
+			childReply({ id: "r2", usage: childUsage(40, 6, 1469, 30) }),
+		];
+		const parsed = observationsFromChildSession(jsonl(rows), CHILD_KEY, { retry: true });
+		expect(parsed.providerErrors).toEqual([]);
+		expect(parsed.errors).toEqual([]);
+		// The recovering reply resent the same context, so its prompt sizes the attempt.
+		expect(parsed.retries).toEqual([{
+			id: `${CHILD_KEY}/entry:${String(failed.id)}`, origin: "worker", errorMessage: "terminated", recovered: true,
+			meteredTokens: 0, estimatedTokens: 40 + 1469 + 30, estimateBasis: "recovering-prompt",
+		}]);
+		expect(accountUsage(parsed.observations).valid).toBe(true);
+		// Off, the same file is a failure, as every v5 grid read it.
+		const off = observationsFromChildSession(jsonl(rows), CHILD_KEY);
+		expect(off.retries).toBeUndefined();
+		expect(off.providerErrors.join(" ")).toContain("terminated");
+	});
+
+	it("keeps a worker's error a failure under the retry policy when no context edit omits it or no reply follows", () => {
+		const failed = childReply({ stop: "error", usage: childUsage(0, 0, 0, 0), errorMessage: "terminated" });
+		const unomitted = observationsFromChildSession(jsonl([...preamble(), failed, childReply({ id: "r2" })]), CHILD_KEY, { retry: true });
+		expect(unomitted.providerErrors.join(" ")).toContain("terminated");
+		const otherTarget = observationsFromChildSession(jsonl([...preamble(), failed, entry("context_edit", { targetId: "elsewhere", replacement: null }), childReply({ id: "r2" })]), CHILD_KEY, { retry: true });
+		expect(otherTarget.providerErrors.join(" ")).toContain("terminated");
+	});
+
+	// The parent lists an attempt whose retry pi cancelled and counts it toward
+	// the cap; a worker whose session ends after the omission used to list
+	// nothing, so the same event counted in one arm's workers and not the other.
+	it("lists a worker's omitted reply as an unrecovered attempt when the session ends before the retry, and fails the worker", () => {
+		const failed = childReply({ stop: "error", usage: childUsage(0, 0, 0, 0), errorMessage: "terminated" });
+		const parsed = observationsFromChildSession(jsonl([
+			...preamble(), childReply({ id: "r1", stop: "toolUse", usage: childUsage(28, 8, 1469, 28) }),
+			failed, entry("context_edit", { targetId: failed.id, replacement: null }),
+		]), CHILD_KEY, { retry: true });
+		expect(parsed.retries?.map((r) => [r.recovered, r.estimatedTokens, r.estimateBasis])).toEqual([[false, 28 + 8 + 1469 + 28, "previous-reply"]]);
+		expect(parsed.providerErrors).toEqual([`child ${CHILD_KEY}: assistant reply entry:${String(failed.id)} failed: terminated; pi's retry of it never ran`]);
+		expect(accountUsage(parsed.observations).valid).toBe(false);
+	});
+
+	// pi also writes context edits for an extension's boundary drafts, which
+	// replace an entry rather than omit it; only an omission is pi's retry.
+	it("does not read a context edit that replaces the failed reply as a retry", () => {
+		const failed = childReply({ stop: "error", usage: childUsage(0, 0, 0, 0), errorMessage: "terminated" });
+		const parsed = observationsFromChildSession(jsonl([
+			...preamble(), failed,
+			entry("context_edit", { targetId: failed.id, replacement: { role: "assistant", content: [{ type: "text", text: "draft" }] } }),
+			childReply({ id: "r2" }),
+		]), CHILD_KEY, { retry: true });
+		expect(parsed.retries).toEqual([]);
+		expect(parsed.providerErrors.join(" ")).toContain("failed: terminated");
+	});
+
+	it("leaves a worker's retried attempt unrecovered when its next attempt also fails and the session ends", () => {
+		const first = childReply({ stop: "error", usage: childUsage(0, 0, 0, 0), errorMessage: "terminated" });
+		const second = childReply({ stop: "error", usage: childUsage(0, 0, 0, 0), errorMessage: "terminated" });
+		const parsed = observationsFromChildSession(jsonl([
+			...preamble(), childReply({ id: "r1", stop: "toolUse", usage: childUsage(28, 8, 1469, 28) }),
+			first, entry("context_edit", { targetId: first.id, replacement: null }), second,
+		]), CHILD_KEY, { retry: true });
+		expect(parsed.retries?.map((r) => r.recovered)).toEqual([false]);
+		expect(parsed.providerErrors.join(" ")).toContain(`entry:${String(second.id)} failed: terminated`);
+	});
+
+	it("lowers a worker's fallback after a compaction to the summary the next prompt carries", () => {
+		const failed = childReply({ stop: "error", usage: childUsage(0, 0, 0, 0), errorMessage: "terminated" });
+		const parsed = observationsFromChildSession(jsonl([
+			...preamble(), childReply({ id: "r1", stop: "toolUse", usage: childUsage(28, 8, 150_000, 28) }),
+			entry("compaction", { summary: "s", firstKeptEntryId: "x", tokensBefore: 150000, usage: childUsage(40000, 900, 0, 0) }),
+			failed, entry("context_edit", { targetId: failed.id, replacement: null }),
+		]), CHILD_KEY, { retry: true });
+		expect(parsed.retries?.map((r) => [r.estimatedTokens, r.estimateBasis])).toEqual([[900, "previous-reply"]]);
+	});
+
+	// pi can run a threshold compaction before the retried request
+	// (_compactBeforeNextAssistantResponse). The shape then matches an overflow
+	// recovery; the error text decides, since pi never retries an overflow.
+	it("keeps a worker's retry a retry when a threshold compaction lands between the omission and the next reply", () => {
+		const failed = childReply({ stop: "error", usage: childUsage(0, 0, 0, 0), errorMessage: "terminated" });
+		const rows = [
+			...preamble(), childReply({ id: "r1", stop: "toolUse", usage: childUsage(28, 8, 150_000, 28) }),
+			failed, entry("context_edit", { targetId: failed.id, replacement: null }),
+			entry("compaction", { summary: "s", firstKeptEntryId: "x", tokensBefore: 150000, usage: childUsage(40000, 900, 0, 0) }),
+			childReply({ id: "r2", usage: childUsage(12, 3, 3000, 0) }),
+		];
+		const parsed = observationsFromChildSession(jsonl(rows), CHILD_KEY, { retry: true });
+		expect(parsed.recoveredOverflows).toBe(0);
+		expect(parsed.providerErrors).toEqual([]);
+		// The compaction changed what the next reply sent, so the fallback stands.
+		expect(parsed.retries?.map((r) => [r.recovered, r.estimatedTokens, r.estimateBasis])).toEqual([[true, 28 + 8 + 150_000 + 28, "previous-reply"]]);
+		// Without a policy the same file reads as v5 read it: an overflow recovery.
+		expect(observationsFromChildSession(jsonl(rows), CHILD_KEY).recoveredOverflows).toBe(1);
+	});
+
+	it("keeps a worker's overflow recovery apart from a retry under the retry policy", () => {
+		const failed = childReply({ stop: "error", usage: childUsage(0, 0, 0, 0), errorMessage: "context_length_exceeded" });
+		const parsed = observationsFromChildSession(jsonl([
+			...preamble(), failed,
+			entry("context_edit", { targetId: failed.id, replacement: null }),
+			entry("compaction", { summary: "s", firstKeptEntryId: "x", tokensBefore: 190000, usage: childUsage(40000, 900, 0, 0) }),
+			childReply({ id: "r2", usage: childUsage(12, 3, 3000, 0) }),
+		]), CHILD_KEY, { retry: true });
+		expect(parsed.recoveredOverflows).toBe(1);
+		expect(parsed.retries).toEqual([]);
 	});
 
 	it("rejects a forked session, whose copied history would book the parent's replies again", () => {
@@ -1512,4 +1858,77 @@ describe("compareMatchedRuns", () => {
 		expect(report.complete).toBe(false);
 		expect(report.missingOrInvalid).toContain("expected target/pass grid is duplicated or incomplete");
 	});
+});
+
+describe("summarizeRetries", () => {
+	const attempt = (over: Partial<RetriedAttempt> = {}): RetriedAttempt => ({ id: "r", origin: "parent", recovered: true, meteredTokens: 0, estimatedTokens: 0, estimateBasis: "none", ...over });
+
+	it("counts attempts per source, recovered or not, with metered usage and the estimate apart", () => {
+		const summary = summarizeRetries([
+			attempt({ id: "p1", meteredTokens: 40 }),
+			attempt({ id: "p2", estimatedTokens: 1_200 }),
+			attempt({ id: "w1", origin: "worker", recovered: false, estimatedTokens: 800 }),
+			attempt({ id: "summary-retry:1" }),
+		], { maxFailedAttempts: 12, maxFailedAttemptRate: 0.1 }, 98);
+		expect(summary).toEqual({
+			attempts: 4, recovered: 3, unrecovered: 1,
+			bySource: { parent: { attempts: 3, recovered: 3, unrecovered: 0 }, worker: { attempts: 1, recovered: 0, unrecovered: 1 } },
+			meteredTokens: 40, unmeteredAttempts: 3, estimatedTokens: 2_000, unestimatedAttempts: 1,
+			cap: { floor: 12, rate: 0.1, meteredRequests: 98, allowed: 12 }, capExceeded: false,
+		});
+	});
+
+	// pi's maxRetries resets on every good reply; a provider that dropped every
+	// third request would otherwise be retried all run and the run read as valid.
+	it("flags a run with more failed attempts than the run-wide cap, parent and workers together", () => {
+		const attempts = [attempt(), attempt(), attempt({ origin: "worker" })];
+		expect(summarizeRetries(attempts, { maxFailedAttempts: 3, maxFailedAttemptRate: 0 }, 50).capExceeded).toBe(false);
+		expect(summarizeRetries(attempts, { maxFailedAttempts: 2, maxFailedAttemptRate: 0 }, 50).capExceeded).toBe(true);
+	});
+
+	// A fixed cap throws out long runs first, and the arm that makes more calls
+	// has more of them (v5c luna: 117 requests a valid candidate run, 98 a
+	// baseline one); each run it throws out is re-run as infrastructure.
+	it("scales the cap with the run's metered requests, never below the floor", () => {
+		const thirteen = Array.from({ length: 13 }, () => attempt());
+		const policy = { maxFailedAttempts: 12, maxFailedAttemptRate: 0.1 };
+		expect(summarizeRetries(thirteen, policy, 98)).toMatchObject({ cap: { allowed: 12 }, capExceeded: true });
+		expect(summarizeRetries(thirteen, policy, 139)).toMatchObject({ cap: { allowed: 13 }, capExceeded: false });
+		expect(summarizeRetries(thirteen, policy, 0)).toMatchObject({ cap: { allowed: 12 }, capExceeded: true });
+	});
+
+	it("counts only observations that reported spend as metered calls", () => {
+		expect(meteredCallCount([
+			{ id: "a", origin: "parent", usage: usage(10, 2) },
+			{ id: "b", origin: "parent", usage: usage(0, 0) },
+			{ id: "c", origin: "worker" },
+		])).toBe(1);
+	});
+});
+
+describe("the v5 reading, without a retry policy", () => {
+	// Inputs and outputs captured from the extractor at b8ba1e8, before any retry
+	// code existed. Comparing the option-off path with itself would pass however
+	// the retry work changed it; comparing with v5 pins what every old grid read.
+	const golden = JSON.parse(readFileSync(new URL("./fixtures/delegation-compare-lib.v5-golden.json", import.meta.url), "utf8")) as {
+		cases: Array<{ name: string; kind: "parent" | "worker"; events?: Array<Record<string, unknown>>; session?: string; childKey?: string; output: unknown }>;
+	};
+
+	it("covers parent streams and worker sessions with retries, overflows and context edits in them", () => {
+		expect(golden.cases.filter((c) => c.kind === "parent").length).toBeGreaterThanOrEqual(8);
+		expect(golden.cases.filter((c) => c.kind === "worker").length).toBeGreaterThanOrEqual(8);
+	});
+
+	for (const c of golden.cases) {
+		it(`reproduces the v5 output byte for byte, with no option and with retry off: ${c.kind} ${c.name}`, () => {
+			const expected = JSON.stringify(c.output);
+			if (c.kind === "parent") {
+				expect(JSON.stringify(observationsFromPiEvents(c.events!))).toBe(expected);
+				expect(JSON.stringify(observationsFromPiEvents(c.events!, { retry: false }))).toBe(expected);
+			} else {
+				expect(JSON.stringify(observationsFromChildSession(c.session, c.childKey!))).toBe(expected);
+				expect(JSON.stringify(observationsFromChildSession(c.session, c.childKey!, { retry: false }))).toBe(expected);
+			}
+		});
+	}
 });

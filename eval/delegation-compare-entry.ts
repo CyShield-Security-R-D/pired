@@ -81,6 +81,11 @@ export interface CompareEntryConfig {
 	 * so the two arms differ only in the change under test.
 	 */
 	extensionPaths?: string[];
+	/**
+	 * The grid's retry policy (ADR-033). Absent, retries stay off and no
+	 * request is logged: the v5 behaviour, byte for byte.
+	 */
+	retryPolicy?: RetryPolicy;
 	/** Present only for the sealing self-check; a real scored run leaves it unset. */
 	probe?: ProbeConfig;
 }
@@ -91,7 +96,8 @@ export interface CompareEntryConfig {
  * warming is off because pi's default ("streaming") sends its own requests to
  * keep a prompt cache warm, which would be spend the transcript does not show as
  * a turn; retries are off so a provider failure stays visible; compaction is on
- * and counted.
+ * and counted. A grid under a retry policy runs benchmarkSettings(policy)
+ * instead, which differs only in `retry`.
  */
 export const BENCHMARK_SETTINGS = Object.freeze({
 	packages: [] as string[],
@@ -99,6 +105,96 @@ export const BENCHMARK_SETTINGS = Object.freeze({
 	retry: Object.freeze({ enabled: false }),
 	cacheWarming: "off" as const,
 });
+
+/**
+ * A grid's in-run retry policy, recorded in its manifest. pi 0.87.1 reads
+ * `retry.{enabled, maxRetries, baseDelayMs, maxAgentDelayMs}` for its agent-level
+ * retry (settings-manager.js getRetrySettings) and `retry.provider.maxRetries`
+ * for silent transport retries, which default to 0. The agent level emits
+ * auto_retry_* and a context_edit per failed attempt, so the accounting can see
+ * it; the transport level emits nothing, which is why it is pinned at 0 rather
+ * than left to a default a later pi could change.
+ *
+ * `maxFailedAttempts` and `maxFailedAttemptRate` are the harness's own cap: pi's
+ * `maxRetries` is per streak (the counter resets on the next good reply), so
+ * without a run-wide cap a provider that drops every third request would be
+ * retried all run and the run would read as valid. A run may fail
+ * max(maxFailedAttempts, floor(maxFailedAttemptRate x its metered requests))
+ * attempts, parent and workers together. The cap scales with the run because a
+ * fixed one hits the arm that makes more calls harder (v5c luna valid runs
+ * averaged 117 requests in the candidate, 98 in the baseline), and a run over
+ * it is re-run as infrastructure: the survival bias toward short runs that
+ * retrying is meant to remove.
+ */
+export interface RetryPolicy {
+	enabled: true;
+	maxRetries: number;
+	baseDelayMs: number;
+	maxAgentDelayMs: number;
+	providerMaxRetries: 0;
+	/** The floor of the run-wide cap on failed attempts, parent and workers together. */
+	maxFailedAttempts: number;
+	/** The cap's share of the run's metered requests, 0 to 1; the larger of the two applies. */
+	maxFailedAttemptRate: number;
+}
+
+/**
+ * The v6 policy (design 2.1): four agent retries, 2 s base, 30 s ceiling, no
+ * transport retries; at most max(12, 10% of metered requests) failed attempts.
+ */
+export const DEFAULT_RETRY_POLICY: Readonly<RetryPolicy> = Object.freeze({
+	enabled: true, maxRetries: 4, baseDelayMs: 2000, maxAgentDelayMs: 30_000, providerMaxRetries: 0, maxFailedAttempts: 12, maxFailedAttemptRate: 0.1,
+});
+
+/**
+ * The settings a cell runs with. Without a policy it is BENCHMARK_SETTINGS
+ * itself, so the settings.json a v5 cell wrote, and its hash, do not change.
+ */
+export function benchmarkSettings(policy?: RetryPolicy): typeof BENCHMARK_SETTINGS | Record<string, unknown> {
+	if (!policy) return BENCHMARK_SETTINGS;
+	return {
+		...BENCHMARK_SETTINGS,
+		retry: {
+			enabled: true, maxRetries: policy.maxRetries, baseDelayMs: policy.baseDelayMs, maxAgentDelayMs: policy.maxAgentDelayMs,
+			provider: { maxRetries: 0 },
+		},
+	};
+}
+
+/**
+ * Refuse a policy that is not the shape above. It arrives from a cell config or
+ * a manifest, both files on disk; a typo that turned transport retries on would
+ * hide failed attempts from every count.
+ */
+export function validateRetryPolicy(value: unknown): RetryPolicy {
+	const row = value as Partial<Record<keyof RetryPolicy, unknown>> | null;
+	if (!row || typeof row !== "object") throw new Error("retryPolicy must be an object");
+	if (row.enabled !== true) throw new Error("retryPolicy.enabled must be true; leave retryPolicy out to disable retries");
+	if (row.providerMaxRetries !== 0) throw new Error("retryPolicy.providerMaxRetries must be 0: transport retries are silent and unmetered");
+	for (const key of ["maxRetries", "maxFailedAttempts"] as const) {
+		if (!Number.isSafeInteger(row[key]) || (row[key] as number) < 1) throw new Error(`retryPolicy.${key} must be a positive integer`);
+	}
+	for (const key of ["baseDelayMs", "maxAgentDelayMs"] as const) {
+		if (!Number.isFinite(row[key]) || (row[key] as number) < 0) throw new Error(`retryPolicy.${key} must be a non-negative number of milliseconds`);
+	}
+	const rate = row.maxFailedAttemptRate;
+	if (typeof rate !== "number" || !Number.isFinite(rate) || rate < 0 || rate > 1) throw new Error("retryPolicy.maxFailedAttemptRate must be a share of requests from 0 to 1");
+	return {
+		enabled: true, maxRetries: row.maxRetries as number, baseDelayMs: row.baseDelayMs as number,
+		maxAgentDelayMs: row.maxAgentDelayMs as number, providerMaxRetries: 0, maxFailedAttempts: row.maxFailedAttempts as number,
+		maxFailedAttemptRate: rate,
+	};
+}
+
+/**
+ * The host of a fetch target, never its path or query: the path of a provider
+ * call can carry an account or deployment name.
+ */
+export function fetchHost(target: unknown): string | undefined {
+	try {
+		return new URL(typeof target === "string" ? target : target instanceof URL ? target.href : (target as Request).url).host.toLowerCase();
+	} catch { return undefined; }
+}
 
 /** The scripted model the delegation probe registers; its name cannot collide with a real provider. */
 export const PROBE_FAUX_PROVIDER = "pired-probe-faux";
@@ -316,6 +412,7 @@ function validateConfig(config: CompareEntryConfig): void {
 	if (config.extensionPaths !== undefined && (!Array.isArray(config.extensionPaths) || config.extensionPaths.some((p) => typeof p !== "string" || !isAbsolute(p)))) {
 		throw new Error("Invalid extensionPaths: expected an array of absolute path strings");
 	}
+	if (config.retryPolicy !== undefined) validateRetryPolicy(config.retryPolicy);
 	if (config.probe !== undefined) {
 		const probe = config.probe as Partial<ProbeConfig>;
 		for (const key of ["readDenied", "readAllowed"] as const) {
@@ -348,15 +445,27 @@ async function main() {
 	const http = await import(new URL("./core/http-dispatcher.js", import.meta.resolve("@earendil-works/pi-coding-agent")).href);
 	http.configureHttpDispatcher();
 	const fetch = globalThis.fetch;
+	// With a retry policy, every request is logged (host, status, time to
+	// headers; never a body or header). Parent and in-process workers share this
+	// fetch, so logged requests minus metered replies is the count of attempts no
+	// reply reports usage for, a worker's failed compaction included.
+	const logRequests = config.retryPolicy !== undefined;
+	let requests = 0;
 	globalThis.fetch = async (...args) => {
-		try { return await fetch(...args); }
+		const n = logRequests ? ++requests : 0;
+		const started = logRequests ? performance.now() : 0;
+		try {
+			const response = await fetch(...args);
+			if (logRequests) console.error(JSON.stringify({ type: "benchmark_request", n, host: fetchHost(args[0]), status: response.status, msToHeaders: Math.round(performance.now() - started) }));
+			return response;
+		}
 		catch (error) {
+			if (logRequests) console.error(JSON.stringify({ type: "benchmark_request", n, host: fetchHost(args[0]), status: null, msToHeaders: Math.round(performance.now() - started) }));
 			const cause = (error as { cause?: { code?: string; syscall?: string; path?: string; errors?: Array<{ code?: string }> } }).cause;
 			// The host (never the path or query) says whose fetch failed: a provider
 			// call, or a side-channel such as a model-catalog refresh. Only the
 			// former may make an invalid run re-runnable.
-			let host: string | undefined;
-			try { const target = args[0]; host = new URL(typeof target === "string" ? target : target instanceof URL ? target.href : (target as Request).url).host.toLowerCase(); } catch { host = undefined; }
+			const host = fetchHost(args[0]);
 			console.error(JSON.stringify({ type: "benchmark_fetch_error", host, code: cause?.code,
 				syscall: cause?.syscall, path: cause?.path, codes: cause?.errors?.map((e) => e.code) }));
 			throw error;
@@ -378,7 +487,7 @@ async function main() {
 	// CLI --no-extensions still resolves global npm packages. An explicit SDK
 	// SettingsManager keeps unrelated packages and their prompts out of both arms.
 	const runtime = await createAgentSessionRuntime(async ({ cwd, agentDir, sessionManager, sessionStartEvent }) => {
-		const settingsManager = SettingsManager.inMemory(structuredClone(BENCHMARK_SETTINGS) as Parameters<typeof SettingsManager.inMemory>[0], { projectTrusted: true });
+		const settingsManager = SettingsManager.inMemory(structuredClone(benchmarkSettings(config.retryPolicy)) as Parameters<typeof SettingsManager.inMemory>[0], { projectTrusted: true });
 		const modelRuntime = await ModelRuntime.create({ authPath: config.authPath, modelsPath: config.modelsPath,
 			modelsStorePath: config.modelsStorePath, allowModelNetwork: false });
 		if (faux) modelRuntime.registerNativeProvider(faux.provider as Parameters<typeof modelRuntime.registerNativeProvider>[0]);

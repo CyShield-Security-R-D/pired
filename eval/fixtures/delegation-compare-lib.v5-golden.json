@@ -1,0 +1,1756 @@
+{
+	"about": "Inputs and the outputs of eval/delegation-compare-lib.ts at b8ba1e8 (the v5 extractor), captured by a scratch script. A current extractor given no retry option must reproduce every output byte for byte.",
+	"cases": [
+		{
+			"name": "plain run with a threshold compaction",
+			"kind": "parent",
+			"events": [
+				{
+					"type": "message_end",
+					"message": {
+						"role": "assistant",
+						"content": [],
+						"api": "openai-completions",
+						"provider": "zai",
+						"model": "glm-5.3-flash",
+						"usage": {
+							"input": 100,
+							"output": 10,
+							"cacheRead": 400,
+							"cacheWrite": 0,
+							"reasoning": 0,
+							"totalTokens": 510,
+							"cost": {
+								"input": 0,
+								"output": 0,
+								"cacheRead": 0,
+								"cacheWrite": 0,
+								"total": 0.001
+							}
+						},
+						"stopReason": "toolUse",
+						"timestamp": 1790000000000,
+						"responseId": "r1"
+					}
+				},
+				{
+					"type": "compaction_end",
+					"reason": "threshold",
+					"result": {
+						"summary": "s",
+						"firstKeptEntryId": "k",
+						"tokensBefore": 1000,
+						"usage": {
+							"input": 900,
+							"output": 80,
+							"cacheRead": 0,
+							"cacheWrite": 0,
+							"reasoning": 0,
+							"totalTokens": 980,
+							"cost": {
+								"input": 0,
+								"output": 0,
+								"cacheRead": 0,
+								"cacheWrite": 0,
+								"total": 0.001
+							}
+						}
+					},
+					"aborted": false,
+					"willRetry": false
+				},
+				{
+					"type": "message_end",
+					"message": {
+						"role": "assistant",
+						"content": [],
+						"api": "openai-completions",
+						"provider": "zai",
+						"model": "glm-5.3-flash",
+						"usage": {
+							"input": 100,
+							"output": 10,
+							"cacheRead": 400,
+							"cacheWrite": 0,
+							"reasoning": 0,
+							"totalTokens": 510,
+							"cost": {
+								"input": 0,
+								"output": 0,
+								"cacheRead": 0,
+								"cacheWrite": 0,
+								"total": 0.001
+							}
+						},
+						"stopReason": "stop",
+						"timestamp": 1790000000001,
+						"responseId": "r2"
+					}
+				}
+			],
+			"output": {
+				"observations": [
+					{
+						"id": "r1",
+						"origin": "parent",
+						"usage": {
+							"inputTokens": 100,
+							"outputTokens": 10,
+							"totalTokens": 510,
+							"cacheReadTokens": 400,
+							"cacheWriteTokens": 0,
+							"reasoningTokens": 0
+						},
+						"costUsd": 0.001
+					},
+					{
+						"id": "compaction:1",
+						"origin": "parent",
+						"usage": {
+							"inputTokens": 900,
+							"outputTokens": 80,
+							"totalTokens": 980,
+							"cacheReadTokens": 0,
+							"cacheWriteTokens": 0,
+							"reasoningTokens": 0
+						},
+						"costUsd": 0.001
+					},
+					{
+						"id": "r2",
+						"origin": "parent",
+						"usage": {
+							"inputTokens": 100,
+							"outputTokens": 10,
+							"totalTokens": 510,
+							"cacheReadTokens": 400,
+							"cacheWriteTokens": 0,
+							"reasoningTokens": 0
+						},
+						"costUsd": 0.001
+					}
+				],
+				"errors": [],
+				"providerErrors": [],
+				"notes": [],
+				"compactions": 1,
+				"recoveredOverflows": 0,
+				"missingResponseIds": 0,
+				"cacheWarmings": 0,
+				"delegatedResults": 0,
+				"finalStop": true
+			}
+		},
+		{
+			"name": "final error left unrecovered",
+			"kind": "parent",
+			"events": [
+				{
+					"type": "message_end",
+					"message": {
+						"role": "assistant",
+						"content": [],
+						"api": "openai-completions",
+						"provider": "zai",
+						"model": "glm-5.3-flash",
+						"usage": {
+							"input": 100,
+							"output": 10,
+							"cacheRead": 400,
+							"cacheWrite": 0,
+							"reasoning": 0,
+							"totalTokens": 510,
+							"cost": {
+								"input": 0,
+								"output": 0,
+								"cacheRead": 0,
+								"cacheWrite": 0,
+								"total": 0.001
+							}
+						},
+						"stopReason": "toolUse",
+						"timestamp": 1790000000002,
+						"responseId": "r1"
+					}
+				},
+				{
+					"type": "message_end",
+					"message": {
+						"role": "assistant",
+						"content": [],
+						"api": "openai-completions",
+						"provider": "zai",
+						"model": "glm-5.3-flash",
+						"usage": {
+							"input": 0,
+							"output": 0,
+							"cacheRead": 0,
+							"cacheWrite": 0,
+							"reasoning": 0,
+							"totalTokens": 0,
+							"cost": {
+								"input": 0,
+								"output": 0,
+								"cacheRead": 0,
+								"cacheWrite": 0,
+								"total": 0.001
+							}
+						},
+						"stopReason": "error",
+						"timestamp": 1790000000003,
+						"responseId": "r2",
+						"errorMessage": "terminated"
+					}
+				}
+			],
+			"output": {
+				"observations": [
+					{
+						"id": "r1",
+						"origin": "parent",
+						"usage": {
+							"inputTokens": 100,
+							"outputTokens": 10,
+							"totalTokens": 510,
+							"cacheReadTokens": 400,
+							"cacheWriteTokens": 0,
+							"reasoningTokens": 0
+						},
+						"costUsd": 0.001
+					},
+					{
+						"id": "r2",
+						"origin": "parent",
+						"usage": {
+							"inputTokens": 0,
+							"outputTokens": 0,
+							"totalTokens": 0,
+							"cacheReadTokens": 0,
+							"cacheWriteTokens": 0,
+							"reasoningTokens": 0
+						},
+						"costUsd": 0.001
+					},
+					{
+						"id": "unaccounted:1",
+						"origin": "parent"
+					}
+				],
+				"errors": [
+					"final assistant reply ended with error, not stop"
+				],
+				"providerErrors": [
+					"assistant reply r2 failed: terminated"
+				],
+				"notes": [],
+				"compactions": 0,
+				"recoveredOverflows": 0,
+				"missingResponseIds": 0,
+				"cacheWarmings": 0,
+				"delegatedResults": 0,
+				"finalStop": false
+			}
+		},
+		{
+			"name": "overflow recovered by compaction",
+			"kind": "parent",
+			"events": [
+				{
+					"type": "message_end",
+					"message": {
+						"role": "assistant",
+						"content": [],
+						"api": "openai-completions",
+						"provider": "zai",
+						"model": "glm-5.3-flash",
+						"usage": {
+							"input": 100,
+							"output": 10,
+							"cacheRead": 400,
+							"cacheWrite": 0,
+							"reasoning": 0,
+							"totalTokens": 510,
+							"cost": {
+								"input": 0,
+								"output": 0,
+								"cacheRead": 0,
+								"cacheWrite": 0,
+								"total": 0.001
+							}
+						},
+						"stopReason": "toolUse",
+						"timestamp": 1790000000004,
+						"responseId": "r1"
+					}
+				},
+				{
+					"type": "message_end",
+					"message": {
+						"role": "assistant",
+						"content": [],
+						"api": "openai-completions",
+						"provider": "zai",
+						"model": "glm-5.3-flash",
+						"usage": {
+							"input": 0,
+							"output": 0,
+							"cacheRead": 0,
+							"cacheWrite": 0,
+							"reasoning": 0,
+							"totalTokens": 0,
+							"cost": {
+								"input": 0,
+								"output": 0,
+								"cacheRead": 0,
+								"cacheWrite": 0,
+								"total": 0.001
+							}
+						},
+						"stopReason": "error",
+						"timestamp": 1790000000005,
+						"responseId": "r2",
+						"errorMessage": "context_length_exceeded"
+					}
+				},
+				{
+					"type": "compaction_end",
+					"reason": "overflow",
+					"result": {
+						"summary": "s",
+						"firstKeptEntryId": "k",
+						"tokensBefore": 1000,
+						"usage": {
+							"input": 900,
+							"output": 80,
+							"cacheRead": 0,
+							"cacheWrite": 0,
+							"reasoning": 0,
+							"totalTokens": 980,
+							"cost": {
+								"input": 0,
+								"output": 0,
+								"cacheRead": 0,
+								"cacheWrite": 0,
+								"total": 0.001
+							}
+						}
+					},
+					"aborted": false,
+					"willRetry": true
+				},
+				{
+					"type": "message_end",
+					"message": {
+						"role": "assistant",
+						"content": [],
+						"api": "openai-completions",
+						"provider": "zai",
+						"model": "glm-5.3-flash",
+						"usage": {
+							"input": 100,
+							"output": 10,
+							"cacheRead": 400,
+							"cacheWrite": 0,
+							"reasoning": 0,
+							"totalTokens": 510,
+							"cost": {
+								"input": 0,
+								"output": 0,
+								"cacheRead": 0,
+								"cacheWrite": 0,
+								"total": 0.001
+							}
+						},
+						"stopReason": "stop",
+						"timestamp": 1790000000006,
+						"responseId": "r3"
+					}
+				}
+			],
+			"output": {
+				"observations": [
+					{
+						"id": "r1",
+						"origin": "parent",
+						"usage": {
+							"inputTokens": 100,
+							"outputTokens": 10,
+							"totalTokens": 510,
+							"cacheReadTokens": 400,
+							"cacheWriteTokens": 0,
+							"reasoningTokens": 0
+						},
+						"costUsd": 0.001
+					},
+					{
+						"id": "r2",
+						"origin": "parent",
+						"usage": {
+							"inputTokens": 0,
+							"outputTokens": 0,
+							"totalTokens": 0,
+							"cacheReadTokens": 0,
+							"cacheWriteTokens": 0,
+							"reasoningTokens": 0
+						},
+						"costUsd": 0.001
+					},
+					{
+						"id": "compaction:1",
+						"origin": "parent",
+						"usage": {
+							"inputTokens": 900,
+							"outputTokens": 80,
+							"totalTokens": 980,
+							"cacheReadTokens": 0,
+							"cacheWriteTokens": 0,
+							"reasoningTokens": 0
+						},
+						"costUsd": 0.001
+					},
+					{
+						"id": "r3",
+						"origin": "parent",
+						"usage": {
+							"inputTokens": 100,
+							"outputTokens": 10,
+							"totalTokens": 510,
+							"cacheReadTokens": 400,
+							"cacheWriteTokens": 0,
+							"reasoningTokens": 0
+						},
+						"costUsd": 0.001
+					}
+				],
+				"errors": [],
+				"providerErrors": [],
+				"notes": [
+					"assistant reply r2 (error) overflowed the context; compaction 1 recovered it and the turn was retried"
+				],
+				"compactions": 1,
+				"recoveredOverflows": 1,
+				"missingResponseIds": 0,
+				"cacheWarmings": 0,
+				"delegatedResults": 0,
+				"finalStop": true
+			}
+		},
+		{
+			"name": "agent retry events with retries off",
+			"kind": "parent",
+			"events": [
+				{
+					"type": "message_end",
+					"message": {
+						"role": "assistant",
+						"content": [],
+						"api": "openai-completions",
+						"provider": "zai",
+						"model": "glm-5.3-flash",
+						"usage": {
+							"input": 100,
+							"output": 10,
+							"cacheRead": 400,
+							"cacheWrite": 0,
+							"reasoning": 0,
+							"totalTokens": 510,
+							"cost": {
+								"input": 0,
+								"output": 0,
+								"cacheRead": 0,
+								"cacheWrite": 0,
+								"total": 0.001
+							}
+						},
+						"stopReason": "toolUse",
+						"timestamp": 1790000000007,
+						"responseId": "r1"
+					}
+				},
+				{
+					"type": "message_end",
+					"message": {
+						"role": "assistant",
+						"content": [],
+						"api": "openai-completions",
+						"provider": "zai",
+						"model": "glm-5.3-flash",
+						"usage": {
+							"input": 0,
+							"output": 0,
+							"cacheRead": 0,
+							"cacheWrite": 0,
+							"reasoning": 0,
+							"totalTokens": 0,
+							"cost": {
+								"input": 0,
+								"output": 0,
+								"cacheRead": 0,
+								"cacheWrite": 0,
+								"total": 0.001
+							}
+						},
+						"stopReason": "error",
+						"timestamp": 1790000000008,
+						"responseId": "r2",
+						"errorMessage": "terminated"
+					}
+				},
+				{
+					"type": "turn_end"
+				},
+				{
+					"type": "agent_end"
+				},
+				{
+					"type": "auto_retry_start",
+					"attempt": 1,
+					"maxAttempts": 3,
+					"delayMs": 2000,
+					"errorMessage": "terminated"
+				},
+				{
+					"type": "entry_appended",
+					"entry": {
+						"type": "context_edit",
+						"id": "e9",
+						"targetId": "m2",
+						"replacement": null
+					}
+				},
+				{
+					"type": "message_end",
+					"message": {
+						"role": "assistant",
+						"content": [],
+						"api": "openai-completions",
+						"provider": "zai",
+						"model": "glm-5.3-flash",
+						"usage": {
+							"input": 100,
+							"output": 10,
+							"cacheRead": 400,
+							"cacheWrite": 0,
+							"reasoning": 0,
+							"totalTokens": 510,
+							"cost": {
+								"input": 0,
+								"output": 0,
+								"cacheRead": 0,
+								"cacheWrite": 0,
+								"total": 0.001
+							}
+						},
+						"stopReason": "stop",
+						"timestamp": 1790000000009,
+						"responseId": "r3"
+					}
+				},
+				{
+					"type": "auto_retry_end",
+					"success": true,
+					"attempt": 1
+				}
+			],
+			"output": {
+				"observations": [
+					{
+						"id": "r1",
+						"origin": "parent",
+						"usage": {
+							"inputTokens": 100,
+							"outputTokens": 10,
+							"totalTokens": 510,
+							"cacheReadTokens": 400,
+							"cacheWriteTokens": 0,
+							"reasoningTokens": 0
+						},
+						"costUsd": 0.001
+					},
+					{
+						"id": "r2",
+						"origin": "parent",
+						"usage": {
+							"inputTokens": 0,
+							"outputTokens": 0,
+							"totalTokens": 0,
+							"cacheReadTokens": 0,
+							"cacheWriteTokens": 0,
+							"reasoningTokens": 0
+						},
+						"costUsd": 0.001
+					},
+					{
+						"id": "unaccounted:1",
+						"origin": "parent"
+					},
+					{
+						"id": "unaccounted:2",
+						"origin": "parent"
+					},
+					{
+						"id": "r3",
+						"origin": "parent",
+						"usage": {
+							"inputTokens": 100,
+							"outputTokens": 10,
+							"totalTokens": 510,
+							"cacheReadTokens": 400,
+							"cacheWriteTokens": 0,
+							"reasoningTokens": 0
+						},
+						"costUsd": 0.001
+					},
+					{
+						"id": "unaccounted:3",
+						"origin": "parent"
+					}
+				],
+				"errors": [],
+				"providerErrors": [
+					"auto_retry_start: retries are disabled, so a retry means a failed attempt whose usage pi does not report",
+					"assistant reply r2 failed: terminated",
+					"auto_retry_end: retries are disabled, so a retry means a failed attempt whose usage pi does not report"
+				],
+				"notes": [],
+				"compactions": 0,
+				"recoveredOverflows": 0,
+				"missingResponseIds": 0,
+				"cacheWarmings": 0,
+				"delegatedResults": 0,
+				"finalStop": true
+			}
+		},
+		{
+			"name": "cancelled retry with retries off",
+			"kind": "parent",
+			"events": [
+				{
+					"type": "message_end",
+					"message": {
+						"role": "assistant",
+						"content": [],
+						"api": "openai-completions",
+						"provider": "zai",
+						"model": "glm-5.3-flash",
+						"usage": {
+							"input": 0,
+							"output": 0,
+							"cacheRead": 0,
+							"cacheWrite": 0,
+							"reasoning": 0,
+							"totalTokens": 0,
+							"cost": {
+								"input": 0,
+								"output": 0,
+								"cacheRead": 0,
+								"cacheWrite": 0,
+								"total": 0.001
+							}
+						},
+						"stopReason": "error",
+						"timestamp": 1790000000010,
+						"responseId": "r1",
+						"errorMessage": "terminated"
+					}
+				},
+				{
+					"type": "auto_retry_start",
+					"attempt": 1
+				},
+				{
+					"type": "auto_retry_end",
+					"success": false,
+					"attempt": 1,
+					"finalError": "Retry cancelled"
+				}
+			],
+			"output": {
+				"observations": [
+					{
+						"id": "r1",
+						"origin": "parent",
+						"usage": {
+							"inputTokens": 0,
+							"outputTokens": 0,
+							"totalTokens": 0,
+							"cacheReadTokens": 0,
+							"cacheWriteTokens": 0,
+							"reasoningTokens": 0
+						},
+						"costUsd": 0.001
+					},
+					{
+						"id": "unaccounted:1",
+						"origin": "parent"
+					},
+					{
+						"id": "unaccounted:2",
+						"origin": "parent"
+					},
+					{
+						"id": "unaccounted:3",
+						"origin": "parent"
+					}
+				],
+				"errors": [
+					"final assistant reply ended with error, not stop"
+				],
+				"providerErrors": [
+					"auto_retry_start: retries are disabled, so a retry means a failed attempt whose usage pi does not report",
+					"auto_retry_end: retries are disabled, so a retry means a failed attempt whose usage pi does not report",
+					"assistant reply r1 failed: terminated"
+				],
+				"notes": [],
+				"compactions": 0,
+				"recoveredOverflows": 0,
+				"missingResponseIds": 0,
+				"cacheWarmings": 0,
+				"delegatedResults": 0,
+				"finalStop": false
+			}
+		},
+		{
+			"name": "summary retry events with retries off",
+			"kind": "parent",
+			"events": [
+				{
+					"type": "message_end",
+					"message": {
+						"role": "assistant",
+						"content": [],
+						"api": "openai-completions",
+						"provider": "zai",
+						"model": "glm-5.3-flash",
+						"usage": {
+							"input": 100,
+							"output": 10,
+							"cacheRead": 400,
+							"cacheWrite": 0,
+							"reasoning": 0,
+							"totalTokens": 510,
+							"cost": {
+								"input": 0,
+								"output": 0,
+								"cacheRead": 0,
+								"cacheWrite": 0,
+								"total": 0.001
+							}
+						},
+						"stopReason": "toolUse",
+						"timestamp": 1790000000011,
+						"responseId": "r1"
+					}
+				},
+				{
+					"type": "summarization_retry_scheduled",
+					"attempt": 1,
+					"errorMessage": "terminated"
+				},
+				{
+					"type": "summarization_retry_attempt_start"
+				},
+				{
+					"type": "summarization_retry_finished"
+				},
+				{
+					"type": "compaction_end",
+					"reason": "threshold",
+					"result": {
+						"summary": "s",
+						"firstKeptEntryId": "k",
+						"tokensBefore": 1000,
+						"usage": {
+							"input": 900,
+							"output": 80,
+							"cacheRead": 0,
+							"cacheWrite": 0,
+							"reasoning": 0,
+							"totalTokens": 980,
+							"cost": {
+								"input": 0,
+								"output": 0,
+								"cacheRead": 0,
+								"cacheWrite": 0,
+								"total": 0.001
+							}
+						}
+					},
+					"aborted": false,
+					"willRetry": false
+				},
+				{
+					"type": "message_end",
+					"message": {
+						"role": "assistant",
+						"content": [],
+						"api": "openai-completions",
+						"provider": "zai",
+						"model": "glm-5.3-flash",
+						"usage": {
+							"input": 100,
+							"output": 10,
+							"cacheRead": 400,
+							"cacheWrite": 0,
+							"reasoning": 0,
+							"totalTokens": 510,
+							"cost": {
+								"input": 0,
+								"output": 0,
+								"cacheRead": 0,
+								"cacheWrite": 0,
+								"total": 0.001
+							}
+						},
+						"stopReason": "stop",
+						"timestamp": 1790000000012,
+						"responseId": "r2"
+					}
+				}
+			],
+			"output": {
+				"observations": [
+					{
+						"id": "r1",
+						"origin": "parent",
+						"usage": {
+							"inputTokens": 100,
+							"outputTokens": 10,
+							"totalTokens": 510,
+							"cacheReadTokens": 400,
+							"cacheWriteTokens": 0,
+							"reasoningTokens": 0
+						},
+						"costUsd": 0.001
+					},
+					{
+						"id": "unaccounted:1",
+						"origin": "parent"
+					},
+					{
+						"id": "unaccounted:2",
+						"origin": "parent"
+					},
+					{
+						"id": "unaccounted:3",
+						"origin": "parent"
+					},
+					{
+						"id": "compaction:1",
+						"origin": "parent",
+						"usage": {
+							"inputTokens": 900,
+							"outputTokens": 80,
+							"totalTokens": 980,
+							"cacheReadTokens": 0,
+							"cacheWriteTokens": 0,
+							"reasoningTokens": 0
+						},
+						"costUsd": 0.001
+					},
+					{
+						"id": "r2",
+						"origin": "parent",
+						"usage": {
+							"inputTokens": 100,
+							"outputTokens": 10,
+							"totalTokens": 510,
+							"cacheReadTokens": 400,
+							"cacheWriteTokens": 0,
+							"reasoningTokens": 0
+						},
+						"costUsd": 0.001
+					}
+				],
+				"errors": [],
+				"providerErrors": [
+					"summarization_retry_scheduled: retries are disabled, so a retry means a failed attempt whose usage pi does not report",
+					"summarization_retry_attempt_start: retries are disabled, so a retry means a failed attempt whose usage pi does not report",
+					"summarization_retry_finished: retries are disabled, so a retry means a failed attempt whose usage pi does not report"
+				],
+				"notes": [],
+				"compactions": 1,
+				"recoveredOverflows": 0,
+				"missingResponseIds": 0,
+				"cacheWarmings": 0,
+				"delegatedResults": 0,
+				"finalStop": true
+			}
+		},
+		{
+			"name": "length stop, missing response ID and a subagent result with usage",
+			"kind": "parent",
+			"events": [
+				{
+					"type": "message_end",
+					"message": {
+						"role": "assistant",
+						"content": [],
+						"api": "openai-completions",
+						"provider": "zai",
+						"model": "glm-5.3-flash",
+						"usage": {
+							"input": 100,
+							"output": 10,
+							"cacheRead": 400,
+							"cacheWrite": 0,
+							"reasoning": 0,
+							"totalTokens": 510,
+							"cost": {
+								"input": 0,
+								"output": 0,
+								"cacheRead": 0,
+								"cacheWrite": 0,
+								"total": 0.001
+							}
+						},
+						"stopReason": "toolUse",
+						"timestamp": 1790000000013
+					}
+				},
+				{
+					"type": "message_end",
+					"message": {
+						"role": "toolResult",
+						"toolName": "subagent",
+						"usage": {
+							"input": 50,
+							"output": 5,
+							"cacheRead": 0,
+							"cacheWrite": 0,
+							"reasoning": 0,
+							"totalTokens": 55,
+							"cost": {
+								"input": 0,
+								"output": 0,
+								"cacheRead": 0,
+								"cacheWrite": 0,
+								"total": 0.001
+							}
+						}
+					}
+				},
+				{
+					"type": "message_end",
+					"message": {
+						"role": "assistant",
+						"content": [],
+						"api": "openai-completions",
+						"provider": "zai",
+						"model": "glm-5.3-flash",
+						"usage": {
+							"input": 100,
+							"output": 10,
+							"cacheRead": 400,
+							"cacheWrite": 0,
+							"reasoning": 0,
+							"totalTokens": 510,
+							"cost": {
+								"input": 0,
+								"output": 0,
+								"cacheRead": 0,
+								"cacheWrite": 0,
+								"total": 0.001
+							}
+						},
+						"stopReason": "length",
+						"timestamp": 1790000000014,
+						"responseId": "r2"
+					}
+				}
+			],
+			"output": {
+				"observations": [
+					{
+						"id": "assistant#1",
+						"origin": "parent",
+						"usage": {
+							"inputTokens": 100,
+							"outputTokens": 10,
+							"totalTokens": 510,
+							"cacheReadTokens": 400,
+							"cacheWriteTokens": 0,
+							"reasoningTokens": 0
+						},
+						"costUsd": 0.001
+					},
+					{
+						"id": "r2",
+						"origin": "parent",
+						"usage": {
+							"inputTokens": 100,
+							"outputTokens": 10,
+							"totalTokens": 510,
+							"cacheReadTokens": 400,
+							"cacheWriteTokens": 0,
+							"reasoningTokens": 0
+						},
+						"costUsd": 0.001
+					}
+				],
+				"errors": [
+					"final assistant reply ended with length, not stop"
+				],
+				"providerErrors": [],
+				"notes": [
+					"assistant reply 1 has no responseId; counted as assistant#1"
+				],
+				"compactions": 0,
+				"recoveredOverflows": 0,
+				"missingResponseIds": 1,
+				"cacheWarmings": 0,
+				"delegatedResults": 1,
+				"finalStop": false
+			}
+		},
+		{
+			"name": "failed compaction",
+			"kind": "parent",
+			"events": [
+				{
+					"type": "message_end",
+					"message": {
+						"role": "assistant",
+						"content": [],
+						"api": "openai-completions",
+						"provider": "zai",
+						"model": "glm-5.3-flash",
+						"usage": {
+							"input": 100,
+							"output": 10,
+							"cacheRead": 400,
+							"cacheWrite": 0,
+							"reasoning": 0,
+							"totalTokens": 510,
+							"cost": {
+								"input": 0,
+								"output": 0,
+								"cacheRead": 0,
+								"cacheWrite": 0,
+								"total": 0.001
+							}
+						},
+						"stopReason": "toolUse",
+						"timestamp": 1790000000015,
+						"responseId": "r1"
+					}
+				},
+				{
+					"type": "compaction_end",
+					"reason": "threshold",
+					"aborted": false,
+					"willRetry": false,
+					"errorMessage": "terminated"
+				},
+				{
+					"type": "message_end",
+					"message": {
+						"role": "assistant",
+						"content": [],
+						"api": "openai-completions",
+						"provider": "zai",
+						"model": "glm-5.3-flash",
+						"usage": {
+							"input": 100,
+							"output": 10,
+							"cacheRead": 400,
+							"cacheWrite": 0,
+							"reasoning": 0,
+							"totalTokens": 510,
+							"cost": {
+								"input": 0,
+								"output": 0,
+								"cacheRead": 0,
+								"cacheWrite": 0,
+								"total": 0.001
+							}
+						},
+						"stopReason": "stop",
+						"timestamp": 1790000000016,
+						"responseId": "r2"
+					}
+				}
+			],
+			"output": {
+				"observations": [
+					{
+						"id": "r1",
+						"origin": "parent",
+						"usage": {
+							"inputTokens": 100,
+							"outputTokens": 10,
+							"totalTokens": 510,
+							"cacheReadTokens": 400,
+							"cacheWriteTokens": 0,
+							"reasoningTokens": 0
+						},
+						"costUsd": 0.001
+					},
+					{
+						"id": "compaction:1",
+						"origin": "parent"
+					},
+					{
+						"id": "r2",
+						"origin": "parent",
+						"usage": {
+							"inputTokens": 100,
+							"outputTokens": 10,
+							"totalTokens": 510,
+							"cacheReadTokens": 400,
+							"cacheWriteTokens": 0,
+							"reasoningTokens": 0
+						},
+						"costUsd": 0.001
+					}
+				],
+				"errors": [],
+				"providerErrors": [
+					"compaction 1 (threshold) failed: terminated"
+				],
+				"notes": [],
+				"compactions": 1,
+				"recoveredOverflows": 0,
+				"missingResponseIds": 0,
+				"cacheWarmings": 0,
+				"delegatedResults": 0,
+				"finalStop": true
+			}
+		},
+		{
+			"name": "finished worker",
+			"kind": "worker",
+			"session": "{\"type\":\"session\",\"version\":3,\"id\":\"child-1\",\"timestamp\":\"t\",\"cwd\":\"/target\"}\n{\"type\":\"thinking_level_change\",\"id\":\"e1\",\"parentId\":null,\"timestamp\":\"t\",\"thinkingLevel\":\"medium\"}\n{\"type\":\"message\",\"id\":\"e2\",\"parentId\":null,\"timestamp\":\"t\",\"message\":{\"role\":\"assistant\",\"provider\":\"zai\",\"model\":\"glm-5.3-flash\",\"stopReason\":\"toolUse\",\"usage\":{\"input\":30,\"output\":4,\"cacheRead\":1500,\"cacheWrite\":20,\"reasoning\":0,\"totalTokens\":1554,\"cost\":{\"input\":0,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0,\"total\":0.001}},\"content\":[],\"responseId\":\"c1\"}}\n{\"type\":\"message\",\"id\":\"e3\",\"parentId\":null,\"timestamp\":\"t\",\"message\":{\"role\":\"assistant\",\"provider\":\"zai\",\"model\":\"glm-5.3-flash\",\"stopReason\":\"stop\",\"usage\":{\"input\":30,\"output\":4,\"cacheRead\":1500,\"cacheWrite\":20,\"reasoning\":0,\"totalTokens\":1554,\"cost\":{\"input\":0,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0,\"total\":0.001}},\"content\":[{\"type\":\"text\",\"text\":\"handoff\"}],\"responseId\":\"c2\"}}\n",
+			"childKey": "run-a/run-0",
+			"output": {
+				"childKey": "run-a/run-0",
+				"observations": [
+					{
+						"id": "run-a/run-0/c1",
+						"origin": "worker",
+						"usage": {
+							"inputTokens": 30,
+							"outputTokens": 4,
+							"totalTokens": 1554,
+							"cacheReadTokens": 1500,
+							"cacheWriteTokens": 20,
+							"reasoningTokens": 0
+						},
+						"costUsd": 0.001
+					},
+					{
+						"id": "run-a/run-0/c2",
+						"origin": "worker",
+						"usage": {
+							"inputTokens": 30,
+							"outputTokens": 4,
+							"totalTokens": 1554,
+							"cacheReadTokens": 1500,
+							"cacheWriteTokens": 20,
+							"reasoningTokens": 0
+						},
+						"costUsd": 0.001
+					}
+				],
+				"errors": [],
+				"providerErrors": [],
+				"notes": [],
+				"turns": 2,
+				"compactions": 0,
+				"cacheWarmings": 0,
+				"recoveredOverflows": 0,
+				"missingResponseIds": 0,
+				"contextEdits": 0,
+				"ending": "handoff",
+				"finalText": "handoff",
+				"models": [
+					"zai/glm-5.3-flash"
+				],
+				"thinkingLevels": [
+					"medium"
+				],
+				"toolCalls": [],
+				"replyUsage": {
+					"input": 60,
+					"output": 8,
+					"cacheRead": 3000,
+					"cacheWrite": 40
+				},
+				"sessionId": "child-1",
+				"finalStop": "stop"
+			}
+		},
+		{
+			"name": "error omitted by a context edit, then a reply",
+			"kind": "worker",
+			"session": "{\"type\":\"session\",\"version\":3,\"id\":\"child-1\",\"timestamp\":\"t\",\"cwd\":\"/target\"}\n{\"type\":\"message\",\"id\":\"e5\",\"parentId\":null,\"timestamp\":\"t\",\"message\":{\"role\":\"assistant\",\"provider\":\"zai\",\"model\":\"glm-5.3-flash\",\"stopReason\":\"toolUse\",\"usage\":{\"input\":30,\"output\":4,\"cacheRead\":1500,\"cacheWrite\":20,\"reasoning\":0,\"totalTokens\":1554,\"cost\":{\"input\":0,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0,\"total\":0.001}},\"content\":[],\"responseId\":\"c1\"}}\n{\"type\":\"message\",\"id\":\"e4\",\"parentId\":null,\"timestamp\":\"t\",\"message\":{\"role\":\"assistant\",\"provider\":\"zai\",\"model\":\"glm-5.3-flash\",\"stopReason\":\"error\",\"usage\":{\"input\":0,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0,\"reasoning\":0,\"totalTokens\":0,\"cost\":{\"input\":0,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0,\"total\":0.001}},\"content\":[],\"errorMessage\":\"terminated\"}}\n{\"type\":\"context_edit\",\"id\":\"e6\",\"parentId\":null,\"timestamp\":\"t\",\"targetId\":\"e4\",\"replacement\":null}\n{\"type\":\"message\",\"id\":\"e7\",\"parentId\":null,\"timestamp\":\"t\",\"message\":{\"role\":\"assistant\",\"provider\":\"zai\",\"model\":\"glm-5.3-flash\",\"stopReason\":\"stop\",\"usage\":{\"input\":30,\"output\":4,\"cacheRead\":1500,\"cacheWrite\":20,\"reasoning\":0,\"totalTokens\":1554,\"cost\":{\"input\":0,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0,\"total\":0.001}},\"content\":[{\"type\":\"text\",\"text\":\"handoff\"}],\"responseId\":\"c2\"}}\n",
+			"childKey": "run-a/run-0",
+			"output": {
+				"childKey": "run-a/run-0",
+				"observations": [
+					{
+						"id": "run-a/run-0/c1",
+						"origin": "worker",
+						"usage": {
+							"inputTokens": 30,
+							"outputTokens": 4,
+							"totalTokens": 1554,
+							"cacheReadTokens": 1500,
+							"cacheWriteTokens": 20,
+							"reasoningTokens": 0
+						},
+						"costUsd": 0.001
+					},
+					{
+						"id": "run-a/run-0/entry:e4",
+						"origin": "worker",
+						"usage": {
+							"inputTokens": 0,
+							"outputTokens": 0,
+							"totalTokens": 0,
+							"cacheReadTokens": 0,
+							"cacheWriteTokens": 0,
+							"reasoningTokens": 0
+						},
+						"costUsd": 0.001
+					},
+					{
+						"id": "run-a/run-0/unaccounted:1",
+						"origin": "worker"
+					},
+					{
+						"id": "run-a/run-0/c2",
+						"origin": "worker",
+						"usage": {
+							"inputTokens": 30,
+							"outputTokens": 4,
+							"totalTokens": 1554,
+							"cacheReadTokens": 1500,
+							"cacheWriteTokens": 20,
+							"reasoningTokens": 0
+						},
+						"costUsd": 0.001
+					}
+				],
+				"errors": [],
+				"providerErrors": [
+					"child run-a/run-0: assistant reply entry:e4 failed: terminated"
+				],
+				"notes": [
+					"child run-a/run-0: assistant reply 2 has no responseId; counted as entry:e4"
+				],
+				"turns": 3,
+				"compactions": 0,
+				"cacheWarmings": 0,
+				"recoveredOverflows": 0,
+				"missingResponseIds": 1,
+				"contextEdits": 1,
+				"ending": "handoff",
+				"finalText": "handoff",
+				"models": [
+					"zai/glm-5.3-flash"
+				],
+				"thinkingLevels": [],
+				"toolCalls": [],
+				"replyUsage": {
+					"input": 60,
+					"output": 8,
+					"cacheRead": 3000,
+					"cacheWrite": 40
+				},
+				"sessionId": "child-1",
+				"finalStop": "stop"
+			}
+		},
+		{
+			"name": "overflow: context edit, compaction, reply",
+			"kind": "worker",
+			"session": "{\"type\":\"session\",\"version\":3,\"id\":\"child-1\",\"timestamp\":\"t\",\"cwd\":\"/target\"}\n{\"type\":\"message\",\"id\":\"e9\",\"parentId\":null,\"timestamp\":\"t\",\"message\":{\"role\":\"assistant\",\"provider\":\"zai\",\"model\":\"glm-5.3-flash\",\"stopReason\":\"toolUse\",\"usage\":{\"input\":30,\"output\":4,\"cacheRead\":1500,\"cacheWrite\":20,\"reasoning\":0,\"totalTokens\":1554,\"cost\":{\"input\":0,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0,\"total\":0.001}},\"content\":[],\"responseId\":\"c1\"}}\n{\"type\":\"message\",\"id\":\"e8\",\"parentId\":null,\"timestamp\":\"t\",\"message\":{\"role\":\"assistant\",\"provider\":\"zai\",\"model\":\"glm-5.3-flash\",\"stopReason\":\"error\",\"usage\":{\"input\":0,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0,\"reasoning\":0,\"totalTokens\":0,\"cost\":{\"input\":0,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0,\"total\":0.001}},\"content\":[],\"errorMessage\":\"context_length_exceeded\"}}\n{\"type\":\"context_edit\",\"id\":\"e10\",\"parentId\":null,\"timestamp\":\"t\",\"targetId\":\"e8\",\"replacement\":null}\n{\"type\":\"compaction\",\"id\":\"e11\",\"parentId\":null,\"timestamp\":\"t\",\"summary\":\"s\",\"firstKeptEntryId\":\"x\",\"tokensBefore\":190000,\"usage\":{\"input\":40000,\"output\":900,\"cacheRead\":0,\"cacheWrite\":0,\"reasoning\":0,\"totalTokens\":40900,\"cost\":{\"input\":0,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0,\"total\":0.001}}}\n{\"type\":\"message\",\"id\":\"e12\",\"parentId\":null,\"timestamp\":\"t\",\"message\":{\"role\":\"assistant\",\"provider\":\"zai\",\"model\":\"glm-5.3-flash\",\"stopReason\":\"stop\",\"usage\":{\"input\":30,\"output\":4,\"cacheRead\":1500,\"cacheWrite\":20,\"reasoning\":0,\"totalTokens\":1554,\"cost\":{\"input\":0,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0,\"total\":0.001}},\"content\":[{\"type\":\"text\",\"text\":\"handoff\"}],\"responseId\":\"c2\"}}\n",
+			"childKey": "run-a/run-0",
+			"output": {
+				"childKey": "run-a/run-0",
+				"observations": [
+					{
+						"id": "run-a/run-0/c1",
+						"origin": "worker",
+						"usage": {
+							"inputTokens": 30,
+							"outputTokens": 4,
+							"totalTokens": 1554,
+							"cacheReadTokens": 1500,
+							"cacheWriteTokens": 20,
+							"reasoningTokens": 0
+						},
+						"costUsd": 0.001
+					},
+					{
+						"id": "run-a/run-0/entry:e8",
+						"origin": "worker",
+						"usage": {
+							"inputTokens": 0,
+							"outputTokens": 0,
+							"totalTokens": 0,
+							"cacheReadTokens": 0,
+							"cacheWriteTokens": 0,
+							"reasoningTokens": 0
+						},
+						"costUsd": 0.001
+					},
+					{
+						"id": "run-a/run-0/compaction:e11",
+						"origin": "worker",
+						"usage": {
+							"inputTokens": 40000,
+							"outputTokens": 900,
+							"totalTokens": 40900,
+							"cacheReadTokens": 0,
+							"cacheWriteTokens": 0,
+							"reasoningTokens": 0
+						},
+						"costUsd": 0.001
+					},
+					{
+						"id": "run-a/run-0/c2",
+						"origin": "worker",
+						"usage": {
+							"inputTokens": 30,
+							"outputTokens": 4,
+							"totalTokens": 1554,
+							"cacheReadTokens": 1500,
+							"cacheWriteTokens": 20,
+							"reasoningTokens": 0
+						},
+						"costUsd": 0.001
+					}
+				],
+				"errors": [],
+				"providerErrors": [],
+				"notes": [
+					"child run-a/run-0: assistant reply 2 has no responseId; counted as entry:e8",
+					"child run-a/run-0: assistant reply entry:e8 (error) overflowed the context; a compaction recovered it and the turn was retried"
+				],
+				"turns": 3,
+				"compactions": 1,
+				"cacheWarmings": 0,
+				"recoveredOverflows": 1,
+				"missingResponseIds": 1,
+				"contextEdits": 1,
+				"ending": "handoff",
+				"finalText": "handoff",
+				"models": [
+					"zai/glm-5.3-flash"
+				],
+				"thinkingLevels": [],
+				"toolCalls": [],
+				"replyUsage": {
+					"input": 60,
+					"output": 8,
+					"cacheRead": 3000,
+					"cacheWrite": 40
+				},
+				"sessionId": "child-1",
+				"finalStop": "stop"
+			}
+		},
+		{
+			"name": "retryable error, context edit, threshold compaction, reply",
+			"kind": "worker",
+			"session": "{\"type\":\"session\",\"version\":3,\"id\":\"child-1\",\"timestamp\":\"t\",\"cwd\":\"/target\"}\n{\"type\":\"message\",\"id\":\"e14\",\"parentId\":null,\"timestamp\":\"t\",\"message\":{\"role\":\"assistant\",\"provider\":\"zai\",\"model\":\"glm-5.3-flash\",\"stopReason\":\"toolUse\",\"usage\":{\"input\":30,\"output\":4,\"cacheRead\":1500,\"cacheWrite\":20,\"reasoning\":0,\"totalTokens\":1554,\"cost\":{\"input\":0,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0,\"total\":0.001}},\"content\":[],\"responseId\":\"c1\"}}\n{\"type\":\"message\",\"id\":\"e13\",\"parentId\":null,\"timestamp\":\"t\",\"message\":{\"role\":\"assistant\",\"provider\":\"zai\",\"model\":\"glm-5.3-flash\",\"stopReason\":\"error\",\"usage\":{\"input\":0,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0,\"reasoning\":0,\"totalTokens\":0,\"cost\":{\"input\":0,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0,\"total\":0.001}},\"content\":[],\"errorMessage\":\"terminated\"}}\n{\"type\":\"context_edit\",\"id\":\"e15\",\"parentId\":null,\"timestamp\":\"t\",\"targetId\":\"e13\",\"replacement\":null}\n{\"type\":\"compaction\",\"id\":\"e16\",\"parentId\":null,\"timestamp\":\"t\",\"summary\":\"s\",\"firstKeptEntryId\":\"x\",\"tokensBefore\":150000,\"usage\":{\"input\":40000,\"output\":900,\"cacheRead\":0,\"cacheWrite\":0,\"reasoning\":0,\"totalTokens\":40900,\"cost\":{\"input\":0,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0,\"total\":0.001}}}\n{\"type\":\"message\",\"id\":\"e17\",\"parentId\":null,\"timestamp\":\"t\",\"message\":{\"role\":\"assistant\",\"provider\":\"zai\",\"model\":\"glm-5.3-flash\",\"stopReason\":\"stop\",\"usage\":{\"input\":30,\"output\":4,\"cacheRead\":1500,\"cacheWrite\":20,\"reasoning\":0,\"totalTokens\":1554,\"cost\":{\"input\":0,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0,\"total\":0.001}},\"content\":[{\"type\":\"text\",\"text\":\"handoff\"}],\"responseId\":\"c2\"}}\n",
+			"childKey": "run-a/run-0",
+			"output": {
+				"childKey": "run-a/run-0",
+				"observations": [
+					{
+						"id": "run-a/run-0/c1",
+						"origin": "worker",
+						"usage": {
+							"inputTokens": 30,
+							"outputTokens": 4,
+							"totalTokens": 1554,
+							"cacheReadTokens": 1500,
+							"cacheWriteTokens": 20,
+							"reasoningTokens": 0
+						},
+						"costUsd": 0.001
+					},
+					{
+						"id": "run-a/run-0/entry:e13",
+						"origin": "worker",
+						"usage": {
+							"inputTokens": 0,
+							"outputTokens": 0,
+							"totalTokens": 0,
+							"cacheReadTokens": 0,
+							"cacheWriteTokens": 0,
+							"reasoningTokens": 0
+						},
+						"costUsd": 0.001
+					},
+					{
+						"id": "run-a/run-0/compaction:e16",
+						"origin": "worker",
+						"usage": {
+							"inputTokens": 40000,
+							"outputTokens": 900,
+							"totalTokens": 40900,
+							"cacheReadTokens": 0,
+							"cacheWriteTokens": 0,
+							"reasoningTokens": 0
+						},
+						"costUsd": 0.001
+					},
+					{
+						"id": "run-a/run-0/c2",
+						"origin": "worker",
+						"usage": {
+							"inputTokens": 30,
+							"outputTokens": 4,
+							"totalTokens": 1554,
+							"cacheReadTokens": 1500,
+							"cacheWriteTokens": 20,
+							"reasoningTokens": 0
+						},
+						"costUsd": 0.001
+					}
+				],
+				"errors": [],
+				"providerErrors": [],
+				"notes": [
+					"child run-a/run-0: assistant reply 2 has no responseId; counted as entry:e13",
+					"child run-a/run-0: assistant reply entry:e13 (error) overflowed the context; a compaction recovered it and the turn was retried"
+				],
+				"turns": 3,
+				"compactions": 1,
+				"cacheWarmings": 0,
+				"recoveredOverflows": 1,
+				"missingResponseIds": 1,
+				"contextEdits": 1,
+				"ending": "handoff",
+				"finalText": "handoff",
+				"models": [
+					"zai/glm-5.3-flash"
+				],
+				"thinkingLevels": [],
+				"toolCalls": [],
+				"replyUsage": {
+					"input": 60,
+					"output": 8,
+					"cacheRead": 3000,
+					"cacheWrite": 40
+				},
+				"sessionId": "child-1",
+				"finalStop": "stop"
+			}
+		},
+		{
+			"name": "context edit with a replacement",
+			"kind": "worker",
+			"session": "{\"type\":\"session\",\"version\":3,\"id\":\"child-1\",\"timestamp\":\"t\",\"cwd\":\"/target\"}\n{\"type\":\"message\",\"id\":\"e18\",\"parentId\":null,\"timestamp\":\"t\",\"message\":{\"role\":\"assistant\",\"provider\":\"zai\",\"model\":\"glm-5.3-flash\",\"stopReason\":\"error\",\"usage\":{\"input\":0,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0,\"reasoning\":0,\"totalTokens\":0,\"cost\":{\"input\":0,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0,\"total\":0.001}},\"content\":[],\"errorMessage\":\"terminated\"}}\n{\"type\":\"context_edit\",\"id\":\"e19\",\"parentId\":null,\"timestamp\":\"t\",\"targetId\":\"e18\",\"replacement\":{\"role\":\"assistant\",\"content\":[]}}\n{\"type\":\"message\",\"id\":\"e20\",\"parentId\":null,\"timestamp\":\"t\",\"message\":{\"role\":\"assistant\",\"provider\":\"zai\",\"model\":\"glm-5.3-flash\",\"stopReason\":\"stop\",\"usage\":{\"input\":30,\"output\":4,\"cacheRead\":1500,\"cacheWrite\":20,\"reasoning\":0,\"totalTokens\":1554,\"cost\":{\"input\":0,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0,\"total\":0.001}},\"content\":[{\"type\":\"text\",\"text\":\"handoff\"}],\"responseId\":\"c2\"}}\n",
+			"childKey": "run-a/run-0",
+			"output": {
+				"childKey": "run-a/run-0",
+				"observations": [
+					{
+						"id": "run-a/run-0/entry:e18",
+						"origin": "worker",
+						"usage": {
+							"inputTokens": 0,
+							"outputTokens": 0,
+							"totalTokens": 0,
+							"cacheReadTokens": 0,
+							"cacheWriteTokens": 0,
+							"reasoningTokens": 0
+						},
+						"costUsd": 0.001
+					},
+					{
+						"id": "run-a/run-0/unaccounted:1",
+						"origin": "worker"
+					},
+					{
+						"id": "run-a/run-0/c2",
+						"origin": "worker",
+						"usage": {
+							"inputTokens": 30,
+							"outputTokens": 4,
+							"totalTokens": 1554,
+							"cacheReadTokens": 1500,
+							"cacheWriteTokens": 20,
+							"reasoningTokens": 0
+						},
+						"costUsd": 0.001
+					}
+				],
+				"errors": [],
+				"providerErrors": [
+					"child run-a/run-0: assistant reply entry:e18 failed: terminated"
+				],
+				"notes": [
+					"child run-a/run-0: assistant reply 1 has no responseId; counted as entry:e18"
+				],
+				"turns": 2,
+				"compactions": 0,
+				"cacheWarmings": 0,
+				"recoveredOverflows": 0,
+				"missingResponseIds": 1,
+				"contextEdits": 1,
+				"ending": "handoff",
+				"finalText": "handoff",
+				"models": [
+					"zai/glm-5.3-flash"
+				],
+				"thinkingLevels": [],
+				"toolCalls": [],
+				"replyUsage": {
+					"input": 30,
+					"output": 4,
+					"cacheRead": 1500,
+					"cacheWrite": 20
+				},
+				"sessionId": "child-1",
+				"finalStop": "stop"
+			}
+		},
+		{
+			"name": "error omitted, then the session ends",
+			"kind": "worker",
+			"session": "{\"type\":\"session\",\"version\":3,\"id\":\"child-1\",\"timestamp\":\"t\",\"cwd\":\"/target\"}\n{\"type\":\"message\",\"id\":\"e22\",\"parentId\":null,\"timestamp\":\"t\",\"message\":{\"role\":\"assistant\",\"provider\":\"zai\",\"model\":\"glm-5.3-flash\",\"stopReason\":\"toolUse\",\"usage\":{\"input\":30,\"output\":4,\"cacheRead\":1500,\"cacheWrite\":20,\"reasoning\":0,\"totalTokens\":1554,\"cost\":{\"input\":0,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0,\"total\":0.001}},\"content\":[],\"responseId\":\"c1\"}}\n{\"type\":\"message\",\"id\":\"e21\",\"parentId\":null,\"timestamp\":\"t\",\"message\":{\"role\":\"assistant\",\"provider\":\"zai\",\"model\":\"glm-5.3-flash\",\"stopReason\":\"error\",\"usage\":{\"input\":0,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0,\"reasoning\":0,\"totalTokens\":0,\"cost\":{\"input\":0,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0,\"total\":0.001}},\"content\":[],\"errorMessage\":\"terminated\"}}\n{\"type\":\"context_edit\",\"id\":\"e23\",\"parentId\":null,\"timestamp\":\"t\",\"targetId\":\"e21\",\"replacement\":null}\n",
+			"childKey": "run-a/run-0",
+			"output": {
+				"childKey": "run-a/run-0",
+				"observations": [
+					{
+						"id": "run-a/run-0/c1",
+						"origin": "worker",
+						"usage": {
+							"inputTokens": 30,
+							"outputTokens": 4,
+							"totalTokens": 1554,
+							"cacheReadTokens": 1500,
+							"cacheWriteTokens": 20,
+							"reasoningTokens": 0
+						},
+						"costUsd": 0.001
+					},
+					{
+						"id": "run-a/run-0/entry:e21",
+						"origin": "worker",
+						"usage": {
+							"inputTokens": 0,
+							"outputTokens": 0,
+							"totalTokens": 0,
+							"cacheReadTokens": 0,
+							"cacheWriteTokens": 0,
+							"reasoningTokens": 0
+						},
+						"costUsd": 0.001
+					},
+					{
+						"id": "run-a/run-0/unaccounted:1",
+						"origin": "worker"
+					}
+				],
+				"errors": [
+					"child run-a/run-0: final assistant reply ended with error, not stop or length"
+				],
+				"providerErrors": [
+					"child run-a/run-0: assistant reply entry:e21 failed: terminated"
+				],
+				"notes": [
+					"child run-a/run-0: assistant reply 2 has no responseId; counted as entry:e21"
+				],
+				"turns": 2,
+				"compactions": 0,
+				"cacheWarmings": 0,
+				"recoveredOverflows": 0,
+				"missingResponseIds": 1,
+				"contextEdits": 1,
+				"ending": "cut-off",
+				"finalText": "",
+				"models": [
+					"zai/glm-5.3-flash"
+				],
+				"thinkingLevels": [],
+				"toolCalls": [],
+				"replyUsage": {
+					"input": 30,
+					"output": 4,
+					"cacheRead": 1500,
+					"cacheWrite": 20
+				},
+				"sessionId": "child-1",
+				"finalStop": "error"
+			}
+		},
+		{
+			"name": "error with no context edit, then a reply",
+			"kind": "worker",
+			"session": "{\"type\":\"session\",\"version\":3,\"id\":\"child-1\",\"timestamp\":\"t\",\"cwd\":\"/target\"}\n{\"type\":\"message\",\"id\":\"e24\",\"parentId\":null,\"timestamp\":\"t\",\"message\":{\"role\":\"assistant\",\"provider\":\"zai\",\"model\":\"glm-5.3-flash\",\"stopReason\":\"error\",\"usage\":{\"input\":0,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0,\"reasoning\":0,\"totalTokens\":0,\"cost\":{\"input\":0,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0,\"total\":0.001}},\"content\":[],\"errorMessage\":\"429 rate limited\"}}\n{\"type\":\"message\",\"id\":\"e25\",\"parentId\":null,\"timestamp\":\"t\",\"message\":{\"role\":\"assistant\",\"provider\":\"zai\",\"model\":\"glm-5.3-flash\",\"stopReason\":\"stop\",\"usage\":{\"input\":30,\"output\":4,\"cacheRead\":1500,\"cacheWrite\":20,\"reasoning\":0,\"totalTokens\":1554,\"cost\":{\"input\":0,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0,\"total\":0.001}},\"content\":[{\"type\":\"text\",\"text\":\"handoff\"}],\"responseId\":\"c2\"}}\n",
+			"childKey": "run-a/run-0",
+			"output": {
+				"childKey": "run-a/run-0",
+				"observations": [
+					{
+						"id": "run-a/run-0/entry:e24",
+						"origin": "worker",
+						"usage": {
+							"inputTokens": 0,
+							"outputTokens": 0,
+							"totalTokens": 0,
+							"cacheReadTokens": 0,
+							"cacheWriteTokens": 0,
+							"reasoningTokens": 0
+						},
+						"costUsd": 0.001
+					},
+					{
+						"id": "run-a/run-0/unaccounted:1",
+						"origin": "worker"
+					},
+					{
+						"id": "run-a/run-0/c2",
+						"origin": "worker",
+						"usage": {
+							"inputTokens": 30,
+							"outputTokens": 4,
+							"totalTokens": 1554,
+							"cacheReadTokens": 1500,
+							"cacheWriteTokens": 20,
+							"reasoningTokens": 0
+						},
+						"costUsd": 0.001
+					}
+				],
+				"errors": [],
+				"providerErrors": [
+					"child run-a/run-0: assistant reply entry:e24 failed: 429 rate limited"
+				],
+				"notes": [
+					"child run-a/run-0: assistant reply 1 has no responseId; counted as entry:e24"
+				],
+				"turns": 2,
+				"compactions": 0,
+				"cacheWarmings": 0,
+				"recoveredOverflows": 0,
+				"missingResponseIds": 1,
+				"contextEdits": 0,
+				"ending": "handoff",
+				"finalText": "handoff",
+				"models": [
+					"zai/glm-5.3-flash"
+				],
+				"thinkingLevels": [],
+				"toolCalls": [],
+				"replyUsage": {
+					"input": 30,
+					"output": 4,
+					"cacheRead": 1500,
+					"cacheWrite": 20
+				},
+				"sessionId": "child-1",
+				"finalStop": "stop"
+			}
+		},
+		{
+			"name": "two failed attempts, then a reply",
+			"kind": "worker",
+			"session": "{\"type\":\"session\",\"version\":3,\"id\":\"child-1\",\"timestamp\":\"t\",\"cwd\":\"/target\"}\n{\"type\":\"message\",\"id\":\"e28\",\"parentId\":null,\"timestamp\":\"t\",\"message\":{\"role\":\"assistant\",\"provider\":\"zai\",\"model\":\"glm-5.3-flash\",\"stopReason\":\"toolUse\",\"usage\":{\"input\":30,\"output\":4,\"cacheRead\":1500,\"cacheWrite\":20,\"reasoning\":0,\"totalTokens\":1554,\"cost\":{\"input\":0,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0,\"total\":0.001}},\"content\":[],\"responseId\":\"c1\"}}\n{\"type\":\"message\",\"id\":\"e26\",\"parentId\":null,\"timestamp\":\"t\",\"message\":{\"role\":\"assistant\",\"provider\":\"zai\",\"model\":\"glm-5.3-flash\",\"stopReason\":\"error\",\"usage\":{\"input\":0,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0,\"reasoning\":0,\"totalTokens\":0,\"cost\":{\"input\":0,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0,\"total\":0.001}},\"content\":[],\"errorMessage\":\"terminated\"}}\n{\"type\":\"context_edit\",\"id\":\"e29\",\"parentId\":null,\"timestamp\":\"t\",\"targetId\":\"e26\",\"replacement\":null}\n{\"type\":\"message\",\"id\":\"e27\",\"parentId\":null,\"timestamp\":\"t\",\"message\":{\"role\":\"assistant\",\"provider\":\"zai\",\"model\":\"glm-5.3-flash\",\"stopReason\":\"error\",\"usage\":{\"input\":0,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0,\"reasoning\":0,\"totalTokens\":0,\"cost\":{\"input\":0,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0,\"total\":0.001}},\"content\":[],\"errorMessage\":\"terminated\"}}\n{\"type\":\"context_edit\",\"id\":\"e30\",\"parentId\":null,\"timestamp\":\"t\",\"targetId\":\"e27\",\"replacement\":null}\n{\"type\":\"message\",\"id\":\"e31\",\"parentId\":null,\"timestamp\":\"t\",\"message\":{\"role\":\"assistant\",\"provider\":\"zai\",\"model\":\"glm-5.3-flash\",\"stopReason\":\"stop\",\"usage\":{\"input\":30,\"output\":4,\"cacheRead\":1500,\"cacheWrite\":20,\"reasoning\":0,\"totalTokens\":1554,\"cost\":{\"input\":0,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0,\"total\":0.001}},\"content\":[{\"type\":\"text\",\"text\":\"handoff\"}],\"responseId\":\"c2\"}}\n",
+			"childKey": "run-a/run-0",
+			"output": {
+				"childKey": "run-a/run-0",
+				"observations": [
+					{
+						"id": "run-a/run-0/c1",
+						"origin": "worker",
+						"usage": {
+							"inputTokens": 30,
+							"outputTokens": 4,
+							"totalTokens": 1554,
+							"cacheReadTokens": 1500,
+							"cacheWriteTokens": 20,
+							"reasoningTokens": 0
+						},
+						"costUsd": 0.001
+					},
+					{
+						"id": "run-a/run-0/entry:e26",
+						"origin": "worker",
+						"usage": {
+							"inputTokens": 0,
+							"outputTokens": 0,
+							"totalTokens": 0,
+							"cacheReadTokens": 0,
+							"cacheWriteTokens": 0,
+							"reasoningTokens": 0
+						},
+						"costUsd": 0.001
+					},
+					{
+						"id": "run-a/run-0/unaccounted:1",
+						"origin": "worker"
+					},
+					{
+						"id": "run-a/run-0/entry:e27",
+						"origin": "worker",
+						"usage": {
+							"inputTokens": 0,
+							"outputTokens": 0,
+							"totalTokens": 0,
+							"cacheReadTokens": 0,
+							"cacheWriteTokens": 0,
+							"reasoningTokens": 0
+						},
+						"costUsd": 0.001
+					},
+					{
+						"id": "run-a/run-0/unaccounted:2",
+						"origin": "worker"
+					},
+					{
+						"id": "run-a/run-0/c2",
+						"origin": "worker",
+						"usage": {
+							"inputTokens": 30,
+							"outputTokens": 4,
+							"totalTokens": 1554,
+							"cacheReadTokens": 1500,
+							"cacheWriteTokens": 20,
+							"reasoningTokens": 0
+						},
+						"costUsd": 0.001
+					}
+				],
+				"errors": [],
+				"providerErrors": [
+					"child run-a/run-0: assistant reply entry:e26 failed: terminated",
+					"child run-a/run-0: assistant reply entry:e27 failed: terminated"
+				],
+				"notes": [
+					"child run-a/run-0: assistant reply 2 has no responseId; counted as entry:e26",
+					"child run-a/run-0: assistant reply 3 has no responseId; counted as entry:e27"
+				],
+				"turns": 4,
+				"compactions": 0,
+				"cacheWarmings": 0,
+				"recoveredOverflows": 0,
+				"missingResponseIds": 2,
+				"contextEdits": 2,
+				"ending": "handoff",
+				"finalText": "handoff",
+				"models": [
+					"zai/glm-5.3-flash"
+				],
+				"thinkingLevels": [],
+				"toolCalls": [],
+				"replyUsage": {
+					"input": 60,
+					"output": 8,
+					"cacheRead": 3000,
+					"cacheWrite": 40
+				},
+				"sessionId": "child-1",
+				"finalStop": "stop"
+			}
+		}
+	]
+}
