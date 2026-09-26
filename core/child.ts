@@ -137,8 +137,23 @@ export const RECORD_RESERVE_TURNS = 3;
  * or control.
  */
 export const VERIFIER_FINDING_KEYS: ReadonlySet<string> = new Set([
-	"kind", "id", "status", "basis", "live", "control", "entitlement", "reason",
+	"kind", "id", "status", "basis", "path", "guards", "live", "control", "entitlement", "reason",
 ]);
+
+/**
+ * The finding statuses a pired-investigate or pired-escalate worker may send:
+ * where every finding starts. Its findings land `suspected`, and someone who
+ * did not write them settles them (delegation-v6 Phase 3, 3.1).
+ *
+ * A finder that checks its own claim agrees with it. The scribe measured that
+ * (precision 0.059 to 0.038 when a pass re-read the finder's own reasoning),
+ * and on the 2026-09-24 grid 17 of 18 settled verification records rested on a
+ * live=true that described no running target (ADR-028). `confirmed` and
+ * `refuted` are therefore the verifier's or the lead's to write; the
+ * dispositions (`false-positive`, `accepted-risk`, …) are the operator's, as
+ * they are for a verifier (VERIFIER_STATUSES).
+ */
+export const FINDER_STATUSES: ReadonlySet<string> = new Set(["suspected", "open"]);
 
 /**
  * The finding statuses a pired-verify worker may write: its verdict, or
@@ -610,6 +625,15 @@ function passed(args: Record<string, unknown>, key: string): boolean {
  */
 async function roleRefusal(agent: PiredAgent | undefined, rawArgs: unknown, ledger: ChildLedger): Promise<GateDecision | undefined> {
 	const args = argsOf(rawArgs);
+	// Settling is the session's own statement that its work is finished, paused
+	// or blocked (3.2). A worker's task ends in its handoff; its settle would be
+	// read as the lead's.
+	if (args.kind === "settle") {
+		return {
+			allow: false,
+			reason: `pired: ${agent?.name ?? "a worker"} does not settle the session — that is the lead's record of how the session ended. Your task ends with your handoff: name what you recorded and what you left open.`,
+		};
+	}
 	if (args.kind !== "finding" || !agent) return undefined;
 	if (agent.role === "scout") {
 		return {
@@ -617,11 +641,52 @@ async function roleRefusal(agent: PiredAgent | undefined, rawArgs: unknown, ledg
 			reason: `pired: ${agent.name} does not record findings — scouts map surface and propose hypotheses. Record what you saw as kind=hypothesis outcome=proposed against the element and its class, and an investigator or verifier settles it.`,
 		};
 	}
+	if (agent.role === "investigate" || agent.role === "escalate") return finderRefusal(agent, args, ledger);
 	if (agent.role !== "verify") return undefined;
 	return verifierRefusal(agent, args, ledger);
 }
 
-const VERDICT = "A verifier records a verdict, not a rewrite: status=confirmed with 'control' (and 'entitlement' where access is the question), status=refuted with 'basis' (and 'live' only when you tested a running target), or status=suspected with what you checked in 'basis' or 'control' when you could not settle it; its reasoning goes in 'reason'. Cite the output you saved — record kind=evidence returns its path — in 'control' or 'basis'. The finding's title, description, locations, severity and evidence stay as recorded; if they are wrong, say so in 'reason' and in your handoff, and the operator amends it.";
+/**
+ * What an investigator or escalator may not do to a finding: settle it, or
+ * change one someone else recorded.
+ *
+ * Refused with a reason rather than stripped (ADR-028): a status quietly
+ * dropped reads to the worker as a verdict recorded. Its findings land
+ * `suspected` and it names them in its handoff; the lead launches a verifier
+ * or settles them itself.
+ *
+ * By id, a worker changes only its own findings. An update by id is
+ * last-write-wins, and ADR-028 measured what that costs when the writer is
+ * not the finder: two verifiers re-recording findings with new descriptions
+ * took the replayed ledger from 4 true positives to 2. A create that merges
+ * into another author's finding is still allowed — that is how a second
+ * location reaches a bug already on the ledger — and the record tool keeps the
+ * stored status on a worker's merge.
+ *
+ * Two launches of one worker share its agent name, so the second may edit the
+ * first one's finding; `by` records the agent, not the launch.
+ */
+async function finderRefusal(agent: PiredAgent, args: Record<string, unknown>, ledger: ChildLedger): Promise<GateDecision | undefined> {
+	if (passed(args, "status") && !(typeof args.status === "string" && FINDER_STATUSES.has(args.status))) {
+		const got = typeof args.status === "string" ? args.status : JSON.stringify(args.status);
+		const verdict = got === "confirmed" || got === "refuted";
+		return {
+			allow: false,
+			reason: verdict
+				? `pired: ${agent.name} records findings and does not settle them — status=${got} is for an independent verifier (pired-verify, launched by the lead) or the lead, because a finder that checks its own claim agrees with it. Record the finding without a status: it lands suspected. Put the control case you ran and the path you traced in its description or evidence, and name its id in your handoff as ready to verify.`
+				: `pired: ${agent.name} does not set a finding's status to '${got}' — that is the operator's disposition. Record the finding without a status (it lands suspected), and say in your handoff why you think it is ${got}.`,
+		};
+	}
+	if (!passed(args, "id")) return undefined;
+	const stored = (await ledger.findings()).find((f) => f.id === args.id);
+	if (stored === undefined || stored.by === agent.name) return undefined;
+	return {
+		allow: false,
+		reason: `pired: finding ${stored.id} was recorded by ${stored.by ?? "someone else (no author on the row)"}, not ${agent.name}, and a worker changes only the findings it recorded. To add a location or detail, record it again without an id — the same bug merges into ${stored.id} and keeps its status — or name ${stored.id} and what you found in your handoff.`,
+	};
+}
+
+const VERDICT = "A verifier records a verdict, not a rewrite: status=confirmed with 'control' (and 'entitlement' where access is the question), status=refuted with 'basis' (and 'live' only when you tested a running target), or status=suspected with what you checked in 'basis' or 'control' when you could not settle it; its reasoning goes in 'reason'. On a review of source the proof is quoted as 'file:line: verbatim text': 'path' from the source hop to the sink hop to confirm, the guard in 'basis' or 'guards' to refute. Cite the output you saved — record kind=evidence returns its path — in 'control' or 'basis'. The finding's title, description, locations, severity and evidence stay as recorded; if they are wrong, say so in 'reason' and in your handoff, and the operator amends it.";
 
 /**
  * A verifier settles a finding; it does not delete or rewrite one (see
@@ -704,11 +769,12 @@ async function verifierRefusal(agent: PiredAgent, args: Record<string, unknown>,
  * could pass a call the record tool then writes as a plain edit.
  */
 function grounded(args: Record<string, unknown>): boolean {
-	const basis = typeof args.basis === "string"
-		? [args.basis]
-		: Array.isArray(args.basis) ? args.basis.filter((b): b is string => typeof b === "string") : undefined;
+	const list = (v: unknown): string[] => typeof v === "string"
+		? [v]
+		: Array.isArray(v) ? v.filter((b): b is string => typeof b === "string") : [];
 	const control = typeof args.control === "string" ? args.control : undefined;
-	return hasGrounds({ basis, control });
+	// Quoted hops and guards say what was looked at, as a basis does.
+	return hasGrounds({ basis: [...list(args.basis), ...list(args.path), ...list(args.guards)], control });
 }
 
 /**

@@ -2498,3 +2498,45 @@ describe("a verdict's quotes are checked against the files they cite", () => {
 		expect((await stored(ws, id))?.verification).toMatchObject({ verdict: "unresolved", guards: [{ at: "src/export.go:31" }] });
 	});
 });
+
+describe("a worker's finding lands suspected, and its merge moves no verdict (3.1)", () => {
+	async function as(author: string) {
+		const svc = makeFakeServices();
+		const ws = await Workspace.open("/ws/acme", "acme", svc);
+		const ctx: ToolContext = { cwd: "/target", services: svc };
+		return { ws, ctx, record: createRecordTool({ workspace: ws, author: () => author }) };
+	}
+	const claim = { kind: "finding", title: "SQL injection in report search", severity: "high", target: "app/reports.py:88", class: "sqli" };
+
+	it("lands a verifier-created finding suspected even when it carries confirmed", async () => {
+		const { ws, ctx, record } = await as("pired-verify");
+		const out = textOf(await record.execute({ ...claim, hypothesisId: "h-1", status: "confirmed", control: "a quote in q returned a 500" }, ctx));
+		const [f] = await ws.read("findings");
+		expect(f?.status).toBe("suspected");
+		expect(f?.verification).toBeUndefined();
+		expect(out).toContain("Recorded as suspected, not confirmed: a finding a worker creates lands suspected");
+	});
+
+	it("still judges the lead's own confirmation on create, and labels who made it", async () => {
+		const { ws, ctx, record } = await as("lead");
+		await record.execute({ ...claim, status: "confirmed", control: "a quote in q returned a 500; a digit returned 200" }, ctx);
+		const [f] = await ws.read("findings");
+		expect(f).toMatchObject({ status: "confirmed", by: "lead", verification: { by: "lead", verdict: "stands" } });
+	});
+
+	it("keeps the stored status when a worker's merge re-records a verified finding", async () => {
+		const { ws, ctx, record } = await as("pired-investigate");
+		const made = await record.execute(claim, ctx);
+		const id = (made.details as { id: string }).id;
+		const verifier = createRecordTool({ workspace: ws, author: () => "pired-verify" });
+		await verifier.execute({ kind: "finding", id, status: "confirmed", control: "a quote in q returned a 500" }, ctx);
+		// The same bug again, from the investigator, with more detail and status=suspected.
+		const out = textOf(await record.execute({ ...claim, status: "suspected", description: "q is formatted into the WHERE clause" }, ctx));
+		expect(out).toContain("Already recorded as finding");
+		const all = await ws.read("findings");
+		expect(all).toHaveLength(1);
+		expect(all[0]?.status).toBe("confirmed");
+		expect(all[0]?.verification).toMatchObject({ verdict: "stands", by: "pired-verify" });
+		expect(all[0]?.description).toBe("q is formatted into the WHERE clause");
+	});
+});

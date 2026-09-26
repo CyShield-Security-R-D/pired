@@ -12,7 +12,7 @@
 
 import { buildBrowserModel, recordLabel } from "./browser.ts";
 import { workerContext } from "./delegation.ts";
-import { auditFinding, challengeBrief, groundQuotes, hasGrounds, hypothesisBrief, isExaminedUnsettled, judge, parseQuote, type QuoteReader, SEVERITY_RANK, unchallengedQueue, unsettledLabel, verdictPatch } from "./challenge.ts";
+import { auditFinding, challengeBrief, groundQuotes, hasGrounds, hypothesisBrief, isExaminedUnsettled, isWorkerAuthor, judge, parseQuote, type QuoteReader, SEVERITY_RANK, unchallengedQueue, unsettledLabel, verdictPatch } from "./challenge.ts";
 import { computeCoverage, coveragePercent, findGaps, selectNext } from "./coverage.ts";
 import { CVSS_DEFAULT_VERSION, CVSS_EXAMPLE, cvssVersion, validateCvss } from "./cvss.ts";
 import { type Fields, findDuplicate, findNearDuplicate, holdsLeadOpen, type IdentityKind, isNoOp, leadMeetsClearance, mergeRecord, reopensLead, updateById } from "./identity.ts";
@@ -1291,7 +1291,20 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 						`so it is an edit and its basis/control were not written as a look. If you looked and could not settle it, ` +
 						`record that on its own: record id=${existing.id} status=suspected with basis=[...] or control="...".`;
 				}
-				if (wanted === "confirmed" || wanted === "refuted" || unsettled) {
+				// A worker's new finding lands suspected, whatever status it carries: no
+				// confirming in the same write that creates the row (3.1). The child
+				// gate refuses the status from an investigator or escalator outright;
+				// a verifier creating the finding for a hypothesis it confirmed gets
+				// here, and records its verdict on the new id in a second write, where
+				// it is judged and labelled as a verification by the finding's finder.
+				const workerCreate = existing === undefined && isWorkerAuthor(authorOf(deps, ctx)) && (wanted === "confirmed" || wanted === "refuted");
+				if (workerCreate) {
+					delete a.status;
+					downgrade =
+						`\nRecorded as suspected, not ${wanted}: a finding a worker creates lands suspected, and its verdict is ` +
+						`a separate write on its id — record id=<id> status=${wanted} with its grounds — where it is checked like any other.`;
+				}
+				if (!workerCreate && (wanted === "confirmed" || wanted === "refuted" || unsettled)) {
 					const subject = {
 						...(existing ?? {}),
 						kind: "finding",
@@ -1631,8 +1644,18 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 					// clearance, and only one nobody re-checked by id with a basis.
 					if (kind === "hypothesis" && reopensLead(stored, patch)) reopened = [dup.id as string];
 					else if (kind === "hypothesis" && leadMeetsClearance(stored, patch)) kept = [{ id: dup.id as string, statement: str(stored.statement) }];
+					const fields = mergeRecord(kind as IdentityKind, stored, patch, { reopen: true });
+					// A worker's merge adds to the claim — a second location, a longer
+					// description — and never moves the verdict on it. Without this an
+					// investigator re-recording a verified bug with status=suspected
+					// would undo the verifier's confirmation by merge, the rewrite the
+					// child gate refuses by id (3.1).
+					if (kind === "finding" && isWorkerAuthor(authorOf(deps, ctx))) {
+						fields.status = stored.status;
+						fields.verification = stored.verification;
+					}
 					const merged = defined({
-						...mergeRecord(kind as IdentityKind, stored, patch, { reopen: true }),
+						...fields,
 						v: RECORD_VERSION, id: dup.id, kind, createdAt: dup.createdAt, updatedAt: now,
 					}) as unknown as LedgerRecord;
 					if (isNoOp(dup as unknown as Fields, merged as unknown as Fields)) {

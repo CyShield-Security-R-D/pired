@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	CHILD_DENIED_TOOLS, type ChildLedger, ChildSetupError, createChildGuard, FALLBACK_MAX_TURNS, HANDOFF_GRACE_TURNS,
 	identifyAgent, openChildWorkspace, PARENT_SCOPE_KEY, publishParentScope, readParentScope, RECORD_RESERVE_TURNS,
-	SUPERVISOR_SECTION_END, SUPERVISOR_SECTION_START, SUPERVISOR_TOOL, VERIFIER_FINDING_KEYS, VERIFIER_STATUSES,
+	SUPERVISOR_SECTION_END, SUPERVISOR_SECTION_START, SUPERVISOR_TOOL, VERIFIER_FINDING_KEYS, VERIFIER_STATUSES, FINDER_STATUSES,
 	withoutSupervisorSection,
 } from "./child.ts";
 import { type EngagementScope, FINDING_STATUSES, type FindingRecord, HYPOTHESIS_OUTCOMES, type HypothesisRecord, type StoreName } from "./ontology.ts";
@@ -687,7 +687,14 @@ describe("what each role may record", () => {
 	});
 
 	it("keeps the verifier's allowed keys to the verdict and its grounds", () => {
-		expect([...VERIFIER_FINDING_KEYS].sort()).toEqual(["basis", "control", "entitlement", "id", "kind", "live", "reason", "status"]);
+		expect([...VERIFIER_FINDING_KEYS].sort()).toEqual(["basis", "control", "entitlement", "guards", "id", "kind", "live", "path", "reason", "status"]);
+	});
+
+	it("lets a verifier send its quoted path and guards, and counts a quoted guard alone as a look", async () => {
+		const guard = worker("pired-verify");
+		const confirm = { kind: "finding", id: "f-1", status: "confirmed", control: "no owner check on the path", path: ["src/export.ts:12: const id = req.params.id", "src/export.ts:40: return db.invoices.find(id)"] };
+		const look = { kind: "finding", id: "f-1", status: "suspected", guards: ["src/router.ts:8: router.use(requireOwner)"] };
+		for (const args of [confirm, look]) expect(await guard.check({ name: "record", args })).toEqual({ allow: true });
 	});
 
 	it("does not let a verifier create an unlinked finding or delete one", async () => {
@@ -1123,5 +1130,64 @@ describe("the reminder before a worker hands back", () => {
 		// The request the reminder buys would be past the grace, where a record call ends the run.
 		const spent = worker("pired-investigate", investigate.maxTurns + HANDOFF_GRACE_TURNS);
 		expect(spent.settleCheck("completed")).toBeUndefined();
+	});
+});
+
+describe("who may settle a finding (3.1)", () => {
+	it("refuses an investigator's status=confirmed and says an independent verifier promotes it", async () => {
+		for (const name of ["pired-investigate", "pired-escalate"]) {
+			const guard = worker(name);
+			for (const status of ["confirmed", "refuted"]) {
+				const refused = await guard.check({ name: "record", args: { kind: "finding", title: "SQLi in search", severity: "high", target: "app/search.py:21", status, control: "ran it" } });
+				expect(refused.allow).toBe(false);
+				expect(refused.reason).toContain(`status=${status} is for an independent verifier (pired-verify`);
+				expect(refused.reason).toContain("it lands suspected");
+			}
+		}
+	});
+
+	it("refuses an investigator the operator's dispositions too, so its findings land suspected", async () => {
+		const guard = worker("pired-investigate");
+		const refused = await guard.check({ name: "record", args: { kind: "finding", title: "t", severity: "low", target: "a.py:1", status: "false-positive" } });
+		expect(refused.allow).toBe(false);
+		expect(refused.reason).toContain("operator's disposition");
+		expect([...FINDER_STATUSES].sort()).toEqual(["open", "suspected"]);
+		// Suspected, or no status at all, is how a finding starts.
+		for (const args of [
+			{ kind: "finding", title: "t", severity: "low", target: "a.py:1", status: "suspected" },
+			{ kind: "finding", title: "t", severity: "low", target: "a.py:1" },
+		]) expect(await guard.check({ name: "record", args })).toEqual({ allow: true });
+	});
+
+	it("keeps an investigator off another author's finding by id, and lets it edit its own", async () => {
+		const ledger = ledgerOf([
+			findingRow({ id: "f-mine", by: "pired-investigate" }),
+			findingRow({ id: "f-lead", by: "lead" }),
+			findingRow({ id: "f-old" }),
+		]);
+		const guard = worker("pired-investigate", 1, ledger);
+		const theirs = await guard.check({ name: "record", args: { kind: "finding", id: "f-lead", description: "the handler also leaks the total" } });
+		expect(theirs.allow).toBe(false);
+		expect(theirs.reason).toContain("finding f-lead was recorded by lead, not pired-investigate");
+		expect(theirs.reason).toContain("record it again without an id");
+		const unknown = await guard.check({ name: "record", args: { kind: "finding", id: "f-old", description: "more" } });
+		expect(unknown.reason).toContain("no author on the row");
+		expect(await guard.check({ name: "record", args: { kind: "finding", id: "f-mine", description: "a second sink at line 52" } })).toEqual({ allow: true });
+		// A create that would merge into the lead's finding is still allowed: that is how a second location arrives.
+		expect(await guard.check({ name: "record", args: { kind: "finding", title: "Missing owner check on invoice export", severity: "medium", target: "src/export.ts:52" } })).toEqual({ allow: true });
+		// An id nobody recorded is not someone else's finding.
+		expect(await guard.check({ name: "record", args: { kind: "finding", id: "f-none", description: "x" } })).toEqual({ allow: true });
+	});
+
+	it("refuses kind=settle from every worker, a verifier and an unnamed one included", async () => {
+		for (const name of ["pired-scout", "pired-investigate", "pired-verify", "pired-escalate"]) {
+			const refused = await worker(name).check({ name: "record", args: { kind: "settle", outcome: "finished" } });
+			expect(refused.allow).toBe(false);
+			expect(refused.reason).toContain("does not settle the session");
+		}
+		const unnamed = createChildGuard();
+		unnamed.arm(scope());
+		unnamed.turnStarted();
+		expect((await unnamed.check({ name: "record", args: { kind: "settle", outcome: "paused" } })).reason).toContain("a worker does not settle the session");
 	});
 });
