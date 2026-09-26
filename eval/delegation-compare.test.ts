@@ -928,7 +928,7 @@ describe("runPairs", () => {
 		const result = await g.run();
 		expect(g.launched).toEqual(["A#1 baseline 1", "B#1 candidate 1", "A#1 baseline 2"]);
 		expect(g.state.stopInvalid).toBe(true);
-		expect(g.state.stopReason).toMatch(/^circuit breaker tripped on the baseline run of A pass 1 attempt 2: 3 consecutive infrastructure failures/);
+		expect(g.state.stopReason).toMatch(/^circuit breaker tripped on the baseline run of A pass 1 attempt 2: 3 consecutive launched runs failed \(3 infrastructure\)/);
 		expect(result.breaker?.tripped).toBe(true);
 		expect(g.lines.some((l) => l.startsWith("BREAKER TRIPPED — ") && l.includes("--resume /grid"))).toBe(true);
 	});
@@ -953,8 +953,8 @@ describe("runPairs", () => {
 		expect(result.requeued).toEqual([]);
 	});
 
-	// An exploratory grid keeps going past a blocked pair, which is never re-run.
-	it("keeps an exploratory grid going past a non-infrastructure failure without re-running it", async () => {
+	// An exploratory grid keeps going past one blocked pair, which is never re-run.
+	it("keeps an exploratory grid going past a single non-infrastructure failure without re-running it", async () => {
 		const g = grid(["A", "B"], (key, arm) => key === "A#1" && arm === "baseline" ? "broken" : "valid", { breaker: DEFAULT_BREAKER });
 		const result = await g.run();
 		expect(g.launched).toEqual(["A#1 baseline 1", "B#1 candidate 1", "B#1 baseline 1"]);

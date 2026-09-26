@@ -1096,7 +1096,7 @@ describe("createBreaker", () => {
 	it("trips after three consecutive infrastructure failures", () => {
 		const { verdicts, trippedAt } = feed(["valid", "drop", "drop", "drop"]);
 		expect(trippedAt).toBe(3);
-		expect(verdicts[3]!.reason).toMatch(/^3 consecutive infrastructure failures \(at 2026-09-26T\d\d:\d\d:00\.000Z\)$/);
+		expect(verdicts[3]!.reason).toMatch(/^3 consecutive launched runs failed \(3 infrastructure\) \(at 2026-09-26T\d\d:\d\d:00\.000Z\)$/);
 	});
 
 	// v5 stopped a whole grid on one dropped stream (research/12). Scattered drops
@@ -1114,7 +1114,7 @@ describe("createBreaker", () => {
 		// Four drops in eight, never three in a row: the eighth run fills the window at exactly R.
 		const { verdicts, trippedAt } = feed(["drop", "valid", "drop", "drop", "valid", "valid", "valid", "drop"]);
 		expect(trippedAt).toBe(7);
-		expect(verdicts[7]!.reason).toMatch(/^4 infrastructure failures in the last 8 runs, at or above the 0\.5 rate/);
+		expect(verdicts[7]!.reason).toMatch(/^4 of 8 launched runs failed \(4 infrastructure\), at or above the 0\.5 rate/);
 		// The window slides: old drops fall out, and three in the last eight is under R.
 		expect(feed(["drop", "drop", "valid", "valid", "valid", "valid", "drop", "valid", "valid", "drop"]).trippedAt).toBe(-1);
 	});
@@ -1133,10 +1133,21 @@ describe("createBreaker", () => {
 		expect(feed(["blocked"]).trippedAt).toBe(0);
 	});
 
-	// A timeout between two drops is not evidence the provider recovered.
-	it("neither extends nor ends the streak on a non-infrastructure failure of an exploratory grid", () => {
-		expect(feed(["drop", "drop", "timeout", "drop"]).trippedAt).toBe(3);
-		expect(feed(["timeout", "timeout", "timeout", "timeout"]).trippedAt).toBe(-1);
+	// Counting only infrastructure let an exploratory grid whose candidate times
+	// out every run spend all of its ~36 h; a timeout is a failed launch too.
+	it("counts a non-infrastructure failure of an exploratory grid as a failure, so repeated timeouts trip it", () => {
+		const { verdicts, trippedAt } = feed(["timeout", "timeout", "timeout", "timeout"]);
+		expect(trippedAt).toBe(2);
+		expect(verdicts[2]!.reason).toMatch(/^3 consecutive launched runs failed \(0 infrastructure\)/);
+		expect(feed(["drop", "drop", "timeout"]).trippedAt).toBe(2);
+	});
+
+	// Three drops in eight is under R, and read as infrastructure alone the
+	// timeouts between them diluted the window into never tripping.
+	it("does not let timeouts between drops dilute the failure rate", () => {
+		const { verdicts, trippedAt } = feed(["drop", "timeout", "valid", "drop", "timeout", "valid", "drop", "valid"]);
+		expect(trippedAt).toBe(7);
+		expect(verdicts[7]!.reason).toMatch(/^5 of 8 launched runs failed \(3 infrastructure\)/);
 	});
 
 	it("stays tripped, keeping the reason of the run that tripped it", () => {

@@ -421,9 +421,10 @@ With --breaker, a pair with an arm invalid for infrastructure is re-queued, both
 arms at attempt + 1, after cooldownMs x the attempts this runner made at it, up
 to maxAttempts; one invalid for any other reason is never re-queued. The breaker
 stops new launches at once on a spent quota or on a non-infrastructure invalid
-run of an official grid, and otherwise after <consecutive> infrastructure
-failures in a row, or an infrastructure share of at least <rate> over the last
-<window> launched runs (read once that many are in); a valid run ends the streak.
+run of an official grid, and otherwise after <consecutive> launched runs fail in
+a row, or when at least a <rate> share of the last <window> launched runs failed
+(read once that many are in), counting every failure, infrastructure or not; a
+valid run ends the streak.
 A pair still counts only when both arms are valid at the same attempt.
 SIGINT/SIGTERM/SIGHUP stops new launches, terminates only process groups and
 scopes this runner started (a second signal kills them), reaps their strays,

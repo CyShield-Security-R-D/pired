@@ -1216,9 +1216,9 @@ export function planSchedule(targetIds: string[], passes: number): ScheduledPair
  * took 14 attempts across resumes (research/12, *The benchmark's own cost*).
  */
 export interface BreakerPolicy {
-	/** C: this many infrastructure failures in a row trip the breaker. */
+	/** C: this many launched runs in a row that fail trip the breaker. */
 	consecutive: number;
-	/** R: an infrastructure failure share at or above this, over the last `window` runs, trips it. */
+	/** R: a failed share at or above this, over the last `window` launched runs, trips it. */
 	rate: number;
 	/** N: the runs the rate is read over. It is read only once N runs are in. */
 	window: number;
@@ -1277,17 +1277,23 @@ export interface BreakerVerdict { tripped: boolean; reason?: string }
  * trips at once on a spent quota, since nothing launched before the reset can
  * succeed, and on a blocked run, since the official decision is then already
  * incomplete_or_invalid and every further pair would spend tokens on a fixed
- * outcome. Otherwise it trips on `consecutive` infrastructure failures in a
- * row, or on an infrastructure share of at least `rate` over the last `window`
- * runs, read only once the window is full: two drops in the first three runs
- * are a 67% rate that says nothing yet. A valid run ends the streak. A run
- * invalid for another reason in an exploratory grid neither extends nor ends
- * it, so a timeout between two drops does not hide an outage. Once tripped it
- * stays tripped. Pure: it keeps its own counts and reads no clock.
+ * outcome. Otherwise it trips when `consecutive` launched runs in a row fail,
+ * or when at least a `rate` share of the last `window` launched runs failed,
+ * read only once the window is full: two drops in the first three runs are a
+ * 67% rate that says nothing yet. A valid run ends the streak.
+ *
+ * Every failed launch counts, whatever its cause. In an official grid a
+ * failure that is not infrastructure is blocked and has already tripped it, so
+ * what is left to count there is infrastructure. In an exploratory grid it is
+ * not blocked, and counting only infrastructure let a candidate that times out
+ * every run spend the whole grid, and let timeouts between drops dilute the
+ * rate below R. The reason says how many of the failures were infrastructure.
+ * Once tripped it stays tripped. Pure: it keeps its own counts and reads no clock.
  */
 export function createBreaker(policy: BreakerPolicy): { record(event: BreakerEvent): BreakerVerdict; readonly verdict: BreakerVerdict } {
 	let streak = 0;
-	const recent: boolean[] = [];
+	let streakInfra = 0;
+	const recent: Array<{ failed: boolean; infra: boolean }> = [];
 	let verdict: BreakerVerdict = { tripped: false };
 	const trip = (why: string, atMs: number): BreakerVerdict => {
 		verdict = { tripped: true, reason: Number.isFinite(atMs) ? `${why} (at ${new Date(atMs).toISOString()})` : why };
@@ -1299,15 +1305,15 @@ export function createBreaker(policy: BreakerPolicy): { record(event: BreakerEve
 			if (verdict.tripped) return verdict;
 			if (event.exhausted) return trip("the provider's quota or usage window is spent", event.atMs);
 			if (event.blocked) return trip("a run of this official grid is invalid for a non-infrastructure reason, so its decision is already incomplete_or_invalid", event.atMs);
-			const failed = !event.valid && event.infra;
-			recent.push(failed);
+			const failed = !event.valid;
+			const infra = failed && event.infra;
+			recent.push({ failed, infra });
 			if (recent.length > policy.window) recent.shift();
-			if (event.valid) streak = 0;
-			else if (failed) streak++;
-			if (streak >= policy.consecutive) return trip(`${streak} consecutive infrastructure failures`, event.atMs);
-			const failures = recent.filter(Boolean).length;
+			if (failed) { streak++; if (infra) streakInfra++; } else { streak = 0; streakInfra = 0; }
+			if (streak >= policy.consecutive) return trip(`${streak} consecutive launched runs failed (${streakInfra} infrastructure)`, event.atMs);
+			const failures = recent.filter((r) => r.failed).length;
 			if (recent.length === policy.window && failures / policy.window >= policy.rate) {
-				return trip(`${failures} infrastructure failures in the last ${policy.window} runs, at or above the ${policy.rate} rate`, event.atMs);
+				return trip(`${failures} of ${policy.window} launched runs failed (${recent.filter((r) => r.infra).length} infrastructure), at or above the ${policy.rate} rate`, event.atMs);
 			}
 			return verdict;
 		},
