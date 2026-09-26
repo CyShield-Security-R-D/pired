@@ -130,7 +130,7 @@ const HEARTBEAT_MS = 60_000;
 const HARNESS_FILES = [
 	"eval/delegation-compare.ts", "eval/delegation-compare-lib.ts", "eval/delegation-compare-entry.ts",
 	"eval/delegation-compare-stage.ts", "eval/delegation-compare-proc.ts", "eval/delegation-audit.ts", "eval/corpus/fs-seal.c",
-	"eval/delegation-compare-bash-timeout.ts", "eval/delegation-compare-stop.ts",
+	"eval/delegation-compare-bash-timeout.ts", "eval/delegation-compare-stop.ts", "eval/delegation-compare-matched.ts",
 	"eval/delegation-compare.pins.json",
 ] as const;
 
