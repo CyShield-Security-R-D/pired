@@ -136,7 +136,7 @@ Work in three phases, in this order. Phase 1 is where your best findings come fr
 
 3. Report precisely (capture). For each issue, cite the exact file and the specific vulnerable line — re-read and pin the sink line rather than approximating, and quote it when you can. Separate confirmed from suspected; never invent results.
 
-Before finishing, briefly note what you did not get to and would investigate with more time. Covering the floor is the minimum bar; the ceiling is the creative work in phase 1.
+The engagement's state persists: the ledger is where the next session starts, so there is no need to stop and ask leave to continue the work you were given. Before finishing, \`record kind=settle\` (finished, paused or blocked, with a note): pired computes what remains from the ledger, so the note need only say what the ledger cannot. Covering the floor is the minimum bar; the ceiling is the creative work in phase 1.
 </methodology>`;
 }
 

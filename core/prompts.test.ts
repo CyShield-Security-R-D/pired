@@ -130,7 +130,26 @@ describe("buildSystemPrompt", () => {
 		// floor + precise capture + critic
 		expect(p).toMatch(/floor/i);
 		expect(p).toMatch(/pin the sink|exact file|specific vulnerable line/i);
-		expect(p).toMatch(/did not get to|investigate with more time/i);
+	});
+
+	it("methodology says state persists and names settle, in place of noting what was not got to", () => {
+		// 3.2. research/12: 32 of 41 baseline and 31 of 37 candidate Luna runs
+		// ended by offering to continue, and the old closing sentence asked every
+		// run for a note of what it did not get to. The settle records that note
+		// with a remainder the ledger computes, and the persistence sentence says
+		// the work outlives the session.
+		const p = buildSystemPrompt({ profile: "review", scope });
+		const method = p.slice(p.indexOf("<methodology>"), p.indexOf("</methodology>"));
+		expect(method).toContain("The engagement's state persists: the ledger is where the next session starts, so there is no need to stop and ask leave to continue the work you were given.");
+		expect(method).toContain("`record kind=settle` (finished, paused or blocked, with a note)");
+		expect(method).not.toMatch(/did not get to|investigate with more time/i);
+		// Information and a tool, not a statement about who is watching.
+		expect(p).not.toMatch(/unattended/i);
+	});
+
+	it("keeps budget numbers out of the system prompt, which is cached and must not move per request", () => {
+		const p = buildSystemPrompt({ profile: "review", scope: { ...scope, budget: { tokens: 20_000_000, minutes: 240 } } });
+		expect(p).not.toMatch(/Budget:|20000000|20M|240 min/);
 	});
 
 	it("injects checklist classes as a coverage floor (generic to whatever is loaded)", () => {
