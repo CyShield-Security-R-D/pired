@@ -1,0 +1,2 @@
+# The fresh-corpus pool is 4.7 MB of one-advisory-per-line JSON: stored, never reviewed as a diff.
+eval/corpus/fresh/pool.json -diff

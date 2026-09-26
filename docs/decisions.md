@@ -2852,7 +2852,7 @@ it does. Leaving the field out keeps the baseline's cell exactly what earlier gr
 
 ---
 
-## ADR-033 — v6 is accepted on fresh applications drawn from OSV by a pre-registered walk
+## ADR-034 — v6 is accepted on fresh applications drawn from OSV by a pre-registered walk
 
 **Status:** accepted for the v6 evaluation · 2026-09-26 · delegation v6 Phase 4, item 4.1 · follows ADR-026
 

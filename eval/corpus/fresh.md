@@ -9,6 +9,12 @@ Everything it produced is in `eval/corpus/fresh/`.
 committed before `draw` was run. The results section below was added afterwards and changes nothing
 above it.
 
+**v6 uses variant 2.** An independent review of the first draw, before any model run, found
+non-applications among the drawn targets and import statements among the labels. The rules were
+fixed (rules v2, *Variant 2* below), committed before a second walk, and the second walk — same
+seed, same pool, same exclusions — was appended to `selection.json` as a variant. Variant 1 stays
+on record in `selection.json` and `fresh/variant-1/`; nothing about it was changed after the fact.
+
 ## Why not the existing pool
 
 `/home/mamgad/corpus` holds 46 CVEs in 15 repositories. All 15 are excluded under the rules below:
@@ -145,7 +151,68 @@ different pool, and so a different draw. `materialise` writes `<corpus>/<name>.p
 commit as a plain tree with history and release notes stripped under every credited advisory's ids,
 which is what the runner copies from. The manifests use the official `PLACEHOLDER/corpus` paths.
 
-## Results
+## Variant 2: rules v2
+
+Written and committed before the second walk. The review of variant 1 found:
+
+- **Non-applications admitted.** One target's only server entry was `Archive/Web Version/BACKEND/
+  server.js`; another's templates and routes came from `examples/` and `__fixtures__/`; a framework
+  and (as a control) a UI framework passed; lib.ts's route pattern counted HTTP client calls
+  (`client.post("/login", …)`) as route registrations; and an 11,912-line `vue.js` copied into a Go
+  application's assets made it a JavaScript project.
+- **Import statements labelled.** Seven labels covered hunks that only add or change imports.
+- **Class labels wrong.** OSV sorts an advisory's CWE ids as text, so "the first CWE" was not the
+  primary one (CWE-200 where the weakness is CWE-22; CWE-266 where it is CWE-285).
+
+Rules v2 (`RULES_VERSION` 2; the verdict cache is keyed on it):
+
+1. **Service folders.** Templates, migrations, server entries and route files count only outside
+   tests, docs, examples, samples, demos, fixtures, mocks and archive folders (`NON_SERVICE`).
+2. **Deployable service.** At least one Dockerfile, compose file, `Chart.yaml` or `Procfile` at depth 3
+   or less, outside those folders. All five official targets have one at depth 1.
+3. **Not a framework or library.** The README's first 40 lines must not call the project a framework,
+   library, SDK or toolkit (`frameworkPhrase`: "X is a … framework", or a tagline "a/an/the …
+   framework"; up to five words between article and noun, none a preposition — "an app built on the
+   Gin framework" describes an application; "a photo library" is a collection).
+4. **Server route shapes only.** The generic `x.get("/…")` form counts only on a receiver a server
+   registers routes on (`app`, `*Router`, `routes`, `server`, `fastify`, `*App`); client calls no
+   longer count. Changed in lib.ts, so `fetch-apps.ts` gets the same fix.
+5. **Vendored files.** A single source file over 5,000 lines, or one opening with a library banner
+   (`/*!`, or a comment naming something at a semantic version), is left out of size, language and
+   routes.
+6. **Import-only hunks** are not labelled. Whether a changed line is an import is read from the whole
+   file on each side (`importLines`), because a `-U0` hunk inside Go's `import (` block or a Python
+   `from x import (` list has no context of its own. It changes which fixes are labellable and how
+   many labels a fix yields, so it is an eligibility rule too.
+7. **Network failures** are retried and, if they persist, stop the walk; they are never recorded as a
+   verdict. Transient failures are recognised from git's own stderr, whose tail the verdict records;
+   variant 1 matched `5\d\d` against a message that quoted the work path.
+
+Checked before the walk, and not tuned afterwards: the five official targets pass every v2 rule. On
+variant 1's fourteen draws, v2 finds four targets not served applications once tests, examples and
+archives are set aside, and the control mesop a framework by its README. It drops all nine hunks
+behind the seven import-only labels the review named, and seven more of the same kind in variant 1's
+targets; every hunk it drops changes import lines and nothing else.
+
+Truth rules for variant 2, decided with the rules and applied by `truth`:
+
+- **Classless.** No label carries `cwe` or `vuln_class`, so the pinned grader scores location only
+  and the class-rule artefacts of research/12 cannot arise. Each label carries `advisory` and `cwes`
+  (all of the advisory's CWEs), so a re-scorer can report a per-advisory score and an any-of class
+  level (`eval/rescore.ts`).
+- **Neutral regions.** Every advisory known to be open in the reviewed tree that brought no label of
+  its own — sharing another's fix, dropped as diffuse, unmappable, or reported only by OSV's
+  by-commit query — has its fix regions recorded in `truth/<name>.neutral.json`. A claim there is
+  neither a true nor a false positive.
+- **Patched twins replace the separate controls.** For each drawn target, its fix commit is a second
+  tree with the fixed regions recorded. The control score is the number of claims within ±3 lines of
+  those regions, per arm, with findings per KLOC beside it; neither is folded into precision.
+  Variant 1's two separate controls are kept only if they pass rules v2.
+
+The second walk runs with no separate controls (`--controls 0`), so the date rule's three-times test
+is against 12, i.e. 36.
+
+## Results (variant 1)
 
 *Added after the draw (`63fe54a`) and the truth step. Nothing above this heading was changed by them.*
 

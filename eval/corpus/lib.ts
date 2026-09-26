@@ -491,11 +491,14 @@ export const ROUTE_RE = [
 	// a route.
 	String.raw`@\w+\.(get|post|put|delete|patch|websocket)\(\s*` + Q + "/",
 	String.raw`urlpatterns\s*=`,
-	// Express/Koa/Nest and friends. Same rule: a leading slash in the first
-	// argument is what tells `router.get("/users")` apart from `config.get("key")`
-	// and `session.get("https://...")`, which otherwise turn every library that
-	// makes an HTTP request into an "application".
-	String.raw`\b\w+\.(get|post|put|delete|patch|all|use)\(\s*` + Q + "/",
+	// Express/Koa/Fastify/Hono and friends. A leading slash in the first
+	// argument tells `router.get("/users")` from `config.get("key")`, but not from
+	// an HTTP client: `client.post("/login", body)`, `axios.get("/api/x")` and
+	// `requests.get("/x")` have the same shape, and counted as routes they made
+	// every frontend and every API client an "application". So the receiver has
+	// to be one a server registers routes on: `app`, a `*Router`/`*router`,
+	// `routes`, `server`, `fastify`, or an `*App`.
+	String.raw`\b(?:app|\w*[Rr]outer|routes|server|srv|fastify|\w+App)\.(get|post|put|delete|patch|all|use)\(\s*` + Q + "/",
 	String.raw`@(Get|Post|Put|Delete|Patch|Controller)\(`,
 	// Go: uppercase verbs plus a quoted path.
 	String.raw`\b\w+\.(GET|POST|PUT|DELETE|PATCH|Any|Handle|HandleFunc)\(\s*"/`,
@@ -525,6 +528,8 @@ export interface Classification {
 	app: boolean; routes: number; templates: boolean; migrations: boolean; server: boolean; compose: string[]; why: string;
 	/** Route files that are also source files (walk().source): a README's usage example is not a routing table. */
 	routeSources: number;
+	/** Every file with a route registration, relative to the checkout. */
+	routeFiles: string[];
 }
 
 export async function classify(dir: string, w: Walk): Promise<Classification> {
@@ -532,6 +537,7 @@ export async function classify(dir: string, w: Walk): Promise<Classification> {
 	// zero, not an error.
 	let routes = 0;
 	let routeSources = 0;
+	let routeFiles: string[] = [];
 	try {
 		const { stdout } = await run(
 			"grep",
@@ -544,6 +550,7 @@ export async function classify(dir: string, w: Walk): Promise<Classification> {
 		);
 		const files = stdout.split("\n").filter(Boolean).map((f) => f.replace(/^\.\//, ""));
 		routes = files.length;
+		routeFiles = files;
 		const source = new Set(w.source);
 		routeSources = files.filter((f) => source.has(f)).length;
 	} catch { /* no match, or grep gave up: treated as no evidence */ }
@@ -562,7 +569,7 @@ export async function classify(dir: string, w: Walk): Promise<Classification> {
 	const why = app
 		? `${routes} route file(s)` + (templates ? ", templates" : "") + (migrations ? ", migrations" : "") + (server ? ", server entry" : "")
 		: routes < 3 ? `only ${routes} route file(s) — not a served application` : "routes but no templates/migrations/server entry";
-	return { app, routes, templates, migrations, server, compose, why, routeSources };
+	return { app, routes, templates, migrations, server, compose, why, routeSources, routeFiles };
 }
 
 export async function countLines(root: string, files: string[]): Promise<number> {

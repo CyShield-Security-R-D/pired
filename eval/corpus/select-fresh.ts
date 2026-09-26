@@ -64,7 +64,12 @@ import type { Advisory, TruthEntry } from "./lib.ts";
  * in the verdict cache key, so a cached verdict from an older rule set can never
  * be replayed into a newer draw.
  */
-export const RULES_VERSION = 1;
+export const RULES_VERSION = 2;
+// v1 (5cac587): the draw recorded as variant 1 in selection.json.
+// v2: an independent review of variant 1, before any model run, found
+// non-applications admitted and import-only edits labelled. v2 adds the
+// service rules (isService), the vendored-file rule (isVendoredFile), server-
+// only route shapes (lib.ts ROUTE_RE) and import-only hunks (importOnly).
 
 /**
  * The size range, in lines of application source (lib.ts walk(): the corpus's
@@ -520,28 +525,114 @@ export interface Label {
 }
 
 /**
+ * The lines of a file that belong to import statements, 1-based.
+ *
+ * Read from the whole file because a hunk of `git diff -U0` has no context: in
+ * Go's `import (` block or a Python `from x import (` list, a changed line
+ * reads `"strings"` or `    helper,` and is recognisable as an import only
+ * from the statement around it. Line-based and per language; a statement it
+ * cannot bracket is left out, so an edit it is unsure of stays code.
+ */
+export function importLines(path: string, text: string): Set<number> {
+	const lines = text.split("\n");
+	const out = new Set<number>();
+	const lang = languageOf(path);
+	const mark = (from: number, to: number): void => { for (let k = from; k <= to; k++) out.add(k + 1); };
+	/** The first line at or after `i` for which `done` holds, within 200 lines. */
+	const until = (i: number, done: (t: string) => boolean): number | undefined => {
+		for (let j = i; j < Math.min(lines.length, i + 200); j++) if (done(lines[j] ?? "")) return j;
+		return undefined;
+	};
+	for (let i = 0; i < lines.length; i++) {
+		const t = lines[i] ?? "";
+		let end: number | undefined;
+		if (lang === "Python") {
+			if (/^\s*(?:from\s+[\w.]+\s+import\b|import\s+[\w.])/.test(t)) {
+				if (t.includes("(") && !t.includes(")")) end = until(i, (x) => x.includes(")"));
+				else {
+					end = i;
+					while (/\\\s*$/.test(lines[end] ?? "") && end + 1 < lines.length) end++;
+				}
+			}
+		} else if (lang === "JavaScript/TypeScript") {
+			if (/^\s*import\b(?!\s*\()/.test(t)) end = until(i, (x) => /\bfrom\s*['"`]|^\s*import\s+['"]|\brequire\s*\(/.test(x));
+			else if (/^\s*(?:const|let|var)\s+[\w$\s{},:]+=\s*require\s*\(\s*['"`][^'"`]+['"`]\s*\)\s*;?\s*$/.test(t) || /^\s*require\s*\(\s*['"]/.test(t)) end = i;
+			else if (/^\s*(?:const|let|var)\s*\{\s*$/.test(t)) {
+				const j = until(i + 1, (x) => /[};]/.test(x));
+				if (j !== undefined && /\}\s*=\s*require\s*\(/.test(lines[j] ?? "")) end = j;
+			}
+		} else if (lang === "Go") {
+			if (/^\s*import\s*\(/.test(t)) end = until(i, (x) => /^\s*\)/.test(x));
+			else if (/^\s*import\s+(?:[\w.]+\s+)?"/.test(t)) end = i;
+		} else if (lang === "PHP") {
+			if (/^\s*use\s+[\\\w]/.test(t) || /^\s*(?:require|include)(?:_once)?\b/.test(t)) end = until(i, (x) => x.includes(";"));
+		} else if (lang === "Ruby") {
+			if (/^\s*require(?:_relative)?[\s(]+['"]/.test(t)) end = i;
+		} else if (lang === "Java" || lang === "Kotlin" || lang === "Scala") {
+			if (/^\s*import\s/.test(t)) end = t.includes("{") && !t.includes("}") ? until(i, (x) => x.includes("}")) : i;
+		} else if (lang === "C#") {
+			if (/^\s*(?:global\s+)?using\s+(?:static\s+)?[\w.]+(?:\s*=\s*[\w.<>]+)?\s*;/.test(t)) end = i;
+		} else if (lang === "Rust") {
+			if (/^\s*(?:pub(?:\([^)]*\))?\s+)?use\s/.test(t)) end = until(i, (x) => x.includes(";"));
+			else if (/^\s*extern\s+crate\s/.test(t)) end = i;
+		}
+		if (end !== undefined) { mark(i, end); i = end; }
+	}
+	return out;
+}
+
+/**
+ * Does this hunk change nothing but imports? `pre` and `post` are the import
+ * lines of the file on each side (importLines). A hunk that adds an import and
+ * a check is code; one that only adds the import the check elsewhere needs is
+ * not a location of the bug. Without both files' import lines the hunk counts
+ * as code.
+ */
+export function importOnly(h: Hunk, pre?: ReadonlySet<number>, post?: ReadonlySet<number>): boolean {
+	const removed = h.removed.map((t, i) => [t, h.oldStart + i] as const).filter(([t]) => isCodeLine(t));
+	const added = h.added.map((t, j) => [t, h.newStart + j] as const).filter(([t]) => isCodeLine(t));
+	if (removed.length + added.length === 0) return false;
+	if ((removed.length > 0 && !pre) || (added.length > 0 && !post)) return false;
+	return removed.every(([, n]) => pre?.has(n)) && added.every(([, n]) => post?.has(n));
+}
+
+/** Import lines per file on each side of a fix, as the IO layer loads them. */
+export interface ImportSides { pre: ReadonlyMap<string, ReadonlySet<number>>; post: ReadonlyMap<string, ReadonlySet<number>> }
+
+/**
  * Labels from a fix's hunks, under the hygiene rules:
  *
  *  - only files the scorer reads, outside tests, docs, examples, vendored and
  *    generated code; code hunks elsewhere are counted as `unscoreable`;
- *  - only hunks that change a code line;
+ *  - only hunks that change a code line, and not only imports (`imports`
+ *    counts the hunks dropped for that);
  *  - hunks of one file merge when at most MERGE_GAP lines apart and the result
  *    fits LABEL_MAX_LINES; a label never spans more than LABEL_MAX_LINES — a
  *    run of several hunks is split at hunk boundaries, and a single hunk wider
  *    than that is capped to its first LABEL_MAX_LINES lines.
  *
  * `side` "pre" labels the vulnerable tree; "post" gives the fixed regions of a
- * clean-code control.
+ * patched twin.
  */
-export function labelsFromHunks(advisory: string, hunks: readonly Hunk[], side: "pre" | "post" = "pre"): { labels: Label[]; unscoreable: number } {
+export function labelsFromHunks(
+	advisory: string,
+	hunks: readonly Hunk[],
+	side: "pre" | "post" = "pre",
+	sides?: ImportSides,
+): { labels: Label[]; unscoreable: number; imports: number } {
 	const byFile = new Map<string, Array<[number, number]>>();
 	let unscoreable = 0;
+	let imports = 0;
 	for (const h of hunks) {
 		const file = side === "pre" ? h.oldFile : h.newFile;
 		if (!file) continue;
 		if (![...h.removed, ...h.added].some(isCodeLine)) continue;
 		if (!isLabelFile(file)) {
 			if ((SCORER_EXT.test(file) || OTHER_CODE_EXT.test(file)) && !NON_SOURCE.test(file) && !VENDORED.test(`/${file}`) && !GENERATED.test(file)) unscoreable += 1;
+			continue;
+		}
+		if (sides && importOnly(h, h.oldFile ? sides.pre.get(h.oldFile) : undefined, h.newFile ? sides.post.get(h.newFile) : undefined)) {
+			imports += 1;
 			continue;
 		}
 		byFile.set(file, [...(byFile.get(file) ?? []), hunkRange(h, side)]);
@@ -570,7 +661,7 @@ export function labelsFromHunks(advisory: string, hunks: readonly Hunk[], side: 
 		}
 		flush();
 	}
-	return { labels, unscoreable };
+	return { labels, unscoreable, imports };
 }
 
 /**
@@ -597,35 +688,49 @@ export function dedupeLabels(labels: readonly Label[]): Label[] {
 	});
 }
 
+/** A fresh truth entry: the official shape without class fields, plus the advisory and its classes. */
+export interface FreshTruthEntry {
+	id: string;
+	title: string;
+	severity: string;
+	file: string;
+	line: number;
+	line_range: [number, number];
+	/** The advisory this label belongs to; an advisory is found when any of its labels is. */
+	advisory: string;
+	/** Every CWE of the advisory, for a re-scorer's class level with any-of matching. */
+	cwes: string[];
+}
+
 /**
- * The class rule: within a target, every label carries a class or none does.
+ * Truth entries, classless for the pinned grader.
  *
- * The grader refuses a claim that names a CWE against a label with none once
- * any label in the target carries one (research/12, "Scoring sensitivity"),
- * so a classless label beside a classed one could not be matched by any claim
- * that names a class. When every contributing advisory has a CWE, every label
- * carries its advisory's first; otherwise no label carries one.
+ * Variant 1 put the advisory's first CWE on every label. OSV sorts an
+ * advisory's CWE ids as text, so the first is not the primary: one target was
+ * labelled CWE-200 where its advisory's weakness is CWE-22, another CWE-266
+ * where it is CWE-285. And once any label carries a class the grader refuses a
+ * location-correct claim naming another (research/12). So no entry carries
+ * `cwe` or `vuln_class`, which makes the official score location-only, and each
+ * carries `cwes` — all of its advisory's classes — for a re-scorer that wants a
+ * class level and can match any of them.
  */
-export function toTruth(labels: readonly Label[], advisories: ReadonlyMap<string, PoolAdvisory>): { truth: TruthEntry[]; classed: boolean } {
-	const ids = [...new Set(labels.map((l) => l.advisory))];
-	const classed = ids.length > 0 && ids.every((id) => (advisories.get(id)?.cwe.length ?? 0) > 0);
+export function toTruth(labels: readonly Label[], advisories: ReadonlyMap<string, PoolAdvisory>): FreshTruthEntry[] {
 	const n = new Map<string, number>();
-	const truth = labels.map((l): TruthEntry => {
+	return labels.map((l): FreshTruthEntry => {
 		const k = (n.get(l.advisory) ?? 0) + 1;
 		n.set(l.advisory, k);
-		const cwe = classed ? advisories.get(l.advisory)?.cwe[0] : undefined;
+		const a = advisories.get(l.advisory);
 		return {
 			id: `${l.advisory}-${k}`,
 			title: l.advisory,
-			...(cwe ? { cwe } : {}),
-			severity: advisories.get(l.advisory)?.severity ?? "unknown",
+			severity: a?.severity ?? "unknown",
 			file: l.file,
 			line: l.range[0],
 			line_range: [l.range[0], l.range[1]],
-			...(cwe ? { vuln_class: cwe } : {}),
+			advisory: l.advisory,
+			cwes: [...(a?.cwe ?? [])].sort((x, y) => Number(x.slice(4)) - Number(y.slice(4))),
 		};
 	});
-	return { truth, classed };
 }
 
 /**
@@ -649,33 +754,171 @@ export function mapLabelsBack(labels: readonly Label[], diffs: ReadonlyMap<strin
 
 // --- application ------------------------------------------------------------------
 
-/** What lib.ts classify() measured, as much as the fresh rule reads. */
-export interface AppFacts { routeSources: number; templates: boolean; migrations: boolean; server: boolean }
-
 /**
- * Is this a served web application, the kind of target the official corpus is?
- *
- * Not fetch-apps.ts's rule. That rule wants route registrations in three
- * files, and three of the five official targets have one — filebrowser,
- * whoogle-search and note-mark each keep their routing table in a single file,
- * and fetch-apps.ts would have rejected them. A fresh set admitted by it would
- * be a different kind of application from the one it stands in for.
- *
- * So: a route registration in at least one SOURCE file — a README's usage
- * example registers a route too, and a library carries one — and at least two
- * of templates, migrations and a server entry. Calibrated on the five official
- * target trees, which all pass — route source files: filebrowser 1, LinkAce 3,
- * fat_free_crm 2 (26 route files in all, most of them specs), whoogle-search 1,
- * note-mark 1; each with two or three corroborations — and on nothing drawn:
- * it was fixed before the draw.
+ * Folders whose contents say nothing about what the project deploys: tests,
+ * docs, examples, fixtures, mocks, archives. Variant 1 counted them. One
+ * drawn target's only server entry was `Archive/Web Version/BACKEND/server.js`,
+ * and another's templates and routes came from `examples/` and `__fixtures__/`.
  */
-export function isServedApp(f: AppFacts): boolean {
-	return f.routeSources >= 1 && [f.templates, f.migrations, f.server].filter(Boolean).length >= 2;
+export const NON_SERVICE = /(^|\/)(?:tests?|__tests__|specs?|e2e|testdata|test[-_]data|docs?|documentation|examples?|samples?|demos?|fixtures?|__fixtures__|mocks?|__mocks__|archives?|archived)(\/|$)/i;
+
+/** Is the file inside a NON_SERVICE folder? Only its folders are tested, never its name. */
+export function inNonServiceFolder(path: string): boolean {
+	return NON_SERVICE.test(path.split("/").slice(0, -1).join("/"));
 }
 
-export function appWhy(f: AppFacts): string {
-	const corroborated = [f.templates && "templates", f.migrations && "migrations", f.server && "server entry"].filter(Boolean);
-	return `${f.routeSources} route source file(s); ${corroborated.length > 0 ? corroborated.join(", ") : "no templates, migrations or server entry"}`;
+/**
+ * A file that deploys a service: a Dockerfile, a compose file, a Helm chart or
+ * a Procfile, at most three levels deep and outside NON_SERVICE folders. A
+ * framework or a library has none of its own; an application its maintainers
+ * run has at least one. All five official targets carry a Dockerfile or a
+ * compose file at depth 1.
+ */
+export function isDeployMarker(path: string): boolean {
+	if (path.split("/").length > 3 || inNonServiceFolder(path)) return false;
+	const name = path.split("/").pop() ?? "";
+	if (/\.dockerignore$/i.test(name)) return false;
+	return /^Dockerfile(?:[.-][\w.-]+)?$/i.test(name) || /\.dockerfile$/i.test(name) || COMPOSE_NAME.test(name)
+		|| /^Chart\.ya?ml$/.test(name) || name === "Procfile";
+}
+const COMPOSE_NAME = /^(docker-)?compose([-.][\w.-]+)?\.ya?ml$/i;
+
+/**
+ * A third-party library's banner in a file's first 15 lines: a `/*!`
+ * preserved comment, or a comment naming something at a semantic version
+ * (`* Vue.js v2.6.14`). A project's own licence header names no version, so it
+ * does not count.
+ */
+export function libraryBanner(text: string): boolean {
+	const head = text.split("\n", 15);
+	if (/^\s*\/\*!/.test(head.find((l) => l.trim() !== "") ?? "")) return true;
+	return head.some((l) => /^\s*(?:\/\*+!?|\*|\/\/|#)\s*.{0,60}?\b[A-Za-z][\w.-]*\s+v?\d+\.\d+\.\d+\b/.test(l));
+}
+
+/** Longer than this, a single source file is treated as vendored. */
+export const VENDORED_MAX_LINES = 5_000;
+
+/**
+ * A source file that is someone else's code, wherever it sits: over
+ * VENDORED_MAX_LINES lines, or opening with a library banner. Variant 1
+ * measured size and language over them. One drawn Go application counted as
+ * JavaScript because `internal/view/assets/js/vue.js`, 11,912 lines, outweighed
+ * its Go. Such files are left out of size, language and routes.
+ */
+export function isVendoredFile(text: string): boolean {
+	return text.split("\n").length > VENDORED_MAX_LINES || libraryBanner(text);
+}
+
+const PREPOSITION = /^(?:on|with|using|built|powered|by|based|in|of|from|to|via|atop|upon|around|over|for|into|uses|runs|and\s+a)$/i;
+/** Collections an application keeps, which READMEs also call libraries. */
+const COLLECTION = /^(?:media|photos?|music|books?|videos?|games?|comics?|manga|audio|e-?books?|movies?|images?|files?|documents?|reading|podcasts?|recipes?|prompts?|component|asset|content|digital|personal)$/i;
+/** The kinds of project the rule rejects, with an optional hyphenated qualifier ("web-framework"). */
+const KIND = String.raw`((?:[\w.]+-)?(?:frameworks?|librar(?:y|ies)|sdks?|toolkits?))`;
+
+/** README text as prose: image alt text kept, tags, badges, links and emphasis removed. */
+function readmeProse(line: string): string {
+	return line
+		.replace(/<img\b[^>]*\balt\s*=\s*"([^"]*)"[^>]*>/gi, " $1 ")
+		.replace(/<[^>]+>/g, " ")
+		.replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
+		.replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+		.replace(/[*_`]/g, "")
+		.trim();
+}
+
+/**
+ * The phrase in which a README's first 40 lines call the project a framework,
+ * a library, an SDK or a toolkit, or undefined when they do not.
+ *
+ * Two shapes count. "X is a|an|the … framework" anywhere in the 40 lines; and
+ * a tagline — a heading, or one of the first ten lines of prose — that is, or
+ * follows a name and a separator, "a|an|the … framework". Up to five words may
+ * sit between the article and the noun, none of them a preposition: "a web app
+ * built on the Gin framework" describes an application. "A photo library" is a
+ * collection, not code.
+ */
+export function frameworkPhrase(readme: string): string | undefined {
+	const lines = readme.split("\n", 40).map(readmeProse).filter((l) => l.length > 0);
+	const find = (line: string, anchored: boolean): string | undefined => {
+		// The noun is inside the pattern, so the lazy middle grows until it
+		// reaches one; a pattern that took any word as the noun would stop at
+		// "a lightweight" and never see "web-framework".
+		const middle = String.raw`((?:[\w.+/#'-]+\s+){0,5}?)`;
+		const re = anchored
+			? new RegExp(String.raw`(?:^#*\s*|[\w)\]]\s*[:|]\s+|[\w)\]]\s+[—–-]\s+)((?:an?|the)\s+` + middle + KIND + String.raw`)\b`, "gi")
+			: new RegExp(String.raw`\b(?:is|as)\s+((?:an?|the|our)\s+` + middle + KIND + String.raw`)\b`, "gi");
+		for (const m of line.matchAll(re)) {
+			const noun = m[3] ?? "";
+			const middle = (m[2] ?? "").trim().split(/\s+/).filter(Boolean);
+			if (middle.some((w) => PREPOSITION.test(w))) continue;
+			if (/librar/i.test(noun) && middle.length > 0 && COLLECTION.test(middle.at(-1) as string)) continue;
+			return (m[1] ?? "").trim();
+		}
+		return undefined;
+	};
+	for (const [i, line] of lines.entries()) {
+		const hit = find(line, false) ?? (i < 10 || line.startsWith("#") ? find(line, true) : undefined);
+		if (hit) return hit;
+	}
+	return undefined;
+}
+
+/** What the service rules read, all from paths except the README and the route files' contents. */
+export interface ServiceFacts {
+	/** Source files with a server route registration, outside NON_SERVICE folders and not vendored. */
+	routeFiles: number;
+	templates: boolean;
+	migrations: boolean;
+	server: boolean;
+	/** Deployable-service markers found (isDeployMarker). */
+	deploy: string[];
+	/** The README's framework/library phrase, if it has one. */
+	readmeKind?: string;
+}
+
+const TEMPLATE_PATH = /(^|\/)(templates?|views?|layouts)(\/|$)|\.(html|htm|j2|jinja2?|tmpl|gohtml|erb|blade\.php|twig|hbs|ejs)$/i;
+const MIGRATION_PATH = /(^|\/)(migrations?|migrate|alembic|Migrations)(\/|$)/i;
+const SERVER_PATH = /(^|\/)(manage\.py|wsgi\.py|asgi\.py|routes\.rb|server\.(js|ts|go)|main\.go|Dockerfile|docker-compose\.ya?ml|index\.php|artisan)$/i;
+
+/**
+ * Service facts from a tree's paths, the route files lib.ts classify() found,
+ * the files judged vendored and the README. The templates, migration and
+ * server-entry patterns are lib.ts's, applied only outside NON_SERVICE folders.
+ */
+export function serviceFacts(all: readonly string[], source: readonly string[], routeFiles: readonly string[], vendored: ReadonlySet<string>, readme?: string): ServiceFacts {
+	const service = all.filter((p) => !inNonServiceFolder(p));
+	const src = new Set(source);
+	return {
+		routeFiles: routeFiles.filter((f) => src.has(f) && !vendored.has(f) && !inNonServiceFolder(f)).length,
+		templates: service.some((p) => TEMPLATE_PATH.test(p)),
+		migrations: service.some((p) => MIGRATION_PATH.test(p)),
+		server: service.some((p) => SERVER_PATH.test(p)),
+		deploy: all.filter(isDeployMarker).sort(),
+		...(readme !== undefined && frameworkPhrase(readme) ? { readmeKind: frameworkPhrase(readme) } : {}),
+	};
+}
+
+/**
+ * The service rules, in the order the walk applies them: a served application
+ * (a server route in a source file, and two of templates, migrations, a server
+ * entry — calibrated on the five official targets, which have 1 to 3 route
+ * source files and two or three corroborations), a deployable service, and a
+ * README that does not call the project a framework or a library.
+ */
+export function serviceVerdict(f: ServiceFacts): { filter: "served application" | "deployable service" | "not a framework or library"; detail: string } | undefined {
+	const corroborated = [f.templates && "templates", f.migrations && "migrations", f.server && "server entry"].filter(Boolean) as string[];
+	if (f.routeFiles < 1 || corroborated.length < 2) {
+		return { filter: "served application", detail: `${f.routeFiles} route source file(s); ${corroborated.length > 0 ? corroborated.join(", ") : "no templates, migrations or server entry"}` };
+	}
+	if (f.deploy.length === 0) return { filter: "deployable service", detail: "no Dockerfile, compose file, Chart.yaml or Procfile at depth 3 or less" };
+	if (f.readmeKind) return { filter: "not a framework or library", detail: `README: "${f.readmeKind.slice(0, 80)}"` };
+	return undefined;
+}
+
+/** The root README, preferring Markdown, from a tree listing. */
+export function readmePath(all: readonly string[]): string | undefined {
+	const root = all.filter((p) => !p.includes("/") && /^readme(\.(md|markdown|rst|txt|adoc|org))?$/i.test(p));
+	return root.find((p) => /\.(md|markdown)$/i.test(p)) ?? root.sort()[0];
 }
 
 // --- language -----------------------------------------------------------------
@@ -732,7 +975,8 @@ export function languageOf(path: string): string | undefined {
  */
 export function sparsePatterns(): string[] {
 	const fold = (ext: string): string => [...ext].map((c) => (/[a-z]/.test(c) ? `[${c}${c.toUpperCase()}]` : c)).join("");
-	return LANGUAGE_EXTENSIONS.flatMap(([, exts]) => exts.map((e) => `*.${fold(e)}`));
+	// The root README too, which the framework rule reads.
+	return [...LANGUAGE_EXTENSIONS.flatMap(([, exts]) => exts.map((e) => `*.${fold(e)}`)), `/${fold("readme")}*`];
 }
 
 /** One line of `git ls-tree -r -z` output, parsed. */
@@ -771,6 +1015,8 @@ export const WALK_FILTERS = [
 	"source obtainable at the parent commit",
 	"size within the official range",
 	"served application",
+	"deployable service",
+	"not a framework or library",
 	"language in the scorer's list",
 	"labellable fix",
 	"fix not diffuse",
@@ -801,6 +1047,12 @@ export interface Eligible {
 	routes: number;
 	labels: Label[];
 	unscoreable: number;
+	/** Hunks dropped as import-only (rules v2). */
+	importOnly?: number;
+	/** Deployable-service markers found (rules v2). */
+	deploy?: string[];
+	/** Source files left out of measurement as vendored (rules v2). */
+	vendored?: number;
 }
 export interface Ineligible { ok: false; advisory: string; filter: WalkFilter; detail: string }
 export type Verdict = Eligible | Ineligible;
@@ -961,15 +1213,52 @@ const REPO_ROOT = resolve(HERE, "../..");
 const GIT_ENV = { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "/bin/false", GCM_INTERACTIVE: "never" };
 
 /**
+ * A failed git call, carrying the tail of git's own stderr and whether the
+ * process was killed for its timeout — never the command line. Variant 1
+ * matched a transient-failure pattern against Node's error message, which
+ * quotes the command and so the work path; `5\d\d` matched the digits of the
+ * scratch directory, and every fetch failure read as transient.
+ */
+export class GitError extends Error {
+	readonly stderrTail: string;
+	readonly timedOut: boolean;
+	constructor(stderrTail: string, timedOut: boolean) {
+		super(stderrTail);
+		this.stderrTail = stderrTail;
+		this.timedOut = timedOut;
+	}
+}
+
+/** git's stderr lines that mean the network failed, not the repository. */
+const TRANSIENT_STDERR = /Could not resolve host|Connection (?:timed out|reset|refused)|Operation timed out|timed out after|early EOF|RPC failed|HTTP\/2 stream|The requested URL returned error: (?:5\d\d|429)|remote end hung up unexpectedly|unexpected disconnect|gnutls_handshake|SSL_ERROR|TLS connection/i;
+
+export function isTransientGitFailure(err: unknown): boolean {
+	if (err instanceof GitError) return err.timedOut || TRANSIENT_STDERR.test(err.stderrTail);
+	// resolveSha's GitHub API errors: a rate limit or a server error is the network's.
+	return /GitHub (?:403|429|5\d\d)\b/.test(String((err as Error)?.message ?? ""));
+}
+
+/** The last lines of a stderr, joined, at most 300 characters. */
+export function stderrTail(stderr: string): string {
+	return stderr.trim().split("\n").map((l) => l.trim()).filter(Boolean).slice(-3).join(" | ").slice(-300);
+}
+
+/**
  * git with the settings every call here needs. The proxy is cleared for the
  * reason multikey.ts gives: the development machine's global config names a
  * SOCKS proxy that is usually down, and every fetch then fails in 0 ms.
  */
 async function git(dir: string, args: string[], timeout = 600_000): Promise<string> {
-	const { stdout } = await exec("git", [
-		"-C", dir, "-c", "http.proxy=", "-c", "https.proxy=", "-c", "core.quotePath=false", "-c", "advice.detachedHead=false", ...args,
-	], { env: GIT_ENV, timeout, maxBuffer: 1 << 28 });
-	return stdout;
+	try {
+		const { stdout } = await exec("git", [
+			"-C", dir, "-c", "http.proxy=", "-c", "https.proxy=", "-c", "core.quotePath=false", "-c", "advice.detachedHead=false", ...args,
+		], { env: GIT_ENV, timeout, maxBuffer: 1 << 28 });
+		return stdout;
+	} catch (err) {
+		const e = err as { stderr?: string; killed?: boolean; signal?: string | null; code?: unknown };
+		const tail = stderrTail(String(e.stderr ?? ""));
+		throw new GitError(tail || `git ${args[0]} exited ${String(e.code ?? e.signal ?? "abnormally")}`, Boolean(e.killed) || e.signal === "SIGTERM");
+	}
 }
 
 /**
@@ -981,9 +1270,7 @@ async function fetchRetrying(dir: string, args: string[], timeout: number): Prom
 	for (let attempt = 1; ; attempt++) {
 		try { await git(dir, ["fetch", "--quiet", ...args], timeout); return; }
 		catch (err) {
-			const msg = String((err as Error).message);
-			const transient = /timed out|ETIMEDOUT|ECONNRESET|early EOF|RPC failed|Could not resolve host|Connection reset|HTTP\/2 stream|returned error: 5\d\d|error: 429/i.test(msg);
-			if (!transient || attempt >= 3) throw err;
+			if (!isTransientGitFailure(err) || attempt >= 3) throw err;
 			await new Promise((r) => setTimeout(r, 5_000 * attempt));
 		}
 	}
@@ -1204,21 +1491,9 @@ async function fullSha(dir: string, repo: string, sha: string): Promise<string> 
 	return resolveSha(owner, name, sha);
 }
 
-/** Lines per language over every code file a walk would see, tests and docs aside. */
-async function languageLines(dir: string, all: string[]): Promise<Map<string, number>> {
-	const lines = new Map<string, number>();
-	for (const f of all) {
-		const lang = languageOf(f);
-		if (!lang || NON_SOURCE.test(f)) continue;
-		const text = await readFile(join(dir, f), "utf8").catch(() => "");
-		lines.set(lang, (lines.get(lang) ?? 0) + (text.length === 0 ? 0 : text.split("\n").length));
-	}
-	return lines;
-}
+interface TreeFacts { scopeFiles: number; scopeLoc: number; language: string | undefined; service: ServiceFacts; vendored: number }
 
-interface TreeFacts { scopeFiles: number; scopeLoc: number; routes: number; app: boolean; why: string; language: string | undefined }
-
-/** Only code in the working tree from here on (see sparsePatterns). */
+/** Only code and the root README in the working tree from here on (see sparsePatterns). */
 async function sparseOn(dir: string): Promise<void> {
 	await git(dir, ["config", "core.sparseCheckout", "true"]);
 	await git(dir, ["config", "core.sparseCheckoutCone", "false"]);
@@ -1237,20 +1512,55 @@ async function fullCheckout(dir: string, commit: string): Promise<void> {
 /**
  * Check out `commit` and measure it the way the corpus measures a target.
  *
- * The paths come from the tree's listing and only code is checked out; the
- * measurements are the ones walk() over a full checkout gives, because every
- * file they read is code and every other test reads a path. `recheck`
- * compares the two on a sample of verdicts.
+ * Paths come from the tree's listing and only code and the root README are
+ * checked out: every rule reads a path, a code file or the README. Each code
+ * file is read once, for its line count and for whether it is vendored
+ * (isVendoredFile); vendored files are left out of size, language and routes.
  */
 async function treeFacts(dir: string, commit: string): Promise<TreeFacts | { tooMany: number }> {
 	const w = walkFromListing(parseLsTree(await git(dir, ["ls-tree", "-r", "-z", "--full-tree", commit])));
 	if (w.source.length > MAX_SOURCE_FILES) return { tooMany: w.source.length };
 	await sparseOn(dir);
 	await git(dir, ["checkout", "--quiet", "--force", "--detach", commit], 1_800_000);
-	const scopeLoc = await countLines(dir, w.source);
+	const lines = new Map<string, number>();
+	const vendored = new Set<string>();
+	for (const f of new Set([...w.source, ...w.all.filter((p) => languageOf(p) && !NON_SOURCE.test(p))])) {
+		const text = await readFile(join(dir, f), "utf8").catch(() => "");
+		lines.set(f, text.length === 0 ? 0 : text.split("\n").length);
+		if (isVendoredFile(text)) vendored.add(f);
+	}
+	const source = w.source.filter((f) => !vendored.has(f));
+	const byLanguage = new Map<string, number>();
+	for (const [f, n] of lines) {
+		if (vendored.has(f) || NON_SOURCE.test(f)) continue;
+		const lang = languageOf(f) as string;
+		byLanguage.set(lang, (byLanguage.get(lang) ?? 0) + n);
+	}
 	const cls = await classify(dir, w);
-	const language = dominantLanguage(await languageLines(dir, w.all));
-	return { scopeFiles: w.source.length, scopeLoc, routes: cls.routeSources, app: isServedApp(cls), why: appWhy(cls), language };
+	const readme = readmePath(w.all);
+	const readmeText = readme ? await readFile(join(dir, readme), "utf8").catch(() => undefined) : undefined;
+	return {
+		scopeFiles: source.length,
+		scopeLoc: source.reduce((n, f) => n + (lines.get(f) ?? 0), 0),
+		language: dominantLanguage(byLanguage),
+		service: serviceFacts(w.all, w.source, cls.routeFiles, vendored, readmeText),
+		vendored: vendored.size,
+	};
+}
+
+/**
+ * Labels for the change `from`..`to`, with each touched file's import lines
+ * loaded from both sides so import-only hunks can be dropped (importOnly).
+ */
+async function fixLabels(dir: string, advisory: string, from: string, to: string, side: "pre" | "post" = "pre"): Promise<{ labels: Label[]; unscoreable: number; imports: number }> {
+	const hunks = parseZeroContextDiff(await git(dir, ["diff", "--unified=0", "--no-color", from, to]));
+	const pre = new Map<string, Set<number>>();
+	const post = new Map<string, Set<number>>();
+	for (const h of hunks) {
+		if (h.oldFile && isLabelFile(h.oldFile) && !pre.has(h.oldFile)) pre.set(h.oldFile, importLines(h.oldFile, await git(dir, ["show", `${from}:${h.oldFile}`]).catch(() => "")));
+		if (h.newFile && isLabelFile(h.newFile) && !post.has(h.newFile)) post.set(h.newFile, importLines(h.newFile, await git(dir, ["show", `${to}:${h.newFile}`]).catch(() => "")));
+	}
+	return labelsFromHunks(advisory, hunks, side, { pre, post });
 }
 
 const inRange = (loc: number): boolean => loc >= SIZE_RANGE[0] && loc <= SIZE_RANGE[1];
@@ -1259,33 +1569,48 @@ function cacheFileOf(work: string, repo: string, c: Candidate): string {
 	return `${workPaths(work, repo).verdict}.${c.advisory.id}.${c.sha.slice(0, 12)}.v${RULES_VERSION}`;
 }
 
+const errDetail = (err: unknown): string => String((err as Error)?.message ?? err).split("\n")[0]?.slice(0, 300) ?? "";
+
+/**
+ * Run `fn`, retrying a network failure (isTransientGitFailure) twice with a
+ * pause, and stopping the walk if it persists. A verdict must be a fact about
+ * the candidate: recording "not obtainable" because DNS failed for a minute
+ * would make the same seed draw differently on a worse day. A stopped walk has
+ * written nothing and resumes from the verdict cache.
+ */
+async function withNetworkRetry<T>(what: string, fn: () => Promise<T>): Promise<T> {
+	for (let attempt = 1; ; attempt++) {
+		try { return await fn(); }
+		catch (err) {
+			if (!isTransientGitFailure(err)) throw err;
+			if (attempt >= 3) throw new Error(`network failure on ${what} after 3 attempts; the walk stops here and resumes from the cache: ${errDetail(err)}`);
+			await new Promise((r) => setTimeout(r, 15_000 * attempt));
+		}
+	}
+}
+
 async function evaluateCandidate(work: string, repo: string, c: Candidate, useCache = true): Promise<Verdict> {
 	const id = c.advisory.id;
 	const paths = workPaths(work, repo);
 	const cacheFile = cacheFileOf(work, repo, c);
 	if (useCache && existsSync(cacheFile)) return readJson<Verdict>(cacheFile);
 	const fail = (filter: WalkFilter, detail: string): Ineligible => ({ ok: false, advisory: id, filter, detail });
-	const verdict = await (async (): Promise<Verdict> => {
-		let fix: string;
-		let parent: string;
-		try {
-			await ensureRepo(paths.git, c.repo);
-			fix = await fullSha(paths.git, c.repo, c.sha);
-			await fetchRetrying(paths.git, ["--depth", "2", "--filter=blob:none", "origin", fix], 900_000);
-			parent = (await git(paths.git, ["rev-parse", "--verify", `${fix}^1`])).trim();
-		} catch (err) {
-			return fail("source obtainable at the parent commit", String((err as Error).message).split("\n")[0]?.slice(0, 160) ?? "");
-		}
-		let facts: TreeFacts | { tooMany: number };
-		try { facts = await treeFacts(paths.git, parent); }
-		catch (err) { return fail("source obtainable at the parent commit", `checkout: ${String((err as Error).message).split("\n")[0]?.slice(0, 140)}`); }
+	const once = async (): Promise<Verdict> => {
+		await ensureRepo(paths.git, c.repo);
+		const fix = await fullSha(paths.git, c.repo, c.sha);
+		await fetchRetrying(paths.git, ["--depth", "2", "--filter=blob:none", "origin", fix], 900_000);
+		const parent = (await git(paths.git, ["rev-parse", "--verify", `${fix}^1`])).trim();
+		const facts = await treeFacts(paths.git, parent);
 		if ("tooMany" in facts) return fail("size within the official range", `${facts.tooMany} source files`);
-		if (!inRange(facts.scopeLoc)) return fail("size within the official range", `${facts.scopeLoc} loc`);
-		if (!facts.app) return fail("served application", facts.why);
+		if (!inRange(facts.scopeLoc)) return fail("size within the official range", `${facts.scopeLoc} loc${facts.vendored > 0 ? `, ${facts.vendored} vendored file(s) left out` : ""}`);
+		const service = serviceVerdict(facts.service);
+		if (service) return fail(service.filter, service.detail);
 		if (!facts.language || !SCORER_LANGUAGES.has(facts.language)) return fail("language in the scorer's list", facts.language ?? "no code");
-		const diff = await git(paths.git, ["diff", "--unified=0", "--no-color", parent, fix]);
-		const { labels, unscoreable } = labelsFromHunks(id, parseZeroContextDiff(diff));
-		if (labels.length === 0) return fail("labellable fix", unscoreable > 0 ? `${unscoreable} code hunk(s), none in a file the scorer reads` : "no code line changed in a source file");
+		const { labels, unscoreable, imports } = await fixLabels(paths.git, id, parent, fix);
+		if (labels.length === 0) {
+			return fail("labellable fix", imports > 0 ? `${imports} import-only hunk(s) and no other code change in a file the scorer reads`
+				: unscoreable > 0 ? `${unscoreable} code hunk(s), none in a file the scorer reads` : "no code line changed in a source file");
+		}
 		if (labels.length > MAX_LABELS_PER_ADVISORY) return fail("fix not diffuse", `${labels.length} labels`);
 		const ids = [id, ...c.advisory.aliases];
 		for (const l of labels) {
@@ -1293,11 +1618,20 @@ async function evaluateCandidate(work: string, repo: string, c: Candidate, useCa
 			if (text === undefined) return fail("labellable fix", `${l.file} absent from the parent tree`);
 			if (wouldStrip(l.file, text, ids)) return fail("labels survive leak stripping", l.file);
 		}
-		return { ok: true, advisory: id, fix, parent, language: facts.language, scopeFiles: facts.scopeFiles, scopeLoc: facts.scopeLoc, routes: facts.routes, labels, unscoreable };
-	})();
-	// A network failure is not a fact about the candidate; everything else is.
-	const transient = !verdict.ok && verdict.filter === "source obtainable at the parent commit" && /timed out|ETIMEDOUT|ECONNRESET|rate limit|403|429|5\d\d/i.test(verdict.detail);
-	if (!transient && useCache) {
+		return {
+			ok: true, advisory: id, fix, parent, language: facts.language, scopeFiles: facts.scopeFiles, scopeLoc: facts.scopeLoc,
+			routes: facts.service.routeFiles, labels, unscoreable, importOnly: imports, deploy: facts.service.deploy, vendored: facts.vendored,
+		};
+	};
+	let verdict: Verdict;
+	try { verdict = await withNetworkRetry(`${repo} ${id}`, once); }
+	catch (err) {
+		if (/the walk stops here/.test(String((err as Error).message))) throw err;
+		// Any other failure — a deleted repository, a commit GitHub will not
+		// serve, a root commit with no parent — is a fact about the candidate.
+		verdict = fail("source obtainable at the parent commit", errDetail(err));
+	}
+	if (useCache) {
 		await mkdir(dirname(cacheFile), { recursive: true });
 		await writeFile(cacheFile, JSON.stringify(verdict));
 	}
@@ -1342,11 +1676,18 @@ async function resolveInHistory(dir: string, repo: string, sha: string): Promise
 }
 
 async function evaluateControl(work: string, pool: readonly PoolAdvisory[], repo: string, c: Candidate, e: Eligible): Promise<ControlVerdict> {
+	return withNetworkRetry(`${repo} ${c.advisory.id} (control)`, () => evaluateControlOnce(work, pool, repo, c, e));
+}
+
+async function evaluateControlOnce(work: string, pool: readonly PoolAdvisory[], repo: string, c: Candidate, e: Eligible): Promise<ControlVerdict> {
 	const id = c.advisory.id;
 	const dir = workPaths(work, repo).git;
 	const fail = (filter: ControlFilter, detail: string): ControlIneligible => ({ ok: false, advisory: id, filter, detail });
 	try { await ensureHistory(dir, c.repo, [e.fix]); }
-	catch (err) { return fail("history obtainable", String((err as Error).message).split("\n")[0]?.slice(0, 160) ?? ""); }
+	catch (err) {
+		if (isTransientGitFailure(err)) throw err;
+		return fail("history obtainable", errDetail(err));
+	}
 	// Every other advisory of this project in the pool, whatever the metadata
 	// filters made of it: a control is clean only if all of them are fixed in it.
 	const others = pool.filter((a) => a.id !== id && a.fixes.some((f) => repoKey(repoOf(f)) === repoKey(repo)));
@@ -1359,14 +1700,17 @@ async function evaluateControl(work: string, pool: readonly PoolAdvisory[], repo
 	}
 	let facts: TreeFacts | { tooMany: number };
 	try { facts = await treeFacts(dir, e.fix); }
-	catch (err) { return fail("fixed tree obtainable", String((err as Error).message).split("\n")[0]?.slice(0, 160) ?? ""); }
+	catch (err) {
+		if (isTransientGitFailure(err)) throw err;
+		return fail("fixed tree obtainable", errDetail(err));
+	}
 	if ("tooMany" in facts) return fail("fixed tree within the official range", `${facts.tooMany} source files`);
 	if (!inRange(facts.scopeLoc)) return fail("fixed tree within the official range", `${facts.scopeLoc} loc`);
-	if (!facts.app) return fail("fixed tree is a served application", facts.why);
+	const service = serviceVerdict(facts.service);
+	if (service) return fail("fixed tree is a served application", `${service.filter}: ${service.detail}`);
 	if (!facts.language || !SCORER_LANGUAGES.has(facts.language)) return fail("fixed tree language in the scorer's list", facts.language ?? "no code");
-	const diff = await git(dir, ["diff", "--unified=0", "--no-color", e.parent, e.fix]);
-	const fixedRegions = labelsFromHunks(id, parseZeroContextDiff(diff), "post").labels;
-	return { ok: true, advisory: id, commit: e.fix, language: facts.language, scopeFiles: facts.scopeFiles, scopeLoc: facts.scopeLoc, routes: facts.routes, fixedRegions };
+	const fixedRegions = (await fixLabels(dir, id, e.parent, e.fix, "post")).labels;
+	return { ok: true, advisory: id, commit: e.fix, language: facts.language, scopeFiles: facts.scopeFiles, scopeLoc: facts.scopeLoc, routes: facts.service.routeFiles, fixedRegions };
 }
 
 interface Selection {
@@ -1522,7 +1866,7 @@ async function cmdTruth(argv: string[]): Promise<void> {
 		const diffOf = (a: string, b: string, file?: string): Promise<string> =>
 			git(dir, ["diff", "--unified=0", "--no-color", a, b, ...(file ? ["--", file] : [])]);
 
-		const primary = labelsFromHunks(id, parseZeroContextDiff(await diffOf(parent, fix))).labels;
+		const primary = (await fixLabels(dir, id, parent, fix)).labels;
 		const collected: Label[] = [...primary];
 		const credited = [id];
 		const dropped: Array<Record<string, unknown>> = [];
@@ -1545,7 +1889,7 @@ async function cmdTruth(argv: string[]): Promise<void> {
 				// Rule 1: fixed after the reviewed tree, so still open in it.
 				if (!(await isAncestor(dir, parent, `${full}^1`))) continue;
 				const fixParent = (await git(dir, ["rev-parse", `${full}^1`])).trim();
-				const { labels } = labelsFromHunks(a.id, parseZeroContextDiff(await diffOf(fixParent, full)));
+				const { labels } = await fixLabels(dir, a.id, fixParent, full);
 				yielded += labels.length;
 				// Rules 2 and 3: the same code in the reviewed tree, at lines that translate.
 				const diffs = new Map<string, string>();
@@ -1571,7 +1915,8 @@ async function cmdTruth(argv: string[]): Promise<void> {
 		}
 		labels = survivors;
 		const contributing = [...new Set(labels.map((l) => l.advisory))];
-		const { truth, classed } = toTruth(labels, byId);
+		const truth = toTruth(labels, byId);
+		const classed = false;
 		const name = String(t.name);
 		await writeFile(join(outDir, "truth", `${name}.truth.json`), `${JSON.stringify(truth, null, 2)}\n`);
 		manifest.push({
@@ -1677,6 +2022,31 @@ async function cmdRecheck(argv: string[]): Promise<void> {
 	if (mismatches > 0) process.exitCode = 1;
 }
 
+/**
+ * One advisory's verdict under the current rules, from scratch and uncached,
+ * with `--control` also the control rules. Prints the verdict's rule and
+ * counts, never labels. How a draw's earlier controls are re-checked against
+ * a later rule set.
+ */
+async function cmdVerdict(argv: string[]): Promise<void> {
+	const work = resolve(argOf(argv, "work", "/tmp/pired-fresh-work") as string);
+	const pool = await readJson<PoolFile>(argOf(argv, "pool", join(FRESH, "pool.json")) as string);
+	const repo = repoKey(argOf(argv, "repo") ?? "");
+	const a = pool.advisories.find((x) => x.id === argOf(argv, "advisory"));
+	const fix = a?.fixes.find((f) => repoKey(repoOf(f)) === repo);
+	if (!a || !fix) throw new Error("usage: verdict --repo owner/name --advisory CVE-… [--control] (the advisory must be in the pool)");
+	const c: Candidate = { advisory: a, repo: repoOf(fix), sha: shaOf(fix) };
+	const v = await evaluateCandidate(work, repo, c, false);
+	const out: Record<string, unknown> = v.ok
+		? { rules_version: RULES_VERSION, repo, advisory: a.id, eligible: true, language: v.language, scope_loc: v.scopeLoc, labels: v.labels.length, import_only_hunks: v.importOnly, deploy: v.deploy, vendored: v.vendored }
+		: { rules_version: RULES_VERSION, repo, advisory: a.id, eligible: false, filter: v.filter, detail: v.detail };
+	if (v.ok && argv.includes("--control")) {
+		const cv = await evaluateControl(work, pool.advisories, repo, c, v);
+		out.control = cv.ok ? { eligible: true, commit: cv.commit, scope_loc: cv.scopeLoc, fixed_regions: cv.fixedRegions.length } : { eligible: false, filter: cv.filter, detail: cv.detail };
+	}
+	process.stdout.write(`${JSON.stringify(out)}\n`);
+}
+
 async function main(): Promise<void> {
 	const [cmd, ...argv] = process.argv.slice(2);
 	if (cmd === "pool") return cmdPool(argv);
@@ -1685,7 +2055,8 @@ async function main(): Promise<void> {
 	if (cmd === "truth") return cmdTruth(argv);
 	if (cmd === "materialise") return cmdMaterialise(argv);
 	if (cmd === "recheck") return cmdRecheck(argv);
-	process.stderr.write("usage: select-fresh.ts pool|exclusions|draw|truth|materialise|recheck [options]\n");
+	if (cmd === "verdict") return cmdVerdict(argv);
+	process.stderr.write("usage: select-fresh.ts pool|exclusions|draw|truth|materialise|recheck|verdict [options]\n");
 	process.exitCode = 2;
 }
 

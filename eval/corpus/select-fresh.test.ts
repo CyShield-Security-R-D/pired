@@ -4,11 +4,13 @@ import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
 	LABEL_MAX_LINES, SCORER_EXT, advisoryOrder, canonical, cvss3Rating, cvss3Score, dateRuleHolds, dedupeLabels,
-	appWhy, dominantLanguage, drawSequential, isCodeLine, isLabelFile, isServedApp, labelsFromHunks, languageOf, mapLabelsBack, mentionIndex,
+	GitError, dominantLanguage, drawSequential, frameworkPhrase, importLines, importOnly, inNonServiceFolder, isCodeLine, isDeployMarker,
+	isLabelFile, isTransientGitFailure, isVendoredFile, labelsFromHunks, languageOf, libraryBanner, mapLabelsBack, mentionIndex, readmePath,
+	serviceFacts, serviceVerdict, stderrTail,
 	mentions, metadataFilter, mulberry32, namePhrases, parseLsTree, parseZeroContextDiff, poolAdvisory, poolHash, repoOrder,
 	seededShuffle, sparsePatterns, targetName, toTruth, walkFromListing, wilsonLower, wouldStrip, yearHistogram,
 } from "./select-fresh.ts";
-import { walk } from "./lib.ts";
+import { ROUTE_RE, walk } from "./lib.ts";
 import type { Candidate, DrawPorts, Eligible, Hunk, Label, OsvRecord, PoolAdvisory, Verdict } from "./select-fresh.ts";
 
 // --- builders -------------------------------------------------------------------
@@ -351,29 +353,29 @@ describe("dedupeLabels", () => {
 
 describe("toTruth", () => {
 	const byId = new Map<string, PoolAdvisory>([
-		["CVE-1", adv("CVE-1", "acme/shop", { cwe: ["CWE-22", "CWE-23"], severity: "high" })],
-		["CVE-2", adv("CVE-2", "acme/shop", { cwe: ["CWE-79"] })],
+		["CVE-1", adv("CVE-1", "acme/shop", { cwe: ["CWE-285", "CWE-266"], severity: "high" })],
 		["CVE-3", adv("CVE-3", "acme/shop", { cwe: [], severity: null })],
 	]);
 
-	it("gives every label its advisory's first class when every contributing advisory has one", () => {
-		const { truth, classed } = toTruth([label("a.py", 1, 2, "CVE-1"), label("b.py", 4, 4, "CVE-2"), label("c.py", 9, 9, "CVE-1")], byId);
-		expect(classed).toBe(true);
-		expect(truth.map((t) => [t.id, t.cwe, t.vuln_class])).toEqual([["CVE-1-1", "CWE-22", "CWE-22"], ["CVE-2-1", "CWE-79", "CWE-79"], ["CVE-1-2", "CWE-22", "CWE-22"]]);
+	it("writes no class field, so the pinned grader scores location only", () => {
+		// OSV sorts CWE ids as text: variant 1 labelled CWE-266 where the advisory's weakness is CWE-285.
+		const truth = toTruth([label("a.py", 1, 2, "CVE-1"), label("b.py", 4, 4, "CVE-3")], byId);
+		for (const t of truth) {
+			expect(t).not.toHaveProperty("cwe");
+			expect(t).not.toHaveProperty("vuln_class");
+		}
 	});
 
-	it("gives no label a class when any contributing advisory lacks one, since the grader would refuse every class-naming claim against it", () => {
-		// research/12: a classless label beside a classed one could not be matched by any claim that names a CWE.
-		const { truth, classed } = toTruth([label("a.py", 1, 2, "CVE-1"), label("b.py", 4, 4, "CVE-3")], byId);
-		expect(classed).toBe(false);
-		for (const t of truth) expect(t).not.toHaveProperty("cwe");
-		for (const t of truth) expect(t).not.toHaveProperty("vuln_class");
+	it("carries every class of the advisory, in numeric order, for a re-scorer's any-of class level", () => {
+		const truth = toTruth([label("a.py", 1, 2, "CVE-1"), label("b.py", 4, 4, "CVE-3")], byId);
+		expect(truth.map((t) => [t.advisory, t.cwes])).toEqual([["CVE-1", ["CWE-266", "CWE-285"]], ["CVE-3", []]]);
 		expect(truth[1]?.severity).toBe("unknown");
 	});
 
-	it("writes the fields in the official truth files' order, with the id as the title", () => {
-		const { truth } = toTruth([label("a.py", 7, 9, "CVE-1")], byId);
-		expect(Object.keys(truth[0] ?? {})).toEqual(["id", "title", "cwe", "severity", "file", "line", "line_range", "vuln_class"]);
+	it("numbers labels per advisory and keeps the official fields in their order, the advisory id as the title", () => {
+		const truth = toTruth([label("a.py", 7, 9, "CVE-1"), label("c.py", 1, 1, "CVE-3"), label("d.py", 2, 2, "CVE-1")], byId);
+		expect(truth.map((t) => t.id)).toEqual(["CVE-1-1", "CVE-3-1", "CVE-1-2"]);
+		expect(Object.keys(truth[0] ?? {})).toEqual(["id", "title", "severity", "file", "line", "line_range", "advisory", "cwes"]);
 		expect(truth[0]).toMatchObject({ title: "CVE-1", severity: "high", line: 7, line_range: [7, 9] });
 	});
 });
@@ -391,21 +393,146 @@ describe("mapLabelsBack", () => {
 	});
 });
 
-describe("isServedApp", () => {
-	it("admits a single routing file with templates and a server entry, as filebrowser, whoogle-search and note-mark have", () => {
-		// fetch-apps.ts wants route registrations in three files and would reject three of the five official targets.
-		expect(isServedApp({ routeSources: 1, templates: true, migrations: false, server: true })).toBe(true);
+describe("the service rules", () => {
+	const facts = (over: Partial<Parameters<typeof serviceVerdict>[0]> = {}) =>
+		({ routeFiles: 1, templates: true, migrations: false, server: true, deploy: ["Dockerfile"], ...over });
+
+	it("admits one routing file with templates, a server entry and a Dockerfile, as every official target has", () => {
+		// fetch-apps.ts wants three route files and would reject filebrowser, whoogle-search and note-mark.
+		expect(serviceVerdict(facts())).toBeUndefined();
 	});
 
-	it("rejects a project whose only route registration is outside its source, or that has nothing to serve it with", () => {
-		// A README's usage example registers a route; it does not make a library an application.
-		expect(isServedApp({ routeSources: 0, templates: true, migrations: true, server: true })).toBe(false);
-		expect(isServedApp({ routeSources: 4, templates: true, migrations: false, server: false })).toBe(false);
+	it("rejects in the walk's order: served application, then deployable service, then a README that says framework", () => {
+		expect(serviceVerdict(facts({ routeFiles: 0 }))?.filter).toBe("served application");
+		expect(serviceVerdict(facts({ templates: false }))?.filter).toBe("served application");
+		expect(serviceVerdict(facts({ deploy: [] }))?.filter).toBe("deployable service");
+		expect(serviceVerdict(facts({ readmeKind: "a lightweight web framework" }))).toEqual({ filter: "not a framework or library", detail: 'README: "a lightweight web framework"' });
 	});
 
-	it("says why, in the words the walk log records", () => {
-		expect(appWhy({ routeSources: 0, templates: false, migrations: false, server: false })).toBe("0 route source file(s); no templates, migrations or server entry");
-		expect(appWhy({ routeSources: 2, templates: true, migrations: true, server: false })).toBe("2 route source file(s); templates, migrations");
+	it("counts no corroboration or route file from tests, docs, examples, fixtures, mocks or archives", () => {
+		// Variant 1: a server entry at Archive/Web Version/BACKEND/server.js; templates from examples/ and __fixtures__/.
+		const all = ["Archive/Web Version/BACKEND/server.js", "examples/site/templates/a.html", "src/__fixtures__/db/migrations/1.sql", "src/app.ts", "Dockerfile"];
+		const f = serviceFacts(all, ["Archive/Web Version/BACKEND/server.js", "src/app.ts"], ["Archive/Web Version/BACKEND/server.js"], new Set());
+		expect(f).toMatchObject({ routeFiles: 0, templates: false, migrations: false, server: true, deploy: ["Dockerfile"] });
+		expect(inNonServiceFolder("docs/index.py")).toBe(true);
+		expect(inNonServiceFolder("app/test_views.py")).toBe(false);
+	});
+
+	it("counts no route file that is vendored or not source", () => {
+		const f = serviceFacts(["app/routes.py", "app/static/vue.js", "README.md"], ["app/routes.py", "app/static/vue.js"], ["app/routes.py", "app/static/vue.js", "README.md"], new Set(["app/static/vue.js"]));
+		expect(f.routeFiles).toBe(1);
+	});
+
+	it("finds a deployable-service marker at depth three or less, outside tests, docs and examples", () => {
+		for (const p of ["Dockerfile", "deploy/Dockerfile.prod", "docker/compose.yaml", "docker-compose.yml", "charts/app/Chart.yaml", "Procfile", "build/api.Dockerfile"]) expect(isDeployMarker(p)).toBe(true);
+		for (const p of ["a/b/c/Dockerfile", "examples/Dockerfile", "docs/docker-compose.yml", "Dockerfile.md.txt/x", "Procfile.dev", "chart.yml", "frontend/Dockerfile.dockerignore"]) expect(isDeployMarker(p)).toBe(false);
+	});
+
+	it("takes the root README, preferring Markdown", () => {
+		expect(readmePath(["README.rst", "README.md", "docs/README.md"])).toBe("README.md");
+		expect(readmePath(["readme.txt", "src/a.py"])).toBe("readme.txt");
+		expect(readmePath(["docs/README.md"])).toBeUndefined();
+	});
+});
+
+describe("frameworkPhrase", () => {
+	it("finds a README that says the project is a framework, library, SDK or toolkit", () => {
+		expect(frameworkPhrase("# Foo\n\nFoo is a lightweight web-framework for real-time apps.")).toBe("a lightweight web-framework");
+		expect(frameworkPhrase("# Foo\nThe official Python SDK for the Foo API")).toBe("The official Python SDK");
+		expect(frameworkPhrase('<p><img alt="Foo - The API and real-time application framework" src="x.png"></p>')).toBe("The API and real-time application framework");
+		expect(frameworkPhrase("# Bar: a Flask extension library")).toBe("a Flask extension library");
+		expect(frameworkPhrase("Baz is a UI toolkit.")).toBe("a UI toolkit");
+	});
+
+	it("leaves an application that names the framework it is built on, or keeps a library of media", () => {
+		expect(frameworkPhrase("# Shop\nShop is a web app built on the Gin framework.")).toBeUndefined();
+		expect(frameworkPhrase("# Shelf\nA self-hosted photo library for your family.")).toBeUndefined();
+		expect(frameworkPhrase("# Notes\nA note-taking app.\n\n## Stack\n- The Gin web framework\n")).toBeUndefined();
+	});
+
+	it("reads only the first 40 lines", () => {
+		expect(frameworkPhrase(`# App\n${"text\n".repeat(45)}App is a framework.`)).toBeUndefined();
+	});
+});
+
+describe("vendored files", () => {
+	it("treats a file over 5,000 lines, or one opening with a library's banner, as vendored", () => {
+		// Variant 1: shiori's internal/view/assets/js/vue.js, 11,912 lines, made a Go application JavaScript.
+		expect(isVendoredFile("x\n".repeat(5_001))).toBe(true);
+		expect(isVendoredFile("x\n".repeat(4_998))).toBe(false);
+		expect(libraryBanner("/*!\n * Vue.js v2.6.14\n * (c) 2014-2021 Evan You\n */")).toBe(true);
+		expect(libraryBanner("/*! jQuery v3.6.0 | (c) OpenJS Foundation */")).toBe(true);
+		expect(libraryBanner("/** @license React v17.0.2 */")).toBe(true);
+	});
+
+	it("does not treat a project's own licence header as a banner", () => {
+		expect(libraryBanner("/*\nCopyright IBM Corp. All Rights Reserved.\nSPDX-License-Identifier: Apache-2.0\n*/\npackage lib")).toBe(false);
+		expect(libraryBanner("// @license MIT\nexport const x = 1;")).toBe(false);
+	});
+});
+
+describe("server route shapes", () => {
+	const route = new RegExp(ROUTE_RE, "m");
+
+	it("counts registrations on an app, a router or a server", () => {
+		for (const t of ['app.get("/users", list)', "router.post('/login', h)", "apiRouter.use('/v1', r)", "fastify.get('/', h)", "adminApp.put(`/x`, h)",
+			'@app.route("/")', '@bp.post("/items")', 'r.GET("/ping", h)', "Route::get('/a', X::class)", "get '/users', to: 'users#index'"]) {
+			expect(route.test(t)).toBe(true);
+		}
+	});
+
+	it("does not count an HTTP client call, which has the same shape", () => {
+		// lib.ts once counted client.post("/login") as a route and every frontend as an application.
+		for (const t of ['client.post("/login", body)', "axios.get('/api/items')", 'requests.get("/x")', "this.http.get('/api/a')", "api.post('/users', user)", 'await ky.get("/a")']) {
+			expect(route.test(t)).toBe(false);
+		}
+	});
+});
+
+describe("import-only hunks", () => {
+	it("marks Go import blocks, Python parenthesised imports and JavaScript requires as import lines", () => {
+		expect([...importLines("a.go", 'package a\n\nimport (\n\t"fmt"\n\t"strings"\n)\n\nfunc f() {}')]).toEqual([3, 4, 5, 6]);
+		expect([...importLines("a.py", "import os\nfrom x import (\n    a,\n    b,\n)\ndef f():\n    pass")]).toEqual([1, 2, 3, 4, 5]);
+		expect([...importLines("a.js", "const x = require('x');\nimport {\n  a,\n} from './a';\nimport './side';\nfoo();")]).toEqual([1, 2, 3, 4, 5]);
+		expect([...importLines("a.php", "<?php\nuse App\\Models\\User;\n$x = 1;")]).toEqual([2]);
+		expect([...importLines("a.rb", "require 'json'\nputs 1")]).toEqual([1]);
+		expect(importLines("a.py", "x = 1\nprint(x)").size).toBe(0);
+	});
+
+	it("drops a hunk that only changes imports, and keeps one that also changes code", () => {
+		const pre = new Set([3, 4, 5]);
+		const post = new Set([3, 4, 5, 6]);
+		const onlyImport: Hunk = { oldFile: "a.go", newFile: "a.go", oldStart: 4, oldLen: 0, newStart: 5, newLen: 1, removed: [], added: ['\t"strings"'] };
+		expect(importOnly(onlyImport, pre, post)).toBe(true);
+		const mixed: Hunk = { ...onlyImport, newStart: 6, newLen: 2, added: ['\t"strings"', "x := 1"] };
+		expect(importOnly(mixed, pre, post)).toBe(false);
+		expect(importOnly(onlyImport, pre, undefined)).toBe(false);
+	});
+
+	it("leaves out import-only hunks when labelling and counts them", () => {
+		const imp: Hunk = { oldFile: "a.py", newFile: "a.py", oldStart: 1, oldLen: 1, newStart: 1, newLen: 1, removed: ["import os"], added: ["import os, re"] };
+		const code = hunk({ oldFile: "a.py", newFile: "a.py", oldStart: 20 });
+		const sides = { pre: new Map([["a.py", new Set([1])]]), post: new Map([["a.py", new Set([1])]]) };
+		const r = labelsFromHunks("CVE-1", [imp, code], "pre", sides);
+		expect(r.labels.map((l) => l.range)).toEqual([[20, 20]]);
+		expect(r.imports).toBe(1);
+	});
+});
+
+describe("git failures", () => {
+	it("calls a failure transient from git's stderr or a timeout, never from digits in a path", () => {
+		// Variant 1 matched 5\d\d against a message quoting the scratch path, whose digits read as an HTTP 5xx.
+		expect(isTransientGitFailure(new GitError("fatal: unable to access 'x': The requested URL returned error: 502", false))).toBe(true);
+		expect(isTransientGitFailure(new GitError("fatal: early EOF", false))).toBe(true);
+		expect(isTransientGitFailure(new GitError("", true))).toBe(true);
+		expect(isTransientGitFailure(new GitError("fatal: remote error: upload-pack: not our ref 53290abc", false))).toBe(false);
+		expect(isTransientGitFailure(new Error("Command failed: git -C /tmp/x-8d72fb41-b86b-4ced-8041-212fa3b53290 fetch"))).toBe(false);
+		expect(isTransientGitFailure(new Error("cannot expand short sha abc: GitHub 403"))).toBe(true);
+	});
+
+	it("keeps the last three lines of stderr, at most 300 characters", () => {
+		expect(stderrTail("a\n\nb\nc\nd\n")).toBe("b | c | d");
+		expect(stderrTail("x".repeat(400))).toHaveLength(300);
 	});
 });
 
@@ -440,6 +567,8 @@ describe("the code-only checkout", () => {
 	it("checks out every file the language count reads, whatever the case of its extension", () => {
 		const patterns = sparsePatterns();
 		expect(patterns).toContain("*.[pP][yY]");
+		// The root README, for the framework rule; the leading slash anchors it to the root.
+		expect(patterns).toContain("/[rR][eE][aA][dD][mM][eE]*");
 		for (const path of ["a/b.py", "C.PHP", "x/y.Tsx", "lib/z.cpp", "App.vue", "run.sh", "m.MM"]) {
 			expect(languageOf(path)).toBeDefined();
 			expect(patterns.some((p) => matches(p, path))).toBe(true);
