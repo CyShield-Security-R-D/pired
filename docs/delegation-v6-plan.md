@@ -48,15 +48,15 @@ then the product. Each product change is judged by a pre-registered test on fres
 Every item keeps both arms under identical conditions. Each item's fairness trade-off is written into
 its ADR.
 
-| # | item | why |
-|---|---|---|
-| 2.1 | **Retry known-transient provider errors inside a run.** Capped, logged per request, failed partial tokens counted, identical in both arms, reported per arm. | 349M tokens were lost to drops. Having no retry also biases the valid set toward short runs, and hits the arm that makes more calls hardest. |
-| 2.2 | **Run a pair's two arms concurrently, in random start order.** | Removes night-to-night drift within a pair. Makes the next item safe. |
-| 2.3 | **Circuit breaker** (consecutive failures, or failure rate within a window) instead of stopping on the first failed run. | Keeps the protection during outages without stalling the grid on single drops. |
-| 2.4 | **Reuse a valid arm** when only its partner failed for infrastructure, both started in the same window, and runs are concurrent. Results are reported with and without reuse. | 17 valid runs (135M tokens, 7.2 run-hours) were discarded. |
-| 2.5 | **Matched-compute arm:** the single agent run *k* times at the candidate's token budget, with findings combined. | Tests whether delegation adds anything beyond spending more tokens. |
-| 2.6 | **Stop reason as a first-class outcome**, recorded per run: finished, offered to continue, budget, turn cap, error. | Luna ends about 80% of runs by offering to continue. |
-| 2.7 | **The candidate's scope states its worker cap.** The review scope sets no `maxAgents`, and since ADR-029 the default is 0. | A candidate cut from `main` would otherwise run with delegation silently off. |
+| # | item | why | status |
+|---|---|---|---|
+| 2.1 | **Retry known-transient provider errors inside a run.** Capped, logged per request, failed partial tokens counted, identical in both arms, reported per arm. | 349M tokens were lost to drops. Having no retry also biases the valid set toward short runs, and hits the arm that makes more calls hardest. | building: retry review in progress |
+| 2.2 | **Run a pair's two arms concurrently, in random start order.** | Removes night-to-night drift within a pair. Makes the next item safe. | needs an operator decision: network isolation per cell |
+| 2.3 | **Circuit breaker** (consecutive failures, or failure rate within a window) instead of stopping on the first failed run. | Keeps the protection during outages without stalling the grid on single drops. | done: ADR-031 (breaker, attempt ceiling 16) |
+| 2.4 | **Reuse a valid arm** when only its partner failed for infrastructure, both started in the same window, and runs are concurrent. Results are reported with and without reuse. | 17 valid runs (135M tokens, 7.2 run-hours) were discarded. | after 2.2 |
+| 2.5 | **Matched-compute arm:** the single agent run *k* times at the candidate's token budget, with findings combined. | Tests whether delegation adds anything beyond spending more tokens. | not started |
+| 2.6 | **Stop reason as a first-class outcome**, recorded per run: finished, offered to continue, budget, turn cap, error. | Luna ends about 80% of runs by offering to continue. | done: ADR-030 |
+| 2.7 | **The candidate's scope states its worker cap.** The review scope sets no `maxAgents`, and since ADR-029 the default is 0. | A candidate cut from `main` would otherwise run with delegation silently off. | done: ADR-032 (cap pinned at 8) |
 
 ## Phase 3 — Product changes (candidate snapshot v5; each its own ADR)
 

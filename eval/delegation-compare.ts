@@ -2415,7 +2415,7 @@ async function inspectRun(ctx: Context, cell: PreparedCell, launched: Launch, at
 }
 
 /**
- * Why the run and each worker stopped (ADR draft 2.6). Attached after the record
+ * Why the run and each worker stopped (ADR-030). Attached after the record
  * is built, like the delegation audit, and never read by validity: a run that
  * offers to continue is still a valid run, it is the model's choice. Kept apart
  * from `valid` so an old grid's rows, which lack it, still load and compare.

@@ -2441,3 +2441,411 @@ default was the configuration measured to cost more for no more findings.
 - **A global switch in `~/.pired/`.** It was rejected in ADR-018 for the same reason as every other
   engagement policy: `maxAgents` already lives in the scope file, and one knob in two places is two
   answers to one question.
+
+## ADR-030 — A run's stop reason is recorded as an outcome, beside validity and never inside it
+
+**Status:** accepted for the v6 harness · 2026-09-26 · delegation v6 Phase 2, item 2.6 · follows ADR-026, ADR-027
+
+### Context
+
+A v5 run record says whether the run is valid. It does not say why the model stopped, so these
+three runs read the same:
+- a run that finished its work;
+- a run that handed the turn back with an offer to do more;
+- a worker that pired's turn budget stopped, whose parent then wrapped up.
+
+The trial (ADR-026, *Outcome*) could not tell a model that found less from a model that stopped
+asking for leave to continue. The same gap exists per worker. `childOutcome` names a worker
+`incomplete` when a bound stopped it, but a worker that handed back early with a question reads
+as `completed`.
+
+A text rule for "offered to continue" is the risky part. A list of sign-off phrases taken from
+the corpus would be fitted to the three models the corpus ran, and would miss the next model's
+wording. The corpus itself is temporary (see the no-overfitting rule).
+
+### Decision
+
+- **New module `eval/delegation-compare-stop.ts`.** `classifyStop` returns
+  `{ outcome, evidence }`. The outcomes are `error`, `budget`, `turn-cap`, `offered-to-continue`
+  and `finished`, and the first match wins in that order:
+  1. **error:** the run failed on its own terms. That covers:
+     - a launch error, or no process;
+     - a non-zero exit;
+     - no reply, or a last reply other than `stop`;
+     - a runner interruption.
+
+     A worker is judged on how its session ended, as the parent is on its last reply. It is an
+     error when it has no session, ended `cut-off` or `aborted-between-requests` without a
+     timeout, handed off on a `length` reply (as a parent's `length` reply is), or has a
+     non-completed pi-subagents row. An error pi retried earlier in the session, after which the
+     worker handed off cleanly, does not make it an error; the count is kept beside the outcome
+     as `sessionErrors`.
+  2. **budget:** the run's time limit fired, or a token ceiling did (the ceiling is the input
+     item 2.5 adds; it is unused today). A worker is budget when pi-subagents reports it
+     `timed-out` and its session does not end on pired's turn-budget stop. A run the runner killed at its time limit exits on a signal with an `aborted`
+     reply. That is the budget, not an error, so the time-limit check comes before the exit-code
+     check.
+  3. **turn-cap:** a worker whose session ends in `budget-stop`, meaning pired's turn budget
+     stopped it. This is read before the worker's `timed-out` status, because the pi-subagents
+     timeout can fire between pired's stop and the settle (`childOutcome`); read after it, the
+     turn cap would be labelled the time limit. A parent cap is accepted as input, but the
+     harness has none today.
+  4. **The text test**, on the last reply's prose.
+- **The text test is grammatical, not a phrase list.**
+  - Code fences (an unclosed fence runs to the end), inline code, quoted strings, blockquotes,
+    list items, table rows, headings and rules are removed first. The last paragraph is kept.
+  - Four features are read from it. Three look only at the closing sentences (the last two), so
+    a recommendation earlier in the paragraph is not read as the sign-off:
+    - **closing-question:** the last sentence ends in `?`, after trailing emphasis is trimmed;
+    - **reader-address:** a second-person pronoun appears in a closing sentence;
+    - **first-person-offer:** a closing sentence offers the reader more work by the writer. That
+      is a first-person question (`shall I`, `should we`), the reader's wish about the writer's
+      work (`would you like me to`, `want me to`), `let me know`, or a conditional on the
+      reader's wish joined to a first-person modal *in the same sentence* (`if you want, I can`).
+      A bare first-person modal is not an offer: "I would recommend you patch the upload handler
+      first" is advice and "I will now stop" an announcement. A conditional with no first-person
+      modal is a pointer: "if you need the raw requests, they are in evidence/". A negated modal
+      (`I could not`, `I couldn't`, `I can't`) reports a failure;
+    - **states-incomplete:** generic English words for unfinished work, anywhere in the paragraph.
+  - The run **offered to continue** when the closing is a question or makes an offer. Otherwise
+    it **finished**. The offer is aimed at the reader by its construction, so it does not also
+    need a "you"; an earlier draft required "you" plus any first-person modal anywhere in the
+    paragraph, and read every synthetic recommendation-style closing in the tests as an offer.
+  - Every feature that fired goes into `evidence`. Reader-address and incompleteness are
+    evidence only: "your team should rotate the keys" addresses the reader without handing
+    anything back, and "no further issues remain" is a finished report.
+- **A ledger cross-check sits beside the outcome and is never merged into it.**
+  - `crossCheck` holds surface cells, hypotheses, settled hypotheses and open hypotheses, taken
+    from the engagement telemetry the run record already carries.
+  - It is `null` when there is no telemetry or the engagement directory is absent, so a missing
+    ledger does not read as zero open. A ledger that exists but fails to read still does:
+    `engagementTelemetry` returns zeros when its read throws, and changing that is outside this
+    item.
+  - `surfaceCells` is the inventory's size. Unsettled surface cells, which the design asks for,
+    are omitted: the telemetry carries no per-cell status.
+  - The summary **lists** the runs that read as *finished* with open hypotheses (arm, key, open
+    count). That disagreement is the case to inspect. It is not counted per arm; see fairness.
+- **Wiring.**
+  - `inspectRun` attaches `record.stop = { outcome, evidence, crossCheck, workers[] }` after the
+    record is built, and guarded the way `delegationAudit` is: if the classifier throws, the
+    record carries `stop: { error }` and `run.json` is still written.
+  - `summary.json` gains a `stops` section: runs by outcome per arm (with `unclassified` for rows
+    that predate the field), candidate workers by outcome, the same two counts under `valid` over
+    valid runs only (the runs the comparison scores), and the list of finished runs with open
+    hypotheses. The top-level counts include invalid and infrastructure-failed runs, so an arm
+    with more infrastructure failures shows more `error` rows there.
+  - The module is added to `HARNESS_FILES`.
+
+### Fairness between arms
+
+- **The same rule runs on both arms' parents, but not on the same register.** Within a pair the
+  model is the same, but the arms run different prompts, and the candidate's parent writes its
+  closing by summarising worker handoffs. So the arms' closings can differ in register, and the
+  rule's error rate (its false offers from rhetorical questions, its missed list-item offers) can
+  differ between arms even under one model. A difference in `offered-to-continue` between arms is
+  therefore a lead to read transcripts on, not a measured behavioural difference, until the
+  labelled validation below measures the rule's error rate per arm. Across models the error rate
+  differs as well, so rates are never compared across models.
+- **Finished-with-open-hypotheses is biased against the candidate.** Since ADR-028 the ledger
+  never loses an open lead: a worker's unconfirmed lead stays open by design, and the baseline
+  has no workers to leave one. The candidate will show more finished runs with open hypotheses
+  when both arms behave alike. The count cannot be compared between arms as it stands, so it is
+  not reported per arm; the runs are listed for inspection. Telling the worker-left leads apart
+  would need the hypothesis rows to carry who recorded them, which the ledger format does not.
+- **Only the candidate has workers.** Its worker counts have no baseline counterpart. They are
+  reported apart from the per-arm run counts and must not be added to them.
+- **The candidate's parent may close differently because of delegation.** For example, it may
+  summarise a worker's open lead as unfinished work. `states-incomplete` then fires more often on
+  the candidate. It does not decide the outcome, which is why it is evidence only.
+- **Invalid runs are counted apart.** An arm with more infrastructure failures has more `error`
+  rows in the all-runs counts; the `valid` counts refer to the same runs as the TP comparison.
+- **Validity is untouched.** No outcome changes `valid`, the comparison, the approval or the
+  resume plan. A run that offers to continue is still a valid run and is scored as delivered.
+  Neither arm gains or loses a true positive from this change.
+
+### Consequences
+
+- **A resume across this change is refused.**
+  - `harnessSha256` changes because `delegation-compare.ts` changed and a new file is pinned. A v5
+    grid is resumed from a worktree at its own commit, as before.
+  - Old `runs.jsonl` rows still load. They carry no `stop`, and the summary counts them as
+    `unclassified`.
+- **The rule is not yet validated.**
+  - Design step 5 asks for a labelled sample from all three models before the rule is frozen.
+    GLM and DeepSeek serve as negatives, since they never stopped early.
+  - That sample was not taken here. The rule was written against synthetic text only, so it
+    could not be fitted to the corpus.
+  - The validation should be pre-registered: label first, then measure agreement, and change no
+    rule after seeing the labels without recording that as a new version.
+  - Until then, the outcome counts are diagnostic, not evidence.
+- **English only; multilingual behaviour is out of scope.** The offer feature reads English
+  grammar only. The question feature does not depend on language, so a closing in another
+  language that ends in `?` still reads as `offered-to-continue` ("Voulez-vous que je
+  continue ?"), and one that does not reads as `finished`. A sign-off with no question and none
+  of the offer shapes, such as "I'll wait for direction", also reads as `finished`.
+- **Known false positives and blind spots**, each pinned by a test named for it:
+  - a rhetorical closing question ("Done. What would an attacker gain here?") reads as offered;
+  - an offer written as a list item ("- Want me to test the refund path?") is stripped with the
+    findings lists and reads as `finished`. Keeping trailing list items that are questions would
+    also keep a findings list ending in an open question, so the blind spot is recorded instead.
+- **This is a stopgap.** A structural `finish` action (Phase 3) would make the stop reason a tool
+  call, and the text test would become a fallback.
+
+### Rejected
+
+- **A phrase list mined from the v5 transcripts.** It would recognise those models' sign-offs and
+  no one else's, which is exactly the overfitting the held-out guard exists to prevent.
+- **Making "offered to continue" invalidate the run, or re-prompting the model to continue.**
+  Either changes what is measured, and treats one arm's stopping habit as a harness fault.
+  Stopping is the model's choice, and it is reported, not corrected.
+- **Folding the ledger cross-check into the outcome.** An offer with nothing open, or a
+  finished-sounding run with open hypotheses, is the disagreement worth seeing. A merged label
+  would hide it.
+- **Reading the pi-level `stopReason` alone.** Every one of these runs ends `stop`, so it cannot
+  tell the outcomes apart.
+
+## ADR-031 — A circuit breaker, not the first invalid run, stops a grid
+
+**Status:** accepted for the v6 harness · 2026-09-26 · delegation v6 Phase 2, item 2.3 · amends the runner's fail-fast
+rule · follows ADR-026
+
+### Context
+
+The runner stopped launching new pairs after any invalid run. For a failure that is not
+infrastructure that rule is right: the pair stays invalid, an official grid's decision is already
+`incomplete_or_invalid`, and every further pair spends up to two hours per arm on a known outcome.
+For an infrastructure failure it is wrong. `--resume` re-runs such a pair anyway, so all the rule
+did was turn each dropped stream into a stopped grid waiting for the operator.
+
+The v5 trial measured the cost (`research/12`, *The benchmark's own cost*):
+- one failed run stopped a grid from launching new pairs;
+- one pair needed 14 attempts, each started by a resume;
+- about 43% of all tokens went to runs that did not count: 550M against 1,024M on the 144 valid
+  runs. Provider and network drops were 349M of it.
+
+The replacement has to do two things. It must keep going through isolated drops. It must still stop
+quickly during an outage, on a spent quota, or when the candidate fails every run, because then
+every launch is wasted.
+
+### Decision
+
+- **Opt-in per grid, pinned.** `--breaker <spec>` turns it on. The spec is `default`, or `k=v`
+  pairs over the defaults:
+  - `consecutive=3` (C), `rate=0.5` (R) and `window=8` (N);
+  - `cooldownMs=60000` and `maxAttempts=4`;
+  - `attemptCeiling=16` (K).
+
+  The policy is written into the manifest as `breaker`. `optionsFromManifest` restores it on
+  resume, and `resumeMismatches` refuses a resume whose policy differs. Without the option the
+  runner is the fail-fast loop every earlier grid ran: its manifest and `summary.json` carry no new
+  field, and a manifest without `breaker` resumes fail-fast with no ceiling.
+- **No policy is pinned yet.** The pins file does not name one, so `--breaker` does not by itself
+  make a grid exploratory. Which policy an official v6 grid runs under belongs to the v6
+  pre-registration (plan item 4.2), not to this harness change.
+- **`createBreaker(policy)`** is pure and lives in `eval/delegation-compare-lib.ts`.
+  `record({atMs, valid, infra, exhausted, blocked})` returns `{tripped, reason}`.
+  - **It trips at once** on a spent quota (`exhausted`), since nothing launched before the reset
+    can succeed. It also trips at once on a run invalid for a non-infrastructure reason in an
+    official grid (`blocked`), for the reason fail-fast gave.
+  - **Otherwise it trips** when C launched runs fail in a row, or when at least a share R of the
+    last N launched runs failed. The share is read only once N runs are in: two drops in the first
+    three runs are a 67% rate that says nothing yet. A valid run ends the streak.
+  - **Every failed launch counts, whatever its cause.** In an official grid a non-infrastructure
+    failure has already tripped it, so what is left to count there is infrastructure. In an
+    exploratory grid it is not blocked. An earlier draft counted only infrastructure there: a
+    candidate that timed out every run then spent the whole ~36 h grid, and timeouts between
+    drops diluted the window below R. The reason says how many failures were infrastructure, for
+    example "5 of 8 launched runs failed (3 infrastructure)".
+  - Once tripped it stays tripped.
+- **Only launched runs feed it.** A partner that was not launched because its first arm failed
+  reached no provider. Counting it would double the weight of each failure that stopped a pair.
+- **`nextPairAction(attempt, arms, {attemptCeiling, requeue})`** is the pairing rule `planResume`
+  already applied, now one function shared by both.
+  - Keep: both arms are valid at the same attempt.
+  - Block: an arm is invalid for a non-infrastructure reason. Such a pair is never re-queued.
+  - Abandon: an arm is missing or failed for infrastructure, and the attempt is already K.
+  - Otherwise re-run both arms at attempt + 1.
+
+  The runner also passes a requeue context. It waits `cooldownMs × n` after its n-th attempt at the
+  pair, and gives up at `maxAttempts`, which leaves the pair for `--resume`. `planResume` passes the
+  ceiling but no requeue context: a resume is the operator's decision to spend more on a pair, so
+  it waits no cooldown and applies no per-runner cap.
+- **Two bounds on attempts.**
+  - **The per-runner cap** (`maxAttempts`, 4) counts one runner's attempts, and a resume starts
+    it again. On a fresh grid this is the attempt number.
+  - **The ceiling** (K, 16) is on the attempt number itself, across every resume. Without it, an
+    auto-resumer could re-run one pair forever. v5c Luna's worst pair needed 14 attempts; a ceiling
+    of 4 would have abandoned 7 of its 15 pairs.
+  - **An abandoned pair** is listed in the resume plan and never re-run. It makes the grid
+    `incomplete_or_invalid`. An official grid stops when a pair is abandoned, and its resume is
+    refused as for a blocked pair, so an auto-resume loop ends.
+- **Scheduling.** The pair loop moves out of `runGrid` into `runPairs`, with the launch, the
+  bookkeeping, the clock and the sleep injected, so it is tested without a model.
+  - A ready re-queued pair goes before later pairs of the schedule, so a stopped grid still leaves
+    whole passes where it can.
+  - A worker with nothing ready waits for the first cooldown in slices of at most one second, so it
+    sees a signal or a trip quickly.
+  - A worker with nothing queued stops. That loses no pair: only the worker that ran a pair can
+    re-queue it, and that worker is still running.
+- **The comparison reads each pair's highest attempt** (`atHighestAttempt`). Without that, the
+  earlier attempts of a re-queued pair would count as duplicate runs and mark the grid incomplete.
+  A fail-fast grid holds one attempt per pair, so for it this changes nothing.
+- **The OAuth horizon covers every attempt one runner can make.**
+  - With a breaker, `gridWorstCaseMs` allows each pair `maxAttempts` attempts plus its cooldowns:
+    144.9 h for the official grid instead of 36 h, under the 168 h cap.
+  - With the 35 min margin, the token must stay valid for about 146 h. A freshly refreshed codex
+    token lives 240 h, so refreshing first should meet it. Otherwise `--auth-horizon-hours` states
+    a shorter bound. Neither was checked against a live token here: this item made no network
+    calls.
+  - A horizon sized for one attempt would let a grid that re-queues outlive its token and refresh
+    it inside a cell.
+- **Reporting.** `summary.json` gains a `breaker` block:
+  - the policy, and whether and why it tripped;
+  - the pairs re-queued, the pairs that reached the per-runner cap, and the blocked pairs (in an
+    exploratory grid the breaker goes on past them);
+  - each pair's highest attempt;
+  - launched infrastructure failures per arm, by reason, over every row of the grid (including a
+    resume's predecessors);
+  - for each abandoned pair, every attempt, with each arm's validity, infrastructure flag,
+    reason, seconds and tokens.
+
+  In `progress.json`, `completedRuns` counts arms at their pair's highest attempt, and `attempts`
+  counts every row. Abandoned pairs and pairs left at the cap are named in `notApprovedReasons`.
+
+### Fairness between arms
+
+- **Both arms are treated alike.** The breaker counts runs, not arms. A pair is re-queued as a
+  pair, both arms in fresh cells, in its scheduled order. So the counterbalancing of which arm
+  goes first holds on every attempt.
+- **The same-attempt pairing rule holds.** A pair counts only when both arms are valid at the same
+  attempt. A valid arm whose partner dropped is re-run with it, never kept (reusing it is item 2.4).
+  The 17 valid runs v5 discarded under this rule would still be discarded here.
+- **The cost of an outage's start.** The breaker trips on the C-th failed launch counted across
+  all workers. Runs already in flight then finish. With k pairs in flight, at most C + k − 1
+  failed runs are spent, within the design's bound of C × k. Which arm pays depends only on the
+  counterbalanced order.
+- **Selection by survival.** Pairs that count are those where both arms survived the same attempt,
+  which favours shorter runs.
+  - The breaker changes when a pair is re-run, not which pairs count. The ceiling bounds the
+    selection among counted pairs to K draws per pair.
+  - Which arm the selection costs more is not assumed. Measured launched infrastructure
+    failures, baseline against candidate, were 31/16 on v5c Luna, 22/8 on v5 GLM and 10/14 on cc
+    GLM. The summary now reports the count per arm for every grid.
+  - Item 2.1, retrying inside a run, is the remedy for the selection itself.
+- **Abandoning cannot create an approval.** An abandoned pair makes the grid incomplete. So the
+  ceiling can only turn an approval into no decision, never produce a false approval.
+
+### Consequences
+
+- **A resume across this change is refused.** `harnessSha256` changes, so a v5 grid is resumed from
+  a worktree at its own commit, as before.
+- **The manifest schema stays v2.** `breaker` is additive, like `candidateMaxAgents` (item 2.7).
+  The Phase 2 design's schema v3, which would refuse older manifests, is not introduced here and is
+  still pending before any Phase 2 official grid. `RESUME_POLICY`, which every manifest carries
+  verbatim, is unchanged. The breaker's rule is in `--help` and in this record.
+- **A grid with `--breaker` spends on its own what the operator used to decide at each resume.**
+  That is up to `maxAttempts` attempts per pair per runner, and K per pair in all. The breaker does
+  not reduce the tokens a dropped run burns before it drops. It removes the stall, and bounds the
+  attempts.
+- **An exploratory grid now stops on repeated failures of any kind, but later than fail-fast.** A
+  candidate that fails every run alternates with valid baseline runs under the counterbalanced
+  order (valid, failed, failed, valid, ...). That never makes three failures in a row, so the rate
+  trips it, on the eighth launch (5 of 8 failed). Fail-fast stopped at the first failure. A first
+  pilot of a new candidate can still run without `--breaker`.
+- **Later items build on this.** Item 2.2, concurrent arms, changes what "in flight" means and
+  drops the ×2 in `gridWorstCaseMs`. Item 2.4 widens `nextPairAction` with rerun-arm.
+
+### Rejected
+
+- **Fail-fast plus `--resume`.** That was v5: one dropped stream stopped the grid until someone
+  noticed.
+- **Re-queuing without a breaker.** During an outage every pair would spend `maxAttempts` attempts
+  before the grid ended.
+- **A streak alone, or a rate alone.** A flapping provider that drops every other run never makes
+  three in a row, and the rate catches it. The rate needs a full window, so at the start of an
+  outage the streak is what trips first.
+- **Counting only infrastructure failures.** In an exploratory grid a candidate that times out
+  every run would never trip it, and timeouts would dilute the window.
+- **Counting not-launched partners.** They reached no provider, and would double the weight of each
+  failure that stopped a pair.
+- **The per-runner cap alone.** Every resume starts it again, so under an auto-resumer one pair
+  could be re-run forever.
+- **A ceiling alone, set as low as the per-runner cap.** A ceiling of 4 would have abandoned 7 of
+  v5c Luna's 15 pairs. A ceiling high enough to spare them (16) does not bound one unattended
+  runner, and the per-runner cap does.
+- **Re-queuing a non-infrastructure failure.** It chases a candidate or harness defect with more
+  tokens, and selects the arm by its survival.
+- **A breaker over wall-clock time (failures per hour).** A run lasts from seconds to two hours, so
+  an hour holds very different amounts of evidence. Counting runs does not have that problem.
+
+## ADR-032 — The candidate's scope states its worker cap
+
+**Status:** accepted for the v6 harness · 2026-09-26 · delegation v6 Phase 2, item 2.7 · follows ADR-029
+
+### Context
+
+The harness writes each cell a review scope: whole application, unenforced, no targets. It named no
+`maxAgents`, so every arm ran at its snapshot's own default. That was harmless while the candidates
+were the v3 and v4 snapshots, which default to 8.
+
+ADR-029 made the default 0 on `main`. A candidate cut from `main` after that change, run under a
+scope naming no cap, would not delegate at all: the gate refuses every launch and the launcher is
+hidden. The grid would then compare the baseline with a second single agent and report the result
+as a delegation result. Nothing in the run record would say so, because a candidate that chooses not
+to delegate and one that cannot look the same from outside.
+
+### Decision
+
+- **The candidate's scope writes `maxAgents`** from `--candidate-max-agents <n>`, default 8, the
+  v3/v4 snapshots' own default. A re-run of one of those snapshots without the flag delegates as its
+  grids did.
+- **The baseline's scope is unchanged.** It names no cap, so the baseline measures whatever its
+  snapshot defaults to.
+- **The cap is part of the candidate's identity.**
+  - `newManifest` pins it as `candidateMaxAgents`.
+  - `optionsFromManifest` restores it on `--resume`.
+  - `resumeMismatches` refuses a resume whose cap differs: pairs run under two caps are two
+    candidates pooled into one comparison.
+- **An official grid runs at the pinned cap.** `eval/delegation-compare.pins.json` states
+  `candidateMaxAgents: 8`. Any other cap adds an exploratory reason (`workerCapReason`), the way a
+  candidate digest that does not match its pin does. Without this, `--candidate-max-agents 3` on the
+  official five targets would have produced an acceptance decision for a candidate nobody froze: the
+  snapshot was pinned, the cap it runs under was not.
+- **Old manifests.** A manifest without the field predates the option, and `optionsFromManifest`
+  then writes no cap, as those grids' cells did. A present but malformed value is refused rather
+  than read as absent, which would silently change the arm.
+- The delegation audit already reads the cap from the cell's `scope.json`, so it checks the budget
+  the gate enforced.
+
+### Fairness between arms
+
+The arms differ in the cap only because delegation is the change under test. The baseline loads no
+pi-subagents (`toolSurfaceErrors` refuses one that does), so a cap in its scope could change nothing
+it does. Leaving the field out keeps the baseline's cell exactly what earlier grids ran.
+
+### Consequences
+
+- `harnessSha256` changes, so a v5 grid resumes from a worktree at its own commit, as for any
+  harness edit.
+- **The absent-cap path is unreachable for old grids today.** The harness pin refuses a v5 grid's
+  resume under this code before any cell is prepared, so its resume runs from its own worktree,
+  where the option does not exist. The path stays so that a manifest without the field is never
+  read as having one.
+- **The manifest schema bump is still pending.** The Phase 2 design's schema v3, under which
+  `optionsFromManifest` refuses a v2 manifest with a clear message, has not landed. It must land
+  before any Phase 2 official grid.
+- **A v3 or v4 re-run now shows the model a cap its grids did not.** `reviewScope` writes
+  `"maxAgents": 8` into the reviewed tree's `pired.scope.json`, which the model can read; the v5
+  cells' file named none. The gate behaves the same: those snapshots default to 8, so
+  `workerCap` returns 8 either way, and the prompt states the same number.
+- A grid that wants to measure the candidate's solo behaviour states it: `--candidate-max-agents 0`.
+
+### Rejected
+
+- **Relying on the snapshot's default.** It is what hid the problem: the same scope means 8 for a
+  v4 snapshot and 0 for a `main` cut.
+- **Writing the cap into both arms' scopes.** It changes the baseline's cell for no effect, and a
+  baseline snapshot that could delegate would then do so, and the comparison would stop being
+  delegation against a single agent.
+- **A global setting outside the scope file.** ADR-018 keeps engagement policy in the scope, and
+  `maxAgents` already lives there.

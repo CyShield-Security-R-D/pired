@@ -1,5 +1,5 @@
 /**
- * Why a run, or one of its workers, stopped (delegation v6 Phase 2, item 2.6).
+ * Why a run, or one of its workers, stopped (delegation v6 Phase 2, item 2.6; ADR-030).
  *
  * Validity says whether a run can be scored; it says nothing about why the
  * model stopped. In the v5 grids a run that ended by offering to do more and
