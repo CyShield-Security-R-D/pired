@@ -4,8 +4,8 @@ import { agentMarker, PIRED_AGENTS } from "../core/subagents.ts";
 import {
 	accountUsage, APPROVAL_DECISION, childRecordIds, compareMatchedRuns, contentText, findLeaks, isOfficialGrid, leakTermsFor, normalizePiUsage,
 	observationsFromChildSession, observationsFromPiEvents, OFFICIAL_PASSES, OFFICIAL_TARGET_IDS, piCostUsd, PIRED_BUDGET_STOP, planSchedule, QUALITY_MARGIN,
-	reconcileChildSession, reconcileSubagentCalls, type ChildSessionExtraction, type ExpectedCell, type RunMetric, type SubagentChild,
-	type UsageObservation,
+	meteredCallCount, reconcileChildSession, reconcileSubagentCalls, summarizeRetries, type ChildSessionExtraction, type ExpectedCell,
+	type RetriedAttempt, type RunMetric, type SubagentChild, type UsageObservation,
 } from "./delegation-compare-lib.ts";
 
 const usage = (inputTokens: number, outputTokens: number) => ({
@@ -386,7 +386,7 @@ describe("observationsFromPiEvents", () => {
 		const parsed = observationsFromPiEvents(events, { retry: true });
 		expect(parsed.errors).toEqual([]);
 		expect(parsed.providerErrors).toEqual([]);
-		expect(parsed.retries).toEqual([{ id: "r2", origin: "parent", errorMessage: "terminated", meteredTokens: 40, estimatedTokens: 0 }]);
+		expect(parsed.retries).toEqual([{ id: "r2", origin: "parent", errorMessage: "terminated", recovered: true, meteredTokens: 40, estimatedTokens: 0 }]);
 		const result = accountUsage(parsed.observations);
 		expect(result.valid).toBe(true);
 		expect(result.parent.totalTokens).toBe(160 + 40 + 12);
@@ -450,16 +450,68 @@ describe("observationsFromPiEvents", () => {
 		expect(parsed.providerErrors).toEqual([]);
 	});
 
-	it("counts a failed summary call as an estimated retry and ignores the attempt markers", () => {
+	it("counts a failed summary call as a retry without an estimate, since its prompt is only part of the history", () => {
+		// The previous reply's prompt includes the kept messages a summary call
+		// does not send, so using it would not be a lower bound.
 		const parsed = observationsFromPiEvents([
 			reply({ id: "r1", stop: "toolUse", usage: piUsage(100, 10) }),
 			{ type: "summarization_retry_scheduled", attempt: 1, errorMessage: "terminated" },
 			{ type: "summarization_retry_attempt_start", attempt: 2 },
-			{ type: "summarization_retry_finished", success: true },
+			{ type: "summarization_retry_finished" },
+			compactionEnd("threshold", { summary: "s", usage: piUsage(50, 5) }),
 			reply({ id: "r2" }),
 		], { retry: true });
 		expect(parsed.providerErrors).toEqual([]);
-		expect(parsed.retries).toEqual([{ id: "summary-retry:1", origin: "parent", errorMessage: "terminated", meteredTokens: 0, estimatedTokens: 110 }]);
+		expect(parsed.retries).toEqual([{ id: "summary-retry:1", origin: "parent", errorMessage: "terminated", recovered: true, meteredTokens: 0, estimatedTokens: 0 }]);
+	});
+
+	it("leaves a summary call's retry unrecovered when the compaction still fails", () => {
+		const parsed = observationsFromPiEvents([
+			reply({ id: "r1", stop: "toolUse", usage: piUsage(100, 10) }),
+			{ type: "summarization_retry_scheduled", attempt: 1, errorMessage: "terminated" },
+			{ type: "compaction_end", reason: "threshold", aborted: false, willRetry: false, errorMessage: "terminated" },
+			reply({ id: "r2" }),
+		], { retry: true });
+		expect(parsed.retries?.map((r) => r.recovered)).toEqual([false]);
+		expect(parsed.providerErrors.join(" ")).toContain("failed: terminated");
+	});
+
+	it("marks every attempt of a streak pi gave up on as unrecovered, so a failed run does not lose its count", () => {
+		const parsed = observationsFromPiEvents([
+			reply({ id: "r1", stop: "toolUse", usage: piUsage(100, 10) }),
+			reply({ id: "r2", stop: "error", usage: zeroUsage(), errorMessage: "terminated" }),
+			{ type: "auto_retry_start", attempt: 1 },
+			reply({ id: "r3", stop: "error", usage: zeroUsage(), errorMessage: "terminated" }),
+			{ type: "auto_retry_start", attempt: 2 },
+			reply({ id: "r4", stop: "error", usage: zeroUsage(), errorMessage: "terminated" }),
+			{ type: "auto_retry_end", success: false, attempt: 2, finalError: "terminated" },
+		], { retry: true });
+		expect(parsed.retries?.map((r) => [r.id, r.recovered])).toEqual([["r2", false], ["r3", false]]);
+		expect(accountUsage(parsed.observations).valid).toBe(false);
+	});
+
+	it("lowers the estimate after a compaction to the summary the next prompt still carries", () => {
+		// The history the summary replaced is not resent, so the reply before the
+		// compaction would overstate a later failed attempt and stop being a lower bound.
+		const parsed = observationsFromPiEvents([
+			reply({ id: "r1", stop: "toolUse", usage: piUsage(180_000, 900) }),
+			compactionEnd("threshold", { summary: "s", usage: piUsage(170_000, 3_000) }),
+			reply({ id: "r2", stop: "error", usage: zeroUsage(), errorMessage: "terminated" }),
+			{ type: "auto_retry_start", attempt: 1 },
+			reply({ id: "r3" }),
+		], { retry: true });
+		expect(parsed.retries?.map((r) => r.estimatedTokens)).toEqual([3_000]);
+	});
+
+	it("gives the same output with the retry option off as with no option, for a stream with no retry in it", () => {
+		const events = [
+			reply({ id: "r1", stop: "toolUse", usage: piUsage(100, 10) }),
+			compactionEnd("threshold", { summary: "s", usage: piUsage(50, 5) }),
+			reply({ id: "r2", stop: "error", usage: zeroUsage(), errorMessage: "terminated" }),
+		];
+		expect(JSON.stringify(observationsFromPiEvents(events, { retry: false }))).toBe(JSON.stringify(observationsFromPiEvents(events)));
+		expect(JSON.stringify(observationsFromChildSession(jsonl([...preamble(), childReply({ id: "r1" })]), CHILD_KEY, { retry: false })))
+			.toBe(JSON.stringify(observationsFromChildSession(jsonl([...preamble(), childReply({ id: "r1" })]), CHILD_KEY)));
 	});
 
 	it("counts a branch summary once by entry ID and notes that print mode should not produce one", () => {
@@ -788,7 +840,7 @@ describe("observationsFromChildSession", () => {
 		const parsed = observationsFromChildSession(jsonl(rows), CHILD_KEY, { retry: true });
 		expect(parsed.providerErrors).toEqual([]);
 		expect(parsed.errors).toEqual([]);
-		expect(parsed.retries).toEqual([{ id: `${CHILD_KEY}/entry:${String(failed.id)}`, origin: "worker", errorMessage: "terminated", meteredTokens: 0, estimatedTokens: 28 + 8 + 1469 + 28 }]);
+		expect(parsed.retries).toEqual([{ id: `${CHILD_KEY}/entry:${String(failed.id)}`, origin: "worker", errorMessage: "terminated", recovered: true, meteredTokens: 0, estimatedTokens: 28 + 8 + 1469 + 28 }]);
 		expect(accountUsage(parsed.observations).valid).toBe(true);
 		// Off, the same file is a failure, as every v5 grid read it.
 		const off = observationsFromChildSession(jsonl(rows), CHILD_KEY);
@@ -805,6 +857,27 @@ describe("observationsFromChildSession", () => {
 		const exhausted = observationsFromChildSession(jsonl([...preamble(), failed, entry("context_edit", { targetId: failed.id, replacement: null })]), CHILD_KEY, { retry: true });
 		expect(exhausted.providerErrors.join(" ")).toContain("terminated");
 		expect(exhausted.retries).toEqual([]);
+	});
+
+	it("leaves a worker's retried attempt unrecovered when its next attempt also fails and the session ends", () => {
+		const first = childReply({ stop: "error", usage: childUsage(0, 0, 0, 0), errorMessage: "terminated" });
+		const second = childReply({ stop: "error", usage: childUsage(0, 0, 0, 0), errorMessage: "terminated" });
+		const parsed = observationsFromChildSession(jsonl([
+			...preamble(), childReply({ id: "r1", stop: "toolUse", usage: childUsage(28, 8, 1469, 28) }),
+			first, entry("context_edit", { targetId: first.id, replacement: null }), second,
+		]), CHILD_KEY, { retry: true });
+		expect(parsed.retries?.map((r) => r.recovered)).toEqual([false]);
+		expect(parsed.providerErrors.join(" ")).toContain(`entry:${String(second.id)} failed: terminated`);
+	});
+
+	it("lowers a worker's estimate after a compaction to the summary the next prompt carries", () => {
+		const failed = childReply({ stop: "error", usage: childUsage(0, 0, 0, 0), errorMessage: "terminated" });
+		const parsed = observationsFromChildSession(jsonl([
+			...preamble(), childReply({ id: "r1", stop: "toolUse", usage: childUsage(28, 8, 150_000, 28) }),
+			entry("compaction", { summary: "s", firstKeptEntryId: "x", tokensBefore: 150000, usage: childUsage(40000, 900, 0, 0) }),
+			failed, entry("context_edit", { targetId: failed.id, replacement: null }), childReply({ id: "r2" }),
+		]), CHILD_KEY, { retry: true });
+		expect(parsed.retries?.map((r) => r.estimatedTokens)).toEqual([900]);
 	});
 
 	it("keeps a worker's overflow recovery apart from a retry under the retry policy", () => {
@@ -1472,5 +1545,40 @@ describe("compareMatchedRuns", () => {
 		const report = compareMatchedRuns(runsFor(cells.slice(0, 15), 1, () => 1000), runsFor(cells.slice(0, 15), 1, () => 700), cells);
 		expect(report.complete).toBe(false);
 		expect(report.missingOrInvalid).toContain("expected target/pass grid is duplicated or incomplete");
+	});
+});
+
+describe("summarizeRetries", () => {
+	const attempt = (over: Partial<RetriedAttempt> = {}): RetriedAttempt => ({ id: "r", origin: "parent", recovered: true, meteredTokens: 0, estimatedTokens: 0, ...over });
+
+	it("counts attempts per source, recovered or not, with metered usage and the estimate apart", () => {
+		const summary = summarizeRetries([
+			attempt({ id: "p1", meteredTokens: 40 }),
+			attempt({ id: "p2", estimatedTokens: 1_200 }),
+			attempt({ id: "w1", origin: "worker", recovered: false, estimatedTokens: 800 }),
+			attempt({ id: "summary-retry:1" }),
+		], 12);
+		expect(summary).toEqual({
+			attempts: 4, recovered: 3, unrecovered: 1,
+			bySource: { parent: { attempts: 3, recovered: 3, unrecovered: 0 }, worker: { attempts: 1, recovered: 0, unrecovered: 1 } },
+			meteredTokens: 40, unmeteredAttempts: 3, estimatedTokens: 2_000, unestimatedAttempts: 1,
+			maxFailedAttempts: 12, capExceeded: false,
+		});
+	});
+
+	// pi's maxRetries resets on every good reply; a provider that dropped every
+	// third request would otherwise be retried all run and the run read as valid.
+	it("flags a run with more failed attempts than the run-wide cap, parent and workers together", () => {
+		const attempts = [attempt(), attempt(), attempt({ origin: "worker" })];
+		expect(summarizeRetries(attempts, 3).capExceeded).toBe(false);
+		expect(summarizeRetries(attempts, 2).capExceeded).toBe(true);
+	});
+
+	it("counts only observations that reported spend as metered calls", () => {
+		expect(meteredCallCount([
+			{ id: "a", origin: "parent", usage: usage(10, 2) },
+			{ id: "b", origin: "parent", usage: usage(0, 0) },
+			{ id: "c", origin: "worker" },
+		])).toBe(1);
 	});
 });
