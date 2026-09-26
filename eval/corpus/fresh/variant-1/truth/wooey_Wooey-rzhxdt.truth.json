@@ -1,0 +1,15 @@
+[
+  {
+    "id": "CVE-2026-7142-1",
+    "title": "CVE-2026-7142",
+    "cwe": "CWE-266",
+    "severity": "unknown",
+    "file": "wooey/api/scripts.py",
+    "line": 186,
+    "line_range": [
+      186,
+      186
+    ],
+    "vuln_class": "CWE-266"
+  }
+]

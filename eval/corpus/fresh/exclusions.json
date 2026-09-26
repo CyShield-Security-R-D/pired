@@ -1,0 +1,5023 @@
+{
+ "rule": "A repository is excluded, whole, if any of its advisories or its name appears in a source below. When unsure, exclude.",
+ "pool_sha256": "4d50c3d4ea46f3fa48f5d255342f17fd3d2471dcd4f86fb2f342f64e9d4a137e",
+ "sources": [
+  {
+   "source": "official v5 manifest",
+   "path": "/home/mamgad/pired-v5c/eval/artifacts/claude-handoff-2026-09-23/research/corpus/manifest.json",
+   "sha256": "b0d72812a4481d69a5a141429d2b5d0800c81d7c120da1ea4c071f1d40dba954",
+   "targets": 5
+  },
+  {
+   "source": "held-out manifest",
+   "path": "/home/mamgad/pired/eval/heldout/manifest-2026-09-24.json",
+   "sha256": "29d31fd9aa185678d1052010621ea0fe3723e270cd19bd89dc607d8b44ed3705",
+   "targets": 4
+  },
+  {
+   "source": "old pool",
+   "path": "/home/mamgad/corpus",
+   "paths": 5836,
+   "top_level_files": 115,
+   "rule": "owner/repo or owner_repo anywhere in a path name (depth 3) or top-level file"
+  },
+  {
+   "source": "pired notes",
+   "repo": "/home/mamgad/pired-p4-corpus",
+   "pathspecs": [
+    "research",
+    "docs",
+    "eval/*.md",
+    "eval/corpus/*.ts",
+    "*.md"
+   ],
+   "not_scanned": "^(eval\\/corpus\\/fresh(\\/|\\.md$)|eval\\/corpus\\/select-fresh|eval\\/heldout\\/|eval\\/artifacts\\/)",
+   "blobs": 492,
+   "heads": [
+    "refs/heads/backup-pre-amend 5527a700a8cf8a28fd392b1a4c36c086b210a31b",
+    "refs/heads/delegation-opt-in 84c7965f0d25eaef6bfbcf56778b092bf2759834",
+    "refs/heads/eval/v5b-luna b860df124968c215965f2a8610dd22792319f525",
+    "refs/heads/eval/v5c-luna e5b085671c85a1ad481da7fa149854942de95198",
+    "refs/heads/feat/pi-subagents-delegation 9d173bc40f2cc38100e3b4b9c768b834f9c51098",
+    "refs/heads/fx-like-ui 8ecbad3095dc68637361118098397560491785c1",
+    "refs/heads/main b860df124968c215965f2a8610dd22792319f525",
+    "refs/heads/p2/breaker ac3ccefb0d48d14fbcd6a01a3d4e14bab82f6557",
+    "refs/heads/p2/retry e3d5100680e7fef5571cb4ab707ba646e041e1c7",
+    "refs/heads/p2/stop 5caa20a2dfc50f3a392a3de4db92752db3e24607",
+    "refs/heads/p3/candidate-v5 93f09dded760a4785ec984c827003e6d2e0ed4ca",
+    "refs/heads/p4/fresh-corpus d347d3f9d8216fc761808cd07d69112d2e233b38",
+    "refs/heads/plan/delegation-v6 93f09dded760a4785ec984c827003e6d2e0ed4ca",
+    "refs/heads/ui/one-chrome-and-agent-visibility e73e27d519091bc67bd3781f6717e81f335c2620",
+    "refs/heads/ux/banner-defers-to-the-rail a7f6912e637f3992552d7ecfa34a41477dcd3538",
+    "refs/heads/ux/ledger-honesty e0b8bf0adc9b2925a4df2059dd30455d409c5406"
+   ],
+   "sha256": "81ef9604172b44a85aed2663ba76e70487cbfb2cad5f2022c5791d467fa7022c"
+  },
+  {
+   "source": "development checkout",
+   "path": "/home/mamgad/DVBank",
+   "remote": "git@github.com:mamgad/DVBLab.git"
+  },
+  {
+   "source": "development checkout",
+   "path": "/home/mamgad/DVBLab",
+   "remote": "git@github.com:mamgad/DVBLab.git"
+  },
+  {
+   "source": "development checkout",
+   "path": "/home/mamgad/DVWA",
+   "remote": "https://github.com/digininja/DVWA"
+  },
+  {
+   "source": "development checkout",
+   "path": "/home/mamgad/WebGoat",
+   "remote": "https://github.com/WebGoat/WebGoat.git"
+  },
+  {
+   "source": "development checkout",
+   "path": "/home/mamgad/juice-shop",
+   "remote": "https://github.com/juice-shop/juice-shop.git"
+  }
+ ],
+ "targets": [
+  {
+   "source": "official v5 manifest",
+   "id": "CVE-2025-52903",
+   "name": "filebrowser_filebrowser-fetgso",
+   "repo": "filebrowser/filebrowser"
+  },
+  {
+   "source": "official v5 manifest",
+   "id": "CVE-2025-62721",
+   "name": "Kovah_LinkAce-z2dd6z",
+   "repo": "Kovah/LinkAce"
+  },
+  {
+   "source": "official v5 manifest",
+   "id": "CVE-2022-39281",
+   "name": "fatfreecrm_fat_free_crm-1wl9c6",
+   "repo": "fatfreecrm/fat_free_crm"
+  },
+  {
+   "source": "official v5 manifest",
+   "id": "CVE-2024-22417",
+   "name": "benbusby_whoogle-search-03n6cv",
+   "repo": "benbusby/whoogle-search"
+  },
+  {
+   "source": "official v5 manifest",
+   "id": "CVE-2026-40262",
+   "name": "enchant97_note-mark-i71l34",
+   "repo": "enchant97/note-mark"
+  },
+  {
+   "source": "held-out manifest",
+   "id": "CVE-2022-1850",
+   "name": "filegator_filegator-l9zjk4",
+   "repo": "filegator/filegator"
+  },
+  {
+   "source": "held-out manifest",
+   "id": "CVE-2023-37469",
+   "name": "IceWhaleTech_CasaOS-7bevo7",
+   "repo": "IceWhaleTech/CasaOS"
+  },
+  {
+   "source": "held-out manifest",
+   "id": "CVE-2022-1553",
+   "name": "publify_publify-c7hz4c",
+   "repo": "publify/publify"
+  },
+  {
+   "source": "held-out manifest",
+   "id": "CVE-2025-67502",
+   "name": "remram44_taguette-3awrde",
+   "repo": "remram44/taguette"
+  }
+ ],
+ "counts": {
+  "excluded": 805,
+  "in_pool": 801,
+  "by_source": {
+   "pired notes (bare name)": 754,
+   "old pool index.json": 15,
+   "old pool run directories and logs": 15,
+   "pired notes (slug)": 47,
+   "official v5 manifest": 5,
+   "development checkout": 4,
+   "held-out manifest": 4
+  }
+ },
+ "repos": [
+  {
+   "repo": "59160781/project",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "abpframework/abp",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "actions/toolkit",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "actualbudget/actual",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "aedart/ion",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "aio-libs/aiohttp",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "airlinklabs/daemon",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "alerta/alerta",
+   "why": [
+    "old pool index.json",
+    "old pool run directories and logs",
+    "pired notes (slug)"
+   ]
+  },
+  {
+   "repo": "alkacon/opencms-core",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "alloy-rs/core",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "amoffat/sh",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "anchore/grype",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "anchore/syft",
+   "why": [
+    "pired notes (slug)"
+   ]
+  },
+  {
+   "repo": "andialbrecht/sqlparse",
+   "why": [
+    "pired notes (slug)"
+   ]
+  },
+  {
+   "repo": "andrewsauder/as",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "anephenix/hub",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "angular/angular",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "angus-c/just",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "ansible/ansible",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "ansibleguy/webui",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "answerdev/answer",
+   "why": [
+    "pired notes (slug)"
+   ]
+  },
+  {
+   "repo": "antchfx/xpath",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "antfu/utils",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "antirez/redis",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "aosc-dev/oma",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "apache/arrow",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "apache/cxf",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "apache/httpd",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "apereo/cas",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "api-platform/core",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "apolloconfig/apollo",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "apollographql/router",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "aquasecurity/trivy",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "archivy/archivy",
+   "why": [
+    "old pool index.json",
+    "old pool run directories and logs",
+    "pired notes (slug)"
+   ]
+  },
+  {
+   "repo": "argoproj/argo-cd",
+   "why": [
+    "pired notes (slug)"
+   ]
+  },
+  {
+   "repo": "arrow-kt/arrow",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "artem-ogre/cdt",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "ash-project/ash",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "asteinhauser/fat_free_crm",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "astral-sh/uv",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "att/ast",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "aurelia/path",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "auth0/express-jwt",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "auth0/lock",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "auth0/symfony",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "auth0/wordpress",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "authguard/authguard",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "authlib/authlib",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "autobrr/qui",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "automattic/mongoose",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "avo-hq/avo",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "axios/axios",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "bagisto/bagisto",
+   "why": [
+    "pired notes (slug)"
+   ]
+  },
+  {
+   "repo": "baresip/re",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "basekick-labs/arc",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "bcit-ci/codeigniter",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "becheran/grid",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "benbusby/whoogle-search",
+   "why": [
+    "official v5 manifest",
+    "old pool index.json",
+    "old pool run directories and logs",
+    "pired notes (slug)"
+   ]
+  },
+  {
+   "repo": "bestpractical/rt",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "bewelcome/rox",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "bishopfox/sliver",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "bitwarden/server",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "bludit/bludit",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "boa-dev/boa",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "briansmith/ring",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "bro/bro",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "browserify/pbkdf2",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "browserless/chrome",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "budibase/budibase",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "cakephp/authentication",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "cakephp/queue",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "canonical/lxd",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "canonical/operator",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "caolan/async",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "caolan/forms",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "capsoftware/cap",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "cardano-scaling/hydra",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "cesanta/mongoose",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "chainlit/chainlit",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "charleskorn/kaml",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "chilek/lms",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "chrome-php/chrome",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "chromiumembedded/cef",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "churchcrm/crm",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "cisco/thor",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "cleverbrush/framework",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "cli/cli",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "clinical-genomics/scout",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "cloudbase/ovs",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "cloudendpoints/esp",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "clusterlabs/pcs",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "cnlh/nps",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "code16/sharp",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "codeclysm/extract",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "coder/registry",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "coderaiser/cloudcmd",
+   "why": [
+    "old pool index.json",
+    "old pool run directories and logs",
+    "pired notes (slug)"
+   ]
+  },
+  {
+   "repo": "commenthol/serialize-to-js",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "composer/composer",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "conda-forge/infrastructure",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "conda/constructor",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "containers/bubblewrap",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "containers/image",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "containers/storage",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "containous/traefik",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "contao/contao",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "convoypanel/panel",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "craftcms/cms",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "craftcms/webhooks",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "crawl/crawl",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "crewjam/saml",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "cryptomator/ios",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "ctfer-io/monitoring",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "ctrlpanel-gg/panel",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "cubecart/v6",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "cure53/dompurify",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "curl/curl",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "dandavison/delta",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "danschultzer/pow",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "dart-lang/pub",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "dart-lang/sdk",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "datasharingframework/dsf",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "datavane/tis",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "dbt-labs/actions",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "debug-js/debug",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "dedupeio/dedupe",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "deepjavalibrary/djl",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "deepset-ai/haystack",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "denoland/std",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "dependencytrack/frontend",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "derf/feh",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "destinygg/chat",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "dexidp/dex",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "digininja/dvwa",
+   "why": [
+    "development checkout"
+   ]
+  },
+  {
+   "repo": "digitalbazaar/forge",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "dioxuslabs/components",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "directus/directus",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "discord-agora/kernel",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "distribution/distribution",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "django-cms/django-cms",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "django-helpdesk/django-helpdesk",
+   "why": [
+    "old pool index.json",
+    "old pool run directories and logs",
+    "pired notes (slug)"
+   ]
+  },
+  {
+   "repo": "django/django",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "dmproadmap/roadmap",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "docker/cli",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "docker/compose",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "documize/community",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "dogtagpki/jss",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "dogtagpki/pki",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "dom4j/dom4j",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "doomsider/shadow",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "dotcms/core",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "dovecot/core",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "dudanogueira/n8n",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "duendesoftware/foss",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "dundee/gdu",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "earendil-works/pi",
+   "why": [
+    "pired notes (slug)"
+   ]
+  },
+  {
+   "repo": "ecies/go",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "eclipse-aerios/idm",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "eclipse-cdt/cdt",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "ecnepsnai/web",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "edge-js/edge",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "eemeli/yaml",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "eivindfjeldstad/dot",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "elgg/elgg",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "elixir-grpc/grpc",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "elixir-mint/mint",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "ellanetworks/core",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "elric1/knc",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "embano1/wip",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "emmett-framework/core",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "enchant97/note-mark",
+   "why": [
+    "official v5 manifest",
+    "old pool index.json",
+    "old pool run directories and logs",
+    "pired notes (slug)"
+   ]
+  },
+  {
+   "repo": "encode/starlette",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "enocknt/gpac",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "enonic/xp",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "ensdomains/ens",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "envoyproxy/gateway",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "eradman/entr",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "ericmj/decimal",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "erlang/otp",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "eslint/rewrite",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "eta-dev/eta",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "etcd-io/etcd",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "eugeneware/changeset",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "exelban/stats",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "expr-lang/expr",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "expressjs/express",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "expressjs/multer",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "facebookincubator/below",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "faforever/fa",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "fardog/trailing-slash",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "farm-fe/farm",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "fastify/fastify",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "fastify/session",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "fatedier/frp",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "fatfreecrm/fat_free_crm",
+   "why": [
+    "official v5 manifest",
+    "old pool index.json",
+    "old pool run directories and logs",
+    "pired notes (slug)"
+   ]
+  },
+  {
+   "repo": "fermyon/spin",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "ffi/ffi",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "ffmpeg/ffmpeg",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "ffuf/ffuf",
+   "why": [
+    "pired notes (slug)"
+   ]
+  },
+  {
+   "repo": "file/file",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "filebrowser/filebrowser",
+   "why": [
+    "official v5 manifest",
+    "old pool index.json",
+    "old pool run directories and logs",
+    "pired notes (slug)"
+   ]
+  },
+  {
+   "repo": "filegator/filegator",
+   "why": [
+    "held-out manifest",
+    "old pool index.json",
+    "old pool run directories and logs",
+    "pired notes (slug)"
+   ]
+  },
+  {
+   "repo": "fishkey1/cms",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "flarum/core",
+   "why": [
+    "pired notes (slug)"
+   ]
+  },
+  {
+   "repo": "flarum/framework",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "fleetdm/fleet",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "flori/json",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "fmtlib/fmt",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "franciscop/translate",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "frappe/crm",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "frappe/lms",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "frappe/press",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "free5gc/amf",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "free5gc/bsf",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "free5gc/chf",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "free5gc/nas",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "free5gc/nef",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "free5gc/nrf",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "free5gc/pcf",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "free5gc/smf",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "free5gc/udm",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "free5gc/udr",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "freepbx/api",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "freepbx/backup",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "freepbx/cdr",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "freepbx/framework",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "freepbx/manager",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "freepbx/tts",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "friendsofflarum/oauth",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "frontaccountingerp/fa",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "froxlor/froxlor",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "frrouting/frr",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "gazay/gon",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "genericmappingtools/gmt",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "getgrav/grav",
+   "why": [
+    "pired notes (slug)"
+   ]
+  },
+  {
+   "repo": "getk2/k2",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "getkirby-v2/panel",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "getrebuild/rebuild",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "ggerganov/llama.cpp",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "ggml-org/llama.cpp",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "ghostty-org/ghostty",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "gibbonedu/core",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "gin-contrib/cors",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "gin-gonic/gin",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "git-for-windows/git",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "git/git",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "gitleaks/gitleaks",
+   "why": [
+    "pired notes (slug)"
+   ]
+  },
+  {
+   "repo": "glanceapp/glance",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "gnachman/iterm2",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "gnuboard/g6",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "go-aah/aah",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "go-gitea/gitea",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "go-ldap/ldap",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "go-macaron/csrf",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "go-pkgz/auth",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "go-vela/compiler",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "go-vela/server",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "go-vela/worker",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "go-yaml/yaml",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "go4rayyan/cg1",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "goadesign/goa",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "gofiber/template",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "gofiber/utils",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "gogs/gogs",
+   "why": [
+    "pired notes (slug)"
+   ]
+  },
+  {
+   "repo": "goharbor/harbor",
+   "why": [
+    "pired notes (slug)"
+   ]
+  },
+  {
+   "repo": "golang-fips/openssl",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "golang-jwt/jwt",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "golang/crypto",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "golang/go",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "golang/net",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "gomarkdown/markdown",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "googlecontainertools/jib",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "gorilla/csrf",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "gorilla/handlers",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "gorilla/schema",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "goshs-labs/goshs",
+   "why": [
+    "old pool index.json",
+    "old pool run directories and logs",
+    "pired notes (slug)"
+   ]
+  },
+  {
+   "repo": "gost-engine/engine",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "gotd/td",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "gouniverse/cms",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "gpac/gpac",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "gradio-app/gradio",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "gradle/gradle",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "grafana/agent",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "grafana/grafana",
+   "why": [
+    "pired notes (slug)"
+   ]
+  },
+  {
+   "repo": "graphprotocol/contracts",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "gravitlauncher/launcher",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "gregkh/linux",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "grokability/snipe-it",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "grpc/grpc",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "gtsteffaniak/filebrowser",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "gwsw/less",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "gzpan123/pip",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "h2o/h2o",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "h3js/h3",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "hackplayers/evil-winrm",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "hapijs/content",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "hapijs/formula",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "hapijs/joi",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "hapijs/nes",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "harness/harness",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "harvesthq/chosen",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "hashcat/hashcat",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "hcengineering/platform",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "helm/helm",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "hexpm/hex",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "home-assistant/core",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "home-assistant/frontend",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "home-assistant/ios",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "honojs/middleware",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "horde/base",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "horde/imp",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "horde/vfs",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "horsicq/formats",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "hughsk/flat",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "humansignal/label-studio",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "hydra-ecosystem/hydra",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "hytalemodding/wiki",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "ibexa/user",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "icewhaletech/casaos",
+   "why": [
+    "held-out manifest",
+    "old pool index.json",
+    "old pool run directories and logs",
+    "pired notes (slug)"
+   ]
+  },
+  {
+   "repo": "idno/known",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "idopesok/zsa",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "ifmeorg/ifme",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "iidk-the-actual/console",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "imagemagick/imagemagick",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "imbrn/v8n",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "impress-org/give",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "imroc/req",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "indeedeng/util",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "indico/indico",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "input-output-hk/hydra",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "instantupdate/cms",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "iovisor/bcc",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "issabelfoundation/framework",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "jackc/pgx",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "janhq/jan",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "jaredallard/archives",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "jaredhanson/passport",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "jarofghosts/glance",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "jarun/nnn",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "jenkinsci/jenkins",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "jeromedevome/grr",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "jnunemaker/httparty",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "jpadilla/pyjwt",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "jqlang/jq",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "jquense/expr",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "jquery/jquery",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "jrspruitt/ubi_reader",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "jshttp/cookie",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "juice-shop/juice-shop",
+   "why": [
+    "development checkout"
+   ]
+  },
+  {
+   "repo": "jupyter/notebook",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "jupyterlab/jupyterlab",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "kaltura/server",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "kanbn/kan",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "kapetan/dns",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "karelzak/util-linux",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "karmada-io/dashboard",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "kataras/iris",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "kbase/metrics",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "kcp-dev/kcp",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "kde/discover",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "kenny2github/report",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "kerberos-io/agent",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "keycloak/keycloak",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "keystonejs/keystone",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "kludex/starlette",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "knative/serving",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "koajs/cors",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "koajs/koa",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "koajs/router",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "kobezzza/collection",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "kongchuanhujiao/server",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "kovah/linkace",
+   "why": [
+    "official v5 manifest",
+    "old pool index.json",
+    "old pool run directories and logs",
+    "pired notes (slug)"
+   ]
+  },
+  {
+   "repo": "krb5/krb5",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "kyverno/sdk",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "labstack/echo",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "lacisynchroni/server",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "lambdaisland/uri",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "langflow-ai/langflow",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "langgenius/dify",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "laravel/framework",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "laverdet/isolated-vm",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "lcobucci/jwt",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "ldapaccountmanager/lam",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "lestrrat-go/jwx",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "libexif/exif",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "librenms/librenms",
+   "why": [
+    "pired notes (slug)"
+   ]
+  },
+  {
+   "repo": "libreoffice/core",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "libressl-portable/portable",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "libsdl-org/sdl",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "libuv/libuv",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "libwww-perl/uri",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "liftkit/database",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "lightpanda-io/browser",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "linuxfabrik/lib",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "ljharb/qs",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "lodash/lodash",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "lostisland/faraday",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "lovell/sharp",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "lua/lua",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "lxc/lxc",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "lxml/lxml",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "lz4/lz4",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "m1k1o/blog",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "mail-0/zero",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "makesoftwaresafe/gpac",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "mamgad/dvblab",
+   "why": [
+    "development checkout"
+   ]
+  },
+  {
+   "repo": "manvel-khnkoyan/jpv",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "mariadb/server",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "markedjs/marked",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "maximhq/bifrost",
+   "why": [
+    "pired notes (slug)"
+   ]
+  },
+  {
+   "repo": "maxsite/cms",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "mcpjam/inspector",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "mde/ejs",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "meltano/hub",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "memcached/memcached",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "mengzhisuoliu/radare2",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "meshtastic/firmware",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "meteor/meteor",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "metersphere/installer",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "microchip-mplab-harmony/core",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "micromatch/braces",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "microsoft/ufo",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "mikel/mail",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "mikopbx/core",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "miniflux/v2",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "minio/minio",
+   "why": [
+    "pired notes (slug)"
+   ]
+  },
+  {
+   "repo": "minio/operator",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "mirror/busybox",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "mitmproxy/mitmproxy",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "mkj/dropbear",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "mlflow/mlflow",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "mnfst/manifest",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "mnkras/concrete5",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "modelcontextprotocol/inspector",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "moment/moment",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "mongodb/mongo",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "mpv-player/mpv",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "mscdex/ssh2",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "musicplayerdaemon/mpd",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "mystenlabs/sui",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "mysteriumnetwork/node",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "n8n-io/n8n",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "natelong/p4",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "nationalsecurityagency/ghidra",
+   "why": [
+    "pired notes (slug)"
+   ]
+  },
+  {
+   "repo": "nautobot/nautobot",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "navidrome/navidrome",
+   "why": [
+    "pired notes (slug)"
+   ]
+  },
+  {
+   "repo": "nektos/act",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "neomjs/neo",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "neos/form",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "nestjs/nest",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "netbox-community/netbox",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "netbsd/src",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "netflix/dispatch",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "nextcloud/approval",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "nextcloud/apps",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "nextcloud/desktop",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "nextcloud/gallery",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "nextcloud/mail",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "nextcloud/server",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "nextcloud/tables",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "nextcloud/text",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "nginx/nginx",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "nginx/njs",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "nim-lang/nim",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "nimble-platform/common",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "ninenines/gun",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "nixos/hydra",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "nixos/nix",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "nmap/nmap",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "noaa-pmel/las",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "nocodb/nocodb",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "node-fetch/node-fetch",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "node-formidable/formidable",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "node-modules/urllib",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "nodeca/js-yaml",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "nodejs/node",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "nodejs/undici",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "nothings/stb",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "npm/cli",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "npm/ini",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "npm/npm",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "nrwl/nx",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "numpy/numpy",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "nuxt-content/mdc",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "nuxt-modules/mdc",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "nuxt-modules/og-image",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "nuxt/framework",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "nvm-sh/nvm",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "oakserver/oak",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "octo-sts/app",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "octobercms/library",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "octobercms/october",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "oldzhu/radare2",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "ollama/ollama",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "omec-project/amf",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "omniblocks/monorepo",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "onlyoffice/core",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "open-mss/mss",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "open-policy-agent/opa",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "open-webui/open-webui",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "openagentplatform/dive",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "openai/codex",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "openbsd/ports",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "openbsd/src",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "openela-main/openssh",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "opennebula/one",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "opensearch-project/reporting",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "opensearch-project/security",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "openshift/builder",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "openshift/osin",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "openssl/openssl",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "openvswitch/ovs",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "openwrt/asu",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "openwrt/packages",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "openwrt/routing",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "openzfs/zfs",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "opnsense/core",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "orchidsoftware/platform",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "oroinc/platform",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "ory/hydra",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "ossrs/srs",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "outerbase/studio",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "outline/outline",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "oven-sh/bun",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "overleaf/toolkit",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "ovn-org/ovn",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "owncloud/apps",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "owncloud/core",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "owncloud/gallery",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "ozi-project/publish",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "pallets/flask",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "pallets/jinja",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "pallets/quart",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "pallets/werkzeug",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "paritytech/frontier",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "paritytech/ink",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "paritytech/parity",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "parse-community/parse-server",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "patrickhener/goshs",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "patriksimek/vm2",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "paulusmack/ppp",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "pay-rails/pay",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "payloadcms/payload",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "pdm-project/pdm",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "pennyw0rth/netexec",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "perl5-dbi/dbi",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "phix33/radare2",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "phpgt/dom",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "phpoffice/math",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "pi-hole/ftl",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "pi-hole/web",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "pig-mesh/pig",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "pillarjs/send",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "pimcore/demo",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "pimcore/pimcore",
+   "why": [
+    "pired notes (slug)"
+   ]
+  },
+  {
+   "repo": "pingidentity/ssam",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "pixeline/bugs",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "pkp/ojs",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "pkp/omp",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "plotly/dash",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "pluck-cms/pluck",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "pluginsglpi/fields",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "pluginsglpi/order",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "pluginsglpi/tag",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "pmd/pmd",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "pnpm/pnpm",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "podium-lib/layout",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "podium-lib/proxy",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "pointcloudlibrary/pcl",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "polkadot-evm/frontier",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "portkey-ai/gateway",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "postalserver/postal",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "postgres/postgres",
+   "why": [
+    "pired notes (slug)"
+   ]
+  },
+  {
+   "repo": "ppp-project/ppp",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "pretix/pretix",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "professionalwiki/maps",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "project-zot/zot",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "projectatomic/bubblewrap",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "projectdiscovery/nuclei",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "protonmail/webclient",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "psf/requests",
+   "why": [
+    "pired notes (slug)"
+   ]
+  },
+  {
+   "repo": "pterodactyl/panel",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "publify/publify",
+   "why": [
+    "held-out manifest",
+    "old pool index.json",
+    "old pool run directories and logs",
+    "pired notes (slug)"
+   ]
+  },
+  {
+   "repo": "pubnub/javascript",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "pugjs/pug",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "pyca/cryptography",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "pyeve/eve",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "pymedusa/medusa",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "pypa/pip",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "python-discord/bot",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "python-hyper/h11",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "python-hyper/h2",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "python-poetry/poetry",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "pytorch/serve",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "pytorch/vision",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "qbee-io/transport",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "qemu/qemu",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "questdb/ui",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "r-lib/gh",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "ractf/core",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "radare/radare2",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "radareorg/radare2",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "rails/rails",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "rails/thor",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "rancher/rancher",
+   "why": [
+    "pired notes (slug)"
+   ]
+  },
+  {
+   "repo": "ray-project/ray",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "react-native-community/cli",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "reactphp/http",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "redaxo/core",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "redis/redis",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "ree6-applications/ree6",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "refirmlabs/binwalk",
+   "why": [
+    "pired notes (slug)"
+   ]
+  },
+  {
+   "repo": "rejetto/hfs",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "remram44/taguette",
+   "why": [
+    "held-out manifest",
+    "old pool index.json",
+    "old pool run directories and logs",
+    "pired notes (slug)"
+   ]
+  },
+  {
+   "repo": "requarks/wiki",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "requests/requests",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "reviactyl/panel",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "rgrove/sanitize",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "rizinorg/rizin",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "rnpgp/rnp",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "rocketchat/rocket.chat",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "rollup/rollup",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "ronomon/opened",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "root-project/root",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "rpm-software-management/rpm",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "rsyncproject/rsync",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "ruby-oauth/oauth",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "ruby-oauth/oauth2",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "ruby/json",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "ruby/openssl",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "ruby/ruby",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "ruscur/linux",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "rust-blockchain/evm",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "rust-ethereum/evm",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "rust-lang/cargo",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "rust-lang/regex",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "rust-lang/rust",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "rustcrypto/rsa",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "rustcrypto/signatures",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "rustcrypto/utils",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "rustfs/console",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "s-cart/core",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "safedep/vet",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "salopensource/sal",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "saltstack/salt",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "samuelcolvin/pydantic",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "sanic-org/sanic",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "sbt/io",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "sbt/sbt",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "secureauthcorp/impacket",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "senchalabs/connect",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "sequelize/sequelize",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "shadow-maint/shadow",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "sharkdp/bat",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "shelljs/shelljs",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "shopware/core",
+   "why": [
+    "pired notes (slug)"
+   ]
+  },
+  {
+   "repo": "shopware/platform",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "shopware/shopware",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "shopware5/shopware",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "siderolabs/talos",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "siemens/kas",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "simplemachines/smf",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "simplerisk/code",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "simstudioai/sim",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "sindresorhus/file-type",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "singular/singular",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "sismics/docs",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "sitefusion/server",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "skim-rs/skim",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "sleepepi/slice",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "smarty-php/smarty",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "snakeyaml/snakeyaml",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "snipe/snipe-it",
+   "why": [
+    "pired notes (slug)"
+   ]
+  },
+  {
+   "repo": "snoyberg/xml",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "snyk/broker",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "snyk/cli",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "sonicdoe/ced",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "spacebarchat/server",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "spacemeshos/api",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "sparklemotion/nokogiri",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "spencermountain/compromise",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "sqlalchemy/mako",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "square/wire",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "stackloklabs/mkp",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "statamic/cms",
+   "why": [
+    "pired notes (slug)"
+   ]
+  },
+  {
+   "repo": "steipete/summarize",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "steveukx/properties",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "strapi/strapi",
+   "why": [
+    "pired notes (slug)"
+   ]
+  },
+  {
+   "repo": "streamlit/streamlit",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "strikeentco/set",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "sudo-project/sudo",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "suitenumerique/docs",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "suitenumerique/messages",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "sulu/sulu",
+   "why": [
+    "pired notes (slug)"
+   ]
+  },
+  {
+   "repo": "supervisor/supervisor",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "sveltejs/kit",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "sveltejs/svelte",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "sviehb/jefferson",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "swc-project/swc",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "sylabs/sif",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "symfony/symfony",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "symfony/ux",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "systemd/systemd",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "t0rchwo0d/gin",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "t8y2/dbx",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "tandoorrecipes/recipes",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "tanstack/db",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "tanstack/query",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "tasks/tasks",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "taubyte/tau",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "tclahr/uac",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "tcltk/tcl",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "tektoncd/pipeline",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "tensorflow/serving",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "theupdateframework/tuf",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "tiangolo/fastapi",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "time-rs/time",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "tinymce/tinymce",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "tmlmobilidade/go",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "tmux/tmux",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "tnborg/panel",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "toddawalter/radare2",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "tokio-rs/bytes",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "tokio-rs/mio",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "tomas/network",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "ton-blockchain/ton",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "tootallnate/once",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "top-think/framework",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "tornadoweb/tornado",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "torproject/tor",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "torvalds/linux",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "totaljs/cms",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "totaljs/framework",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "tracksapp/tracks",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "traefik/traefik",
+   "why": [
+    "pired notes (slug)"
+   ]
+  },
+  {
+   "repo": "transmission/transmission",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "traviscross/mtr",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "trollepierre/tdm",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "trufflesecurity/trufflehog",
+   "why": [
+    "pired notes (slug)"
+   ]
+  },
+  {
+   "repo": "trycua/cua",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "tryghost/ghost",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "tukaani-project/xz",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "turbowarp/desktop",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "twentyhq/twenty",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "twigphp/twig",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "typelevel/fs2",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "typicms/core",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "typo3/typo3",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "ucbrise/opaque",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "ufirstgroup/ymlr",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "ulikunitz/xz",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "ultradagcom/core",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "umijs/umi",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "unicode-org/icu",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "uniget-org/cli",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "unjs/ipx",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "unstructured-io/unstructured",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "upx/upx",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "urllib3/urllib3",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "ury-erp/ury",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "usememos/memos",
+   "why": [
+    "pired notes (slug)"
+   ]
+  },
+  {
+   "repo": "util-linux/util-linux",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "uuidjs/uuid",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "v8/v8",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "vectordotdev/vector",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "vercel/ai",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "vercel/ms",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "vercel/next.js",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "viking04/merge",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "vim/vim",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "vitest-dev/vitest",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "vivapayments/api",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "vixie/cron",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "vlang/v",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "vllm-project/vllm",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "vscodevim/vim",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "vshakitskiy/ewe",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "wagtail/wagtail",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "webdetails/cpf",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "webgoat/webgoat",
+   "why": [
+    "development checkout"
+   ]
+  },
+  {
+   "repo": "weblateorg/docker",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "weblateorg/wlc",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "websockets/ws",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "wojtekmach/req",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "woltlab/wcf",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "wordpress/wordpress",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "x-stream/xstream",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "xataio/agent",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "xe/x",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "xorbitsai/inference",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "xwiki-contrib/oidc",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "yahoo/serialize-javascript",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "yansongda/pay",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "yarnpkg/yarn",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "yeoman/environment",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "yetanalytics/lrs",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "yi-ge/unzip",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "yiisoft/yii",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "yourls/yourls",
+   "why": [
+    "old pool index.json",
+    "old pool run directories and logs",
+    "pired notes (slug)"
+   ]
+  },
+  {
+   "repo": "yrccondor/mdx",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "zen-browser/desktop",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "zenhive/mpp",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "zenstruck/collection",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "zevv/duc",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  },
+  {
+   "repo": "zitadel/zitadel",
+   "why": [
+    "pired notes (slug)"
+   ]
+  },
+  {
+   "repo": "znc/znc",
+   "why": [
+    "pired notes (bare name)"
+   ]
+  }
+ ],
+ "sha256": "03105eb92b6d93c342440ca281bc00697236233d73b085bcb026afe169e9d10e"
+}

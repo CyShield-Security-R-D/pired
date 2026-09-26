@@ -1,0 +1,119 @@
+[
+  {
+    "id": "CVE-2026-42352-1",
+    "title": "CVE-2026-42352",
+    "cwe": "CWE-918",
+    "severity": "high",
+    "file": "pygeoapi/process/base.py",
+    "line": 55,
+    "line_range": [
+      55,
+      55
+    ],
+    "vuln_class": "CWE-918"
+  },
+  {
+    "id": "CVE-2026-42352-2",
+    "title": "CVE-2026-42352",
+    "cwe": "CWE-918",
+    "severity": "high",
+    "file": "pygeoapi/process/manager/base.py",
+    "line": 48,
+    "line_range": [
+      48,
+      52
+    ],
+    "vuln_class": "CWE-918"
+  },
+  {
+    "id": "CVE-2026-42352-3",
+    "title": "CVE-2026-42352",
+    "cwe": "CWE-918",
+    "severity": "high",
+    "file": "pygeoapi/process/manager/base.py",
+    "line": 108,
+    "line_range": [
+      108,
+      108
+    ],
+    "vuln_class": "CWE-918"
+  },
+  {
+    "id": "CVE-2026-42352-4",
+    "title": "CVE-2026-42352",
+    "cwe": "CWE-918",
+    "severity": "high",
+    "file": "pygeoapi/process/manager/base.py",
+    "line": 398,
+    "line_range": [
+      398,
+      404
+    ],
+    "vuln_class": "CWE-918"
+  },
+  {
+    "id": "CVE-2026-42352-5",
+    "title": "CVE-2026-42352",
+    "cwe": "CWE-918",
+    "severity": "high",
+    "file": "pygeoapi/process/manager/base.py",
+    "line": 477,
+    "line_range": [
+      477,
+      477
+    ],
+    "vuln_class": "CWE-918"
+  },
+  {
+    "id": "CVE-2026-42352-6",
+    "title": "CVE-2026-42352",
+    "cwe": "CWE-918",
+    "severity": "high",
+    "file": "pygeoapi/process/manager/base.py",
+    "line": 487,
+    "line_range": [
+      487,
+      506
+    ],
+    "vuln_class": "CWE-918"
+  },
+  {
+    "id": "CVE-2026-42352-7",
+    "title": "CVE-2026-42352",
+    "cwe": "CWE-918",
+    "severity": "high",
+    "file": "pygeoapi/provider/filesystem.py",
+    "line": 81,
+    "line_range": [
+      81,
+      81
+    ],
+    "vuln_class": "CWE-918"
+  },
+  {
+    "id": "CVE-2026-42352-8",
+    "title": "CVE-2026-42352",
+    "cwe": "CWE-918",
+    "severity": "high",
+    "file": "pygeoapi/util.py",
+    "line": 38,
+    "line_range": [
+      38,
+      45
+    ],
+    "vuln_class": "CWE-918"
+  },
+  {
+    "id": "CVE-2026-42352-9",
+    "title": "CVE-2026-42352",
+    "cwe": "CWE-918",
+    "severity": "high",
+    "file": "pygeoapi/util.py",
+    "line": 757,
+    "line_range": [
+      757,
+      757
+    ],
+    "vuln_class": "CWE-918"
+  }
+]

@@ -1,0 +1,123 @@
+[
+  {
+    "id": "CVE-2026-93421",
+    "package": "mesop-dev/mesop",
+    "repo": "mesop-dev/mesop",
+    "entries": 0,
+    "scope": [
+      "."
+    ],
+    "cwe": [
+      "CWE-117",
+      "CWE-150"
+    ],
+    "severity": "",
+    "published": "2026-09-23",
+    "fix_commit": "f38c42a1d3eba246941ef8d7f645072d53c58785",
+    "scope_files": 386,
+    "scope_loc": 28801,
+    "name": "mesop-dev_mesop-f87yds",
+    "target": "PLACEHOLDER/corpus/mesop-dev_mesop-f87yds",
+    "truth": "PLACEHOLDER/corpus/truth/mesop-dev_mesop-f87yds.truth.json",
+    "reviewed_commit": "f38c42a1d3eba246941ef8d7f645072d53c58785",
+    "language": "Python",
+    "control": true,
+    "aliases": [
+      "GHSA-g7f6-rxc4-qhph"
+    ],
+    "fixed_regions": [
+      {
+        "file": "mesop/server/static_file_serving.py",
+        "line_range": [
+          47,
+          70
+        ]
+      },
+      {
+        "file": "mesop/server/static_file_serving.py",
+        "line_range": [
+          212,
+          221
+        ]
+      }
+    ]
+  },
+  {
+    "id": "CVE-2026-28678",
+    "package": "toxicbishop/DSA-with-tsx",
+    "repo": "toxicbishop/DSA-with-tsx",
+    "entries": 0,
+    "scope": [
+      "."
+    ],
+    "cwe": [
+      "CWE-311",
+      "CWE-522"
+    ],
+    "severity": "high",
+    "published": "2026-03-07",
+    "fix_commit": "d527fba3b3c15f185b9d1e730322dff9248391e4",
+    "scope_files": 33,
+    "scope_loc": 10060,
+    "name": "toxicbishop_DSA-with-tsx-f4gmrs",
+    "target": "PLACEHOLDER/corpus/toxicbishop_DSA-with-tsx-f4gmrs",
+    "truth": "PLACEHOLDER/corpus/truth/toxicbishop_DSA-with-tsx-f4gmrs.truth.json",
+    "reviewed_commit": "d527fba3b3c15f185b9d1e730322dff9248391e4",
+    "language": "JavaScript/TypeScript",
+    "control": true,
+    "aliases": [
+      "GHSA-vmxr-562h-rcgg"
+    ],
+    "fixed_regions": [
+      {
+        "file": "server/middleware/auth.js",
+        "line_range": [
+          2,
+          17
+        ]
+      },
+      {
+        "file": "server/routes/auth.js",
+        "line_range": [
+          9,
+          9
+        ]
+      },
+      {
+        "file": "server/routes/auth.js",
+        "line_range": [
+          61,
+          61
+        ]
+      },
+      {
+        "file": "server/routes/auth.js",
+        "line_range": [
+          158,
+          158
+        ]
+      },
+      {
+        "file": "server/routes/auth.js",
+        "line_range": [
+          251,
+          251
+        ]
+      },
+      {
+        "file": "server/routes/auth.js",
+        "line_range": [
+          313,
+          313
+        ]
+      },
+      {
+        "file": "server/utils/cookieCrypto.js",
+        "line_range": [
+          1,
+          31
+        ]
+      }
+    ]
+  }
+]

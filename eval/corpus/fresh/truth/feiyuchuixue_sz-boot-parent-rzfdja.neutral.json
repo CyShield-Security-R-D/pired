@@ -1,0 +1,362 @@
+[
+  {
+    "advisory": "CVE-2026-3185",
+    "file": "sz-common/sz-common-core/src/main/java/com/sz/core/common/enums/CommonResponseEnum.java",
+    "line_range": [
+      25,
+      25
+    ],
+    "why": "shares the drawn advisory's fix commit"
+  },
+  {
+    "advisory": "CVE-2026-3185",
+    "file": "sz-common/sz-common-core/src/main/java/com/sz/core/common/enums/CommonResponseEnum.java",
+    "line_range": [
+      36,
+      36
+    ],
+    "why": "shares the drawn advisory's fix commit"
+  },
+  {
+    "advisory": "CVE-2026-3185",
+    "file": "sz-common/sz-common-core/src/main/java/com/sz/core/util/Utils.java",
+    "line_range": [
+      154,
+      154
+    ],
+    "why": "shares the drawn advisory's fix commit"
+  },
+  {
+    "advisory": "CVE-2026-3185",
+    "file": "sz-common/sz-common-oss/src/main/java/com/sz/oss/OssClient.java",
+    "line_range": [
+      122,
+      122
+    ],
+    "why": "shares the drawn advisory's fix commit"
+  },
+  {
+    "advisory": "CVE-2026-3185",
+    "file": "sz-common/sz-common-oss/src/main/java/com/sz/oss/OssClient.java",
+    "line_range": [
+      356,
+      356
+    ],
+    "why": "shares the drawn advisory's fix commit"
+  },
+  {
+    "advisory": "CVE-2026-3185",
+    "file": "sz-common/sz-common-oss/src/main/java/com/sz/oss/OssProperties.java",
+    "line_range": [
+      41,
+      41
+    ],
+    "why": "shares the drawn advisory's fix commit"
+  },
+  {
+    "advisory": "CVE-2026-3185",
+    "file": "sz-service/sz-service-admin/src/main/java/com/sz/admin/system/service/impl/CommonServiceImpl.java",
+    "line_range": [
+      50,
+      50
+    ],
+    "why": "shares the drawn advisory's fix commit"
+  },
+  {
+    "advisory": "CVE-2026-3185",
+    "file": "sz-service/sz-service-admin/src/main/java/com/sz/admin/system/service/impl/CommonServiceImpl.java",
+    "line_range": [
+      157,
+      157
+    ],
+    "why": "shares the drawn advisory's fix commit"
+  },
+  {
+    "advisory": "CVE-2026-3185",
+    "file": "sz-service/sz-service-admin/src/main/java/com/sz/admin/system/service/impl/SysFileServiceImpl.java",
+    "line_range": [
+      67,
+      67
+    ],
+    "why": "shares the drawn advisory's fix commit"
+  },
+  {
+    "advisory": "CVE-2026-3185",
+    "file": "sz-service/sz-service-admin/src/main/java/com/sz/admin/system/service/impl/SysFileServiceImpl.java",
+    "line_range": [
+      76,
+      83
+    ],
+    "why": "shares the drawn advisory's fix commit"
+  },
+  {
+    "advisory": "CVE-2026-3186",
+    "file": "sz-common/sz-common-core/src/main/java/com/sz/core/common/enums/CommonResponseEnum.java",
+    "line_range": [
+      25,
+      25
+    ],
+    "why": "shares the drawn advisory's fix commit"
+  },
+  {
+    "advisory": "CVE-2026-3186",
+    "file": "sz-common/sz-common-core/src/main/java/com/sz/core/common/enums/CommonResponseEnum.java",
+    "line_range": [
+      36,
+      36
+    ],
+    "why": "shares the drawn advisory's fix commit"
+  },
+  {
+    "advisory": "CVE-2026-3186",
+    "file": "sz-common/sz-common-core/src/main/java/com/sz/core/util/Utils.java",
+    "line_range": [
+      154,
+      154
+    ],
+    "why": "shares the drawn advisory's fix commit"
+  },
+  {
+    "advisory": "CVE-2026-3186",
+    "file": "sz-common/sz-common-oss/src/main/java/com/sz/oss/OssClient.java",
+    "line_range": [
+      122,
+      122
+    ],
+    "why": "shares the drawn advisory's fix commit"
+  },
+  {
+    "advisory": "CVE-2026-3186",
+    "file": "sz-common/sz-common-oss/src/main/java/com/sz/oss/OssClient.java",
+    "line_range": [
+      356,
+      356
+    ],
+    "why": "shares the drawn advisory's fix commit"
+  },
+  {
+    "advisory": "CVE-2026-3186",
+    "file": "sz-common/sz-common-oss/src/main/java/com/sz/oss/OssProperties.java",
+    "line_range": [
+      41,
+      41
+    ],
+    "why": "shares the drawn advisory's fix commit"
+  },
+  {
+    "advisory": "CVE-2026-3186",
+    "file": "sz-service/sz-service-admin/src/main/java/com/sz/admin/system/service/impl/CommonServiceImpl.java",
+    "line_range": [
+      50,
+      50
+    ],
+    "why": "shares the drawn advisory's fix commit"
+  },
+  {
+    "advisory": "CVE-2026-3186",
+    "file": "sz-service/sz-service-admin/src/main/java/com/sz/admin/system/service/impl/CommonServiceImpl.java",
+    "line_range": [
+      157,
+      157
+    ],
+    "why": "shares the drawn advisory's fix commit"
+  },
+  {
+    "advisory": "CVE-2026-3186",
+    "file": "sz-service/sz-service-admin/src/main/java/com/sz/admin/system/service/impl/SysFileServiceImpl.java",
+    "line_range": [
+      67,
+      67
+    ],
+    "why": "shares the drawn advisory's fix commit"
+  },
+  {
+    "advisory": "CVE-2026-3186",
+    "file": "sz-service/sz-service-admin/src/main/java/com/sz/admin/system/service/impl/SysFileServiceImpl.java",
+    "line_range": [
+      76,
+      83
+    ],
+    "why": "shares the drawn advisory's fix commit"
+  },
+  {
+    "advisory": "CVE-2026-3188",
+    "file": "sz-common/sz-common-core/src/main/java/com/sz/core/common/enums/CommonResponseEnum.java",
+    "line_range": [
+      25,
+      25
+    ],
+    "why": "shares the drawn advisory's fix commit"
+  },
+  {
+    "advisory": "CVE-2026-3188",
+    "file": "sz-common/sz-common-core/src/main/java/com/sz/core/common/enums/CommonResponseEnum.java",
+    "line_range": [
+      36,
+      36
+    ],
+    "why": "shares the drawn advisory's fix commit"
+  },
+  {
+    "advisory": "CVE-2026-3188",
+    "file": "sz-common/sz-common-core/src/main/java/com/sz/core/util/Utils.java",
+    "line_range": [
+      154,
+      154
+    ],
+    "why": "shares the drawn advisory's fix commit"
+  },
+  {
+    "advisory": "CVE-2026-3188",
+    "file": "sz-common/sz-common-oss/src/main/java/com/sz/oss/OssClient.java",
+    "line_range": [
+      122,
+      122
+    ],
+    "why": "shares the drawn advisory's fix commit"
+  },
+  {
+    "advisory": "CVE-2026-3188",
+    "file": "sz-common/sz-common-oss/src/main/java/com/sz/oss/OssClient.java",
+    "line_range": [
+      356,
+      356
+    ],
+    "why": "shares the drawn advisory's fix commit"
+  },
+  {
+    "advisory": "CVE-2026-3188",
+    "file": "sz-common/sz-common-oss/src/main/java/com/sz/oss/OssProperties.java",
+    "line_range": [
+      41,
+      41
+    ],
+    "why": "shares the drawn advisory's fix commit"
+  },
+  {
+    "advisory": "CVE-2026-3188",
+    "file": "sz-service/sz-service-admin/src/main/java/com/sz/admin/system/service/impl/CommonServiceImpl.java",
+    "line_range": [
+      50,
+      50
+    ],
+    "why": "shares the drawn advisory's fix commit"
+  },
+  {
+    "advisory": "CVE-2026-3188",
+    "file": "sz-service/sz-service-admin/src/main/java/com/sz/admin/system/service/impl/CommonServiceImpl.java",
+    "line_range": [
+      157,
+      157
+    ],
+    "why": "shares the drawn advisory's fix commit"
+  },
+  {
+    "advisory": "CVE-2026-3188",
+    "file": "sz-service/sz-service-admin/src/main/java/com/sz/admin/system/service/impl/SysFileServiceImpl.java",
+    "line_range": [
+      67,
+      67
+    ],
+    "why": "shares the drawn advisory's fix commit"
+  },
+  {
+    "advisory": "CVE-2026-3188",
+    "file": "sz-service/sz-service-admin/src/main/java/com/sz/admin/system/service/impl/SysFileServiceImpl.java",
+    "line_range": [
+      76,
+      83
+    ],
+    "why": "shares the drawn advisory's fix commit"
+  },
+  {
+    "advisory": "CVE-2026-3189",
+    "file": "sz-common/sz-common-core/src/main/java/com/sz/core/common/enums/CommonResponseEnum.java",
+    "line_range": [
+      25,
+      25
+    ],
+    "why": "shares the drawn advisory's fix commit"
+  },
+  {
+    "advisory": "CVE-2026-3189",
+    "file": "sz-common/sz-common-core/src/main/java/com/sz/core/common/enums/CommonResponseEnum.java",
+    "line_range": [
+      36,
+      36
+    ],
+    "why": "shares the drawn advisory's fix commit"
+  },
+  {
+    "advisory": "CVE-2026-3189",
+    "file": "sz-common/sz-common-core/src/main/java/com/sz/core/util/Utils.java",
+    "line_range": [
+      154,
+      154
+    ],
+    "why": "shares the drawn advisory's fix commit"
+  },
+  {
+    "advisory": "CVE-2026-3189",
+    "file": "sz-common/sz-common-oss/src/main/java/com/sz/oss/OssClient.java",
+    "line_range": [
+      122,
+      122
+    ],
+    "why": "shares the drawn advisory's fix commit"
+  },
+  {
+    "advisory": "CVE-2026-3189",
+    "file": "sz-common/sz-common-oss/src/main/java/com/sz/oss/OssClient.java",
+    "line_range": [
+      356,
+      356
+    ],
+    "why": "shares the drawn advisory's fix commit"
+  },
+  {
+    "advisory": "CVE-2026-3189",
+    "file": "sz-common/sz-common-oss/src/main/java/com/sz/oss/OssProperties.java",
+    "line_range": [
+      41,
+      41
+    ],
+    "why": "shares the drawn advisory's fix commit"
+  },
+  {
+    "advisory": "CVE-2026-3189",
+    "file": "sz-service/sz-service-admin/src/main/java/com/sz/admin/system/service/impl/CommonServiceImpl.java",
+    "line_range": [
+      50,
+      50
+    ],
+    "why": "shares the drawn advisory's fix commit"
+  },
+  {
+    "advisory": "CVE-2026-3189",
+    "file": "sz-service/sz-service-admin/src/main/java/com/sz/admin/system/service/impl/CommonServiceImpl.java",
+    "line_range": [
+      157,
+      157
+    ],
+    "why": "shares the drawn advisory's fix commit"
+  },
+  {
+    "advisory": "CVE-2026-3189",
+    "file": "sz-service/sz-service-admin/src/main/java/com/sz/admin/system/service/impl/SysFileServiceImpl.java",
+    "line_range": [
+      67,
+      67
+    ],
+    "why": "shares the drawn advisory's fix commit"
+  },
+  {
+    "advisory": "CVE-2026-3189",
+    "file": "sz-service/sz-service-admin/src/main/java/com/sz/admin/system/service/impl/SysFileServiceImpl.java",
+    "line_range": [
+      76,
+      83
+    ],
+    "why": "shares the drawn advisory's fix commit"
+  }
+]

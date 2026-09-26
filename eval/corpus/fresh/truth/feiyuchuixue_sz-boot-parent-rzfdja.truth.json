@@ -1,0 +1,162 @@
+[
+  {
+    "id": "CVE-2026-3187-1",
+    "title": "CVE-2026-3187",
+    "severity": "unknown",
+    "file": "sz-common/sz-common-core/src/main/java/com/sz/core/common/enums/CommonResponseEnum.java",
+    "line": 25,
+    "line_range": [
+      25,
+      25
+    ],
+    "advisory": "CVE-2026-3187",
+    "cwes": [
+      "CWE-284",
+      "CWE-434"
+    ]
+  },
+  {
+    "id": "CVE-2026-3187-2",
+    "title": "CVE-2026-3187",
+    "severity": "unknown",
+    "file": "sz-common/sz-common-core/src/main/java/com/sz/core/common/enums/CommonResponseEnum.java",
+    "line": 36,
+    "line_range": [
+      36,
+      36
+    ],
+    "advisory": "CVE-2026-3187",
+    "cwes": [
+      "CWE-284",
+      "CWE-434"
+    ]
+  },
+  {
+    "id": "CVE-2026-3187-3",
+    "title": "CVE-2026-3187",
+    "severity": "unknown",
+    "file": "sz-common/sz-common-core/src/main/java/com/sz/core/util/Utils.java",
+    "line": 154,
+    "line_range": [
+      154,
+      154
+    ],
+    "advisory": "CVE-2026-3187",
+    "cwes": [
+      "CWE-284",
+      "CWE-434"
+    ]
+  },
+  {
+    "id": "CVE-2026-3187-4",
+    "title": "CVE-2026-3187",
+    "severity": "unknown",
+    "file": "sz-common/sz-common-oss/src/main/java/com/sz/oss/OssClient.java",
+    "line": 122,
+    "line_range": [
+      122,
+      122
+    ],
+    "advisory": "CVE-2026-3187",
+    "cwes": [
+      "CWE-284",
+      "CWE-434"
+    ]
+  },
+  {
+    "id": "CVE-2026-3187-5",
+    "title": "CVE-2026-3187",
+    "severity": "unknown",
+    "file": "sz-common/sz-common-oss/src/main/java/com/sz/oss/OssClient.java",
+    "line": 356,
+    "line_range": [
+      356,
+      356
+    ],
+    "advisory": "CVE-2026-3187",
+    "cwes": [
+      "CWE-284",
+      "CWE-434"
+    ]
+  },
+  {
+    "id": "CVE-2026-3187-6",
+    "title": "CVE-2026-3187",
+    "severity": "unknown",
+    "file": "sz-common/sz-common-oss/src/main/java/com/sz/oss/OssProperties.java",
+    "line": 41,
+    "line_range": [
+      41,
+      41
+    ],
+    "advisory": "CVE-2026-3187",
+    "cwes": [
+      "CWE-284",
+      "CWE-434"
+    ]
+  },
+  {
+    "id": "CVE-2026-3187-7",
+    "title": "CVE-2026-3187",
+    "severity": "unknown",
+    "file": "sz-service/sz-service-admin/src/main/java/com/sz/admin/system/service/impl/CommonServiceImpl.java",
+    "line": 50,
+    "line_range": [
+      50,
+      50
+    ],
+    "advisory": "CVE-2026-3187",
+    "cwes": [
+      "CWE-284",
+      "CWE-434"
+    ]
+  },
+  {
+    "id": "CVE-2026-3187-8",
+    "title": "CVE-2026-3187",
+    "severity": "unknown",
+    "file": "sz-service/sz-service-admin/src/main/java/com/sz/admin/system/service/impl/CommonServiceImpl.java",
+    "line": 157,
+    "line_range": [
+      157,
+      157
+    ],
+    "advisory": "CVE-2026-3187",
+    "cwes": [
+      "CWE-284",
+      "CWE-434"
+    ]
+  },
+  {
+    "id": "CVE-2026-3187-9",
+    "title": "CVE-2026-3187",
+    "severity": "unknown",
+    "file": "sz-service/sz-service-admin/src/main/java/com/sz/admin/system/service/impl/SysFileServiceImpl.java",
+    "line": 67,
+    "line_range": [
+      67,
+      67
+    ],
+    "advisory": "CVE-2026-3187",
+    "cwes": [
+      "CWE-284",
+      "CWE-434"
+    ]
+  },
+  {
+    "id": "CVE-2026-3187-10",
+    "title": "CVE-2026-3187",
+    "severity": "unknown",
+    "file": "sz-service/sz-service-admin/src/main/java/com/sz/admin/system/service/impl/SysFileServiceImpl.java",
+    "line": 76,
+    "line_range": [
+      76,
+      83
+    ],
+    "advisory": "CVE-2026-3187",
+    "cwes": [
+      "CWE-284",
+      "CWE-434"
+    ]
+  }
+]

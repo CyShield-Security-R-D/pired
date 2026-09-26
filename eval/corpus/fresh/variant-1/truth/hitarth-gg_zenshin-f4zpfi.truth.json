@@ -1,0 +1,101 @@
+[
+  {
+    "id": "CVE-2026-37281-1",
+    "title": "CVE-2026-37281",
+    "severity": "critical",
+    "file": "Electron/zenshin-electron/src/main/index.js",
+    "line": 6,
+    "line_range": [
+      6,
+      6
+    ]
+  },
+  {
+    "id": "CVE-2026-37281-2",
+    "title": "CVE-2026-37281",
+    "severity": "critical",
+    "file": "Electron/zenshin-electron/src/main/index.js",
+    "line": 16,
+    "line_range": [
+      16,
+      16
+    ]
+  },
+  {
+    "id": "CVE-2026-37281-3",
+    "title": "CVE-2026-37281",
+    "severity": "critical",
+    "file": "Electron/zenshin-electron/src/main/index.js",
+    "line": 162,
+    "line_range": [
+      162,
+      169
+    ]
+  },
+  {
+    "id": "CVE-2026-37281-4",
+    "title": "CVE-2026-37281",
+    "severity": "critical",
+    "file": "Electron/zenshin-electron/src/main/index.js",
+    "line": 422,
+    "line_range": [
+      422,
+      422
+    ]
+  },
+  {
+    "id": "CVE-2026-37281-5",
+    "title": "CVE-2026-37281",
+    "severity": "critical",
+    "file": "Electron/zenshin-electron/src/main/index.js",
+    "line": 859,
+    "line_range": [
+      859,
+      876
+    ]
+  },
+  {
+    "id": "CVE-2026-37281-6",
+    "title": "CVE-2026-37281",
+    "severity": "critical",
+    "file": "Electron/zenshin-electron/src/preload/index.js",
+    "line": 10,
+    "line_range": [
+      10,
+      10
+    ]
+  },
+  {
+    "id": "CVE-2026-37281-7",
+    "title": "CVE-2026-37281",
+    "severity": "critical",
+    "file": "Electron/zenshin-electron/src/renderer/src/pages/Player.jsx",
+    "line": 198,
+    "line_range": [
+      198,
+      198
+    ]
+  },
+  {
+    "id": "CVE-2026-37281-8",
+    "title": "CVE-2026-37281",
+    "severity": "critical",
+    "file": "Electron/zenshin-electron/src/renderer/src/pages/Player.jsx",
+    "line": 237,
+    "line_range": [
+      237,
+      237
+    ]
+  },
+  {
+    "id": "CVE-2026-37281-9",
+    "title": "CVE-2026-37281",
+    "severity": "critical",
+    "file": "Electron/zenshin-electron/src/renderer/src/ui/AppLayout.jsx",
+    "line": 42,
+    "line_range": [
+      42,
+      42
+    ]
+  }
+]

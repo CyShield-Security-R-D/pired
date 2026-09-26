@@ -1,0 +1,110 @@
+[
+  {
+    "advisory": "CVE-2026-82543",
+    "file": "apps/base/utils.py",
+    "line_range": [
+      114,
+      114
+    ],
+    "why": "diffuse: its fix yields 16 labels"
+  },
+  {
+    "advisory": "CVE-2026-82543",
+    "file": "apps/base/views.py",
+    "line_range": [
+      214,
+      218
+    ],
+    "why": "diffuse: its fix yields 16 labels"
+  },
+  {
+    "advisory": "CVE-2026-82543",
+    "file": "apps/base/views.py",
+    "line_range": [
+      245,
+      247
+    ],
+    "why": "diffuse: its fix yields 16 labels"
+  },
+  {
+    "advisory": "CVE-2026-82543",
+    "file": "apps/base/views.py",
+    "line_range": [
+      258,
+      275
+    ],
+    "why": "diffuse: its fix yields 16 labels"
+  },
+  {
+    "advisory": "CVE-2026-82543",
+    "file": "apps/base/views.py",
+    "line_range": [
+      288,
+      288
+    ],
+    "why": "diffuse: its fix yields 16 labels"
+  },
+  {
+    "advisory": "CVE-2026-82543",
+    "file": "apps/base/views.py",
+    "line_range": [
+      301,
+      302
+    ],
+    "why": "diffuse: its fix yields 16 labels"
+  },
+  {
+    "advisory": "CVE-2026-82543",
+    "file": "apps/base/views.py",
+    "line_range": [
+      312,
+      315
+    ],
+    "why": "diffuse: its fix yields 16 labels"
+  },
+  {
+    "advisory": "CVE-2026-82543",
+    "file": "core/config.py",
+    "line_range": [
+      12,
+      12
+    ],
+    "why": "diffuse: its fix yields 16 labels"
+  },
+  {
+    "advisory": "CVE-2026-82543",
+    "file": "core/tasks.py",
+    "line_range": [
+      30,
+      30
+    ],
+    "why": "diffuse: its fix yields 16 labels"
+  },
+  {
+    "advisory": "CVE-2026-82543",
+    "file": "main.py",
+    "line_range": [
+      28,
+      28
+    ],
+    "why": "diffuse: its fix yields 16 labels"
+  },
+  {
+    "advisory": "CVE-2026-82543",
+    "file": "main.py",
+    "line_range": [
+      41,
+      41
+    ],
+    "why": "diffuse: its fix yields 16 labels"
+  },
+  {
+    "advisory": "CVE-2026-82543",
+    "file": "main.py",
+    "line_range": [
+      57,
+      57
+    ],
+    "why": "diffuse: its fix yields 16 labels"
+  }
+]

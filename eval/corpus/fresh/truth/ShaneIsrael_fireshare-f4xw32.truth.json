@@ -1,0 +1,32 @@
+[
+  {
+    "id": "CVE-2026-34745-1",
+    "title": "CVE-2026-34745",
+    "severity": "critical",
+    "file": "app/server/fireshare/api.py",
+    "line": 1518,
+    "line_range": [
+      1518,
+      1518
+    ],
+    "advisory": "CVE-2026-34745",
+    "cwes": [
+      "CWE-22"
+    ]
+  },
+  {
+    "id": "CVE-2026-34745-2",
+    "title": "CVE-2026-34745",
+    "severity": "critical",
+    "file": "app/server/fireshare/api.py",
+    "line": 1530,
+    "line_range": [
+      1530,
+      1531
+    ],
+    "advisory": "CVE-2026-34745",
+    "cwes": [
+      "CWE-22"
+    ]
+  }
+]

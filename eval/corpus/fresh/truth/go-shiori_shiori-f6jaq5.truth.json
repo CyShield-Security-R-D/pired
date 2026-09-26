@@ -1,0 +1,17 @@
+[
+  {
+    "id": "CVE-2026-61463-1",
+    "title": "CVE-2026-61463",
+    "severity": "unknown",
+    "file": "internal/http/handlers/api/v1/auth.go",
+    "line": 179,
+    "line_range": [
+      179,
+      179
+    ],
+    "advisory": "CVE-2026-61463",
+    "cwes": [
+      "CWE-269"
+    ]
+  }
+]

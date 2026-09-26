@@ -1,0 +1,67 @@
+[
+  {
+    "id": "CVE-2026-53658-1",
+    "title": "CVE-2026-53658",
+    "cwe": "CWE-90",
+    "severity": "unknown",
+    "file": "lib/server/ldap/client.go",
+    "line": 143,
+    "line_range": [
+      143,
+      143
+    ],
+    "vuln_class": "CWE-90"
+  },
+  {
+    "id": "CVE-2026-53658-2",
+    "title": "CVE-2026-53658",
+    "cwe": "CWE-90",
+    "severity": "unknown",
+    "file": "lib/server/ldap/client.go",
+    "line": 157,
+    "line_range": [
+      157,
+      157
+    ],
+    "vuln_class": "CWE-90"
+  },
+  {
+    "id": "CVE-2026-53658-3",
+    "title": "CVE-2026-53658",
+    "cwe": "CWE-90",
+    "severity": "unknown",
+    "file": "lib/server/ldap/client.go",
+    "line": 171,
+    "line_range": [
+      171,
+      175
+    ],
+    "vuln_class": "CWE-90"
+  },
+  {
+    "id": "CVE-2026-53658-4",
+    "title": "CVE-2026-53658",
+    "cwe": "CWE-90",
+    "severity": "unknown",
+    "file": "lib/server/ldap/client.go",
+    "line": 300,
+    "line_range": [
+      300,
+      300
+    ],
+    "vuln_class": "CWE-90"
+  },
+  {
+    "id": "CVE-2026-53658-5",
+    "title": "CVE-2026-53658",
+    "cwe": "CWE-90",
+    "severity": "unknown",
+    "file": "lib/server/ldap/client.go",
+    "line": 313,
+    "line_range": [
+      313,
+      313
+    ],
+    "vuln_class": "CWE-90"
+  }
+]

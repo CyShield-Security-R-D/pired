@@ -1,0 +1,47 @@
+[
+  {
+    "id": "CVE-2026-48518-1",
+    "title": "CVE-2026-48518",
+    "severity": "medium",
+    "file": "internal/routes/private/routes.go",
+    "line": 12,
+    "line_range": [
+      12,
+      12
+    ],
+    "advisory": "CVE-2026-48518",
+    "cwes": [
+      "CWE-352"
+    ]
+  },
+  {
+    "id": "CVE-2026-48518-2",
+    "title": "CVE-2026-48518",
+    "severity": "medium",
+    "file": "internal/routes/public/routes.go",
+    "line": 16,
+    "line_range": [
+      16,
+      21
+    ],
+    "advisory": "CVE-2026-48518",
+    "cwes": [
+      "CWE-352"
+    ]
+  },
+  {
+    "id": "CVE-2026-48518-3",
+    "title": "CVE-2026-48518",
+    "severity": "medium",
+    "file": "internal/routes/public/routes.go",
+    "line": 35,
+    "line_range": [
+      35,
+      36
+    ],
+    "advisory": "CVE-2026-48518",
+    "cwes": [
+      "CWE-352"
+    ]
+  }
+]

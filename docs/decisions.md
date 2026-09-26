@@ -3283,3 +3283,77 @@ find what the candidate found?
   would count twice. The union is deduplicated and graded once, as the pinned scorer grades a run.
 - **Letting a matched-session failure trip an official grid at once, as a pair arm's does.** That
   rule exists because such a failure fixes the gate's decision. A matched session's does not.
+
+---
+
+## ADR-035 — v6 is accepted on fresh applications drawn from OSV by a pre-registered walk
+
+**Status:** accepted for the v6 evaluation · 2026-09-26 · delegation v6 Phase 4, item 4.1 · follows ADR-026
+
+### Context
+
+The v5 trial graded delegation on the five official targets and guarded it with four held-out
+ones. Every project in the pool those came from (`/home/mamgad/corpus`, 46 CVEs in 15 repositories)
+is now either one of those nine or named in `research/10` as part of the corpus pired was built
+against. A v6 verdict measured there would partly measure how well pired was fitted to it, and
+hand-picking replacements would carry the picker's knowledge of each project into the result.
+
+### Decision
+
+- **The pool is OSV's GIT export**, the source `fetch-repos.ts` already selects small applications
+  from: CVE records with a reference typed `FIX` to a GitHub commit. The derived pool is committed
+  with its hash so the draw can be repeated after OSV moves.
+- **Exclusion is by repository and errs wide.** A repository is out if it appears in the official
+  or held-out manifests (names only), anywhere in the old pool's paths, logs or notes, or anywhere in
+  any version of pired's notes — including by bare name, which also removes unrelated projects named
+  `core` or `server`.
+- **The draw is a seeded walk** (`eval/corpus/select-fresh.ts`): repositories in mulberry32 order,
+  each admitted on its first eligible advisory, no language above half the draw, then two clean-code
+  controls whose fixed tree is reviewed. A publication cutoff is used only if the walk's own yield
+  shows it leaves three times the draw.
+- **The application rule is calibrated on the official targets, not taken from `fetch-apps.ts`.**
+  That rule wants three route files and rejects three of the five official targets; a fresh set it
+  admitted would be a different kind of application.
+- **Label hygiene is part of the key**: at most 31 lines per label, split at hunk boundaries or
+  capped; every label classed or none (research/12); diffuse fixes excluded.
+- **Nothing is re-drawn after results.** A re-draw is appended as a variant beside the original.
+
+The procedure, its counts and its limitations are in `eval/corpus/fresh.md`.
+
+### Consequences
+
+- The fresh targets' names live only under `eval/corpus/fresh*`, which this draw's exclusion scan
+  skips. Once used they are no longer fresh; a later draw's scan should include them.
+- The draw depends on the network at draw time (fetches of fix commits). Transient failures are
+  retried; a permanent one is a fact about the candidate and is recorded as such.
+- Keys are patch-derived: precise about where the maintainer changed code, silent about undisclosed
+  bugs, which count as false positives.
+
+### Amendment — variant 2 (2026-09-26, before any model run)
+
+An independent review of the first draw found non-applications admitted (a server entry under an
+archive folder, templates from examples and fixtures, a framework, HTTP client calls counted as
+routes, a vendored 12k-line `vue.js` deciding a Go project's language) and import statements
+labelled. Decided:
+
+- **Rules v2 are committed before a second walk**: service evidence only outside tests, docs,
+  examples, fixtures, mocks and archives; a deployable-service marker (Dockerfile, compose,
+  `Chart.yaml`, `Procfile`); no README calling the project a framework, library, SDK or toolkit;
+  server-only route shapes (also fixed in `lib.ts`); vendored files left out of size and language;
+  import-only hunks not labelled. The five official targets pass every rule.
+- **The second walk is appended as variant 2**, same seed, pool and exclusions; v6 uses it. Variant
+  1 stays on record.
+- **Fresh truth is classless for the pinned grader.** OSV sorts CWE ids as text, so "the first CWE"
+  was not the primary one. Labels carry `advisory` and all `cwes` for re-scoring instead.
+- **Open advisories without labels are neutral** — a claim at them is neither a true nor a false
+  positive (`rescore.ts` `claimOutcomes`).
+- **Patched twins replace separate controls**: each target's fix commit, scored by claims within ±3
+  lines of the fixed regions and by claims per KLOC, never folded into precision.
+
+### Rejected
+
+- **Drawing from the old pool anyway.** Every repository in it has been named in pired's research.
+- **Hand-picking fresh applications.** Unfalsifiable: nobody could tell afterwards how much the
+  choice favoured the candidate.
+- **Filtering hard on publication date.** None of the three v6 models publishes a cutoff, so any
+  date is a guess; the cutoff is conditional on the pool staying large.

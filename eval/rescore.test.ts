@@ -3,9 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-	citationMatches, citationsForRecord, currentRuns, findingsFromLedger, formatReport, inventoryIndex, labelHygiene, LEVELS,
-	liveRecords, loadTruth, matchUnique, officialMatches, pairedRows, parseCitations, rescoreGrid, sameFile, type Citation, type Truth,
-	CLAIM_TIERS, ledgerFindingRows, type LedgerFinding, partitionClaims, tiersOf, verdictCounts,
+	advisoriesFound, advisoryOf, citationMatches, citationsForRecord, claimOutcomes, CLAIM_TIERS, controlScore, currentRuns, findingsFromLedger,
+	formatReport, inventoryIndex, labelHygiene, ledgerFindingRows, LEVELS, liveRecords, loadRegions, loadTruth, matchUnique, officialMatches,
+	pairedRows, parseCitations, partitionClaims, precisionWithoutNeutral, rescoreGrid, sameFile, tiersOf, verdictCounts,
+	type Citation, type LedgerFinding, type Truth,
 } from "./rescore.ts";
 
 type Row = Record<string, unknown>;
@@ -306,6 +307,62 @@ describe("run selection", () => {
 	});
 });
 
+describe("per advisory", () => {
+	it("names a label's advisory from its own field, or from its id without the -n suffix", () => {
+		expect(advisoryOf(truth("CVE-2026-1-2", "a.go", 1, 1, 1, { advisory: "CVE-2026-9" }))).toBe("CVE-2026-9");
+		expect(advisoryOf(truth("CVE-2024-22203-7", "a.go", 1))).toBe("CVE-2024-22203");
+	});
+
+	it("finds an advisory when any one of its labels is found, so a three-place fix found once counts once", () => {
+		const truths = [
+			truth("A-1", "a.go", 10, 10, 10, { advisory: "A" }), truth("A-2", "b.go", 50, 50, 50, { advisory: "A" }),
+			truth("A-3", "c.go", 90, 90, 90, { advisory: "A" }), truth("B-1", "d.go", 5, 5, 5, { advisory: "B" }),
+		];
+		expect([...advisoriesFound([[at("b.go", 51)]], truths, "line±3")]).toEqual(["A"]);
+		expect(advisoriesFound([[at("z.go", 1)]], truths, "line±3").size).toBe(0);
+	});
+
+	it("reads the advisory and its classes from a fresh key", () => {
+		const dir = tmp();
+		writeFileSync(join(dir, "k.json"), JSON.stringify([{ id: "C-1", file: "a.py", line: 3, line_range: [3, 5], advisory: "C", cwes: ["CWE-22", "CWE-200"] }]));
+		expect(loadTruth(join(dir, "k.json"))).toEqual([{ id: "C-1", file: "a.py", line: 3, lo: 3, hi: 5, advisory: "C", cwes: ["CWE-22", "CWE-200"] }]);
+	});
+});
+
+describe("neutral regions", () => {
+	const truths = [truth("A-1", "app/views.py", 40, 40, 44)];
+	const neutral = [{ file: "app/api.py", lo: 100, hi: 110, advisory: "B" }];
+
+	it("counts a claim at an open advisory the key could not label as neither a true nor a false positive", () => {
+		const claims = [
+			{ file: "app/views.py", line: 46 }, { file: "app/api.py", line: 98 }, { file: "app/api.py", line: 150 }, { file: "app/api.py", line: 98 },
+		];
+		expect(claimOutcomes(claims, truths, neutral)).toEqual({ tp: 1, neutral: 1, fp: 1 });
+		expect(precisionWithoutNeutral({ tp: 1, fp: 1 })).toBe(0.5);
+		expect(precisionWithoutNeutral({ tp: 0, fp: 0 })).toBeNull();
+	});
+
+	it("lets a label win over a neutral region that covers the same lines", () => {
+		expect(claimOutcomes([{ file: "a.py", line: 5 }], [truth("A-1", "a.py", 5)], [{ file: "a.py", lo: 1, hi: 10 }])).toEqual({ tp: 1, neutral: 0, fp: 0 });
+	});
+
+	it("reads no regions when a target has no neutral file", () => {
+		const dir = tmp();
+		expect(loadRegions(join(dir, "none.neutral.json"))).toEqual([]);
+		writeFileSync(join(dir, "x.neutral.json"), JSON.stringify([{ advisory: "B", file: "a.go", line_range: [9, 4], why: "diffuse" }]));
+		expect(loadRegions(join(dir, "x.neutral.json"))).toEqual([{ file: "a.go", lo: 4, hi: 9, advisory: "B" }]);
+	});
+});
+
+describe("patched twins", () => {
+	it("counts claims within three lines of a fixed region, and all claims per thousand lines, deduped", () => {
+		const regions = [{ file: "http/share.go", lo: 80, hi: 84 }];
+		const claims = [{ file: "http/share.go", line: 87 }, { file: "http/share.go", line: 87 }, { file: "http/share.go", line: 88 }, { file: "users.go", line: 3 }];
+		expect(controlScore(claims, regions, 12_000)).toEqual({ hits: 1, claims: 3, perKloc: 0.25 });
+		expect(controlScore([], regions, 0).perKloc).toBeNull();
+	});
+});
+
 describe("rescoreGrid and the report", () => {
 	const grid = (): string => {
 		const g = tmp();
@@ -333,6 +390,25 @@ describe("rescoreGrid and the report", () => {
 		mkdirSync(join(g, "runs", "c-norun"));
 		return g;
 	};
+
+	it("adds advisories found, neutral claims and a twin's control score without changing the official columns", () => {
+		const g = grid();
+		const keys = join(g, "keys");
+		writeFileSync(join(keys, "app.neutral.json"), JSON.stringify([{ advisory: "N", file: "http/share.go", line_range: [118, 122], why: "shares a fix" }]));
+		const manifest = JSON.parse(readFileSync(join(g, "manifest.json"), "utf8")) as { targets: Row[] };
+		manifest.targets[0] = { ...manifest.targets[0], fixed_regions: [{ file: "http/share.go", line_range: [119, 121] }], scope_loc: 2_000 };
+		writeFileSync(join(g, "manifest.json"), JSON.stringify(manifest));
+		const before = rescoreGrid(grid()).rows.map((r) => [r.arm, r.mirroredTp, r.matched]);
+		const { rows } = rescoreGrid(g);
+		expect(rows.map((r) => [r.arm, r.mirroredTp, r.matched])).toEqual(before);
+		const cand = rows.find((r) => r.arm === "candidate")!;
+		expect(cand.claimOutcomes).toEqual({ tp: 0, neutral: 1, fp: 0 });
+		expect(cand.control).toEqual({ hits: 1, claims: 1, perKloc: 0.5 });
+		expect(cand.advisoriesMatched["line±3"]).toEqual([]);
+		const report = formatReport(rows, []);
+		expect(report).toContain("precision without neutral");
+		expect(report).toContain("patched twins (never in precision)");
+	});
 
 	it("reproduces the official count per run and scores each level from the ledger", () => {
 		const { rows } = rescoreGrid(grid());
