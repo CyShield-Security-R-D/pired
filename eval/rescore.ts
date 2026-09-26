@@ -421,6 +421,8 @@ export interface RescoreRow {
 	 */
 	claimsIdentical: boolean | null;
 	matched: Record<Level, string[]>;
+	/** A matched-arm union row only: its k session cells, in session order. */
+	sessions?: string[];
 }
 
 /**
@@ -441,23 +443,86 @@ export function claimKeys(claims: Array<{ file: string; line?: number }>): strin
 }
 
 function scoredClaimKeys(dir: string): string[] | null {
-	const path = join(dir, "score.json.findings.json");
+	return scoredClaimKeysAt(join(dir, "score.json.findings.json"));
+}
+
+function scoredClaimKeysAt(path: string): string[] | null {
 	if (!existsSync(path)) return null;
 	const raw = JSON.parse(readFileSync(path, "utf8")) as unknown;
 	return Array.isArray(raw) ? (raw as Array<{ file: string; line?: number }>).map((c) => `${c.file}:${c.line ?? 0}`) : null;
 }
 
+/** A matched session's index and own attempt, from run.json's matchedSession. */
+const sessionOf = (r: Row): { index: number; sessionAttempt: number } | undefined => {
+	const s = r.matchedSession as Row | undefined;
+	return s && typeof s.index === "number" && typeof s.sessionAttempt === "number" ? { index: s.index, sessionAttempt: s.sessionAttempt } : undefined;
+};
+
+/**
+ * The matched arm's runs folded into one row per pair (plan item 2.5): its k
+ * sessions' ledgers unioned, as the harness unions them, at the pair's highest
+ * attempt, each session at its own highest attempt. A pair whose k sessions are
+ * not all valid there has no row, as an invalid run has none.
+ *
+ * `officialTp` is the pinned scorer's union number from summary.json's matched
+ * block, and the mirror is run on the concatenated claims (officialMatches
+ * dedupes them on file:line, as the union did), so the control still checks
+ * this file against the official path. A pair summary.json has no union for
+ * (a grid still running) has no row either: there is no official number yet.
+ */
+export function matchedUnionRows(gridDir: string, runs: Row[], k: number, truths: Map<string, Truth[]>, unions: Row[], cap = DEFAULT_WIDTH_CAP): RescoreRow[] {
+	const top = new Map<string, number>();
+	const at = (r: Row) => `${String(r.target)}#${String(r.pass)}`;
+	for (const r of runs) top.set(at(r), Math.max(top.get(at(r)) ?? -Infinity, Number(r.attempt ?? 0)));
+	const groups = new Map<string, Map<number, Row>>();
+	for (const r of runs) {
+		const session = sessionOf(r);
+		if (!session || Number(r.attempt ?? 0) !== top.get(at(r))) continue;
+		const group = groups.get(at(r)) ?? new Map<number, Row>();
+		const held = group.get(session.index);
+		if (!held || session.sessionAttempt >= sessionOf(held)!.sessionAttempt) group.set(session.index, r);
+		groups.set(at(r), group);
+	}
+	const rows: RescoreRow[] = [];
+	for (const group of groups.values()) {
+		const sessions = [...group.entries()].sort(([a], [b]) => a - b).map(([, r]) => r);
+		if (sessions.length !== k || sessions.some((r, i) => sessionOf(r)!.index !== i + 1 || r.valid !== true)) continue;
+		const first = sessions[0]!;
+		const union = unions.find((u) => String(u.target) === String(first.target) && Number(u.pass) === Number(first.pass) && Number(u.attempt) === Number(first.attempt ?? 0));
+		if (!union || union.valid !== true) continue;
+		const dirs = sessions.map((r) => join(gridDir, "runs", r.__cell as string));
+		const truth = truths.get(String(first.target)) ?? [];
+		const findings = dirs.flatMap(findingsFromLedger);
+		const claims = dirs.flatMap(claimsFromLedger);
+		const scored = typeof union.scorePath === "string" ? scoredClaimKeysAt(`${union.scorePath}.findings.json`) : null;
+		rows.push({
+			grid: gridDir, cell: sessions.map((r) => r.__cell as string).join("+"), target: String(first.target), pass: Number(first.pass), arm: "matched", attempt: Number(first.attempt ?? 0),
+			officialTp: Number(union.truePositives), claims: Number(union.totalClaims), tokens: Number(union.totalTokens),
+			mirroredTp: officialMatches(claims, truth).size,
+			segmentsTp: officialMatches(claims, truth, { fileRule: "segments" }).size,
+			locationTp: officialMatches(claims, truth, { classRule: false }).size,
+			strictLocationTp: officialMatches(claims, truth, { classRule: false, fileRule: "segments" }).size,
+			claimsIdentical: scored === null ? null : scored.join("\n") === claimKeys(claims).join("\n"),
+			matched: Object.fromEntries(LEVELS.map((l) => [l, [...matchUnique(findings, truth, l, cap)].sort()])) as Record<Level, string[]>,
+			sessions: sessions.map((r) => r.__cell as string),
+		});
+	}
+	return rows;
+}
+
 export function rescoreGrid(gridDir: string, cap = DEFAULT_WIDTH_CAP): { rows: RescoreRow[]; truths: Map<string, Truth[]> } {
-	const manifest = JSON.parse(readFileSync(join(gridDir, "manifest.json"), "utf8")) as { targets: Array<{ id: string; name: string }>; inputs: { truth: string } };
+	const manifest = JSON.parse(readFileSync(join(gridDir, "manifest.json"), "utf8")) as { targets: Array<{ id: string; name: string }>; inputs: { truth: string }; matched?: { k?: unknown } };
 	const truths = new Map<string, Truth[]>();
 	for (const t of manifest.targets) truths.set(t.id, loadTruth(join(manifest.inputs.truth, `${t.name}.truth.json`)));
 	const runsDir = join(gridDir, "runs");
-	const runs = readdirSync(runsDir).flatMap((cell) => {
+	const runs: Row[] = readdirSync(runsDir).flatMap((cell) => {
 		const path = join(runsDir, cell, "run.json");
 		if (!existsSync(path)) return [];
 		return [{ ...(JSON.parse(readFileSync(path, "utf8")) as Row), __cell: cell }];
 	});
-	const rows = currentRuns(runs).map((r): RescoreRow => {
+	// A matched session is one of k draws, not a run of its own: its arm is read
+	// as the union below, and never enters the per-run rows.
+	const rows = currentRuns(runs.filter((r) => r.arm !== "matched")).map((r): RescoreRow => {
 		const dir = join(runsDir, r.__cell as string);
 		const truth = truths.get(String(r.target)) ?? [];
 		const findings = findingsFromLedger(dir);
@@ -474,6 +539,12 @@ export function rescoreGrid(gridDir: string, cap = DEFAULT_WIDTH_CAP): { rows: R
 			matched,
 		};
 	});
+	const k = manifest.matched?.k;
+	if (typeof k === "number") {
+		const summaryPath = join(gridDir, "summary.json");
+		const summary = existsSync(summaryPath) ? JSON.parse(readFileSync(summaryPath, "utf8")) as { matched?: { unions?: Row[] } } : {};
+		rows.push(...matchedUnionRows(gridDir, runs.filter((r) => r.arm === "matched"), k, truths, summary.matched?.unions ?? [], cap));
+	}
 	return { rows, truths };
 }
 
@@ -481,7 +552,9 @@ export function rescoreGrid(gridDir: string, cap = DEFAULT_WIDTH_CAP): { rows: R
  * Rows whose (target, pass) has both arms valid at the same attempt: only those
  * enter the paired sums, the rule eval/paired.ts applies. Without the attempt
  * check a baseline that needed a retry would be paired with a candidate's first
- * attempt, and the two would not have run under the same conditions.
+ * attempt, and the two would not have run under the same conditions. A matched
+ * union row enters with its pair, and a pair missing a gate arm stays out even
+ * when a matched row stands in the second slot.
  */
 export function pairedRows(rows: RescoreRow[]): RescoreRow[] {
 	const groups = new Map<string, { arms: Set<string>; attempts: Set<number> }>();
@@ -494,7 +567,7 @@ export function pairedRows(rows: RescoreRow[]): RescoreRow[] {
 	}
 	return rows.filter((r) => {
 		const g = groups.get(`${r.grid}#${r.target}#${r.pass}`);
-		return !!g && g.arms.size >= 2 && g.attempts.size === 1;
+		return !!g && g.arms.has("baseline") && g.arms.has("candidate") && g.attempts.size === 1;
 	});
 }
 

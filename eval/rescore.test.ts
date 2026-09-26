@@ -401,3 +401,66 @@ describe("rescoreGrid and the report", () => {
 		}
 	});
 });
+
+describe("the matched arm's union rows (plan 2.5)", () => {
+	// A synthetic grid: one gate pair and a matched arm of two sessions whose
+	// ledgers overlap on one citation.
+	const grid = (opts: { k?: number; union?: Row | null; secondValid?: boolean } = {}): string => {
+		const g = tmp();
+		const keys = join(g, "keys");
+		mkdirSync(keys);
+		writeFileSync(join(keys, "app.truth.json"), JSON.stringify([
+			{ id: "T-1", file: "http/share.go", line: 80, line_range: [78, 84] },
+			{ id: "T-2", file: "users/users.go", line: 10, line_range: [10, 20] },
+			{ id: "T-3", file: "auth/login.go", line: 30, line_range: [30, 30] },
+		]));
+		writeFileSync(join(g, "manifest.json"), JSON.stringify({ targets: [{ id: "t1", name: "app" }], inputs: { truth: keys }, ...(opts.k ? { matched: { mode: "follow", k: opts.k } } : {}) }));
+		const cell = (name: string, run: Row, findings: Row[]) => {
+			const dir = join(g, "runs", name);
+			mkdirSync(join(dir, "workspace"), { recursive: true });
+			writeFileSync(join(dir, "run.json"), JSON.stringify({ target: "t1", pass: 1, attempt: 1, valid: true, totalTokens: 1000, truePositives: 1, findings: 1, ...run }));
+			writeFileSync(join(dir, "workspace", "findings.jsonl"), jsonl(findings));
+		};
+		cell("c-base", { arm: "baseline" }, [{ id: "a", description: "http/share.go:80" }]);
+		cell("c-cand", { arm: "candidate" }, [{ id: "b", description: "http/share.go:81" }]);
+		const session = (index: number, sessionAttempt: number, valid = true) => ({ arm: "matched", valid, matchedSession: { index, sessionAttempt } });
+		cell("m-1", session(1, 1), [{ id: "c", description: "http/share.go:80" }]);
+		cell("m-2-old", session(2, 1, false), [{ id: "d", description: "auth/login.go:30" }]);
+		cell("m-2", session(2, 2), []);
+		writeFileSync(join(g, "runs", "m-2", "run.json"), JSON.stringify({ target: "t1", pass: 1, attempt: 1, valid: opts.secondValid ?? true, totalTokens: 900, arm: "matched", matchedSession: { index: 2, sessionAttempt: 2 } }));
+		writeFileSync(join(g, "runs", "m-2", "workspace", "findings.jsonl"), jsonl([
+			{ id: "e", description: "http/share.go:80" }, { id: "f", description: "users/users.go:12" },
+		]));
+		const union = opts.union === undefined ? { target: "t1", pass: 1, attempt: 1, valid: true, truePositives: 2, totalClaims: 2, totalTokens: 1900 } : opts.union;
+		if (union) writeFileSync(join(g, "summary.json"), JSON.stringify({ matched: { unions: [union] } }));
+		return g;
+	};
+
+	it("unions each session's latest ledger into one row, deduplicated as the pinned scorer dedupes", () => {
+		const { rows } = rescoreGrid(grid({ k: 2 }));
+		const matched = rows.filter((r) => r.arm === "matched");
+		expect(matched).toHaveLength(1);
+		expect(matched[0]).toMatchObject({ cell: "m-1+m-2", sessions: ["m-1", "m-2"], officialTp: 2, mirroredTp: 2, claims: 2, tokens: 1900, attempt: 1 });
+		expect(matched[0]!.matched["line±3"]).toEqual(["T-1", "T-2"]);
+		// The superseded session attempt (the only one citing T-3) never enters the union.
+		expect(matched[0]!.matched["point±3"]).not.toContain("T-3");
+	});
+
+	it("gives the arm no row when one of its sessions is not valid, or when summary.json has no union yet", () => {
+		expect(rescoreGrid(grid({ k: 2, secondValid: false })).rows.filter((r) => r.arm === "matched")).toEqual([]);
+		expect(rescoreGrid(grid({ k: 2, union: null })).rows.filter((r) => r.arm === "matched")).toEqual([]);
+		expect(rescoreGrid(grid({ k: 3 })).rows.filter((r) => r.arm === "matched")).toEqual([]);
+	});
+
+	it("never reads a matched session as a run of its own, even in a grid whose manifest names no matched arm", () => {
+		const { rows } = rescoreGrid(grid());
+		expect(rows.map((r) => r.arm).sort()).toEqual(["baseline", "candidate"]);
+	});
+
+	it("reports the matched row beside its gate pair, and never lets it stand in for a missing gate arm", () => {
+		const { rows } = rescoreGrid(grid({ k: 2 }));
+		expect(pairedRows(rows).map((r) => r.arm).sort()).toEqual(["baseline", "candidate", "matched"]);
+		expect(pairedRows(rows.filter((r) => r.arm !== "candidate"))).toEqual([]);
+		expect(formatReport(rows, [])).toMatch(/\tmatched\t1\t2\t/);
+	});
+});
