@@ -448,7 +448,7 @@ describe("runs the v6 validity policy keeps", () => {
 	// or quits sooner, so they count as pairs and their numbers show per arm.
 	it("pairs limit-reaching and fast empty runs like any other and reports how many each arm had, without letting them decide", () => {
 		const flagged = grid(pairs("baseline", "candidate", (t, p) => [
-			{ found: 1, ...(p === 1 ? { fastEmpty: true, found: 0 } : { fastEmpty: false }) },
+			p === 1 ? { found: 0, fastEmpty: true } : { found: 1, fastEmpty: false },
 			{ found: 2, reachedLimit: t === "t1" || t === "t2" },
 		]));
 		const d = decide("S-vs-A", [flagged], labels());
