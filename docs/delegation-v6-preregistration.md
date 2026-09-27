@@ -216,6 +216,15 @@ the check that S did not drift between stages.
   commits.
 - **Bootstrap:** 10,000 app-clustered resamples, seed 1.
 - **Decision script:** `eval/v6-decision.ts` at its frozen commit.
+- **Run validity (the v6 policy, pinned in both stage kinds):**
+  - A run that reaches the run limit is valid, and is scored on its ledger as it stood at the
+    deadline.
+  - A run that ends quickly with nothing recorded is valid, with zero findings.
+  - Both are model behaviour, not harness failure. Excluding them would bias the comparison
+    against the arm that works longer or quits sooner, which is exactly what 3.2 changes. Their
+    counts are reported per arm.
+  - Only harness-integrity failures make a run invalid. On an official grid such a failure still
+    stops the grid at once.
 - **Exclusions:**
   - invalid runs are excluded only by the harness's validity rules, and listed;
   - pairs abandoned by the attempt ceiling are reported per arm. They make a comparison that uses
