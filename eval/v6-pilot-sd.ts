@@ -18,6 +18,11 @@
  * eval/rescore.ts does, and never `<out>/sealed/`, where the harness keeps the
  * arms' numbers until the count is fixed. The full comparison is
  * eval/v6-decision.ts, which refuses a grid whose count is not yet fixed.
+ *
+ * A valid pair is what the harness recorded valid. Under the v6 validity
+ * policy both stage kinds pin, that includes runs that reached the run limit
+ * and fast empty runs: they are paired like any other, and their flags are not
+ * read here, since how many each arm had would show which arm works longer.
  */
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";

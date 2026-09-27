@@ -18,7 +18,7 @@ afterEach(() => {
 const LINES = [10, 50, 90, 130];
 
 /** One run: how many of its target's advisories it found (the first `found` of four). */
-interface RunSpec { target: string; pass: number; arm: string; found: number; attempt?: number; valid?: boolean }
+interface RunSpec { target: string; pass: number; arm: string; found: number; attempt?: number; valid?: boolean; reachedLimit?: boolean; fastEmpty?: boolean }
 
 /**
  * A stage-1 grid: each target `app-<t>` has four one-label advisories in
@@ -50,7 +50,8 @@ function grid(runs: RunSpec[], options: { targets?: string[]; truthExtra?: Row; 
 		const dir = join(g, "runs", `cell-${i}`);
 		mkdirSync(join(dir, "workspace"), { recursive: true });
 		const file = r.target.endsWith("-patched") ? r.target.replace(/-patched$/, "") : r.target;
-		writeFileSync(join(dir, "run.json"), JSON.stringify({ target: r.target, pass: r.pass, arm: r.arm, attempt: r.attempt ?? 1, valid: r.valid ?? true, truePositives: r.found, findings: r.found, totalTokens: 1000 }));
+		const flags = r.reachedLimit === undefined && r.fastEmpty === undefined ? {} : { reachedLimit: r.reachedLimit ?? false, fastEmpty: r.fastEmpty ?? false, limitEffects: [] };
+		writeFileSync(join(dir, "run.json"), JSON.stringify({ target: r.target, pass: r.pass, arm: r.arm, attempt: r.attempt ?? 1, valid: r.valid ?? true, ...flags, truePositives: r.found, findings: r.found, totalTokens: 1000 }));
 		const path = options.citeIn?.(r.arm) ?? "src";
 		const rows = LINES.slice(0, r.found).map((line, k) => ({ id: `F${k}`, title: "injection", target: `${path}/${file}.py:${line}` }));
 		writeFileSync(join(dir, "workspace", "findings.jsonl"), rows.map((x) => JSON.stringify(x)).join("\n"));
@@ -162,6 +163,23 @@ describe("the blind output", () => {
 		expect(Object.keys(JSON.parse(forward.written) as Row).sort()).toEqual(["amendment", "formula", "level", "metric", "passes", "pooledPairedSd", "validPairs"]);
 		expect(forward.out).toContain("valid pairs: 4");
 		expect(forward.out).toContain("pooled paired SD: 0.957");
+	});
+
+	// Under the v6 validity policy a run that reached the limit, or ended fast and
+	// empty, is a valid run: the pilot pairs it like any other, and flagging it
+	// neither changes the SD nor lets which arm had it show.
+	it("counts limit-reaching and fast empty runs as valid pairs, with the same bytes whichever arm had them", () => {
+		const flag = (runs: RunSpec[]): RunSpec[] => runs.map((r) => (r.arm === "candidate" && r.target === "alpha" ? { ...r, reachedLimit: true } : r.arm === "baseline" && r.pass === 2 ? { ...r, fastEmpty: true, found: 0 } : r));
+		const table: Array<[string, number, number, number]> = [["alpha", 1, 2, 3], ["alpha", 2, 0, 1], ["beta", 1, 2, 4], ["beta", 2, 0, 1]];
+		const forward = run(grid(flag(pilotRuns(table))));
+		const backward = run(grid(swapArms(flag(pilotRuns(table)))));
+		const plain = run(grid(pilotRuns(table)));
+		const strip = (s: string) => s.replace(/--resume \S+/, "--resume <grid>");
+		expect(forward.out).toContain("valid pairs: 4");
+		expect(strip(backward.out)).toBe(strip(forward.out));
+		expect(backward.written).toBe(forward.written);
+		expect(forward.written).toBe(plain.written);
+		expect(forward.out).not.toMatch(/limit|fast|empty/i);
 	});
 
 	it("never opens <out>/sealed/, where the harness keeps the arms' numbers until the count is fixed", () => {

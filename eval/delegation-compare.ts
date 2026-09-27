@@ -40,7 +40,7 @@ import {
 } from "./delegation-compare-lib.ts";
 // The grid's shape and identity (plan item 2.8): the pinned official corpora.
 import {
-	ARM_ORDER, corpusReasons, DEFAULT_BUDGET_ARMS, DEFAULT_SUBAGENTS_ARMS, delegationOff, loadsSubagentsFor, gridKindReasons, kindlessArmReasons, kindlessCorpus, kindSnapshotReasons, parseArmList, parseCorpora,
+	ARM_ORDER, corpusReasons, DEFAULT_BUDGET_ARMS, DEFAULT_SUBAGENTS_ARMS, delegationOff, loadsSubagentsFor, gridKindReasons, kindlessArmReasons, kindlessCorpus, kindlessValidityReasons, kindSnapshotReasons, parseArmList, parseCorpora,
 	amendmentsMismatch, blindSummary, currentPasses, pilotPairedSd, extensionRefusal, kindPassesReasons, parseAmendments, parseGridKinds, parseMaxVerifiers, scheduleExtends, type PassesAmendment, sameArms, scopeFor, scopeSettingsFor, shapeOf, summarizeTwins, twinTargets, type GridKind, type PinnedCorpus, type ScopeSettings,
 } from "./delegation-compare-grid.ts";
 // The staging, target-copy and tree-hash helpers moved to their own module so
@@ -52,6 +52,8 @@ import { auditCell, auditLimits, summarizeAudits, type AuditLimits, type Delegat
 // cells and the operator's own processes.
 import { reapMarkedProcesses } from "./delegation-compare-proc.ts";
 import { classifyRunStop, summarizeStops, type RunStop } from "./delegation-compare-stop.ts";
+// What a run's errors make of it, with or without a pinned validity policy.
+import { FAST_EMPTY_ERROR, FAST_EMPTY_SECONDS, inFlightWorkers, isValidityPolicy, judgeRun, limitError, runNumbers, VALIDITY_POLICIES, VALIDITY_POLICY_TEXT, type InFlightWorker, type ValidityPolicy } from "./delegation-compare-validity.ts";
 // The matched-compute arm (plan item 2.5): its policy, budget, union scorer and comparisons.
 import {
 	budgetRatios, matchedComparisons, metricOfUnion, nextSessionStep, parseMatchedPolicy, parseMatchedSpec, scoreUnion, sessionBudget, targetsWithoutBudget,
@@ -325,6 +327,12 @@ type Options = {
 	 * no such arm runs and every output is what it was before the option.
 	 */
 	matched?: MatchedPolicy;
+	/**
+	 * --validity: the run-validity policy (eval/delegation-compare-validity.ts),
+	 * which a v6 grid kind pins. Absent, every run is judged by the v5 rules and
+	 * every output is what it was before the option.
+	 */
+	validity?: ValidityPolicy;
 };
 
 type JsonRecord = Record<string, unknown>;
@@ -496,6 +504,12 @@ Options:
   --matched-snapshot <dir>
                         Run the matched arm from this snapshot instead of the
                         candidate's; makes the grid exploratory
+  --validity <policy>   Judge runs by a run-validity policy: v6 counts a run that
+                        reaches the run limit (scored on its ledger at the
+                        deadline) and a fast empty run as valid, flagged
+                        reachedLimit/fastEmpty; every other invalid reason
+                        stays invalid. Pinned in the manifest (default: the v5
+                        rules, under which both are invalid)
   --dry-run             Run the preflight only, with no model calls
   --help, -h            Show this help without starting a model
 
@@ -636,6 +650,7 @@ export function parseOptions(argv: string[]): Parsed {
 		"--thinking", "--passes", "--only", "--concurrency", "--timeout", "--manifest", "--fs-seal", "--auth-horizon-hours",
 		"--candidate-max-agents", "--breaker", "--matched", "--matched-snapshot",
 		"--baseline-max-agents", "--max-verifiers", "--budget-arms", "--subagents-arms", "--twins", "--twin-arms", "--grid-kind", "--passes-from",
+		"--validity",
 	]);
 	const values = new Map<string, string>();
 	let dryRun = false;
@@ -696,6 +711,8 @@ export function parseOptions(argv: string[]): Parsed {
 	const passesFromDir = values.get("--passes-from");
 	if (passesFromDir !== undefined && gridKind === undefined) throw new Error("--passes-from needs --grid-kind: it adopts a pass count for a grid of a kind");
 	if (passesFromDir !== undefined && values.has("--passes")) throw new Error("--passes-from sets the pass count; do not also pass --passes");
+	const validity = values.get("--validity");
+	if (validity !== undefined && !isValidityPolicy(validity)) throw new Error(`--validity must be one of ${VALIDITY_POLICIES.join(", ")}`);
 	const breakerText = values.get("--breaker");
 	const breaker = breakerText === undefined ? undefined : parseBreakerSpec(breakerText);
 	const matchedText = values.get("--matched");
@@ -731,6 +748,7 @@ export function parseOptions(argv: string[]): Parsed {
 			...(breaker === undefined ? {} : { breaker }),
 			...(retry ? { retryPolicy: { ...DEFAULT_RETRY_POLICY } } : {}),
 			...(matched === undefined ? {} : { matched }),
+			...(validity === undefined ? {} : { validity }),
 		},
 	};
 }
@@ -817,6 +835,10 @@ export function optionsFromManifest(dir: string, manifest: JsonRecord): Options 
 		try { breaker = parseBreakerPolicy(manifest.breaker); } catch (error) { throw new Error(`--resume manifest has an invalid breaker: ${message(error)}`); }
 	}
 	const retryPolicy = retryPolicyFromManifest(manifest);
+	// Absent: the grid judged its runs by the v5 rules, and so does its resume.
+	// A present but unknown policy is refused rather than read as "absent".
+	if (manifest.validity !== undefined && !isValidityPolicy(manifest.validity)) throw new Error("--resume manifest has an invalid validity policy");
+	const validity = manifest.validity as ValidityPolicy | undefined;
 	// Absent: the grid ran no matched arm, and neither does its resume.
 	let matched: MatchedPolicy | undefined;
 	if (manifest.matched !== undefined) {
@@ -838,6 +860,7 @@ export function optionsFromManifest(dir: string, manifest: JsonRecord): Options 
 		...(breaker === undefined ? {} : { breaker }),
 		...(retryPolicy === undefined ? {} : { retryPolicy }),
 		...(matched === undefined ? {} : { matched }),
+		...(validity === undefined ? {} : { validity }),
 	};
 }
 
@@ -2505,6 +2528,8 @@ type CellUsage = {
 	retry?: RetrySummary;
 	/** Under a retry policy only: observations that reported spend, for the request-log cross-check. */
 	meteredCalls?: number;
+	/** Under the v6 validity policy, on a run stopped at the limit: workers cut off in flight, counted from their sessions. */
+	inFlight?: InFlightWorker[];
 };
 
 const isJsonRecord = (value: unknown): value is JsonRecord => typeof value === "object" && value !== null && !Array.isArray(value);
@@ -2565,7 +2590,7 @@ export function childProviderFailure(child: Pick<SubagentChild, "childKey" | "st
  * extension is not loaded, so any subagent call or child session means the
  * wrong snapshot ran and its tokens would land in the wrong arm.
  */
-export async function accountCellUsage(events: JsonRecord[], cell: { arm: Arm; childSessionDir: string; loadsSubagents?: boolean; delegationOff?: boolean }, expect: { provider: string; model: string; thinking: string }, stream: Pick<StreamObservation, "subagentCalls">, retryPolicy?: RetryPolicy, ceiling: { cut?: boolean } = {}): Promise<CellUsage> {
+export async function accountCellUsage(events: JsonRecord[], cell: { arm: Arm; childSessionDir: string; loadsSubagents?: boolean; delegationOff?: boolean }, expect: { provider: string; model: string; thinking: string }, stream: Pick<StreamObservation, "subagentCalls">, retryPolicy?: RetryPolicy, ceiling: { cut?: boolean; limit?: boolean } = {}): Promise<CellUsage> {
 	const errors: string[] = [];
 	const notes: string[] = [];
 	const observations: UsageObservation[] = [];
@@ -2592,6 +2617,7 @@ export async function accountCellUsage(events: JsonRecord[], cell: { arm: Arm; c
 	const children: ChildAccount[] = [];
 	const childProviderErrors: CellUsage["childProviderErrors"] = [];
 	let reconciliation: SubagentReconciliation | undefined;
+	let inFlight: InFlightWorker[] | undefined;
 	// Absent, the arms load what they always did: everything but the baseline, and only the matched arm is off.
 	const loads = cell.loadsSubagents ?? cell.arm !== "baseline";
 	const off = cell.delegationOff ?? cell.arm === "matched";
@@ -2612,6 +2638,24 @@ export async function accountCellUsage(events: JsonRecord[], cell: { arm: Arm; c
 		const workers = reconciliation?.children.length ?? 0;
 		if (off && (workers || childSessionFiles.length)) {
 			errors.push(`${cell.arm} arm launched ${workers} worker(s) (${childSessionFiles.length} child session file(s)); its scope states maxAgents 0`);
+		}
+		// A run the v6 policy keeps after the limit stopped it (ceiling.limit): a
+		// worker still running has no tool result, so its session file is claimed by
+		// no call. Its completed replies are counted from the file, a lower bound.
+		if (ceiling.limit && reconciliation) {
+			const claimed = new Set(reconciliation.children.map((c) => c.sessionPath));
+			const unclaimed = childSessionFiles.filter((f) => !claimed.has(f));
+			const texts = new Map<string, string | undefined>();
+			for (const file of unclaimed) {
+				try { texts.set(file, await readOptional(join(cell.childSessionDir, file))); }
+				catch (error) { errors.push(`in-flight session ${file} unreadable: ${message(error)}`); }
+			}
+			const flight = inFlightWorkers([...texts.keys()], (f) => texts.get(f), { model: `${expect.provider}/${expect.model}`, thinking: expect.thinking }, retry);
+			observations.push(...flight.observations);
+			errors.push(...flight.errors);
+			notes.push(...flight.notes);
+			retried.push(...flight.retries);
+			inFlight = flight.workers;
 		}
 		const callText = new Map((reconciliation?.calls ?? []).map((c) => [c.toolCallId, c.resultText]));
 		for (const child of reconciliation?.children ?? []) {
@@ -2640,7 +2684,8 @@ export async function accountCellUsage(events: JsonRecord[], cell: { arm: Arm; c
 	const usage = accountUsage(observations);
 	errors.push(...usage.errors);
 	if (!usage.valid) errors.push("provider usage attribution is incomplete");
-	if (!retryPolicy) return { errors: [...new Set(errors)], notes, parent, reconciliation, children, childProviderErrors, childSessionFiles, usage };
+	const flight = inFlight ? { inFlight } : {};
+	if (!retryPolicy) return { errors: [...new Set(errors)], notes, parent, reconciliation, children, childProviderErrors, childSessionFiles, usage, ...flight };
 	const meteredCalls = meteredCallCount(observations);
 	const summary = summarizeRetries(retried, retryPolicy, meteredCalls);
 	if (summary.capExceeded) {
@@ -2648,7 +2693,7 @@ export async function accountCellUsage(events: JsonRecord[], cell: { arm: Arm; c
 	}
 	return {
 		errors: [...new Set(errors)], notes, parent, reconciliation, children, childProviderErrors, childSessionFiles, usage,
-		retry: summary, meteredCalls,
+		retry: summary, meteredCalls, ...flight,
 	};
 }
 
@@ -2912,7 +2957,7 @@ async function inspectRun(ctx: Context, cell: PreparedCell, launched: Launch, at
 	const errors = [...cell.errors];
 	const result = launched.result;
 	if (launched.launchError) errors.push(launched.launchError);
-	if (result?.timedOut) errors.push(`timed out at ${options.timeoutMs} ms`);
+	if (result?.timedOut) errors.push(limitError(options.timeoutMs));
 	if (result?.oversized) errors.push(`transcript exceeded ${MAX_TRANSCRIPT_BYTES} bytes`);
 	if (result && result.exitCode !== 0) errors.push(`process failed with exit=${result.exitCode} signal=${result.signal ?? "none"}`);
 	const seconds = result ? (result.finishedAt - result.startedAt) / 1000 : 0;
@@ -2927,6 +2972,7 @@ async function inspectRun(ctx: Context, cell: PreparedCell, launched: Launch, at
 	let findings: Finding[] = [];
 	let telemetry: JsonRecord | undefined;
 	let ceilingState: ReturnType<typeof ceilingOf>;
+	let fastEmpty = false;
 	if (result) {
 		try {
 			const transcript = await readTranscriptEvents(cell.transcriptPath);
@@ -2948,7 +2994,11 @@ async function inspectRun(ctx: Context, cell: PreparedCell, launched: Launch, at
 		if (events.some((e) => e.type === "benchmark_probe" || e.type === "benchmark_probe_delegation")) errors.push("a scored run emitted a probe report");
 		if (assistantReplies(events).some((m) => m.provider === PROBE_FAUX_PROVIDER)) errors.push("a scored run was answered by the probe's scripted model");
 		ceilingState = ceilingOf(events, cell, result, errors);
-		accounting = await accountCellUsage(events, cell, options, launched.stream, options.retryPolicy, { cut: ceilingState?.cut === true });
+		accounting = await accountCellUsage(events, cell, options, launched.stream, options.retryPolicy, {
+			cut: ceilingState?.cut === true,
+			// Only under a validity policy, so every other cell is accounted as before.
+			...(options.validity && result.timedOut ? { limit: true } : {}),
+		});
 		errors.push(...accounting.errors);
 		if (ceilingState) errors.push(...verifyCeiling(events, ceilingState, accounting.usage.parent.totalTokens));
 		errors.push(...await cellConfigErrors(cell));
@@ -2961,13 +3011,21 @@ async function inspectRun(ctx: Context, cell: PreparedCell, launched: Launch, at
 			// The pinned scorer's telemetry, plus the stopping readings kept out of it (3.2).
 			const measured = { ...(await engagementTelemetry(cell.workspaceDir)), ...(await settleTelemetry(cell.workspaceDir)) };
 			telemetry = measured as unknown as JsonRecord;
-			if (findings.length === 0 && measured.hypotheses === 0 && seconds < 120) errors.push("fast empty run (no findings or hypotheses under 120 seconds)");
+			fastEmpty = findings.length === 0 && measured.hypotheses === 0 && seconds < FAST_EMPTY_SECONDS;
+			if (fastEmpty) errors.push(FAST_EMPTY_ERROR);
 		} catch (error) {
 			errors.push(`ledger/scorer inspection failed: ${message(error)}`);
 		}
 	}
-	const uniqueErrors = [...new Set(errors)];
-	const valid = uniqueErrors.length === 0;
+	// Without a validity policy every error invalidates, as in every v5 grid; under
+	// one, a run that reached the limit or ended fast and empty is the model's
+	// behaviour and stays valid (eval/delegation-compare-validity.ts).
+	const judged = judgeRun({
+		...(options.validity ? { policy: options.validity } : {}), timedOut: result?.timedOut === true, fastEmpty, errors: [...new Set(errors)],
+		...(accounting?.inFlight ? { inFlightWorkers: accounting.inFlight.map((w) => w.key) } : {}),
+	});
+	const uniqueErrors = judged.errors;
+	const valid = judged.valid;
 	// Provider-limit and transient failures may be re-run by --resume; the run's
 	// own failures (timeout, fast-empty, quality, harness) may not. Only
 	// provider-originated text is classified (see ProviderFailures).
@@ -2994,17 +3052,14 @@ async function inspectRun(ctx: Context, cell: PreparedCell, launched: Launch, at
 	const infraFailure = !valid && classified.infra;
 	const infraReason = infraFailure ? classified.reason : undefined;
 	const usage = accounting?.usage;
-	const truePositives = graded?.ok ? graded.truePositives : 0;
-	const totalClaims = graded?.ok ? graded.totalFindings : 0;
-	const precision = graded?.ok ? graded.precision : 0;
 	// Only a valid run carries a token count. JSON has no NaN, so an invalid row
-	// serializes as null — never as a zero that reads like a free run.
-	const totalTokens = valid && usage?.valid ? usage.total.totalTokens : Number.NaN;
-	// What the comparison gates on: metered tokens plus the lower-bound estimate
-	// for failed attempts that reported nothing. The arm that makes more calls
-	// meets more drops, so metered tokens alone would flatter it; without a
+	// serializes as null — never as a zero that reads like a free run. What the
+	// comparison gates on is metered tokens plus the lower-bound estimate for
+	// failed attempts that reported nothing. The arm that makes more calls meets
+	// more drops, so metered tokens alone would flatter it; without a retry
 	// policy there are no retried attempts and this is totalTokens.
-	const totalTokensWithRetryEstimate = totalTokens + (accounting?.retry?.estimatedTokens ?? 0);
+	const { truePositives, totalClaims, precision, totalTokens, totalTokensWithRetryEstimate } = runNumbers(
+		judged, graded, usage ? { valid: usage.valid, totalTokens: usage.total.totalTokens } : undefined, accounting?.retry?.estimatedTokens ?? 0);
 	const requestLog = options.retryPolicy && result ? requestLogFromStderr(stderrText, [ctx.provider.baseHost]) : undefined;
 	const stream = launched.stream;
 	const since = (at: number | undefined): number | null => at === undefined || !result ? null : (at - result.startedAt) / 1000;
@@ -3015,7 +3070,13 @@ async function inspectRun(ctx: Context, cell: PreparedCell, launched: Launch, at
 		providerFailures: failures,
 		stoppedByRunner, interruptedAt: stoppedByRunner && abortedAt !== undefined ? new Date(abortedAt).toISOString() : null,
 		scopeUnit: launched.scopeUnit ?? null, reapedPids: reaped.pids, symlinkActions: cell.symlinkActions,
-		valid, seconds, process: result ?? null,
+		valid,
+		// Only a grid under a validity policy writes these, so a v5 record keeps its bytes.
+		...(judged.flags ? {
+			reachedLimit: judged.flags.reachedLimit, fastEmpty: judged.flags.fastEmpty, limitEffects: judged.flags.limitEffects,
+			tokensLowerBound: judged.flags.tokensLowerBound, inFlightWorkers: judged.flags.inFlightWorkers,
+		} : {}),
+		seconds, process: result ?? null,
 		findings: totalClaims, truePositives, unmatchedClaims: Math.max(0, totalClaims - truePositives),
 		precisionLowerBound: precision, submittedFindings: findings.length,
 		score: graded?.ok ? graded.summary : null, telemetry: telemetry ?? null,
@@ -3692,6 +3753,7 @@ async function runPreflight(options: Options, manifest: JsonRecord, saveManifest
 			const capReason = workerCapReason(comparePins.candidateMaxAgents, options.candidateMaxAgents);
 			if (capReason) exploratoryReasons.push(capReason);
 			exploratoryReasons.push(...kindlessArmReasons(options));
+			exploratoryReasons.push(...kindlessValidityReasons(options.validity));
 		}
 		const piSubagents = await measurePiSubagents(comparePins);
 		exploratoryReasons.push(...piSubagents.reasons);
@@ -4082,6 +4144,8 @@ export function resumeMismatches(prior: JsonRecord, fresh: JsonRecord, allow: { 
 	// The matched arm's mode, k and budgets: sessions run under two policies
 	// would be two arms unioned into one.
 	eq("matched", prior.matched, fresh.matched);
+	// Half a grid judged with limit-reaching runs valid and half without would not compare.
+	eq("validity", prior.validity, fresh.validity);
 	const pr = (prior.requested ?? {}) as JsonRecord;
 	const fr = (fresh.requested ?? {}) as JsonRecord;
 	for (const k of ["provider", "model", "thinking", "passes", "only"]) {
@@ -4289,6 +4353,8 @@ export function newManifest(options: Options, mode: string): JsonRecord {
 		...(options.retryPolicy ? { retryPolicy: options.retryPolicy } : {}),
 		// Only a grid that asked for the matched arm records one.
 		...(options.matched ? { matched: options.matched, matchedResumePolicy: MATCHED_RESUME_POLICY } : {}),
+		// Only a grid under a validity policy records one, with what it means verbatim.
+		...(options.validity ? { validity: options.validity, validityPolicy: VALIDITY_POLICY_TEXT[options.validity] } : {}),
 		prompt: REVIEW_PROMPT, resumePolicy: RESUME_POLICY,
 		runtimeConfiguration: {
 			globalExtensions: false, globalSkills: false, promptTemplates: false, contextFiles: false, theme: false, forcedDelegation: false, scribe: "off",

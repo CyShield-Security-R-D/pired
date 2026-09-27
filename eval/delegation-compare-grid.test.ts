@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import {
-	corpusReasons, DEFAULT_BUDGET_ARMS, delegationOff, kindlessArmReasons, kindlessCorpus, parseArmList, parseCorpora, parseMaxVerifiers, scopeFor, scopeSettingsFor, shapeOf,
+	corpusReasons, DEFAULT_BUDGET_ARMS, delegationOff, kindlessArmReasons, kindlessCorpus, kindlessValidityReasons, parseArmList, parseCorpora, parseMaxVerifiers, scopeFor, scopeSettingsFor, shapeOf,
 	amendmentsMismatch, blindSummary, currentPasses, pilotPairedSd, extensionRefusal, gridKindReasons, kindFlags, kindPassesReasons, kindSnapshotReasons, parseAmendments, parseGridKinds, scheduleExtends, summarizeTwins, twinTargets, type CorpusInput, type GridKind, type GridOptions, type PinnedCorpus,
 } from "./delegation-compare-grid.ts";
 import { armsOfPair, DEFAULT_BREAKER, isOfficialGrid, OFFICIAL_PASSES, OFFICIAL_TARGET_IDS, planSchedule, type ExpectedCell } from "./delegation-compare-lib.ts";
@@ -364,6 +364,20 @@ describe("grid kinds", () => {
 		expect(gridKindReasons("k", kind({ matched: null }), ran())).toEqual(["grid kind k: the matched arm is on, not off"]);
 	});
 
+	// The v5 rules judged a limit-reaching run invalid; a grid judged by v6 is not a v5 grid, and the reverse.
+	it("holds a grid to its kind's validity policy both ways, and reads a kind without one as the v5 rules", () => {
+		const corpora = { c: corpus() };
+		expect(parseGridKinds({ k: { ...kind(), validity: "v6" } }, corpora).k!.validity).toBe("v6");
+		expect(parseGridKinds({ k: kind() }, corpora).k).not.toHaveProperty("validity");
+		expect(gridKindReasons("k", kind({ validity: "v6" }), ran({ validity: "v6" }))).toEqual([]);
+		expect(gridKindReasons("k", kind({ validity: "v6" }), ran())).toEqual(["grid kind k: it requires --validity v6"]);
+		expect(gridKindReasons("k", kind(), ran({ validity: "v6" }))).toEqual(["grid kind k: it runs without --validity, not under v6"]);
+		expect(kindFlags("k", kind({ validity: "v6" }))).toEqual(expect.arrayContaining(["--validity", "v6"]));
+		expect(kindFlags("k", kind())).not.toContain("--validity");
+		expect(kindlessValidityReasons(undefined)).toEqual([]);
+		expect(kindlessValidityReasons("v6")[0]).toMatch(/v6 validity policy; without --grid-kind the v5 rules apply/);
+	});
+
 	it("holds a kind's snapshots to its own pins: a commit, a digest, or not frozen", () => {
 		const measured = { baselineDigest: sha("b"), candidateDigest: sha("c"), commitReason: (commit: string) => commit === "1".repeat(40) ? "" : `baseline snapshot differs from git ${commit.slice(0, 7)}` };
 		expect(kindSnapshotReasons("k", kind(), measured)).toEqual([]);
@@ -417,6 +431,7 @@ describe("grid kinds", () => {
 		expect(() => parseGridKinds(raw({ retry: "yes" }), corpora)).toThrow(/retry/);
 		expect(() => parseGridKinds(raw({ timeoutMs: 0 }), corpora)).toThrow(/timeoutMs/);
 		expect(() => parseGridKinds(raw({ thinking: "loud" }), corpora)).toThrow(/thinking/);
+		expect(() => parseGridKinds(raw({ validity: "lenient" }), corpora)).toThrow(/validity/);
 	});
 });
 

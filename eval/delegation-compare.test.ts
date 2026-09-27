@@ -2223,6 +2223,34 @@ describe("grid kinds on the command line (plan 2.8)", () => {
 		expect(() => optionsFromManifest("/out", { ...manifest, gridKind: 3 })).toThrow(/gridKind/);
 		expect(() => parseOptions(argv("--grid-kind", "v6 stage1"))).toThrow(/--grid-kind/);
 	});
+
+	// A v6 grid that judged limit-reaching runs invalid would drop the arm that works longest.
+	it("carries the v6 validity policy on both stage kinds, and reads a stage launched without it as exploratory", async () => {
+		const pins = await shippedPins();
+		for (const [name, flags] of [["v6-stage1", STAGE1], ["v6-stage2", STAGE2]] as const) {
+			expect(pins.gridKinds[name]!.validity).toBe("v6");
+			expect(options(...flags).validity).toBe("v6");
+			const without = options(...flags.filter((f, i, all) => f !== "--validity" && all[i - 1] !== "--validity"));
+			expect(without).not.toHaveProperty("validity");
+			expect(gridKindReasons(name, pins.gridKinds[name]!, { ...without, retry: true })).toEqual([`grid kind ${name}: it requires --validity v6`]);
+		}
+		expect(() => parseOptions(argv("--validity", "lenient"))).toThrow(/--validity must be one of v6/);
+	});
+
+	it("pins the validity policy in the manifest with its text, restores it on resume, and refuses a resume under other rules", () => {
+		const opts = options("--grid-kind", "v6-stage1", "--validity", "v6");
+		const manifest: Record<string, unknown> = { ...newManifest(opts, "live"), inputs: { corpus: "/corpus", truth: "/truth", corpusManifest: { path: "/m.json" }, baseline: { path: "/b" }, candidate: { path: "/c" } }, pins: { landlockWrapper: "/seal" } };
+		expect(manifest.validity).toBe("v6");
+		expect(manifest.validityPolicy).toMatch(/reachedLimit:true/);
+		expect(optionsFromManifest("/out", manifest).validity).toBe("v6");
+		expect(resumeMismatches({ validity: "v6" }, {})).toEqual(["validity"]);
+		expect(() => optionsFromManifest("/out", { ...manifest, validity: "v7" })).toThrow(/validity/);
+		// Without the option a manifest keeps every byte it had, and so does its resume.
+		const plain = newManifest(options("--grid-kind", "v6-stage1"), "live");
+		expect(plain).not.toHaveProperty("validity");
+		expect(plain).not.toHaveProperty("validityPolicy");
+		expect(optionsFromManifest("/out", { ...manifest, validity: undefined, validityPolicy: undefined })).not.toHaveProperty("validity");
+	});
 });
 
 describe("S is the same arm in both stages (plan 2.8)", () => {
