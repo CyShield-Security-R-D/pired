@@ -492,12 +492,35 @@ export interface ValidityCounts {
 	runs: number; reachedLimit: number; fastEmpty: number;
 	/** Runs stopped at the limit with a worker in flight: their tokens count that worker's completed replies only. */
 	tokensLowerBound: number;
+	/**
+	 * Runs, at any attempt, silent more than 30 minutes before the limit: stalled
+	 * infrastructure the harness re-ran, so none is paired. Counted per arm
+	 * because a hang may follow one arm's behaviour.
+	 */
+	stalled?: number;
 }
 
 const runJsons = (r: RescoreRow): Row[] => runDirs(r).map((dir) => join(dir, "run.json")).map((path) => (existsSync(path) ? readJson(path) : {}));
 
 /** Whether any run behind a row (a matched union's sessions included) counted its tokens as a lower bound. */
 export const lowerBoundTokens = (r: RescoreRow): boolean => runJsons(r).some((run) => run.tokensLowerBound === true);
+
+/** A row's imputed missing spend: each cut-off worker's largest completed reply, once per worker. */
+export function imputedReplies(r: RescoreRow): number {
+	return runJsons(r).reduce((n, run) => n + (Array.isArray(run.inFlightWorkers) ? (run.inFlightWorkers as Row[]).reduce((m, w) => m + (typeof w.largestReply === "number" ? w.largestReply : 0), 0) : 0), 0);
+}
+
+/** Every run.json of an arm in the grids, at any attempt, that the harness classed as stalled. */
+export function stalledCount(gridDirs: readonly string[], arm: string): number {
+	let n = 0;
+	for (const dir of gridDirs) for (const cell of existsSync(join(dir, "runs")) ? readdirSync(join(dir, "runs")) : []) {
+		const path = join(dir, "runs", cell, "run.json");
+		if (!existsSync(path)) continue;
+		const run = readJson(path);
+		if (run.arm === arm && run.stalled === true) n++;
+	}
+	return n;
+}
 
 export function validityCounts(rows: RescoreRow[]): ValidityCounts {
 	const out: ValidityCounts = { runs: 0, reachedLimit: 0, fastEmpty: 0, tokensLowerBound: 0 };
@@ -549,6 +572,12 @@ export interface Decision {
 	 * them, and this never decides.
 	 */
 	rule3ExcludingLowerBound?: Rule3 & { excludedPairs: number };
+	/**
+	 * Rule 3 with each cut-off worker's missing reply imputed at the size of its
+	 * largest completed reply: the conservative reading of a lower bound.
+	 * Reported, never deciding.
+	 */
+	rule3ImputedInFlight?: Rule3 & { imputedRuns: number };
 	mcnemar?: { b: number; c: number; p: number };
 	findRates?: Array<{ advisory: string; reference: number; subject: number; n: number }>;
 	stopping?: Stopping;
@@ -647,12 +676,12 @@ export function decide(comparison: ComparisonId, gridDirs: string[], labels?: La
 
 	// Rule 3 counts a pair whose tokens are a lower bound like any other; the
 	// sensitivity row leaves those pairs out and never decides.
-	const costRule = (rows: typeof pairRows) => {
+	const costRule = (rows: typeof pairRows, tokensOf: (r: RescoreRow) => number = gateTokens) => {
 		const logRatios = new Map<string, number[]>();
 		let missingTokens = 0;
 		const pooled = { subject: 0, reference: 0 };
 		for (const { p, ref, sub } of rows) {
-			const [ts, tr] = [gateTokens(sub), gateTokens(ref)];
+			const [ts, tr] = [tokensOf(sub), tokensOf(ref)];
 			if (!(Number.isFinite(ts) && Number.isFinite(tr) && ts > 0 && tr > 0)) { missingTokens++; continue; }
 			pooled.subject += ts;
 			pooled.reference += tr;
@@ -663,6 +692,11 @@ export function decide(comparison: ComparisonId, gridDirs: string[], labels?: La
 	const r3 = costRule(pairRows);
 	const exact = pairRows.filter((x) => !lowerBoundTokens(x.ref) && !lowerBoundTokens(x.sub));
 	const r3Sensitivity = { ...costRule(exact), excludedPairs: pairRows.length - exact.length };
+	// The conservative reading: each cut-off worker's missing reply imputed at the
+	// size of its largest completed one. Reported, never deciding.
+	const imputed = pairRows.reduce((n, x) => n + (lowerBoundTokens(x.ref) ? 1 : 0) + (lowerBoundTokens(x.sub) ? 1 : 0), 0);
+	const r3Imputed = { ...costRule(pairRows, (r) => gateTokens(r) + imputedReplies(r)), imputedRuns: imputed };
+	const stalledRuns = Object.fromEntries(letters.map((letter, i) => [letter, stalledCount(gridDirs, arms[i]!)]));
 
 	const reasons: string[] = [];
 	if (!r1.nonInferior && pairs.length) reasons.push(`rule 1 fails: the lower bound ${r1.lo.toFixed(3)} is not above ${RULES.margin}`);
@@ -694,14 +728,17 @@ export function decide(comparison: ComparisonId, gridDirs: string[], labels?: La
 	});
 	const armRows = (side: "ref" | "sub") => pairRows.map((x) => x[side]);
 	return {
-		...head, outcome, reasons, notReady, pairs: account, rule1: r1, robustness, leaveOneTargetOut, rule2: r2, precisionTiers, rule3: r3, rule3ExcludingLowerBound: r3Sensitivity,
+		...head, outcome, reasons, notReady, pairs: account, rule1: r1, robustness, leaveOneTargetOut, rule2: r2, precisionTiers, rule3: r3, rule3ExcludingLowerBound: r3Sensitivity, rule3ImputedInFlight: r3Imputed,
 		mcnemar: mcnemar(pairs, truthIds),
 		findRates: [...perIssueFindRate(pairs, truthIds).entries()].sort(([a], [b]) => byCodePoint(a, b)).map(([advisory, x]) => ({ advisory, reference: x.baseline, subject: x.candidate, n: x.n })),
 		stopping: stopping(stopRows, spec.reference, spec.subject),
 		twins: twinScores(scored.rows.filter((r) => isTwinRow(r, twinIds)), letterOf),
 		verifier: { [spec.reference]: verifierMetrics(armRows("ref")), [spec.subject]: verifierMetrics(armRows("sub")) },
 		dollars: { [spec.reference]: dollars(armRows("ref")), [spec.subject]: dollars(armRows("sub")) },
-		validity: { [spec.reference]: validityCounts(armRows("ref")), [spec.subject]: validityCounts(armRows("sub")) },
+		validity: {
+			[spec.reference]: { ...validityCounts(armRows("ref")), stalled: stalledRuns[spec.reference]! },
+			[spec.subject]: { ...validityCounts(armRows("sub")), stalled: stalledRuns[spec.subject]! },
+		},
 	};
 }
 
@@ -910,6 +947,10 @@ export function formatDecision(d: Decision, ship: ShipRow[]): string {
 				const x = d.rule3ExcludingLowerBound;
 				return `  without the ${x.excludedPairs} pair(s) whose tokens are a lower bound (sensitivity, never deciding): ${f(x.median, 4)} [${f(x.lo, 4)}, ${f(x.hi, 4)}] over ${x.pairs} pair(s): ${x.pass === null ? "undecided" : x.pass ? "yes" : "no"}`;
 			})()] : []),
+			...(d.rule3ImputedInFlight ? [(() => {
+				const x = d.rule3ImputedInFlight;
+				return `  with each cut-off worker's missing reply imputed at its largest completed reply, over ${x.imputedRuns} run(s) (conservative, never deciding): ${f(x.median, 4)} [${f(x.lo, 4)}, ${f(x.hi, 4)}] over ${x.pairs} pair(s): ${x.pass === null ? "undecided" : x.pass ? "yes" : "no"}`;
+			})()] : []),
 		);
 	}
 	if (d.stopping) {
@@ -924,7 +965,7 @@ export function formatDecision(d: Decision, ship: ShipRow[]): string {
 	}
 	if (d.validity) {
 		L.push("", "run validity (reported; the v6 policy keeps these runs valid, never deciding):");
-		for (const [arm, x] of Object.entries(d.validity)) L.push(`  ${arm}: ${x.reachedLimit} of ${x.runs} paired run(s) reached the run limit (scored on the ledger at the deadline); ${x.fastEmpty} ended fast and empty; ${x.tokensLowerBound} counted tokens as a lower bound (a worker cut off at the limit)`);
+		for (const [arm, x] of Object.entries(d.validity)) L.push(`  ${arm}: ${x.reachedLimit} of ${x.runs} paired run(s) reached the run limit (scored on the ledger at the deadline); ${x.fastEmpty} ended fast and empty; ${x.tokensLowerBound} counted tokens as a lower bound (a worker cut off at the limit)${x.stalled ? `; ${x.stalled} run(s) stalled before the limit and were re-run as infrastructure` : ""}`);
 	}
 	if (d.dollars) {
 		L.push("", "dollars (reported; pi's usage.costUsd):");
