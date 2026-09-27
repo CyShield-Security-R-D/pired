@@ -289,6 +289,48 @@ export function clusterBootstrap(byTarget: ReadonlyMap<string, readonly number[]
 	return { mean: observed, lo: percentile(means, 0.025), hi: percentile(means, 0.975) };
 }
 
+/**
+ * The same two-stage resampling as clusterBootstrap, for any statistic of the
+ * resampled units (a median of log ratios, a ratio of pooled sums) rather than
+ * the mean of numbers. It draws from the same generator in the same way, so
+ * with the mean as the statistic it prints clusterBootstrap's interval whenever
+ * the two orders of the target ids agree (they do for ASCII ids of one case).
+ * Additive (eval/v6-decision.ts): clusterBootstrap is left as it was. A
+ * resample whose statistic is not finite (a ratio over an empty denominator) is
+ * left out of the percentiles and counted in `dropped`.
+ */
+export function clusterBootstrapStatistic<T>(byTarget: ReadonlyMap<string, readonly T[]>, statistic: (units: readonly T[]) => number, iterations = 10000, seed = 1): { value: number; lo: number; hi: number; dropped: number } {
+	// Code-point order, not localeCompare: the draw order, and so the interval,
+	// must not depend on the machine's locale.
+	const clusters = [...byTarget.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([, d]) => d).filter((d) => d.length > 0);
+	const value = statistic(clusters.flat());
+	if (!clusters.length) return { value, lo: Number.NaN, hi: Number.NaN, dropped: 0 };
+	const rand = mulberry32(seed);
+	const draw = (n: number) => Math.floor(rand() * n);
+	const stats: number[] = [];
+	let dropped = 0;
+	for (let it = 0; it < iterations; it++) {
+		const units: T[] = [];
+		for (let t = 0; t < clusters.length; t++) {
+			const cluster = clusters[draw(clusters.length)]!;
+			for (let j = 0; j < cluster.length; j++) units.push(cluster[draw(cluster.length)]!);
+		}
+		const s = statistic(units);
+		if (Number.isFinite(s)) stats.push(s);
+		else dropped++;
+	}
+	stats.sort((a, b) => a - b);
+	return stats.length ? { value, lo: percentile(stats, 0.025), hi: percentile(stats, 0.975), dropped } : { value, lo: Number.NaN, hi: Number.NaN, dropped };
+}
+
+/** The median of numbers (the mean of the middle two for an even count); NaN for none. */
+export function median(xs: readonly number[]): number {
+	if (!xs.length) return Number.NaN;
+	const sorted = [...xs].sort((a, b) => a - b);
+	const mid = Math.floor(sorted.length / 2);
+	return sorted.length % 2 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
+}
+
 /** Sample standard deviation (n − 1); 0 for fewer than two values. */
 export function sampleSd(xs: readonly number[]): number {
 	if (xs.length < 2) return 0;

@@ -428,6 +428,40 @@ export function officialMatches(claims: Claim[], truths: Truth[], options: Mirro
 	return new Set([...truthTaken].map((ti) => truths[ti]!.id));
 }
 
+/**
+ * Advisories found by the pinned grader's own matching (officialMatches): the
+ * advisories of the labels it credits. On the location-only fresh corpus this
+ * is the official rule's advisory count, and it differs from the line±3
+ * advisory level in two ways the v6 decision must not inherit: a claim in
+ * `lib/app.py` credits a label in `src/app.py` (basename), and one claim within
+ * ±3 of two advisories' labels credits only the nearer (one claim, one label).
+ * Additive (v6 decision review).
+ */
+export function officialAdvisories(claims: Claim[], truths: Truth[], options: MirrorOptions = {}): Set<string> {
+	const byId = new Map(truths.map((t) => [t.id, t]));
+	return new Set([...officialMatches(claims, truths, options)].map((id) => advisoryOf(byId.get(id)!)));
+}
+
+/**
+ * The class level, any-of (v6 pre-registration, "Metrics"): a label is matched
+ * when a finding cites it at line±3 and the finding's CWE is any of the
+ * label's advisory CWEs (`cwes`, else its own `cwe`). OSV sorts CWE ids as
+ * text, so a "first" CWE is not the primary one, and requiring it refused
+ * location-correct claims in the v5 trial. A finding without a CWE, or a label
+ * without any, matches nothing here. Reported beside the location levels;
+ * never the official rule. Additive (v6 decision review).
+ */
+export function classAnyOfMatches(findings: Array<{ citations: Citation[]; cwe?: string }>, truths: Truth[]): { labels: string[]; advisories: string[] } {
+	const hit = truths.filter((t) => {
+		const classes = new Set((t.cwes ?? (t.cwe ? [t.cwe] : [])).map(normCwe).filter((c): c is string => c !== undefined));
+		return findings.some((f) => {
+			const cwe = normCwe(f.cwe);
+			return cwe !== undefined && classes.has(cwe) && f.citations.some((c) => citationMatches(c, t, "line±3"));
+		});
+	});
+	return { labels: hit.map((t) => t.id).sort(), advisories: [...new Set(hit.map(advisoryOf))].sort() };
+}
+
 // --- Reading runs ----------------------------------------------------------
 
 function readJsonl(path: string): Row[] {
@@ -605,6 +639,22 @@ export function ledgerFindingRows(runDir: string): LedgerFinding[] {
 	});
 }
 
+/**
+ * The id, title and description of each located live row, index for index with
+ * ledgerFindingRows (the same rows, read the same way): what a blind
+ * adjudication worksheet shows beside a claim's location. Additive (v6
+ * decision); ledgerFindingRows keeps its shape.
+ */
+export function ledgerFindingTexts(runDir: string): Array<{ id?: string; title?: string; description?: string }> {
+	const ws = join(runDir, "workspace");
+	const inventory = inventoryIndex(liveRecords(readJsonl(join(ws, "inventory.jsonl"))));
+	return liveRecords(readJsonl(join(ws, "findings.jsonl"))).flatMap((f) => citationsForRecord(f, inventory).length ? [{
+		...(typeof f.id === "string" ? { id: f.id } : {}),
+		...(typeof f.title === "string" ? { title: f.title } : {}),
+		...(typeof f.description === "string" ? { description: f.description } : {}),
+	}] : []);
+}
+
 /** What a run's verifications record about verdicts that missed their bar (3.1). */
 export interface VerdictCounts {
 	/** Distinct verifications written (one per finding id and verification time). */
@@ -706,6 +756,10 @@ export interface RescoreRow {
 	sessions?: string[];
 	/** Advisories with at least one label matched, per level (advisoriesFound). */
 	advisoriesMatched: Record<Level, string[]>;
+	/** Advisories the pinned grader's matching credits (officialAdvisories): the official rule's advisory count. */
+	officialAdvisories: string[];
+	/** Labels and advisories matched at the any-of class level (classAnyOfMatches). Reported only. */
+	classAnyOf: { labels: string[]; advisories: string[] };
 	/** Deduped claims as true, neutral and false positives (claimOutcomes). */
 	claimOutcomes: { tp: number; neutral: number; fp: number };
 	/** For a patched twin (a target carrying `fixed_regions`): its control score. */
@@ -782,6 +836,9 @@ export function matchedUnionRows(gridDir: string, runs: Row[], truths: Map<strin
 			claimsIdentical: scored === null ? null : scored.join("\n") === claimKeys(claims).join("\n"),
 			matched: Object.fromEntries(LEVELS.map((l) => [l, [...matchUnique(findings, truth, l, cap)].sort()])) as Record<Level, string[]>,
 			advisoriesMatched: Object.fromEntries(LEVELS.map((l) => [l, [...advisoriesFound(findings, truth, l, cap)].sort()])) as Record<Level, string[]>,
+			// Over the concatenated claims, as mirroredTp is.
+			officialAdvisories: [...officialAdvisories(claims, truth)].sort(),
+			classAnyOf: classAnyOfMatches(dirs.flatMap(ledgerFindings), truth),
 			claimOutcomes: claimOutcomes(claims, truth, neutral.get(String(union.target)) ?? []),
 			// The claim tiers over the unioned ledgers, as a single run's are over its one.
 			...partitionClaims(dirs.flatMap(ledgerFindingRows), truth, cap),
@@ -837,6 +894,8 @@ export function rescoreGrid(gridDir: string, cap = DEFAULT_WIDTH_CAP): { rows: R
 			...partition,
 			verdicts: verdictCounts(dir),
 			advisoriesMatched,
+			officialAdvisories: [...officialAdvisories(claims, truth)].sort(),
+			classAnyOf: classAnyOfMatches(ledgerFindings(dir), truth),
 			claimOutcomes: claimOutcomes(claims, truth, neutral.get(String(r.target)) ?? []),
 			...(twin ? { control: controlScore(claims, twin.regions, twin.loc) } : {}),
 		};
