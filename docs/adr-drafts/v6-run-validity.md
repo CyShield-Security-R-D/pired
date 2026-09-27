@@ -37,16 +37,36 @@ ADR-026 inherits and the breaker's trigger in ADR-031 · built on branch `p2/val
   ledger as it stood at the deadline: the ledger is durable while the run works, and the runner
   grades it only after the process group has closed and the cell's scope is reaped, as it always
   has. It is flagged `reachedLimit: true`, and its stop reason stays `budget` (ADR-030). The errors
-  the stop itself causes are listed as `limitEffects` rather than `errors`: the timeout, the
-  stopped process's exit status, a parent reply cut off mid-turn, and a `subagent` call still
-  running with its workers' session files.
+  the stop itself causes are listed as `limitEffects` rather than `errors`, and only these: the
+  timeout; exit 143 or 137, or SIGTERM or SIGKILL, which the runner's stop leaves; a parent reply
+  cut off mid-turn; a `subagent` call still running; and that call's session file, only when it
+  was counted (below) and a call was still out. A stray file under the session directory stays an
+  error. Under the policy a waived limit no longer keeps the run from the infrastructure
+  classifier, so a real provider failure in a limit run is infrastructure like any other.
+- **A run that hung is not a limit run.** The runner records `idleAtLimitSeconds`, the time from the
+  run's last sign of work (its last transcript line, or the last write to any worker session) to
+  the deadline. A run silent for more than 30 minutes is flagged `stalled: true` and classed as
+  infrastructure (`stalled: silent N min before the limit`), so the breaker re-queues its pair under
+  the attempt ceiling rather than scoring a hang as work. Stalled runs are counted per arm.
 - **A limit-reaching run with a worker in flight counts that worker's session, as a lower
   bound.** The worker's `subagent` call never ended, so no tool result carries its spend. Its
   session file, which reconciliation finds claimed by no call, is read instead: each completed
   reply is metered as a finished worker's is, and the same model, effort and usage checks apply.
   The reply it had in flight was never written, so the run's `totalTokens` stays a number but is a
-  lower bound, flagged `tokensLowerBound: true` with the workers' keys in `inFlightWorkers`.
-- **Under v6, a fast empty run is valid with zero findings,** flagged `fastEmpty: true`.
+  lower bound, flagged `tokensLowerBound: true` with each worker's key, completed replies and
+  largest reply in `inFlightWorkers`. A worker stopped during a retry's backoff did not fail: the
+  cancelled retry is noted and its estimate is already in the retry count. A worker's provider
+  failure reaches the infrastructure classifier as a finished worker's does.
+- **Under v6, a fast empty run is valid with zero findings, flagged `fastEmpty: true`, only when the
+  harness let the model work.** `engagementTelemetry` reads a missing or unreadable workspace as
+  zeros, so an empty ledger and a run the harness broke look alike. The run is kept only when
+  pired's `manifest.json` is in the workspace for the cell's engagement, no pired tool (`record`,
+  `recall`) returned an error and no call was blocked by the scope or worker gate, on the parent or
+  any worker, and no tool result shows a seal denial (EACCES, EPERM, "Permission denied",
+  "Operation not permitted"). Otherwise it stays invalid, with the reason beside the fast-empty
+  error. Every scored cell also reports the tools its first request is offered (a
+  `benchmark_tools` line), checked as the preflight probe's are, so a run with the wrong tool
+  surface is invalid whether or not it was empty.
 - **Every other invalid reason stays invalid,** and on an official grid still trips the breaker at
   once: a leak, a tool-surface error, a runtime or pin mismatch, harness bookkeeping (usage
   attribution, reconciliation, a malformed transcript line), a scorer or grader failure, a launch
@@ -54,8 +74,9 @@ ADR-026 inherits and the breaker's trigger in ADR-031 · built on branch `p2/val
   errors it recognises as the stop's, and only on a run the runner stopped at the limit.
 - **The counts are reported per arm.** `eval/v6-decision.ts` reports, for each arm of a
   comparison, how many paired runs reached the limit and how many ended fast and empty. They never
-  decide. It also counts per arm the runs whose tokens are a lower bound; rule 3 includes their
-  pairs, and is reported again without them as a sensitivity row that never decides.
+  decide. It also counts per arm the runs whose tokens are a lower bound and the runs that stalled.
+  Rule 3 includes the lower-bound pairs, and is reported twice more, never deciding: without them,
+  and with each cut-off worker's missing reply imputed at the size of its largest completed reply.
   `eval/v6-pilot-sd.ts` pairs these runs like any other and does not read the flags, since
   a per-arm count would show which arm works longer.
 
@@ -68,8 +89,12 @@ ADR-026 inherits and the breaker's trigger in ADR-031 · built on branch `p2/val
 - A delegating arm that reaches the limit with a worker running has its cost understated by at
   most the replies in flight, one per worker cut off. Rule 3 includes those pairs, since leaving
   them out, or withholding their tokens, would make rule 3 inconclusive for the whole comparison
-  the first time it happens. How much they matter is read from the sensitivity row and the per-arm
-  counts.
+  the first time it happens. How much they matter is read from the excluding and imputed rows and
+  the per-arm counts.
+- A fast empty run that met a gate block or a seal denial stays invalid and, on an official grid,
+  trips the breaker. That is deliberate: it cannot be told from a harness that kept the model out.
+- A hang shorter than 30 minutes before the limit still counts as a limit run; the threshold is a
+  choice, not a measurement.
 - A transcript line truncated by the SIGKILL that follows SIGTERM by 5 s would still invalidate the
   run. pi exits on SIGTERM after disposing its runtime, and its stdout to a pipe is synchronous on
   Linux, so this should be rare; it is left as an integrity failure rather than guessed at.
@@ -90,5 +115,9 @@ ADR-026 inherits and the breaker's trigger in ADR-031 · built on branch `p2/val
 - **Withholding the tokens of such a run (null).** Under the pre-registration a pair with no token
   count makes rule 3 inconclusive, so one such run would leave the cost rule undecided for the whole
   comparison.
+- **Keeping every fast empty run valid.** A run with no workspace, or one the seal or the gate
+  refused, is empty because the harness failed, and would be scored as a model that chose to stop.
+- **Treating any run at the limit as a limit run.** A run that hung an hour before the deadline
+  would be scored as a run that worked for four.
 - **Making the policy a global default.** The v5 grids were judged by the old rules; changing them
   under a v5 resume would make one grid run under two rules.
