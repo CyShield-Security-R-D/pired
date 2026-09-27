@@ -47,7 +47,9 @@
  * comparison would unblind it (eval/v6-pilot-sd.ts reads it blind).
  *
  * Reported and never deciding: stopping (3.2), the patched twins, the verifier
- * metrics, dollars, per-advisory find rates and McNemar.
+ * metrics, dollars, per-advisory find rates, McNemar, and per arm how many
+ * paired runs reached the run limit or ended fast and empty (the v6 validity
+ * policy keeps both valid).
  *
  * Adjudication runs in two steps around a judge that never sees an arm: `export`
  * writes a blind worksheet per target and a key map kept from the judge, and
@@ -476,6 +478,28 @@ export function dollars(rows: RescoreRow[]): { usd: number | null; runs: number;
 	return { usd: unrecorded ? null : usd, runs, unrecorded };
 }
 
+/**
+ * How many of an arm's paired runs the v6 validity policy kept that the v5
+ * rules would have dropped: runs that reached the run limit (scored on their
+ * ledger at the deadline) and fast empty runs (valid, zero findings). Both are
+ * the model's behaviour, and the arm that works longer or quits sooner has
+ * more of them, so they are counted per arm beside the rules. Reported, never
+ * deciding. A matched union counts each of its sessions.
+ */
+export interface ValidityCounts { runs: number; reachedLimit: number; fastEmpty: number }
+
+export function validityCounts(rows: RescoreRow[]): ValidityCounts {
+	const out: ValidityCounts = { runs: 0, reachedLimit: 0, fastEmpty: 0 };
+	for (const r of rows) for (const dir of runDirs(r)) {
+		const path = join(dir, "run.json");
+		const run = existsSync(path) ? readJson(path) : {};
+		out.runs++;
+		if (run.reachedLimit === true) out.reachedLimit++;
+		if (run.fastEmpty === true) out.fastEmpty++;
+	}
+	return out;
+}
+
 // --- The decision ---------------------------------------------------------------------
 
 export type Outcome = "not ready" | "inconclusive" | "fails" | "pending adjudication" | "passes" | "superior";
@@ -515,6 +539,8 @@ export interface Decision {
 	twins?: Partial<Record<ArmLetter, TwinArm>>;
 	verifier?: Partial<Record<ArmLetter, VerifierArm>>;
 	dollars?: Partial<Record<ArmLetter, { usd: number | null; runs: number; unrecorded: number }>>;
+	/** Paired runs that reached the limit, and fast empty ones, per arm (the v6 validity policy). Reported only. */
+	validity?: Partial<Record<ArmLetter, ValidityCounts>>;
 }
 
 const REPORTED_TIERS: ClaimTier[] = ["all", "presented", "suspected", "confirmed"];
@@ -652,6 +678,7 @@ export function decide(comparison: ComparisonId, gridDirs: string[], labels?: La
 		twins: twinScores(scored.rows.filter((r) => isTwinRow(r, twinIds)), letterOf),
 		verifier: { [spec.reference]: verifierMetrics(armRows("ref")), [spec.subject]: verifierMetrics(armRows("sub")) },
 		dollars: { [spec.reference]: dollars(armRows("ref")), [spec.subject]: dollars(armRows("sub")) },
+		validity: { [spec.reference]: validityCounts(armRows("ref")), [spec.subject]: validityCounts(armRows("sub")) },
 	};
 }
 
@@ -867,6 +894,10 @@ export function formatDecision(d: Decision, ship: ShipRow[]): string {
 	if (d.verifier) {
 		L.push("", "verifier (reported):");
 		for (const [arm, v] of Object.entries(d.verifier)) L.push(`  ${arm}: ${v.refutedRows} refuted row(s) matching ${v.rejectedLabels} label(s) (${f(v.rejectedShare)} of its line±3 labels) · ${v.verifications} verification(s), downgraded ${f(v.downgradeRate)}, on quotes ${f(v.quoteDowngradeRate)}`);
+	}
+	if (d.validity) {
+		L.push("", "run validity (reported; the v6 policy keeps these runs valid, never deciding):");
+		for (const [arm, x] of Object.entries(d.validity)) L.push(`  ${arm}: ${x.reachedLimit} of ${x.runs} paired run(s) reached the run limit (scored on the ledger at the deadline); ${x.fastEmpty} ended fast and empty`);
 	}
 	if (d.dollars) {
 		L.push("", "dollars (reported; pi's usage.costUsd):");

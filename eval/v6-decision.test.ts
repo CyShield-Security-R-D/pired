@@ -21,7 +21,7 @@ const TARGETS = ["t1", "t2", "t3", "t4", "t5", "t6"];
  * claims the key does not label, or `rows` as given. `tokens: null` is a run
  * without a token count; `cost: null` one without a recorded cost.
  */
-interface RunSpec { target: string; pass: number; arm: string; found: number; fps?: number; rows?: Row[]; tokens?: number | null; cost?: number | null; attempt?: number; stop?: Row; cell?: string }
+interface RunSpec { target: string; pass: number; arm: string; found: number; fps?: number; rows?: Row[]; tokens?: number | null; cost?: number | null; attempt?: number; stop?: Row; cell?: string; reachedLimit?: boolean; fastEmpty?: boolean }
 
 const stop = (outcome: "finished" | "offered-to-continue", timeShare: number, leftWithOpenWork: boolean): Row => ({ outcome, evidence: [], crossCheck: null, workers: [], timeShare, leftWithOpenWork });
 
@@ -107,6 +107,8 @@ function grid(runs: RunSpec[], o: GridOptions = {}): string {
 			usage: r.cost === null ? { valid: true } : { valid: true, costUsd: r.cost ?? 1.5 },
 			...(r.target.endsWith("-patched") ? { twinOf: r.target.replace(/-patched$/, "") } : {}),
 			stop: r.stop ?? stop("finished", 0.5, false),
+			// What the v6 validity policy writes on every run it judges.
+			...(r.reachedLimit === undefined && r.fastEmpty === undefined ? {} : { reachedLimit: r.reachedLimit ?? false, fastEmpty: r.fastEmpty ?? false, limitEffects: [] }),
 		}));
 		const file = `src/${r.target.replace(/-patched$/, "")}.py`;
 		const rows = r.rows ?? [...LINES.slice(0, r.found), ...FP_LINES.slice(0, r.fps ?? 0)].map((line, k) => ({ id: `F${k}`, title: "injection", target: `${file}:${line}`, cwe: "CWE-89" }));
@@ -438,6 +440,26 @@ describe("reported, never deciding", () => {
 		expect(d.findRates!.find((r) => r.advisory === "t1-A1")).toEqual({ advisory: "t1-A1", reference: 0, subject: 2, n: 2 });
 		expect(d.mcnemar).toMatchObject({ b: 0, c: 12 });
 		expect(formatDecision(d, shipTable([d]))).toMatch(/A: not recorded \(12 of 12 run\(s\) without a cost\)/);
+	});
+});
+
+describe("runs the v6 validity policy keeps", () => {
+	// Excluding them would bias the comparison against the arm that works longer
+	// or quits sooner, so they count as pairs and their numbers show per arm.
+	it("pairs limit-reaching and fast empty runs like any other and reports how many each arm had, without letting them decide", () => {
+		const flagged = grid(pairs("baseline", "candidate", (t, p) => [
+			{ found: 1, ...(p === 1 ? { fastEmpty: true, found: 0 } : { fastEmpty: false }) },
+			{ found: 2, reachedLimit: t === "t1" || t === "t2" },
+		]));
+		const d = decide("S-vs-A", [flagged], labels());
+		expect(d.pairs!.paired).toBe(12);
+		expect(d.validity).toEqual({ A: { runs: 12, reachedLimit: 0, fastEmpty: 6 }, S: { runs: 12, reachedLimit: 4, fastEmpty: 0 } });
+		// The same runs without the flags decide the same way: the counts are reported only.
+		const plain = decide("S-vs-A", [grid(pairs("baseline", "candidate", (_t, p) => [{ found: p === 1 ? 0 : 1 }, { found: 2 }]))], labels());
+		expect(plain.validity).toEqual({ A: { runs: 12, reachedLimit: 0, fastEmpty: 0 }, S: { runs: 12, reachedLimit: 0, fastEmpty: 0 } });
+		expect(d.outcome).toBe(plain.outcome);
+		expect(d.rule1).toEqual(plain.rule1);
+		expect(formatDecision(d, shipTable([d]))).toMatch(/S: 4 of 12 paired run\(s\) reached the run limit \(scored on the ledger at the deadline\); 0 ended fast and empty/);
 	});
 });
 
