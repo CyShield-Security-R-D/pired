@@ -78,7 +78,10 @@ export interface Clock {
 
 /** Id source. Injected so ids are deterministic under test. */
 export interface Ids {
-	/** Short id, unique enough within one engagement store. */
+	/**
+	 * A short random id. NOT guaranteed unique: callers mint through
+	 * `freshId`/`idMinter` (core/ids.ts), which draw again on a collision.
+	 */
 	newId(): string;
 }
 

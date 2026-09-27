@@ -16,6 +16,7 @@ import { auditFinding, challengeBrief, hasGrounds, hypothesisBrief, isExaminedUn
 import { computeCoverage, coveragePercent, findGaps, selectNext } from "./coverage.ts";
 import { CVSS_DEFAULT_VERSION, CVSS_EXAMPLE, cvssVersion, validateCvss } from "./cvss.ts";
 import { type Fields, findDuplicate, findNearDuplicate, holdsLeadOpen, type IdentityKind, isNoOp, leadMeetsClearance, mergeRecord, reopensLead, updateById } from "./identity.ts";
+import { idMinter } from "./ids.ts";
 import { locateAcrossFiles, locateSink, sinkHints } from "./locate.ts";
 import { lensForPass, nextInPass, PASS_LENS_HELP, type PassState, passDelta, planPass } from "./passes.ts";
 import { buildTargetIndex, elementLabel, resolveElementTarget, type TargetIndex } from "./target.ts";
@@ -547,7 +548,7 @@ async function writeRecord(
 		await deps.workspace.upsert("inventory", (current) => {
 			const dup = findDuplicate(kind, merged, current as unknown as Fields[]);
 			if (dup) { id = (dup as unknown as InventoryRecord).id; return undefined; }
-			id = ctx.services.ids.newId();
+			id = idMinter(ctx.services.ids, current)();
 			return [{ v: RECORD_VERSION, id, kind, createdAt: ctx.services.clock.nowIso(), ...passStamp(deps), ...merged } as unknown as InventoryRecord];
 		});
 		return id;
@@ -987,6 +988,9 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 					// twice under two spellings.
 					const working = [...current] as unknown as Fields[];
 					const out: HypothesisRecord[] = [];
+					// One minter for the whole cross product: a 20 x 19 write mints up to
+					// 380 ids at once, and each must miss the store and every id before it.
+					const mint = idMinter(ctx.services.ids, current);
 					for (const t of targets) {
 						for (const c of classes) {
 							const patch = defined({
@@ -1016,7 +1020,7 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 								out.push(merged);
 								continue;
 							}
-							const id = ctx.services.ids.newId();
+							const id = mint();
 							const record = defined({
 								v: RECORD_VERSION, id, kind: "hypothesis", createdAt: stamp, ...passStamp(deps), ...patch,
 							}) as unknown as HypothesisRecord;
@@ -1261,7 +1265,7 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 						await deps.workspace.upsert("blockers", (current) => {
 							const dup = current.find((b) => b.status === "open" && b.question === outcome.blocker?.question);
 							if (dup) { parked = dup.id; return undefined; }
-							parked = ctx.services.ids.newId();
+							parked = idMinter(ctx.services.ids, current)();
 							return [{
 								v: RECORD_VERSION, id: parked, kind: "blocker", createdAt: ctx.services.clock.nowIso(),
 								...passStamp(deps),
@@ -1525,7 +1529,7 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 				// Written, then reported: a merge here could drop a real finding, and
 				// recall is the one thing that cannot be recovered later.
 				if (kind === "finding") near = findNearDuplicate(patch, current as unknown as Fields[]) as unknown as LedgerRecord | undefined;
-				const id = existingId ?? ctx.services.ids.newId();
+				const id = existingId ?? idMinter(ctx.services.ids, current)();
 				record = defined({ v: RECORD_VERSION, id, kind, createdAt: now, ...passStamp(deps), ...(DEFAULTS[kind] ?? {}), ...patch }) as unknown as LedgerRecord;
 				return [record];
 			});

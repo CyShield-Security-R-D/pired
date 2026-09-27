@@ -156,11 +156,13 @@ describe("the clock and the ids", () => {
 		expect(Date.now() - t0).toBeGreaterThanOrEqual(4);
 	});
 
-	it("mints short hex ids that do not repeat", () => {
+	it("mints six lowercase hex characters, the shape every existing ledger uses", () => {
+		// Uniqueness is not asserted here because a random source cannot promise
+		// it: 500 draws from 16^6 repeat in 0.74% of runs, and this test used to
+		// fail 1 run in 135 for exactly that reason. The record tool draws again
+		// on a collision (core/ids.ts), and that is where uniqueness is tested.
 		const ids = new RandomIds();
-		const seen = new Set(Array.from({ length: 500 }, () => ids.newId()));
-		expect(seen.size).toBe(500);
-		expect([...seen].every((id) => /^[0-9a-f]{6}$/.test(id))).toBe(true);
+		for (let i = 0; i < 50; i++) expect(ids.newId()).toMatch(/^[0-9a-f]{6}$/);
 	});
 });
 
