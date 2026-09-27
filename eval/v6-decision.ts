@@ -49,7 +49,9 @@
  * Reported and never deciding: stopping (3.2), the patched twins, the verifier
  * metrics, dollars, per-advisory find rates, McNemar, and per arm how many
  * paired runs reached the run limit or ended fast and empty (the v6 validity
- * policy keeps both valid).
+ * policy keeps both valid) and how many counted their tokens as a lower bound
+ * (a worker cut off at the limit). Rule 3 includes those pairs; it is reported
+ * again without them as a sensitivity row that never decides.
  *
  * Adjudication runs in two steps around a judge that never sees an arm: `export`
  * writes a blind worksheet per target and a key map kept from the judge, and
@@ -486,16 +488,24 @@ export function dollars(rows: RescoreRow[]): { usd: number | null; runs: number;
  * more of them, so they are counted per arm beside the rules. Reported, never
  * deciding. A matched union counts each of its sessions.
  */
-export interface ValidityCounts { runs: number; reachedLimit: number; fastEmpty: number }
+export interface ValidityCounts {
+	runs: number; reachedLimit: number; fastEmpty: number;
+	/** Runs stopped at the limit with a worker in flight: their tokens count that worker's completed replies only. */
+	tokensLowerBound: number;
+}
+
+const runJsons = (r: RescoreRow): Row[] => runDirs(r).map((dir) => join(dir, "run.json")).map((path) => (existsSync(path) ? readJson(path) : {}));
+
+/** Whether any run behind a row (a matched union's sessions included) counted its tokens as a lower bound. */
+export const lowerBoundTokens = (r: RescoreRow): boolean => runJsons(r).some((run) => run.tokensLowerBound === true);
 
 export function validityCounts(rows: RescoreRow[]): ValidityCounts {
-	const out: ValidityCounts = { runs: 0, reachedLimit: 0, fastEmpty: 0 };
-	for (const r of rows) for (const dir of runDirs(r)) {
-		const path = join(dir, "run.json");
-		const run = existsSync(path) ? readJson(path) : {};
+	const out: ValidityCounts = { runs: 0, reachedLimit: 0, fastEmpty: 0, tokensLowerBound: 0 };
+	for (const r of rows) for (const run of runJsons(r)) {
 		out.runs++;
 		if (run.reachedLimit === true) out.reachedLimit++;
 		if (run.fastEmpty === true) out.fastEmpty++;
+		if (run.tokensLowerBound === true) out.tokensLowerBound++;
 	}
 	return out;
 }
@@ -533,6 +543,12 @@ export interface Decision {
 	/** Every reported tier: all, presented (rule 2's), suspected, confirmed. */
 	precisionTiers?: TierPrecision[];
 	rule3?: Rule3;
+	/**
+	 * Rule 3 again without the pairs where either arm's tokens are a lower bound
+	 * (a worker cut off at the limit). Sensitivity only: rule 3 above includes
+	 * them, and this never decides.
+	 */
+	rule3ExcludingLowerBound?: Rule3 & { excludedPairs: number };
 	mcnemar?: { b: number; c: number; p: number };
 	findRates?: Array<{ advisory: string; reference: number; subject: number; n: number }>;
 	stopping?: Stopping;
@@ -629,17 +645,24 @@ export function decide(comparison: ComparisonId, gridDirs: string[], labels?: La
 	});
 	const r2 = rule2(precisionTiers.find((t) => t.tier === "presented")!);
 
-	const logRatios = new Map<string, number[]>();
-	let missingTokens = 0;
-	const pooled = { subject: 0, reference: 0 };
-	for (const { p, ref, sub } of pairRows) {
-		const [ts, tr] = [gateTokens(sub), gateTokens(ref)];
-		if (!(Number.isFinite(ts) && Number.isFinite(tr) && ts > 0 && tr > 0)) { missingTokens++; continue; }
-		pooled.subject += ts;
-		pooled.reference += tr;
-		logRatios.set(p.target, [...(logRatios.get(p.target) ?? []), Math.log(ts / tr)]);
-	}
-	const r3 = rule3(logRatios, missingTokens, r1.superior, pooled);
+	// Rule 3 counts a pair whose tokens are a lower bound like any other; the
+	// sensitivity row leaves those pairs out and never decides.
+	const costRule = (rows: typeof pairRows) => {
+		const logRatios = new Map<string, number[]>();
+		let missingTokens = 0;
+		const pooled = { subject: 0, reference: 0 };
+		for (const { p, ref, sub } of rows) {
+			const [ts, tr] = [gateTokens(sub), gateTokens(ref)];
+			if (!(Number.isFinite(ts) && Number.isFinite(tr) && ts > 0 && tr > 0)) { missingTokens++; continue; }
+			pooled.subject += ts;
+			pooled.reference += tr;
+			logRatios.set(p.target, [...(logRatios.get(p.target) ?? []), Math.log(ts / tr)]);
+		}
+		return rule3(logRatios, missingTokens, r1.superior, pooled);
+	};
+	const r3 = costRule(pairRows);
+	const exact = pairRows.filter((x) => !lowerBoundTokens(x.ref) && !lowerBoundTokens(x.sub));
+	const r3Sensitivity = { ...costRule(exact), excludedPairs: pairRows.length - exact.length };
 
 	const reasons: string[] = [];
 	if (!r1.nonInferior && pairs.length) reasons.push(`rule 1 fails: the lower bound ${r1.lo.toFixed(3)} is not above ${RULES.margin}`);
@@ -648,7 +671,7 @@ export function decide(comparison: ComparisonId, gridDirs: string[], labels?: La
 	const inconclusive = [
 		...(abandoned.length ? [`${abandoned.length} pair(s) abandoned at the attempt ceiling: the comparison is inconclusive, never passing`] : []),
 		...(pairs.length === 0 ? ["no valid pairs"] : []),
-		...(missingTokens ? [`${missingTokens} pair(s) have no token count: rule 3 cannot be decided`] : []),
+		...(r3.missingTokens ? [`${r3.missingTokens} pair(s) have no token count: rule 3 cannot be decided`] : []),
 	];
 	let outcome: Outcome;
 	if (inconclusive.length) {
@@ -671,7 +694,7 @@ export function decide(comparison: ComparisonId, gridDirs: string[], labels?: La
 	});
 	const armRows = (side: "ref" | "sub") => pairRows.map((x) => x[side]);
 	return {
-		...head, outcome, reasons, notReady, pairs: account, rule1: r1, robustness, leaveOneTargetOut, rule2: r2, precisionTiers, rule3: r3,
+		...head, outcome, reasons, notReady, pairs: account, rule1: r1, robustness, leaveOneTargetOut, rule2: r2, precisionTiers, rule3: r3, rule3ExcludingLowerBound: r3Sensitivity,
 		mcnemar: mcnemar(pairs, truthIds),
 		findRates: [...perIssueFindRate(pairs, truthIds).entries()].sort(([a], [b]) => byCodePoint(a, b)).map(([advisory, x]) => ({ advisory, reference: x.baseline, subject: x.candidate, n: x.n })),
 		stopping: stopping(stopRows, spec.reference, spec.subject),
@@ -883,6 +906,10 @@ export function formatDecision(d: Decision, ship: ShipRow[]): string {
 			"",
 			`rule 3 · median per-pair log ratio of gate tokens (totalTokensWithRetryEstimate): ${f(r3.median, 4)} [${f(r3.lo, 4)}, ${f(r3.hi, 4)}] over ${r3.pairs} pair(s) · upper bound ≤ log(${r3.relaxed ? "1.5, relaxed by superiority" : "1.10"}) = ${f(r3.bound, 4)}: ${r3.pass === null ? "undecided" : r3.pass ? "yes" : "no"}${r3.missingTokens ? ` · ${r3.missingTokens} pair(s) without tokens` : ""}`,
 			`  pooled token ratio (reported, not deciding): ${f(r3.pooledRatio)}`,
+			...(d.rule3ExcludingLowerBound ? [(() => {
+				const x = d.rule3ExcludingLowerBound;
+				return `  without the ${x.excludedPairs} pair(s) whose tokens are a lower bound (sensitivity, never deciding): ${f(x.median, 4)} [${f(x.lo, 4)}, ${f(x.hi, 4)}] over ${x.pairs} pair(s): ${x.pass === null ? "undecided" : x.pass ? "yes" : "no"}`;
+			})()] : []),
 		);
 	}
 	if (d.stopping) {
@@ -897,7 +924,7 @@ export function formatDecision(d: Decision, ship: ShipRow[]): string {
 	}
 	if (d.validity) {
 		L.push("", "run validity (reported; the v6 policy keeps these runs valid, never deciding):");
-		for (const [arm, x] of Object.entries(d.validity)) L.push(`  ${arm}: ${x.reachedLimit} of ${x.runs} paired run(s) reached the run limit (scored on the ledger at the deadline); ${x.fastEmpty} ended fast and empty`);
+		for (const [arm, x] of Object.entries(d.validity)) L.push(`  ${arm}: ${x.reachedLimit} of ${x.runs} paired run(s) reached the run limit (scored on the ledger at the deadline); ${x.fastEmpty} ended fast and empty; ${x.tokensLowerBound} counted tokens as a lower bound (a worker cut off at the limit)`);
 	}
 	if (d.dollars) {
 		L.push("", "dollars (reported; pi's usage.costUsd):");

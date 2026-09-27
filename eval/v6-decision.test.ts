@@ -21,7 +21,7 @@ const TARGETS = ["t1", "t2", "t3", "t4", "t5", "t6"];
  * claims the key does not label, or `rows` as given. `tokens: null` is a run
  * without a token count; `cost: null` one without a recorded cost.
  */
-interface RunSpec { target: string; pass: number; arm: string; found: number; fps?: number; rows?: Row[]; tokens?: number | null; cost?: number | null; attempt?: number; stop?: Row; cell?: string; reachedLimit?: boolean; fastEmpty?: boolean }
+interface RunSpec { target: string; pass: number; arm: string; found: number; fps?: number; rows?: Row[]; tokens?: number | null; cost?: number | null; attempt?: number; stop?: Row; cell?: string; reachedLimit?: boolean; fastEmpty?: boolean; tokensLowerBound?: boolean }
 
 const stop = (outcome: "finished" | "offered-to-continue", timeShare: number, leftWithOpenWork: boolean): Row => ({ outcome, evidence: [], crossCheck: null, workers: [], timeShare, leftWithOpenWork });
 
@@ -108,7 +108,10 @@ function grid(runs: RunSpec[], o: GridOptions = {}): string {
 			...(r.target.endsWith("-patched") ? { twinOf: r.target.replace(/-patched$/, "") } : {}),
 			stop: r.stop ?? stop("finished", 0.5, false),
 			// What the v6 validity policy writes on every run it judges.
-			...(r.reachedLimit === undefined && r.fastEmpty === undefined ? {} : { reachedLimit: r.reachedLimit ?? false, fastEmpty: r.fastEmpty ?? false, limitEffects: [] }),
+			...(r.reachedLimit === undefined && r.fastEmpty === undefined && r.tokensLowerBound === undefined ? {} : {
+				reachedLimit: r.reachedLimit ?? r.tokensLowerBound ?? false, fastEmpty: r.fastEmpty ?? false, limitEffects: [],
+				tokensLowerBound: r.tokensLowerBound ?? false, inFlightWorkers: r.tokensLowerBound ? ["run-1/run-0"] : [],
+			}),
 		}));
 		const file = `src/${r.target.replace(/-patched$/, "")}.py`;
 		const rows = r.rows ?? [...LINES.slice(0, r.found), ...FP_LINES.slice(0, r.fps ?? 0)].map((line, k) => ({ id: `F${k}`, title: "injection", target: `${file}:${line}`, cwe: "CWE-89" }));
@@ -453,13 +456,36 @@ describe("runs the v6 validity policy keeps", () => {
 		]));
 		const d = decide("S-vs-A", [flagged], labels());
 		expect(d.pairs!.paired).toBe(12);
-		expect(d.validity).toEqual({ A: { runs: 12, reachedLimit: 0, fastEmpty: 6 }, S: { runs: 12, reachedLimit: 4, fastEmpty: 0 } });
+		expect(d.validity).toEqual({ A: { runs: 12, reachedLimit: 0, fastEmpty: 6, tokensLowerBound: 0 }, S: { runs: 12, reachedLimit: 4, fastEmpty: 0, tokensLowerBound: 0 } });
 		// The same runs without the flags decide the same way: the counts are reported only.
 		const plain = decide("S-vs-A", [grid(pairs("baseline", "candidate", (_t, p) => [{ found: p === 1 ? 0 : 1 }, { found: 2 }]))], labels());
-		expect(plain.validity).toEqual({ A: { runs: 12, reachedLimit: 0, fastEmpty: 0 }, S: { runs: 12, reachedLimit: 0, fastEmpty: 0 } });
+		expect(plain.validity).toEqual({ A: { runs: 12, reachedLimit: 0, fastEmpty: 0, tokensLowerBound: 0 }, S: { runs: 12, reachedLimit: 0, fastEmpty: 0, tokensLowerBound: 0 } });
 		expect(d.outcome).toBe(plain.outcome);
 		expect(d.rule1).toEqual(plain.rule1);
 		expect(formatDecision(d, shipTable([d]))).toMatch(/S: 4 of 12 paired run\(s\) reached the run limit \(scored on the ledger at the deadline\); 0 ended fast and empty/);
+	});
+
+	// A delegating run cut off with a worker in flight counts that worker's
+	// completed replies: a lower bound. Leaving the pair out would make rule 3
+	// inconclusive for the whole comparison; it is counted, and rule 3 is shown
+	// again without such pairs.
+	it("keeps pairs whose tokens are a lower bound in rule 3, counts them per arm, and reports rule 3 without them as a sensitivity row", () => {
+		const runs = pairs("baseline", "candidate", (t, p) => [
+			{ found: 1, tokens: 1_000_000 },
+			// On t1 and t2 pass 1 the subject hit the limit with a worker running, at a low count.
+			(t === "t1" || t === "t2") && p === 1 ? { found: 1, tokens: 500_000, tokensLowerBound: true } : { found: 1, tokens: 2_000_000 },
+		]);
+		const d = decide("S-vs-A", [grid(runs)], labels());
+		expect(d.rule3!.pairs).toBe(12);
+		expect(d.rule3!.missingTokens).toBe(0);
+		expect(d.validity!.S!.tokensLowerBound).toBe(2);
+		expect(d.validity!.A!.tokensLowerBound).toBe(0);
+		expect(d.rule3ExcludingLowerBound).toMatchObject({ pairs: 10, excludedPairs: 2, median: Math.log(2) });
+		// Only rule 3 decides: the lower-bound pairs pull its median down, the sensitivity row does not move the outcome.
+		expect(d.rule3!.median).toBeCloseTo(Math.log(2), 10);
+		expect(d.outcome).toBe("fails");
+		expect(d.reasons.join("\n")).not.toMatch(/sensitivity|lower bound/);
+		expect(formatDecision(d, shipTable([d]))).toMatch(/without the 2 pair\(s\) whose tokens are a lower bound \(sensitivity, never deciding\)/);
 	});
 });
 
