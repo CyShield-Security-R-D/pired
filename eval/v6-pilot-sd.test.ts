@@ -25,7 +25,7 @@ interface RunSpec { target: string; pass: number; arm: string; found: number; at
  * `src/<t>.py` at LINES, and a patched twin with no labels. A run finds an
  * advisory by citing its line.
  */
-function grid(runs: RunSpec[], options: { targets?: string[]; truthExtra?: Row; gridKind?: string } = {}): string {
+function grid(runs: RunSpec[], options: { targets?: string[]; truthExtra?: Row; gridKind?: string; summary?: Row | null; citeIn?: (target: string) => string } = {}): string {
 	const g = mkdtempSync(join(tmpdir(), "v6-pilot-"));
 	dirs.push(g);
 	const keys = join(g, "keys");
@@ -44,12 +44,15 @@ function grid(runs: RunSpec[], options: { targets?: string[]; truthExtra?: Row; 
 		inputs: { truth: keys },
 	};
 	writeFileSync(join(g, "manifest.json"), JSON.stringify(manifest));
+	// What the harness writes while the pilot is blind: the SD block, nothing of the arms.
+	if (options.summary !== null) writeFileSync(join(g, "summary.json"), JSON.stringify(options.summary ?? { pilot: { blinded: true, validPairs: runs.length / 2, sd: 1 } }));
 	runs.forEach((r, i) => {
 		const dir = join(g, "runs", `cell-${i}`);
 		mkdirSync(join(dir, "workspace"), { recursive: true });
 		const file = r.target.endsWith("-patched") ? r.target.replace(/-patched$/, "") : r.target;
 		writeFileSync(join(dir, "run.json"), JSON.stringify({ target: r.target, pass: r.pass, arm: r.arm, attempt: r.attempt ?? 1, valid: r.valid ?? true, truePositives: r.found, findings: r.found, totalTokens: 1000 }));
-		const rows = LINES.slice(0, r.found).map((line, k) => ({ id: `F${k}`, title: "injection", target: `src/${file}.py:${line}` }));
+		const path = options.citeIn?.(r.arm) ?? "src";
+		const rows = LINES.slice(0, r.found).map((line, k) => ({ id: `F${k}`, title: "injection", target: `${path}/${file}.py:${line}` }));
 		writeFileSync(join(dir, "workspace", "findings.jsonl"), rows.map((x) => JSON.stringify(x)).join("\n"));
 	});
 	return g;
@@ -99,7 +102,13 @@ describe("pilotSd", () => {
 		const r = pilotSd(grid(runs));
 		expect(r.validPairs).toBe(4);
 		expect(r.pooledPairedSd).toBeCloseTo(Math.sqrt(((1 - 0.75) ** 2 + 0.75 ** 2 + 1.25 ** 2 + 0.75 ** 2) / 3), 10);
-		expect(r.level).toBe("line±3");
+		expect(r.level).toBe("official");
+	});
+
+	it("counts advisories by the pinned grader's matching, so a basename collision counts as it does officially", () => {
+		// The candidate cites lib/<t>.py: the grader credits it by basename, the line±3 level would not.
+		const g = grid(pilotRuns(TABLE), { citeIn: (arm) => (arm === "candidate" ? "lib" : "src") });
+		expect(pilotSd(g).pooledPairedSd).toBeCloseTo(pilotSd(grid(pilotRuns(TABLE))).pooledPairedSd, 10);
 	});
 
 	it("counts an advisory once however many of its labels a run hits", () => {
@@ -114,6 +123,11 @@ describe("pilotSd", () => {
 	it("refuses a truth that carries classes, because the official rule would then not be the location level it reads", () => {
 		expect(() => pilotSd(grid(pilotRuns(TABLE), { truthExtra: { cwe: "CWE-89" } }))).toThrow(/truth carries classes/);
 		expect(() => assertLocationOnlyTruth(new Map([["t", [{ id: "x", file: "a.py", line: 1, lo: 1, hi: 1, vulnClass: "sqli" }]]]))).toThrow(/t:x/);
+	});
+
+	it("refuses a grid the harness did not summarise blind, since a count fixed after the numbers were shown is not blind", () => {
+		expect(() => pilotSd(grid(pilotRuns(TABLE), { summary: null }))).toThrow(/no pilot.blinded/);
+		expect(() => pilotSd(grid(pilotRuns(TABLE), { summary: { comparison: {} } }))).toThrow(/no pilot.blinded/);
 	});
 
 	it("refuses a grid that is not stage 1, and one with fewer than two valid pairs", () => {

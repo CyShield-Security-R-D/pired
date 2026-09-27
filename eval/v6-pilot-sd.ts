@@ -19,22 +19,26 @@
  * arms' numbers until the count is fixed. The full comparison is
  * eval/v6-decision.ts, which refuses a grid whose count is not yet fixed.
  */
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { dropTwins, pairDiffs, pairRuns, sampleSd, twinIdsFromManifests, type ArmPair, type RunRecord } from "./paired.ts";
 import { rescoreGrid, type RescoreRow, type Truth } from "./rescore.ts";
 
 /**
- * The official location rule of the v6 trial. The fresh corpus's truth is
+ * The official rule of the v6 trial: the pinned grader's own matching, read
+ * per advisory (rescore's `officialAdvisories`). The fresh corpus's truth is
  * location-only: its labels carry `cwes` for the re-scorer's class level but no
- * `cwe` or `vuln_class`, so the pinned grader has no class to refuse a claim on
- * and grades a claim within ±3 lines of a label's whole `line_range`. That is
- * rescore's "line±3" level. A key that carried classes would make the official
- * rule class-sensitive and this level no longer the official one, so
- * `assertLocationOnlyTruth` refuses it rather than scoring the wrong rule.
+ * `cwe` or `vuln_class`, so the grader has no class to refuse a claim on. It
+ * still differs from rescore's "line±3" advisory level, which is reported as
+ * robustness: it matches basenames (`lib/app.py` credits a label in
+ * `src/app.py`), and it credits one claim to one label, so a claim near two
+ * advisories finds one. A key that carried classes would make the official
+ * rule class-sensitive, and the pre-registration calls the truth location-only,
+ * so `assertLocationOnlyTruth` refuses it rather than score a rule nobody
+ * registered.
  */
-export const OFFICIAL_LEVEL = "line±3";
+export const OFFICIAL_LEVEL = "official";
 
 /** Stage 1's arms as the harness names them: A (incumbent) is `baseline`, S (candidate solo) is `candidate`. */
 export const STAGE1_ARMS: ArmPair = ["baseline", "candidate"];
@@ -58,7 +62,9 @@ export function assertLocationOnlyTruth(truths: ReadonlyMap<string, readonly Tru
 export function toRecords(rows: readonly RescoreRow[], field: "advisoriesMatched" | "matched" = "advisoriesMatched"): RunRecord[] {
 	return rows.map((r) => ({
 		grid: r.grid, target: r.target, pass: r.pass, arm: r.arm, attempt: r.attempt, tokens: r.tokens,
-		matched: r[field], ...(r.control ? { control: r.control } : {}),
+		// Advisory records carry the official level beside the location levels.
+		matched: field === "advisoriesMatched" ? { ...r.advisoriesMatched, [OFFICIAL_LEVEL]: r.officialAdvisories } : r.matched,
+		...(r.control ? { control: r.control } : {}),
 	}));
 }
 
@@ -94,19 +100,25 @@ export function pilotSd(gridDir: string): PilotResult {
 	const manifestPath = join(gridDir, "manifest.json");
 	const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { gridKind?: unknown };
 	if (manifest.gridKind !== "v6-stage1") throw new Error(`the pilot is stage 1's: ${gridDir} is grid kind ${JSON.stringify(manifest.gridKind ?? null)}, not "v6-stage1"`);
+	// The pilot reads a grid the harness summarised blind, and only such a grid:
+	// on one summarised in the open the numbers were already shown, and a pass
+	// count fixed from it would not be blind.
+	const summaryPath = join(gridDir, "summary.json");
+	const pilot = existsSync(summaryPath) ? (JSON.parse(readFileSync(summaryPath, "utf8")) as { pilot?: { blinded?: unknown } }).pilot : undefined;
+	if (typeof pilot?.blinded !== "boolean") throw new Error(`${gridDir}: summary.json has no pilot.blinded; the pilot reads only a stage-1 grid the harness summarised blind`);
 	const { rows, truths } = rescoreGrid(gridDir);
 	assertLocationOnlyTruth(truths);
 	const { kept } = dropTwins(toRecords(rows), twinIdsFromManifests([manifestPath], (p) => readFileSync(p, "utf8")));
 	const diffs = pairDiffs(pairRuns(kept, OFFICIAL_LEVEL, STAGE1_ARMS));
 	if (diffs.length < 2) throw new Error(`the pilot needs at least two valid pairs to measure an SD; ${gridDir} has ${diffs.length}`);
 	const sd = sampleSd(diffs);
-	return { metric: "advisories found per pair, paired difference (direction withheld)", level: OFFICIAL_LEVEL, validPairs: diffs.length, pooledPairedSd: sd, ...passesFor(sd) };
+	return { metric: "advisories found per pair (the pinned grader's matching), paired difference (direction withheld)", level: OFFICIAL_LEVEL, validPairs: diffs.length, pooledPairedSd: sd, ...passesFor(sd) };
 }
 
 export function formatPilot(r: PilotResult): string {
 	const reason = `pre-registered pilot rule: pooled paired SD ${r.pooledPairedSd.toFixed(3)} over ${r.validPairs} valid pairs; ceil(2.8^2 * SD^2 / 0.3^2 / 12) = ${r.formula}, capped at 10, floor 2 -> ${r.passes}`;
 	return [
-		`v6 pilot (blind): ${r.metric}, at ${r.level} (the official rule on this location-only truth)`,
+		`v6 pilot (blind): ${r.metric}, at the ${r.level} rule (location-only truth)`,
 		`valid pairs: ${r.validPairs}`,
 		`pooled paired SD: ${r.pooledPairedSd.toFixed(3)}`,
 		`passes per target: ceil((1.96 + 0.84)^2 * SD^2 / 0.3^2 / 12) = ${r.formula}; capped at 10, floor 2 -> ${r.passes} (${r.amendment})`,

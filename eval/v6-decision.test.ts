@@ -94,7 +94,7 @@ describe("rule 1 and the outcome", () => {
 		const g = grid(pairs("baseline", "candidate", () => [{ found: 2, fps: 1 }, { found: 2, fps: 1 }]));
 		const d = decide("S-vs-A", [g], labels());
 		expect(d.outcome).toBe("passes");
-		expect(d.rule1).toMatchObject({ level: "line±3", pairs: 12, targets: 6, mean: 0, lo: 0, hi: 0, nonInferior: true, superior: false });
+		expect(d.rule1).toMatchObject({ level: "official", pairs: 12, targets: 6, mean: 0, lo: 0, hi: 0, nonInferior: true, superior: false });
 		expect(d.rule2).toMatchObject({ status: "adjudicated", subject: 2 / 3, reference: 2 / 3, ratio: 1, pass: true });
 		expect(d.rule3).toMatchObject({ median: 0, pass: true, relaxed: false });
 	});
