@@ -1821,10 +1821,19 @@ export function nextPairAction(attempt: number, arms: ReadonlyArray<ArmResult | 
 	return { kind: "rerun", attempt: attempt + 1, notBeforeMs: requeue.atMs + requeue.policy.cooldownMs * requeue.attemptsThisRun, reason };
 }
 
-/** Advisory identifiers for one target. The project name is not a label: the source already says it. */
-export function leakTermsFor(target: { id: string; aliases?: unknown }): string[] {
+/**
+ * Advisory identifiers for one target. The project name is not a label: the
+ * source already says it.
+ *
+ * A patched twin's `id` is its tree's name, not an advisory (plan 2.8), and its
+ * aliases already carry the advisory id. Counting that name as a label made the
+ * first v6 dry run refuse every twin: the probe's own list of answer-key paths
+ * it must fail to read names the twin's key file, `<name>.truth.json`.
+ */
+export function leakTermsFor(target: { id: string; aliases?: unknown; twinOf?: unknown }): string[] {
 	const aliases = Array.isArray(target.aliases) ? target.aliases.map(String) : [];
-	return [...new Set([target.id, ...aliases].map((t) => t.trim()).filter(Boolean))];
+	const own = typeof target.twinOf === "string" ? [] : [target.id];
+	return [...new Set([...own, ...aliases].map((t) => t.trim()).filter(Boolean))];
 }
 
 /**

@@ -1619,6 +1619,15 @@ describe("leak checks", () => {
 		expect(leakTermsFor({ id: "CVE-2025-52903", aliases: "not a list" })).toEqual(["CVE-2025-52903"]);
 	});
 
+	// The first v6 dry run: a twin's id is its tree's name, which the probe's own
+	// list of answer-key paths it must fail to read names, so every twin was refused.
+	it("takes a patched twin's terms from its advisory aliases, never from the tree name it runs under", () => {
+		const twin = { id: "acme_app-x1-patched", twinOf: "CVE-2026-00001", aliases: ["CVE-2026-00001", "GHSA-2222-3333-4444"] };
+		expect(leakTermsFor(twin)).toEqual(["CVE-2026-00001", "GHSA-2222-3333-4444"]);
+		expect(findLeaks({ "entry-config": "/corpus/acme_app-x1-patched.truth.json" }, leakTermsFor(twin))).toEqual([]);
+		expect(findLeaks({ "entry-config": "note CVE-2026-00001" }, leakTermsFor(twin))).toEqual(["entry-config: CVE-2026-00001"]);
+	});
+
 	it("catches the target ID in any case or separator style, and its alias", () => {
 		const terms = leakTermsFor({ id: "CVE-2025-52903", aliases: ["GHSA-3q2w-5c6v-8j4r"] });
 		expect(findLeaks({ cwd: "/tmp/cells/run-cve-2025-52903/work" }, terms)).toEqual(["cwd: CVE-2025-52903"]);
