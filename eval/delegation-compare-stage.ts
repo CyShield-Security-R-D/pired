@@ -97,10 +97,41 @@ async function walk(root: string, visit: (rel: string, abs: string, kind: EntryK
 
 const squash = (text: string): string => text.toLowerCase().replace(/[^a-z0-9]/g, "");
 
+const ALNUM = /[A-Za-z0-9]/;
+const LOWER_OR_DIGIT = /[a-z0-9]/;
+const UPPER = /[A-Z]/;
+
 /**
- * Case-insensitive substring match. Advisory IDs are also matched with the
- * separators squashed out, the same rule findLeaks applies: `CVE_2025_52903` in
- * a comment is the same leak as `CVE-2025-52903`.
+ * Whether `text[at]` starts, or `text[at - 1]` ends, an identifier-shaped word:
+ * a non-alphanumeric neighbour, the edge of the text, or a camelCase hump (a
+ * lowercase letter or digit followed by an uppercase one).
+ */
+function wordEdge(text: string, at: number): boolean {
+	if (at <= 0 || at >= text.length) return true;
+	const before = text[at - 1] as string;
+	const after = text[at] as string;
+	if (!ALNUM.test(before) || !ALNUM.test(after)) return true;
+	return LOWER_OR_DIGIT.test(before) && UPPER.test(after);
+}
+
+/** A case-insensitive match of `lower` in `text` that starts and ends on a word edge. */
+function containsWord(text: string, lowerText: string, lower: string): boolean {
+	for (let at = lowerText.indexOf(lower); at !== -1; at = lowerText.indexOf(lower, at + 1)) {
+		if (wordEdge(text, at) && wordEdge(text, at + lower.length)) return true;
+	}
+	return false;
+}
+
+/**
+ * Case-insensitive match on identifier boundaries. Advisory IDs are also matched
+ * with the separators squashed out, the same rule findLeaks applies:
+ * `CVE_2025_52903` in a comment is the same leak as `CVE-2025-52903`.
+ *
+ * Project names and paths match only as whole words, a camelCase hump counting
+ * as an edge. The first v6 dry run refused to stage pired at all: the fresh
+ * corpus's `OpenBMB/XAgent` made `xagent` a term, and a plain substring match
+ * found it inside pired's own `maxAgents` on dozens of code lines. A hump still
+ * counts, so `whoogleSearch` names `whoogle`.
  */
 function termMatcher(terms: string[]): (text: string) => string[] {
 	const wanted = [...new Set(terms)].map((term) => {
@@ -110,7 +141,9 @@ function termMatcher(terms: string[]): (text: string) => string[] {
 	return (text) => {
 		const lower = text.toLowerCase();
 		let squashed: string | undefined;
-		return wanted.filter((w) => lower.includes(w.lower) || (w.key !== undefined && (squashed ??= squash(text)).includes(w.key))).map((w) => w.term);
+		return wanted.filter((w) => w.key !== undefined
+			? lower.includes(w.lower) || (squashed ??= squash(text)).includes(w.key)
+			: containsWord(text, lower, w.lower)).map((w) => w.term);
 	};
 }
 

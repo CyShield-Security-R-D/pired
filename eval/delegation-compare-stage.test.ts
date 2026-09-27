@@ -81,6 +81,34 @@ describe("treeManifest", () => {
 });
 
 describe("stageSnapshot", () => {
+	// The first v6 dry run: the fresh corpus's OpenBMB/XAgent made `xagent` a
+	// term, and a substring match refused to stage pired over its own `maxAgents`.
+	it("does not read a corpus project name inside a longer identifier, but still reads it at a camelCase hump or a separator", async () => {
+		const code = [
+			"export const maxAgents = 1;",
+			"export function run(): number { return maxAgents; }",
+			"",
+		].join("\n");
+		const clean = await checkout({ "core/cap.ts": code });
+		const staged = await stageSnapshot(clean.source, clean.destination, { redactTerms: ["xagent"], nodeModules: clean.nodeModules });
+		expect(staged.redactions).toEqual([]);
+		expect(staged.stagedDigest).toBe(staged.sourceDigest);
+
+		const commented = [
+			"export function one(): number {",
+			"\t// measured on the whoogleSearch handler and on multi-juicer-api.",
+			"\treturn 1;",
+			"}",
+			"",
+		].join("\n");
+		const named = await checkout({ "core/one.ts": commented });
+		const redacted = await stageSnapshot(named.source, named.destination, { redactTerms: ["whoogle", "multi-juicer"], nodeModules: named.nodeModules });
+		expect(redacted.redactions).toEqual([{ path: "core/one.ts", lines: [2], hitLines: [2], terms: ["multi-juicer", "whoogle"] }]);
+
+		const inCode = await checkout({ "core/two.ts": "export const target = \"XAgent\";\n" });
+		await expect(stageSnapshot(inCode.source, inCode.destination, { redactTerms: ["xagent"], nodeModules: inCode.nodeModules })).rejects.toThrow(/names the corpus on a line that is not only comment/);
+	});
+
 	it("stages a snapshot that names nothing byte for byte, with the staged digest equal to the source digest", async () => {
 		const { source, destination, nodeModules } = await checkout();
 		const staged = await stageSnapshot(source, destination, { redactTerms: TERMS, nodeModules });
