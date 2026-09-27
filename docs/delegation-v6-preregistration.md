@@ -109,7 +109,10 @@ as much per pair.
   - 2 passes of arms A and S on all 12 targets.
   - The pooled paired SD of advisories found is computed blind to the direction of the difference.
     Only the SD is read; the arm means are not inspected.
-  - Passes per target = ⌈(1.96 + 0.84)² · SD² / 0.3² / 12⌉, capped at 10.
+  - Passes per target = ⌈(1.96 + 0.84)² · SD² / 0.3² / 12⌉, capped at 10, with a floor of 2. When
+    the rule gives 2 or fewer, the pilot's count is fixed as it stands (a "fix-passes" amendment).
+  - The pilot is computed by `eval/v6-pilot-sd.ts`, which prints only the number of valid pairs, the
+    SD and the pass count.
   - The pilot pairs count toward the final analysis.
   - The rule is fixed here, before the pilot.
 - **With only 12 apps,** the app-clustered interval stays wide whatever the pass count. This is
@@ -119,12 +122,16 @@ as much per pair.
 
 **Primary**
 - **Advisories found per pair (primary):** an advisory is found when any of its labels is matched
-  at the official rule, which is location-only on this corpus. Five targets hold most of the
+  at the official rule: the pinned grader's matching (basename files, ±3 over the label's range, each
+  claim assigned to at most one label), which is location-only on this corpus's classless truth. Five targets hold most of the
   labels, so counting labels would let one app carry the result.
   - Also reported: unique labelled locations, at every `eval/rescore.ts` level (file, point ±3,
     range ±3, ±10, capped overlap), and at the class level, matched any-of.
 - **Adjudicated precision, per claim tier:** all rows, presented (not refuted or disposed) and
-  confirmed. Adjudication follows `eval/adjudication.md`, and the judge is not an OpenAI model
+  confirmed. The unit is the unique issues an arm claimed on a target, across all its runs there.
+  Precision is pooled over targets as Σ valid ÷ Σ claimed issues, and its bound comes from the
+  app-clustered bootstrap. Labels reach the analysis through a blind worksheet: per target, claims
+  under shuffled ids, with no arm, run, author or status (`eval/adjudication.md`). Adjudication follows `eval/adjudication.md`, and the judge is not an OpenAI model
   **[operator: judge model]**.
 - **Cost:** the median per-pair log ratio of total tokens (metered plus the retry estimate), with an
   app-clustered bootstrap interval. Pooled sums are reported beside it and not used for the decision:
@@ -141,8 +148,9 @@ as much per pair.
     - the share of the run limit used at the stop;
     - the share of runs that stop with time left **and** open cells or hypotheses.
 
-    3.2 passes on stopping only if the co-primary moves in the same direction as the text-test
-    rate.
+    3.2 passes on stopping only if all of these hold: the text-test offered rate falls; the share
+    of runs stopping with time left and open work falls; and the median share of the run limit used
+    does not fall.
 - **Verifier:** confirmed-tier against suspected-tier precision; rejected true positives, as a
   share of labelled true positives among refuted rows; quote-downgrade rate.
 - **Patched twins:** claims within ±3 lines of each fixed region, per arm. This is re-flagging
@@ -172,9 +180,17 @@ gain.]**
 
 | outcome | action |
 |---|---|
+| S non-inferior to A on rule 1 (after stage 1) | stage 2 runs; otherwise it does not, and delegation stays opt-in |
 | S passes against A | Phase 3's single-agent changes can ship to `main` |
-| D passes against S **and** D is at least non-inferior to M | delegation may become the default again, by a new ADR citing this trial |
-| D does not pass against M | delegation stays opt-in: it adds nothing that the same tokens do not buy solo |
+| D passes against S **and** D passes against M (all three rules each) | delegation may become the default again, by a new ADR citing this trial |
+| D does not pass against S, or does not pass against M | delegation stays opt-in: it adds nothing that the same tokens do not buy solo |
+
+The last two rows are mutually exclusive by construction.
+
+**D against A** is reported descriptively only and decides nothing. A and D run in different stages,
+so they are never paired directly. The bridged estimate (D − S₂) + (S₁ − A) is paired by target and
+pass index, with targets resampled jointly across the two grids. S₂ − S₁ is reported beside it, as
+the check that S did not drift between stages.
 
 ## Held-out guard
 
@@ -190,10 +206,13 @@ gain.]**
 - **Tools:** `eval/rescore.ts`, `eval/paired.ts` and `eval/cost-breakdown.ts` at their frozen
   commits.
 - **Bootstrap:** 10,000 app-clustered resamples, seed 1.
+- **Decision script:** `eval/v6-decision.ts` at its frozen commit.
 - **Exclusions:**
-  - invalid runs are excluded only by the harness's validity rules;
-  - pairs abandoned by the attempt ceiling are reported per arm, and they make a comparison
-    inconclusive, never passing.
+  - invalid runs are excluded only by the harness's validity rules, and listed;
+  - pairs abandoned by the attempt ceiling are reported per arm. They make a comparison that uses
+    them inconclusive, never passing, but the full report is still produced. A matched-arm
+    abandonment affects only D against M.
+  - A pair with no token count makes rule 3 inconclusive, not failed.
 - **Reported whatever the outcome:** every comparison, every level, every arm, every variant.
 - **Everything in this document is fixed at the freeze.** A metric added later is labelled
   exploratory.
