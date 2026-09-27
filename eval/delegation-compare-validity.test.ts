@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { decideInfra } from "./delegation-compare.ts";
+import { createBreaker, DEFAULT_BREAKER } from "./delegation-compare-lib.ts";
 import { FAST_EMPTY_ERROR, judgeRun, limitError, runNumbers, VALIDITY_POLICY_TEXT, WORKER_IN_FLIGHT, type RunFacts } from "./delegation-compare-validity.ts";
 
 // Per-file builders: the facts inspectRun hands the judge, and the grader's
@@ -87,6 +89,19 @@ describe("the v6 validity policy", () => {
 		expect(judged.valid).toBe(false);
 		expect(judged.errors).toEqual([leak]);
 		expect(judged.flags!.reachedLimit).toBe(true);
+	});
+
+	// ADR-031: one non-infrastructure invalid run in an official grid trips the
+	// breaker at once. Under v6 a leak still does; a limit-reaching run no longer does.
+	it("still trips an official grid's breaker at once on a leak, and not on a run that reached the limit", () => {
+		const breakerAfter = (errors: string[]) => {
+			const judged = judgeRun(facts({ policy: "v6", timedOut: true, errors }));
+			const infra = decideInfra({ valid: judged.valid, timedOut: true, stoppedByRunner: false, notLaunchedInterrupted: false, failures: { parent: [], workers: [], fetchErrors: [] } }).infra;
+			const breaker = createBreaker({ ...DEFAULT_BREAKER });
+			return breaker.record({ atMs: Number.NaN, valid: judged.valid, infra, exhausted: false, blocked: !judged.valid && !infra });
+		};
+		expect(breakerAfter([...LIMIT_ERRORS, "answer-key leak: CVE-2025-1234 in the target copy"])).toEqual({ tripped: true, reason: expect.stringMatching(/invalid for a non-infrastructure reason/) });
+		expect(breakerAfter(LIMIT_ERRORS)).toEqual({ tripped: false });
 	});
 
 	it("keeps every harness-integrity error invalid: tool surface, runtime and pins, bookkeeping, the scorer, the launch", () => {
