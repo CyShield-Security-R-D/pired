@@ -15,6 +15,7 @@
  */
 import { parseBreakerPolicy, type Arm, type BreakerPolicy, type OfficialShape, type PairArm } from "./delegation-compare-lib.ts";
 import { parseMatchedPolicy, type MatchedPolicy } from "./delegation-compare-matched.ts";
+import { isValidityPolicy, VALIDITY_POLICIES, type ValidityPolicy } from "./delegation-compare-validity.ts";
 
 /** An official corpus as eval/delegation-compare.pins.json pins it under `corpora`. */
 export interface PinnedCorpus {
@@ -322,6 +323,15 @@ export function kindlessArmReasons(options: ArmOptions): string[] {
 	return reasons;
 }
 
+/**
+ * Why a grid without --grid-kind that sets a validity policy is exploratory:
+ * the v5 official grid judged a run that reached the limit, and a fast empty
+ * run, invalid, and a grid that counts them is judged by other rules.
+ */
+export function kindlessValidityReasons(validity: ValidityPolicy | undefined): string[] {
+	return validity === undefined ? [] : [`runs are judged by the ${validity} validity policy; without --grid-kind the v5 rules apply, under which a run that reaches the limit and a fast empty run are invalid`];
+}
+
 /** A fixed region as the fresh corpus records it: the lines the fix changed in the patched tree. */
 export interface FixedRegion { file: string; line_range: [number, number]; advisory?: string }
 
@@ -467,6 +477,12 @@ export interface GridKind {
 	 * stage 2 runs at the count stage 1's pilot fixed. Null otherwise.
 	 */
 	passesFrom: string | null;
+	/**
+	 * --validity: the run-validity policy the kind's grids are judged by
+	 * (eval/delegation-compare-validity.ts). Absent, the v5 rules: a run that
+	 * reaches the limit and a fast empty run are invalid.
+	 */
+	validity?: ValidityPolicy;
 }
 
 const hexCommit = (value: unknown): boolean => typeof value === "string" && /^[0-9a-f]{40}$/.test(value);
@@ -526,6 +542,7 @@ export function parseGridKinds(value: unknown, corpora: Record<string, PinnedCor
 		const passesFrom = raw.passesFrom ?? null;
 		if (passesFrom !== null && (typeof passesFrom !== "string" || !passesFrom || name === passesFrom)) throw new Error(`${where}.passesFrom must be null or another kind's name`);
 		if (passesFrom !== null && raw.extendablePasses === true) throw new Error(`${where} takes its passes from ${String(passesFrom)}, so it cannot also extend them`);
+		if (raw.validity !== undefined && !isValidityPolicy(raw.validity)) throw new Error(`${where}.validity must be one of ${VALIDITY_POLICIES.join(", ")} when present`);
 		if (raw.thinking !== null && !(typeof raw.thinking === "string" && ["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(raw.thinking))) throw new Error(`${where}.thinking must be null or a thinking level`);
 		out[name] = {
 			corpus: raw.corpus, baseline: { ...(baseline as Record<string, unknown>) } as GridKind["baseline"], candidate: { ...(candidate as Record<string, unknown>) } as unknown as SnapshotPin,
@@ -534,6 +551,7 @@ export function parseGridKinds(value: unknown, corpora: Record<string, PinnedCor
 			twinArms: arms("twinArms", ["baseline", "candidate"]) as PairArm[],
 			matched, retry: raw.retry, breaker, timeoutMs: raw.timeoutMs as number | null, thinking: raw.thinking as string | null, extendablePasses: raw.extendablePasses === true,
 			pilotPasses, maxPasses, passesFrom: passesFrom as string | null,
+			...(raw.validity === undefined ? {} : { validity: raw.validity as ValidityPolicy }),
 		};
 	}
 	for (const [name, kind] of Object.entries(out)) {
@@ -570,6 +588,7 @@ export interface GridOptions extends ArmOptions {
 	retry: boolean;
 	breaker?: BreakerPolicy;
 	timeoutMs: number;
+	validity?: ValidityPolicy;
 }
 
 const stated = (n: number | undefined | null): string => n === undefined || n === null ? "unstated" : String(n);
@@ -609,6 +628,7 @@ export function gridKindReasons(name: string, kind: GridKind, grid: GridOptions)
 	}
 	if (kind.timeoutMs !== null && grid.timeoutMs !== kind.timeoutMs) say(`--timeout ${grid.timeoutMs} is not ${kind.timeoutMs}`);
 	if (kind.thinking !== null && grid.thinking !== kind.thinking) say(`--thinking ${grid.thinking ?? "unstated"} is not ${kind.thinking}`);
+	if (grid.validity !== kind.validity) say(kind.validity ? `it requires --validity ${kind.validity}` : `it runs without --validity, not under ${grid.validity}`);
 	return reasons;
 }
 
@@ -827,6 +847,7 @@ export function kindFlags(name: string, kind: GridKind, paths: { twins?: string;
 	if (kind.breaker === true) flags.push("--breaker", "default");
 	else if (kind.breaker) flags.push("--breaker", Object.entries(kind.breaker).map(([k, v]) => `${k}=${v}`).join(","));
 	if (kind.timeoutMs !== null) flags.push("--timeout", String(kind.timeoutMs));
+	if (kind.validity) flags.push("--validity", kind.validity);
 	if (kind.extendablePasses && kind.pilotPasses !== null) flags.push("--passes", String(kind.pilotPasses));
 	if (kind.passesFrom !== null) flags.push("--passes-from", paths.passesFrom ?? `<${kind.passesFrom} grid>`);
 	flags.push("--grid-kind", name);
