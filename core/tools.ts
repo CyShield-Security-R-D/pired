@@ -16,6 +16,7 @@ import { auditFinding, challengeBrief, EARNED_LOCKED_FIELDS, groundQuotes, hasGr
 import { computeCoverage, coveragePercent, findGaps, selectNext } from "./coverage.ts";
 import { CVSS_DEFAULT_VERSION, CVSS_EXAMPLE, cvssVersion, validateCvss } from "./cvss.ts";
 import { type Fields, findDuplicate, findNearDuplicate, holdsLeadOpen, type IdentityKind, isNoOp, leadMeetsClearance, mergeRecord, reopensLead, updateById } from "./identity.ts";
+import { idMinter } from "./ids.ts";
 import { locateAcrossFiles, locateSink, sinkHints } from "./locate.ts";
 import { lensForPass, nextInPass, PASS_LENS_HELP, type PassState, passDelta, planPass } from "./passes.ts";
 import { buildTargetIndex, elementLabel, resolveElementTarget, type TargetIndex } from "./target.ts";
@@ -591,10 +592,10 @@ async function writeRecord(
 		// check: two subagents resolving the same unrecorded file both arrive here,
 		// and inside the writer's lock only the first of them creates it.
 		const merged = { ...(DEFAULTS[kind] ?? {}), ...fields };
-		await deps.workspace.upsert("inventory", (current) => {
+		await deps.workspace.upsert("inventory", (current, written) => {
 			const dup = findDuplicate(kind, merged, current as unknown as Fields[]);
 			if (dup) { id = (dup as unknown as InventoryRecord).id; return undefined; }
-			id = ctx.services.ids.newId();
+			id = idMinter(ctx.services.ids, written)();
 			return [{ v: RECORD_VERSION, id, kind, createdAt: ctx.services.clock.nowIso(), ...passStamp(deps), ...authorStamp(deps, ctx), ...merged } as unknown as InventoryRecord];
 		});
 		return id;
@@ -1046,12 +1047,17 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 					...(deps.budget?.() ? { budget: deps.budget()! } : {}),
 				});
 				const areas = settleAreas(ledger);
-				const record = {
-					v: RECORD_VERSION, id: ctx.services.ids.newId(), kind: "settle", createdAt: ctx.services.clock.nowIso(),
-					...passStamp(deps), ...authorStamp(deps, ctx),
-					outcome, ...(note ? { note } : {}), remainder: settleRemainder(ledger, areas),
-				} as SettleRecord;
-				await deps.workspace.append("sessions", record);
+				// Minted under the store's lock like every other row, so a settle can
+				// never take the id of an earlier one (or of a deleted one).
+				let record!: SettleRecord;
+				await deps.workspace.upsert("sessions", (_current, written) => {
+					record = {
+						v: RECORD_VERSION, id: idMinter(ctx.services.ids, written)(), kind: "settle", createdAt: ctx.services.clock.nowIso(),
+						...passStamp(deps), ...authorStamp(deps, ctx),
+						outcome, ...(note ? { note } : {}), remainder: settleRemainder(ledger, areas),
+					} as SettleRecord;
+					return [record];
+				});
 				return text(renderSettleReply(record, areas, a.remainder !== undefined), { kind, id: record.id, outcome, remainder: record.remainder, created: [record.id] });
 			}
 			// A refutation clears cells, so it must say what was checked.
@@ -1204,7 +1210,7 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 				const matched = new Set<string>();
 				const heldOpen = new Set<string>();
 				const kept = new Map<string, KeptClearance>();
-				await deps.workspace.upsert("hypotheses", (current) => {
+				await deps.workspace.upsert("hypotheses", (current, written) => {
 					// The cross product is where repeats concentrate: the extractor
 					// re-offers the same class verdict over the whole surface once a
 					// turn, so a 40-element engagement would gain 40 rows a turn for
@@ -1213,6 +1219,9 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 					// twice under two spellings.
 					const working = [...current] as unknown as Fields[];
 					const out: HypothesisRecord[] = [];
+					// One minter for the whole cross product: a 20 x 19 write mints up to
+					// 380 ids at once, and each must miss the store and every id before it.
+					const mint = idMinter(ctx.services.ids, written);
 					for (const t of targets) {
 						for (const c of classes) {
 							const patch = defined({
@@ -1242,7 +1251,7 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 								out.push(merged);
 								continue;
 							}
-							const id = ctx.services.ids.newId();
+							const id = mint();
 							const record = defined({
 								v: RECORD_VERSION, id, kind: "hypothesis", createdAt: stamp, ...passStamp(deps), ...authorStamp(deps, ctx), ...patch,
 							}) as unknown as HypothesisRecord;
@@ -1548,10 +1557,10 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 						// is the only one who can answer this, and the blocker machinery
 						// already puts the question in front of them as a dialog.
 						let parked: string | undefined;
-						await deps.workspace.upsert("blockers", (current) => {
+						await deps.workspace.upsert("blockers", (current, written) => {
 							const dup = current.find((b) => b.status === "open" && b.question === outcome.blocker?.question);
 							if (dup) { parked = dup.id; return undefined; }
-							parked = ctx.services.ids.newId();
+							parked = idMinter(ctx.services.ids, written)();
 							return [{
 								v: RECORD_VERSION, id: parked, kind: "blocker", createdAt: ctx.services.clock.nowIso(),
 								...passStamp(deps), ...authorStamp(deps, ctx),
@@ -1771,7 +1780,7 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 			let reopened: string[] = [];
 			let kept: KeptClearance[] = [];
 			let heldVerdict = "";
-			await deps.workspace.upsert(store, (current) => {
+			await deps.workspace.upsert(store, (current, written) => {
 				const byId = existingId ? current.find((r) => r.id === existingId) : undefined;
 				if (byId) {
 					const updated = defined({
@@ -1840,7 +1849,7 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 				// Written, then reported: a merge here could drop a real finding, and
 				// recall is the one thing that cannot be recovered later.
 				if (kind === "finding") near = findNearDuplicate(patch, current as unknown as Fields[]) as unknown as LedgerRecord | undefined;
-				const id = existingId ?? ctx.services.ids.newId();
+				const id = existingId ?? idMinter(ctx.services.ids, written)();
 				record = defined({ v: RECORD_VERSION, id, kind, createdAt: now, ...passStamp(deps), ...authorStamp(deps, ctx), ...(DEFAULTS[kind] ?? {}), ...patch }) as unknown as LedgerRecord;
 				return [record];
 			});

@@ -42,6 +42,18 @@ async function session(extra: Partial<ToolDeps> = {}): Promise<Session> {
 }
 
 describe("record kind=settle", () => {
+	// A store keeps only the latest line per id: a settle that drew an earlier
+	// settle's id would silently replace it, and the session's history with it.
+	it("mints a settle an id no earlier settle holds", async () => {
+		const s = await session();
+		const queue = ["s00001", "s00001", "s00002"];
+		const ctx: ToolContext = { ...s.ctx, services: { ...s.ctx.services, ids: { newId: () => queue.shift() ?? "zzzzzz" } } };
+		await s.record().execute({ kind: "settle", outcome: "paused" }, ctx);
+		await s.record().execute({ kind: "settle", outcome: "finished" }, ctx);
+		const rows = await s.ws.read("sessions");
+		expect(rows.map((r) => [r.id, r.outcome])).toEqual([["s00001", "paused"], ["s00002", "finished"]]);
+	});
+
 	it("records settle with the ledger's own remainder, ignoring caller counts", async () => {
 		const budget: BudgetReading = { ceiling: { tokens: 20_000_000, minutes: 240 }, spent: { tokens: 6_100_000, minutes: 52 } };
 		const s = await session({ budget: () => budget, sourceDirs: () => ["src", "src/routes", "src/admin"] });

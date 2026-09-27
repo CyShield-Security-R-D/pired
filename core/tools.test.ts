@@ -2703,3 +2703,100 @@ describe("a verdict someone earned is not undone by its finder or by a merge (3.
 		expect((await again.row())?.contributors).toBeUndefined();
 	});
 });
+
+/**
+ * A store keeps only the latest line per id, so an id minted twice silently
+ * replaced one record with another. With 6 hex characters that happens in
+ * 0.74% of stores at 500 rows and 11.2% at 2,000 (computed exactly), and a
+ * bulk hypothesis write reaches those sizes. Every place `record` mints an id
+ * draws again until it misses the store and the ids of its own write.
+ */
+describe("an id is never minted twice in one store", () => {
+	/** A setup whose id source returns the draws queued on it, then "zzzzzz" forever. */
+	async function scriptedIds(): Promise<{ svc: FakeServices; ws: Workspace; ctx: ToolContext; record: ToolDefinition; queue: string[] }> {
+		const { svc, ws, ctx, record } = await setup();
+		const queue: string[] = [];
+		const scripted: ToolContext = { ...ctx, services: { ...ctx.services, ids: { newId: () => queue.shift() ?? "zzzzzz" } } };
+		return { svc, ws, ctx: scripted, record, queue };
+	}
+
+	it("mints a fresh id when the first draw collides with a stored row", async () => {
+		const { ws, ctx, record, queue } = await scriptedIds();
+		queue.push("aaaaaa");
+		await record.execute({ kind: "finding", title: "IDOR on notes", severity: "high", target: "notes.py:42", class: "idor" }, ctx);
+		queue.push("aaaaaa", "bbbbbb");
+		const second = await record.execute({ kind: "finding", title: "SQL injection in search", severity: "critical", target: "search.py:9", class: "sqli" }, ctx);
+		expect((second.details as { id: string }).id).toBe("bbbbbb");
+		const findings = await ws.read("findings");
+		expect(findings.map((f) => [f.id, f.title]).sort()).toEqual([["aaaaaa", "IDOR on notes"], ["bbbbbb", "SQL injection in search"]]);
+	});
+
+	it("never gives two rows of one bulk write the same id", async () => {
+		const { ws, ctx, record, queue } = await scriptedIds();
+		queue.push("h00001");
+		await record.execute({ kind: "hypothesis", statement: "IDOR on /user", target: "e1", class: "authz" }, ctx);
+		// The stored id, then each new id drawn again before the one after it.
+		queue.push("h00001", "n00001", "n00001", "n00002", "h00001", "n00002", "n00003", "n00001", "n00004");
+		await record.execute({ kind: "hypothesis", statement: "no ownership check", target: ["e2", "e3"], class: ["idor", "authz"] }, ctx);
+		const hyps = await ws.read("hypotheses");
+		expect(hyps).toHaveLength(5);
+		expect(hyps.map((h) => h.id).sort()).toEqual(["h00001", "n00001", "n00002", "n00003", "n00004"]);
+		expect(hyps.find((h) => h.id === "h00001")?.statement).toBe("IDOR on /user");
+	});
+
+	it("does not reuse an inventory id for the file a hypothesis names", async () => {
+		const { ws, ctx, record, queue } = await scriptedIds();
+		queue.push("e00001");
+		await record.execute({ kind: "host", value: "app.acme.test" }, ctx);
+		queue.push("e00001", "e00002", "h00001");
+		await record.execute({ kind: "hypothesis", statement: "hardcoded key", class: "secrets", target: "app.py line 17 SECRET_KEY = 'x'" }, ctx);
+		const inv = await ws.read("inventory");
+		expect(inv.map((r) => r.id).sort()).toEqual(["e00001", "e00002"]);
+		expect(inv.find((r) => r.id === "e00001")).toMatchObject({ kind: "host", value: "app.acme.test" });
+		expect((await ws.read("hypotheses"))[0]?.target).toBe("e00002");
+	});
+
+	it("does not reuse a blocker id when a verdict parks a question", async () => {
+		const { ws, ctx, record, queue } = await scriptedIds();
+		queue.push("f00001");
+		await record.execute({ kind: "finding", title: "IDOR on notes", severity: "high", target: "notes.py:42", class: "idor" }, ctx);
+		queue.push("b00001");
+		await record.execute({ kind: "blocker", question: "Is the staging host in scope?" }, ctx);
+		queue.push("b00001", "b00002");
+		const out = textOf(await record.execute({
+			kind: "finding", id: "f00001", status: "confirmed", live: true, control: "no-cookie request returned 401",
+		}, ctx));
+		expect(out).toContain("Parked blocker b00002");
+		const blockers = await ws.read("blockers");
+		expect(blockers.map((b) => b.id).sort()).toEqual(["b00001", "b00002"]);
+		expect(blockers.find((b) => b.id === "b00001")?.question).toBe("Is the staging host in scope?");
+	});
+
+	it("never reuses the id of a deleted row", async () => {
+		// A tombstone hides the row from reads but keeps its history in the file,
+		// so a deletion can be undone by hand (FORMAT.md §4). A new finding minted
+		// onto that id would interleave with the history, and the undo would
+		// restore the wrong record.
+		const { svc, ws, ctx, record, queue } = await scriptedIds();
+		queue.push("aaaaaa");
+		await record.execute({ kind: "finding", title: "IDOR on notes", severity: "high", target: "notes.py:42", class: "idor" }, ctx);
+		await record.execute({ kind: "finding", id: "aaaaaa", delete: true, reason: "recorded against the wrong engagement" }, ctx);
+		queue.push("aaaaaa", "bbbbbb");
+		const next = await record.execute({ kind: "finding", title: "SQL injection in search", severity: "critical", target: "search.py:9", class: "sqli" }, ctx);
+		expect((next.details as { id: string }).id).toBe("bbbbbb");
+		const lines = (await svc.fs.readFileIfExists(ws.storePath("findings")))?.trim().split("\n").map((l) => JSON.parse(l) as { id: string; title?: string });
+		expect(lines?.filter((l) => l.id === "aaaaaa").every((l) => l.title === "IDOR on notes")).toBe(true);
+	});
+
+	it("throws after the attempts are exhausted, rather than overwriting a record", async () => {
+		const { ws, ctx, record } = await scriptedIds();
+		// Every draw is "zzzzzz": the first finding takes it, and the second
+		// has nowhere to go. Failing the call loses nothing; writing it would
+		// have replaced the first finding.
+		await record.execute({ kind: "finding", title: "IDOR on notes", severity: "high", target: "notes.py:42", class: "idor" }, ctx);
+		await expect(record.execute({ kind: "finding", title: "SQL injection in search", severity: "critical", target: "search.py:9", class: "sqli" }, ctx))
+			.rejects.toThrow(/could not mint an unused id/);
+		const findings = await ws.read("findings");
+		expect(findings.map((f) => [f.id, f.title])).toEqual([["zzzzzz", "IDOR on notes"]]);
+	});
+});

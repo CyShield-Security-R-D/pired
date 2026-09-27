@@ -302,11 +302,11 @@ class WatchedWorkspace extends Workspace {
 
 	override async upsert<S extends StoreName>(
 		store: S,
-		plan: (current: StoreRecordMap[S][]) => StoreRecordMap[S][] | undefined,
+		plan: (current: StoreRecordMap[S][], written: ReadonlySet<string>) => StoreRecordMap[S][] | undefined,
 	): Promise<void> {
 		let rows = 0;
-		await super.upsert(store, (current) => {
-			const out = plan(current);
+		await super.upsert(store, (current, written) => {
+			const out = plan(current, written);
 			rows = out?.length ?? 0;
 			return out;
 		});
