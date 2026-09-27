@@ -292,14 +292,17 @@ export function clusterBootstrap(byTarget: ReadonlyMap<string, readonly number[]
 /**
  * The same two-stage resampling as clusterBootstrap, for any statistic of the
  * resampled units (a median of log ratios, a ratio of pooled sums) rather than
- * the mean of numbers. It draws in the same order from the same generator, so
- * with the mean as the statistic it prints clusterBootstrap's interval.
+ * the mean of numbers. It draws from the same generator in the same way, so
+ * with the mean as the statistic it prints clusterBootstrap's interval whenever
+ * the two orders of the target ids agree (they do for ASCII ids of one case).
  * Additive (eval/v6-decision.ts): clusterBootstrap is left as it was. A
  * resample whose statistic is not finite (a ratio over an empty denominator) is
  * left out of the percentiles and counted in `dropped`.
  */
 export function clusterBootstrapStatistic<T>(byTarget: ReadonlyMap<string, readonly T[]>, statistic: (units: readonly T[]) => number, iterations = 10000, seed = 1): { value: number; lo: number; hi: number; dropped: number } {
-	const clusters = [...byTarget.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, d]) => d).filter((d) => d.length > 0);
+	// Code-point order, not localeCompare: the draw order, and so the interval,
+	// must not depend on the machine's locale.
+	const clusters = [...byTarget.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([, d]) => d).filter((d) => d.length > 0);
 	const value = statistic(clusters.flat());
 	if (!clusters.length) return { value, lo: Number.NaN, hi: Number.NaN, dropped: 0 };
 	const rand = mulberry32(seed);

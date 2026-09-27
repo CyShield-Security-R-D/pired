@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
 	advisoriesFound, advisoryOf, citationMatches, citationsForRecord, claimOutcomes, CLAIM_TIERS, controlScore, currentRuns, findingsFromLedger,
-	formatReport, inventoryIndex, labelHygiene, ledgerFindingRows, LEVELS, liveRecords, loadRegions, loadTruth, matchUnique, officialMatches,
+	classAnyOfMatches, formatReport, inventoryIndex, ledgerFindingTexts, officialAdvisories, labelHygiene, ledgerFindingRows, LEVELS, liveRecords, loadRegions, loadTruth, matchUnique, officialMatches,
 	pairedRows, parseCitations, partitionClaims, precisionWithoutNeutral, rescoreGrid, sameFile, tiersOf, verdictCounts,
 	type Citation, type LedgerFinding, type Truth,
 } from "./rescore.ts";
@@ -697,5 +697,50 @@ describe("the matched arm's union rows (plan 2.5)", () => {
 		expect(pairedRows(rows).map((r) => r.arm).sort()).toEqual(["baseline", "candidate", "matched"]);
 		expect(pairedRows(rows.filter((r) => r.arm !== "candidate"))).toEqual([]);
 		expect(formatReport(rows, [])).toMatch(/\tmatched\t1\t2\t/);
+	});
+});
+
+describe("the official advisory count and the any-of class level (v6 decision review)", () => {
+	const adv = (id: string, advisory: string, file: string, lo: number, hi = lo, extra: Partial<Truth> = {}): Truth => truth(id, file, lo, lo, hi, { advisory, ...extra });
+
+	it("credits a basename collision as the pinned grader does, where the line±3 level refuses it", () => {
+		const truths = [adv("A-1", "A", "src/app.py", 10)];
+		const claims = [{ file: "lib/app.py", line: 11 }];
+		expect([...officialAdvisories(claims, truths)]).toEqual(["A"]);
+		expect([...advisoriesFound([[at("lib/app.py", 11)]], truths, "line±3")]).toEqual([]);
+		expect([...officialAdvisories(claims, truths, { fileRule: "segments" })]).toEqual([]);
+	});
+
+	it("credits one claim near two advisories' labels to the nearer one only, where line±3 counts both", () => {
+		const truths = [adv("A-1", "A", "a.py", 10), adv("B-1", "B", "a.py", 14)];
+		expect([...officialAdvisories([{ file: "a.py", line: 13 }], truths)]).toEqual(["B"]);
+		expect([...advisoriesFound([[at("a.py", 13)]], truths, "line±3")].sort()).toEqual(["A", "B"]);
+	});
+
+	it("matches the class level when the finding's CWE is any of the advisory's CWEs, not only the first", () => {
+		const truths = [adv("A-1", "A", "a.py", 10, 10, { cwes: ["CWE-200", "CWE-22"] }), adv("B-1", "B", "a.py", 50, 50, { cwes: ["CWE-79"] })];
+		const found = classAnyOfMatches([{ citations: [at("a.py", 11)], cwe: "CWE-22" }, { citations: [at("a.py", 50)], cwe: "CWE-89" }, { citations: [at("a.py", 50)] }], truths);
+		expect(found).toEqual({ labels: ["A-1"], advisories: ["A"] });
+	});
+
+	it("reads each located row's text index for index with ledgerFindingRows, and rows carry both new fields", () => {
+		const g = tmp();
+		const keys = join(g, "keys");
+		mkdirSync(keys);
+		writeFileSync(join(keys, "app.truth.json"), JSON.stringify([{ id: "A-1", advisory: "A", file: "src/app.py", line: 10, cwes: ["CWE-89"] }]));
+		writeFileSync(join(g, "manifest.json"), JSON.stringify({ targets: [{ id: "t1", name: "app" }], inputs: { truth: keys } }));
+		const dir = join(g, "runs", "c1");
+		mkdirSync(join(dir, "workspace"), { recursive: true });
+		writeFileSync(join(dir, "run.json"), JSON.stringify({ target: "t1", pass: 1, attempt: 1, valid: true, totalTokens: 1, arm: "baseline", truePositives: 1, findings: 1 }));
+		writeFileSync(join(dir, "workspace", "findings.jsonl"), jsonl([
+			{ id: "x", title: "no location", description: "somewhere" },
+			{ id: "y", title: "sqli", description: "query built from input", target: "lib/app.py:10", cwe: "CWE-89" },
+		]));
+		expect(ledgerFindingTexts(dir)).toEqual([{ id: "y", title: "sqli", description: "query built from input" }]);
+		expect(ledgerFindingRows(dir)).toHaveLength(1);
+		const [row] = rescoreGrid(g).rows;
+		expect(row!.officialAdvisories).toEqual(["A"]);
+		expect(row!.advisoriesMatched["line±3"]).toEqual([]);
+		expect(row!.classAnyOf).toEqual({ labels: [], advisories: [] });
 	});
 });
