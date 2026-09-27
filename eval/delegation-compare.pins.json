@@ -45,7 +45,7 @@
 	"gridKinds": {
 		"_comment": "Plan item 2.8. A grid launched with --grid-kind <name> is official only when every option matches its kind, its corpus is frozen and matched, and its snapshots are the kind's; otherwise it is exploratory with the reasons listed. Both kinds below are DRAFTS from docs/delegation-v6-preregistration.md: every value is to be frozen with the pre-registration, and the verifier cap (2) and the twin arms are still operator decisions there.",
 		"v6-stage1": {
-			"_comment": "To be frozen. Arm A (main at the freeze, single agent, its own defaults) against arm S (the candidate snapshot, maxAgents 0, maxVerifiers 0, budget line on). Patched twins in both arms. Retry and breaker required; run limit 4 h. Passes: the internal pilot runs pilotPasses (2); one amendment, --resume <dir> --extend-passes <n> --extend-reason <text>, fixes the count the pilot's rule gives, at most maxPasses (10), keeping the pilot's pairs, or keeps 2 when the rule gives 2 or fewer.",
+			"_comment": "To be frozen. Arm A (main at the freeze, single agent, its own defaults) against arm S (the candidate snapshot, maxAgents 0, maxVerifiers 0, budget line on). Patched twins in both arms. Retry and breaker required; run limit 4 h; run validity v6 (a run that reaches the limit, or ends fast and empty, is valid). Passes: the internal pilot runs pilotPasses (2); one amendment, --resume <dir> --extend-passes <n> --extend-reason <text>, fixes the count the pilot's rule gives, at most maxPasses (10), keeping the pilot's pairs, or keeps 2 when the rule gives 2 or fewer.",
 			"corpus": "v6-fresh",
 			"baseline": {
 				"commit": null
@@ -83,13 +83,14 @@
 			},
 			"timeoutMs": 14400000,
 			"thinking": "medium",
+			"validity": "v6",
 			"extendablePasses": true,
 			"pilotPasses": 2,
 			"maxPasses": 10,
 			"passesFrom": null
 		},
 		"v6-stage2": {
-			"_comment": "To be frozen. Arm S as the baseline (the candidate snapshot, with exactly the scope it had as stage 1's candidate, and loading pi-subagents as it did there) against arm D (the same snapshot, maxAgents 8, maxVerifiers 2, budget line on), with the matched arm M (follow, k 3). No twins. Retry and breaker required; run limit 4 h. Its baseline (S) and candidate (D) are pinned as v6-stage1's candidate, input and staged digest alike, so S is the same bytes in both stages. Passes: not extendable; launched with --passes-from <stage-1 grid dir>, it runs the count stage 1's amendment fixed.",
+			"_comment": "To be frozen. Arm S as the baseline (the candidate snapshot, with exactly the scope it had as stage 1's candidate, and loading pi-subagents as it did there) against arm D (the same snapshot, maxAgents 8, maxVerifiers 2, budget line on), with the matched arm M (follow, k 3). No twins. Retry and breaker required; run limit 4 h; run validity v6. Its baseline (S) and candidate (D) are pinned as v6-stage1's candidate, input and staged digest alike, so S is the same bytes in both stages. Passes: not extendable; launched with --passes-from <stage-1 grid dir>, it runs the count stage 1's amendment fixed.",
 			"corpus": "v6-fresh",
 			"baseline": {
 				"sameAs": "v6-stage1.candidate"
@@ -131,6 +132,7 @@
 			},
 			"timeoutMs": 14400000,
 			"thinking": "medium",
+			"validity": "v6",
 			"extendablePasses": false,
 			"pilotPasses": null,
 			"maxPasses": null,
