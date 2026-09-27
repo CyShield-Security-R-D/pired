@@ -35,11 +35,49 @@
 			"_comment": "To be frozen: the twelve fresh targets (twins are not listed; they are pinned by the twins file's sha256 and their truth files), the pass count the pilot fixes, the manifest's and the twins file's sha256, and every truth file's, twins included.",
 			"label": "the twelve fresh targets",
 			"kindless": false,
-			"targets": null,
+			"targets": [
+				"CVE-2026-23846",
+				"CVE-2026-72713",
+				"CVE-2026-7142",
+				"CVE-2026-61463",
+				"CVE-2026-3187",
+				"CVE-2026-42352",
+				"CVE-2026-48518",
+				"CVE-2026-54519",
+				"CVE-2026-53553",
+				"CVE-2026-34745",
+				"CVE-2026-25803",
+				"CVE-2026-64619"
+			],
 			"passes": null,
-			"manifestSha256": null,
-			"truthSha256": null,
-			"twinsSha256": null
+			"manifestSha256": "8504b848d97da45fe26eddcfcaa2aea782c40728b41716b1ca65d8fc381556ac",
+			"truthSha256": {
+				"OpenBMB_XAgent-f73set": "8cee2be111184f671d3882b0b66ecf6cd757f0517f308637ce130a6783c2476d",
+				"OpenBMB_XAgent-f73set-patched": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+				"Quenary_tugtainer-f4dh8w": "6f464d71f3b0ead43a86d18be702d7fbfd72fd823237c5e30f578018a8521841",
+				"Quenary_tugtainer-f4dh8w-patched": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+				"ShaneIsrael_fireshare-f4xw32": "434f057d4ded8e5e853026b17bccdc80de76c97ef4c22fce23f638ed334db32d",
+				"ShaneIsrael_fireshare-f4xw32-patched": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+				"denpiligrim_3dp-manager-f4er4f": "20ccef13003e0f7028d444e1ad29d8e08cd88464fb131d9b8619c1843010d918",
+				"denpiligrim_3dp-manager-f4er4f-patched": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+				"feiyuchuixue_sz-boot-parent-rzfdja": "803a239b30709bcb78e198867f7b7db07b3587760db7cf34c0498130bcff768e",
+				"feiyuchuixue_sz-boot-parent-rzfdja-patched": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+				"geopython_pygeoapi-f5gbrd": "af1bdcb1517887e50987c1f8ad13777fe1ffc80e5f1fed63d6b5af9e2c3e4ba7",
+				"geopython_pygeoapi-f5gbrd-patched": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+				"go-shiori_shiori-f6jaq5": "4b1c42429b3d6ea064c50de4ee5d412f9563faf47d9c72f66ef791d32ff37a8d",
+				"go-shiori_shiori-f6jaq5-patched": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+				"juice-shop_multi-juicer-f5k72n": "50d1d81b1f4a79b6baabfe72a0c1a6448d5baae3d8cac5c8e0fbfe51c455ea01",
+				"juice-shop_multi-juicer-f5k72n-patched": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+				"vastsa_FileCodeBox-f6l91z": "53bee9ef41419e72907def7c105409ef914f8aba158a546d7f93ea92e0c23e0e",
+				"vastsa_FileCodeBox-f6l91z-patched": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+				"vmDeshpande_ai-agent-automation-f61fpx": "db2601c492f419ae18d15a6db0c53b0c77cf051f58974685fe29317834a588d7",
+				"vmDeshpande_ai-agent-automation-f61fpx-patched": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+				"wooey_Wooey-rzhxdt": "d3466afc3df5336fbc6558e0649a904fd7aa15847d93c2fb603063c775ffdda2",
+				"wooey_Wooey-rzhxdt-patched": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+				"zhenorzz_goploy-f60sto": "0496c89f7c7b52b5932f8e4da47a8555a69ae69f96c90f1e7b690deb4860d766",
+				"zhenorzz_goploy-f60sto-patched": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570"
+			},
+			"twinsSha256": "3d3b84c8f4de54af449317e15222c5a8fb9cf53282e5d78011740a32932a3215"
 		}
 	},
 	"gridKinds": {
@@ -48,11 +86,11 @@
 			"_comment": "To be frozen. Arm A (main at the freeze, single agent, its own defaults) against arm S (the candidate snapshot, maxAgents 0, maxVerifiers 0, budget line on). Patched twins in both arms. Retry and breaker required; run limit 4 h; run validity v6 (a run that reaches the limit, or ends fast and empty, is valid). Passes: the internal pilot runs pilotPasses (2); one amendment, --resume <dir> --extend-passes <n> --extend-reason <text>, fixes the count the pilot's rule gives, at most maxPasses (10), keeping the pilot's pairs, or keeps 2 when the rule gives 2 or fewer.",
 			"corpus": "v6-fresh",
 			"baseline": {
-				"commit": null
+				"commit": "5573ec4db66c7a1188be286604c33d45802cda4f"
 			},
 			"candidate": {
-				"digest": null,
-				"stagedDigest": null
+				"digest": "8f29c26cb8f03cab087e9c2022ebd89cc3270a341c741c6c76e2bbcbaa41bac7",
+				"stagedDigest": "8f29c26cb8f03cab087e9c2022ebd89cc3270a341c741c6c76e2bbcbaa41bac7"
 			},
 			"baselineMaxAgents": null,
 			"candidateMaxAgents": 0,

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import {
@@ -41,9 +42,17 @@ describe("pinned corpora", () => {
 
 	// Until the v6 freeze nothing on the fresh corpus may read as official, and
 	// it must never be official without a grid kind fixing its arms.
-	it("ships the fresh v6 corpus unfrozen and reachable only through a grid kind", async () => {
+	// Frozen 2026-09-27, before any v6 model call. An edit to any file the pins
+	// name after that must fail here, not surface as an exploratory grid later.
+	it("ships the fresh v6 corpus frozen to the files in eval/corpus/fresh, reachable only through a grid kind", async () => {
 		const v6 = parseCorpora((await shipped()).corpora)["v6-fresh"]!;
-		expect(v6).toMatchObject({ targets: null, passes: null, manifestSha256: null, truthSha256: null, twinsSha256: null, kindless: false });
+		const sha = async (path: string) => createHash("sha256").update(await readFile(new URL(path, import.meta.url))).digest("hex");
+		expect(v6).toMatchObject({ passes: null, kindless: false });
+		expect(v6.targets).toHaveLength(12);
+		expect(v6.manifestSha256).toBe(await sha("./corpus/fresh/manifest.json"));
+		expect(v6.twinsSha256).toBe(await sha("./corpus/fresh/twins.json"));
+		expect(Object.keys(v6.truthSha256 ?? {})).toHaveLength(24);
+		for (const [name, hash] of Object.entries(v6.truthSha256 ?? {})) expect(hash, name).toBe(await sha(`./corpus/fresh/truth/${name}.truth.json`));
 		expect(shapeOf(v6)).toBeUndefined();
 	});
 
@@ -299,14 +308,17 @@ describe("grid kinds", () => {
 
 	// The pre-registration's draft: stage 1 is A against S, stage 2 is S against
 	// D with the matched arm; both on the fresh corpus, retry and breaker on.
-	it("ships the two v6 stages as drafts of the pre-registration, unfrozen", async () => {
+	// Frozen 2026-09-27: arm A is main after the ledger id fix; S, D and M run
+	// one candidate snapshot, staged byte for byte as it was frozen.
+	it("ships the two v6 stages frozen to the pre-registration's snapshots", async () => {
 		const kinds = await shippedKinds();
+		const candidate = "8f29c26cb8f03cab087e9c2022ebd89cc3270a341c741c6c76e2bbcbaa41bac7";
 		expect(kinds["v6-stage1"]).toMatchObject({
-			corpus: "v6-fresh", baseline: { commit: null }, candidate: { digest: null }, baselineMaxAgents: null, candidateMaxAgents: 0,
+			corpus: "v6-fresh", baseline: { commit: "5573ec4db66c7a1188be286604c33d45802cda4f" }, candidate: { digest: candidate, stagedDigest: candidate }, baselineMaxAgents: null, candidateMaxAgents: 0,
 			maxVerifiers: { candidate: 0 }, budgetArms: ["candidate", "matched"], subagentsArms: ["candidate", "matched"], twinArms: ["baseline", "candidate"], matched: null, retry: true, timeoutMs: 14_400_000,
 		});
 		expect(kinds["v6-stage2"]).toMatchObject({
-			corpus: "v6-fresh", baseline: { digest: null }, candidate: { digest: null }, baselineMaxAgents: 0, candidateMaxAgents: 8,
+			corpus: "v6-fresh", baselineMaxAgents: 0, candidateMaxAgents: 8,
 			maxVerifiers: { baseline: 0, candidate: 2 }, budgetArms: ["baseline", "candidate", "matched"], subagentsArms: ["baseline", "candidate", "matched"], twinArms: [], matched: { mode: "follow", k: 3 }, retry: true,
 		});
 		expect(kinds["v6-stage1"]!.breaker).toEqual(DEFAULT_BREAKER);
