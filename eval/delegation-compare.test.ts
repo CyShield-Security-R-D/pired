@@ -2374,6 +2374,15 @@ describe("the verdict of a kind grid (plan 2.8)", () => {
 		const stopped = verdictFields("v6-stage1", { approved: false, notApprovedReasons: ["interrupted before the grid finished"], comparison });
 		expect(stopped.head.decision).toMatchObject({ ready: false, notReadyReasons: ["interrupted before the grid finished"] });
 	});
+
+	// eval/v6-decision.ts acts on codes, not on the prose: an abandoned pair makes
+	// a comparison inconclusive while an interrupted grid is merely not ready yet.
+	it("writes the not-ready reasons as codes beside the prose for a kind grid, and nothing new for a v5 grid", () => {
+		const codes = [{ code: "abandoned" as const, reason: "abandoned at the attempt ceiling", keys: ["t1#2"] }, { code: "blinded" as const, reason: "pilot" }];
+		const out = verdictFields("v6-stage2", { approved: false, notApprovedReasons: ["1 pair(s) abandoned"], comparison, codes });
+		expect(out.head.decision).toMatchObject({ ready: false, notReadyReasons: ["1 pair(s) abandoned"], reasons: codes });
+		expect(verdictFields(undefined, { approved: false, notApprovedReasons: ["x"], comparison, codes }).head).not.toHaveProperty("decision");
+	});
 });
 
 describe("the OAuth horizon of long grids (plan 2.8 review)", () => {

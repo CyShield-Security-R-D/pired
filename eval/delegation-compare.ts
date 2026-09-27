@@ -5132,6 +5132,20 @@ async function summarizeMatched(policy: MatchedPolicy, pairs: ScheduledPair[], c
 export const V6_DECISION = { rule: "v6 pre-registration", computedBy: "eval/v6-decision.ts" } as const;
 
 /**
+ * Why a kind grid is not ready, as a code eval/v6-decision.ts can act on (v6
+ * decision review). The prose reasons say the same for a reader; a script
+ * that matched on their wording would break on the next rewording. The
+ * pre-registration treats them differently: an abandoned pair makes the
+ * comparisons that use it inconclusive; invalid and blocked pairs are excluded
+ * and listed; interrupted, stopped, quota, credential, gave-up,
+ * amendment-pending and blinded clear on a resume; exploratory,
+ * runtime-changed and amendment-mismatch mean the grid cannot be decided.
+ */
+export type DecisionCode = "exploratory" | "interrupted" | "stopped" | "quota" | "credential" | "gave-up" | "abandoned" | "runtime-changed"
+	| "invalid" | "blocked" | "amendment-mismatch" | "amendment-pending" | "blinded";
+export interface DecisionReason { code: DecisionCode; reason: string; keys?: string[] }
+
+/**
  * The verdict fields of summary.json. A grid without a kind carries ADR-026's
  * approval exactly as before. A grid of a kind (plan item 2.8) is decided by
  * the v6 pre-registration's rule, which a separate analysis computes from its
@@ -5140,7 +5154,7 @@ export const V6_DECISION = { rule: "v6 pre-registration", computedBy: "eval/v6-d
  * outcome from a rule it was never judged by. It says only whether the grid
  * is ready for that analysis, and why not.
  */
-export function verdictFields(gridKind: string | undefined, v: { approved: boolean; notApprovedReasons: string[]; comparison: MatchedComparison; meteredOnlyComparison?: MatchedComparison }): { head: JsonRecord; comparison: JsonRecord; meteredOnlyComparison?: JsonRecord } {
+export function verdictFields(gridKind: string | undefined, v: { approved: boolean; notApprovedReasons: string[]; comparison: MatchedComparison; meteredOnlyComparison?: MatchedComparison; codes?: DecisionReason[] }): { head: JsonRecord; comparison: JsonRecord; meteredOnlyComparison?: JsonRecord } {
 	if (gridKind === undefined) {
 		return {
 			// One grid measures one model; acceptance needs both priority models. This
@@ -5155,7 +5169,7 @@ export function verdictFields(gridKind: string | undefined, v: { approved: boole
 		return rest as unknown as JsonRecord;
 	};
 	return {
-		head: { decision: { ...V6_DECISION, ready: v.notApprovedReasons.length === 0, notReadyReasons: v.notApprovedReasons } },
+		head: { decision: { ...V6_DECISION, ready: v.notApprovedReasons.length === 0, notReadyReasons: v.notApprovedReasons, ...(v.codes ? { reasons: v.codes as unknown as JsonRecord[] } : {}) } },
 		comparison: descriptive(v.comparison),
 		...(v.meteredOnlyComparison ? { meteredOnlyComparison: descriptive(v.meteredOnlyComparison) } : {}),
 	};
@@ -5333,7 +5347,24 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 		...(comparison.complete && comparison.decision !== APPROVAL && options.gridKind === undefined ? [`comparison decision: ${comparison.decision}`] : []),
 		...amendmentReasons,
 	];
-	const verdictOut = verdictFields(options.gridKind, { approved, notApprovedReasons, comparison, ...(meteredOnlyComparison ? { meteredOnlyComparison } : {}) });
+	// The same reasons as codes, for eval/v6-decision.ts (v6 decision review).
+	const gateBlocked = [...(plan?.blockedKeys ?? []), ...loop.blocked.map((b) => b.key)].filter((k) => !twinKeys.has(k));
+	const code = (c: DecisionCode, reason: string, keys?: string[]): DecisionReason => ({ code: c, reason, ...(keys ? { keys } : {}) });
+	const decisionCodes: DecisionReason[] = [
+		...(!official ? [code("exploratory", pre.exploratoryReasons.join("; ") || "not the official grid")] : []),
+		...(interrupted ? [code("interrupted", "interrupted before the grid finished")] : []),
+		...(stoppedInvalid && !interrupted ? [code("stopped", runState.stopReason ?? "an invalid run")] : []),
+		...(runState.quotaExhausted ? [code("quota", String(runState.quotaExhausted))] : []),
+		...(runState.credentialExpiring ? [code("credential", String(runState.credentialExpiring))] : []),
+		...(gateGaveUp.length ? [code("gave-up", "reached the attempt cap; --resume re-runs them", gateGaveUp.map((g) => g.key))] : []),
+		...(gateAbandoned.length ? [code("abandoned", "abandoned at the attempt ceiling; no resume re-runs them", gateAbandoned)] : []),
+		...(!runtimeStable ? [code("runtime-changed", "the pi runtime changed during the grid")] : []),
+		...(!comparison.complete ? [code("invalid", "grid incomplete or invalid", comparison.missingOrInvalid)] : []),
+		...(gateBlocked.length ? [code("blocked", "invalid for a non-infrastructure reason", [...new Set(gateBlocked)])] : []),
+		...amendmentReasons.map((r) => code(r.startsWith("the pass count is not fixed") ? "amendment-pending" : "amendment-mismatch", r)),
+		...(blinded ? [code("blinded", "the pilot is blind until its amendment fixes the pass count")] : []),
+	];
+	const verdictOut = verdictFields(options.gridKind, { approved, notApprovedReasons, comparison, ...(meteredOnlyComparison ? { meteredOnlyComparison } : {}), codes: decisionCodes });
 	const inputsRecord = (manifest.inputs ?? {}) as JsonRecord;
 	const baselineInput = (inputsRecord.baseline ?? {}) as JsonRecord;
 	const candidateInput = (inputsRecord.candidate ?? {}) as JsonRecord;
