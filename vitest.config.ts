@@ -7,6 +7,11 @@ export default defineConfig({
 		// included. Collected, they re-run stale suites against the live modules.
 		exclude: [...configDefaults.exclude, "eval/artifacts/**"],
 		environment: "node",
+		// Several suites spawn node, pi or git subprocesses. Under load (several
+		// worktrees checking at once on 2026-09-26/27) they overran the 5 s default
+		// and failed a full run, then passed alone, which trains everyone to ignore
+		// a red check. 20 s still catches a hang.
+		testTimeout: 20_000,
 		coverage: {
 			provider: "v8",
 			reporter: ["text", "json-summary"],
