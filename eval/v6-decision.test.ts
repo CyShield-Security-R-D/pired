@@ -110,7 +110,7 @@ function grid(runs: RunSpec[], o: GridOptions = {}): string {
 			// What the v6 validity policy writes on every run it judges.
 			...(r.reachedLimit === undefined && r.fastEmpty === undefined && r.tokensLowerBound === undefined ? {} : {
 				reachedLimit: r.reachedLimit ?? r.tokensLowerBound ?? false, fastEmpty: r.fastEmpty ?? false, limitEffects: [],
-				tokensLowerBound: r.tokensLowerBound ?? false, inFlightWorkers: r.tokensLowerBound ? ["run-1/run-0"] : [],
+				tokensLowerBound: r.tokensLowerBound ?? false, inFlightWorkers: r.tokensLowerBound ? [{ key: "run-1/run-0", replies: 3, largestReply: 250_000 }] : [],
 			}),
 		}));
 		const file = `src/${r.target.replace(/-patched$/, "")}.py`;
@@ -456,10 +456,10 @@ describe("runs the v6 validity policy keeps", () => {
 		]));
 		const d = decide("S-vs-A", [flagged], labels());
 		expect(d.pairs!.paired).toBe(12);
-		expect(d.validity).toEqual({ A: { runs: 12, reachedLimit: 0, fastEmpty: 6, tokensLowerBound: 0 }, S: { runs: 12, reachedLimit: 4, fastEmpty: 0, tokensLowerBound: 0 } });
+		expect(d.validity).toEqual({ A: { runs: 12, reachedLimit: 0, fastEmpty: 6, tokensLowerBound: 0, stalled: 0 }, S: { runs: 12, reachedLimit: 4, fastEmpty: 0, tokensLowerBound: 0, stalled: 0 } });
 		// The same runs without the flags decide the same way: the counts are reported only.
 		const plain = decide("S-vs-A", [grid(pairs("baseline", "candidate", (_t, p) => [{ found: p === 1 ? 0 : 1 }, { found: 2 }]))], labels());
-		expect(plain.validity).toEqual({ A: { runs: 12, reachedLimit: 0, fastEmpty: 0, tokensLowerBound: 0 }, S: { runs: 12, reachedLimit: 0, fastEmpty: 0, tokensLowerBound: 0 } });
+		expect(plain.validity).toEqual({ A: { runs: 12, reachedLimit: 0, fastEmpty: 0, tokensLowerBound: 0, stalled: 0 }, S: { runs: 12, reachedLimit: 0, fastEmpty: 0, tokensLowerBound: 0, stalled: 0 } });
 		expect(d.outcome).toBe(plain.outcome);
 		expect(d.rule1).toEqual(plain.rule1);
 		expect(formatDecision(d, shipTable([d]))).toMatch(/S: 4 of 12 paired run\(s\) reached the run limit \(scored on the ledger at the deadline\); 0 ended fast and empty/);
@@ -486,6 +486,22 @@ describe("runs the v6 validity policy keeps", () => {
 		expect(d.outcome).toBe("fails");
 		expect(d.reasons.join("\n")).not.toMatch(/sensitivity|lower bound/);
 		expect(formatDecision(d, shipTable([d]))).toMatch(/without the 2 pair\(s\) whose tokens are a lower bound \(sensitivity, never deciding\)/);
+		// The conservative row adds each cut-off worker's largest reply: 500k + 250k on those two runs.
+		expect(d.rule3ImputedInFlight).toMatchObject({ pairs: 12, imputedRuns: 2 });
+		expect(formatDecision(d, shipTable([d]))).toMatch(/imputed at its largest completed reply, over 2 run\(s\) \(conservative, never deciding\)/);
+		const logs = [...Array(10).fill(Math.log(2)), Math.log(0.75), Math.log(0.75)].sort((a, b) => a - b);
+		expect(d.rule3ImputedInFlight!.median).toBeCloseTo((logs[5]! + logs[6]!) / 2, 10);
+	});
+
+	// A hung run is re-run as infrastructure and never paired; it is still counted, per arm.
+	it("counts per arm the runs the harness classed as stalled, at any attempt", () => {
+		const g = grid(pairs("baseline", "candidate", () => [{ found: 1 }, { found: 1, attempt: 2 }]));
+		mkdirSync(join(g, "runs", "stalled-0"), { recursive: true });
+		writeFileSync(join(g, "runs", "stalled-0", "run.json"), JSON.stringify({ key: "t1#1", target: "t1", pass: 1, arm: "candidate", attempt: 1, valid: false, infraFailure: true, stalled: true, reachedLimit: false }));
+		const d = decide("S-vs-A", [g], labels());
+		expect(d.validity!.S!.stalled).toBe(1);
+		expect(d.validity!.A!.stalled).toBe(0);
+		expect(formatDecision(d, shipTable([d]))).toMatch(/1 run\(s\) stalled before the limit and were re-run as infrastructure/);
 	});
 });
 
