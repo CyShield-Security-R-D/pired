@@ -2296,6 +2296,15 @@ describe("S is the same arm in both stages (plan 2.8)", () => {
 		expect(d.scope).toMatchObject({ maxAgents: 8, maxVerifiers: 2 });
 	});
 
+	// A fast empty run is kept valid only if the model had its tools: under the
+	// v6 policy every scored cell reports its first request's tools, and a grid
+	// without the policy writes the entry config every earlier cell did.
+	it("asks every scored cell of a v6 stage to report its first request's tools, and no cell without the policy", () => {
+		expect(cellModelInputs(stage1, "baseline", target, cell, "/pinned/pi-subagents/index.js", "5".repeat(64), now).reportTools).toBe(true);
+		const plain = options("--candidate-max-agents", "8");
+		expect(cellModelInputs(plain, "candidate", target, cell, "/pinned/pi-subagents/index.js", "5".repeat(64), now)).not.toHaveProperty("reportTools");
+	});
+
 	// Unset, the baseline loads nothing but pired and the bash default, as in every earlier grid.
 	it("keeps the default baseline without pi-subagents", () => {
 		const plain = cellModelInputs(options(), "baseline", target, cell, "/pinned/pi-subagents/index.js", "6".repeat(64), now);

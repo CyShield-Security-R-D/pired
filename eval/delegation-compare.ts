@@ -53,7 +53,7 @@ import { auditCell, auditLimits, summarizeAudits, type AuditLimits, type Delegat
 import { reapMarkedProcesses } from "./delegation-compare-proc.ts";
 import { classifyRunStop, summarizeStops, type RunStop } from "./delegation-compare-stop.ts";
 // What a run's errors make of it, with or without a pinned validity policy.
-import { FAST_EMPTY_ERROR, FAST_EMPTY_SECONDS, inFlightWorkers, isValidityPolicy, judgeRun, limitError, runNumbers, VALIDITY_POLICIES, VALIDITY_POLICY_TEXT, type InFlightWorker, type ValidityPolicy } from "./delegation-compare-validity.ts";
+import { FAST_EMPTY_ERROR, FAST_EMPTY_SECONDS, fastEmptyBlockers, inFlightWorkers, isValidityPolicy, judgeRun, parentToolResults, limitError, runNumbers, VALIDITY_POLICIES, VALIDITY_POLICY_TEXT, type InFlightWorker, type ValidityPolicy } from "./delegation-compare-validity.ts";
 // The matched-compute arm (plan item 2.5): its policy, budget, union scorer and comparisons.
 import {
 	budgetRatios, matchedComparisons, metricOfUnion, nextSessionStep, parseMatchedPolicy, parseMatchedSpec, scoreUnion, sessionBudget, targetsWithoutBudget,
@@ -2029,6 +2029,8 @@ export type StreamObservation = {
 	recordWritesBeforeFirstSubagent: number;
 	firstRecordAt?: number;
 	firstSubagentAt?: number;
+	/** When the last transcript line arrived: the parent's last sign of work. */
+	lastLineAt?: number;
 };
 
 function parseJsonObject(line: string): JsonRecord | undefined {
@@ -2047,6 +2049,7 @@ export function trackStream(): { stream: StreamObservation; onLine: LineSink } {
 	const onLine = (line: string, atMs: number): void => {
 		if (!line.trim()) return;
 		stream.lines++;
+		stream.lastLineAt = atMs;
 		const event = parseJsonObject(line);
 		if (!event) { stream.malformedJsonLines++; return; }
 		if (event.type === "tool_execution_start") {
@@ -2292,6 +2295,7 @@ function gridSchedule(pre: Pick<Preflight, "targets">, options: Pick<Options, "p
 export function cellModelInputs(options: Options, arm: Arm, target: Target, cell: { engagement: string; workspaceDir: string; childSessionDir: string }, piSubagentsEntry: string, stagedDigest: string, nowMs: number = Date.now()): {
 	snapshot: string; stagedDigest: string; scope: Record<string, unknown>; settings: ReturnType<typeof benchmarkSettings>; subagentConfig: Record<string, unknown>;
 	loadsSubagents: boolean; extensionPaths: string[]; prompt: string; provider: string; model: string; thinking: CompareEntryConfig["thinking"]; retryPolicy?: RetryPolicy;
+	reportTools?: true;
 } {
 	const loads = loadsSubagents(options, arm);
 	const snapshot = arm === "baseline" ? options.baseline : arm === "matched" ? options.matched?.snapshot ?? options.candidate : options.candidate;
@@ -2307,6 +2311,7 @@ export function cellModelInputs(options: Options, arm: Arm, target: Target, cell
 		prompt: promptFor(target),
 		provider: options.provider, model: options.model, thinking: options.thinking as CompareEntryConfig["thinking"],
 		...(options.retryPolicy ? { retryPolicy: options.retryPolicy } : {}),
+		...(options.validity ? { reportTools: true as const } : {}),
 	};
 }
 
@@ -2420,6 +2425,8 @@ async function prepareCell(ctx: Context, target: Target, pass: number, arm: Arm,
 		...(inputs.retryPolicy ? { retryPolicy: inputs.retryPolicy } : {}),
 		...(session ? { tokenCeiling: session.ceiling } : {}),
 		...(probe ? { probe } : {}),
+		// Only a scored cell of a grid under a validity policy reports its tools.
+		...(inputs.reportTools && !probe ? { reportTools: true as const } : {}),
 	};
 	const configText = `${JSON.stringify(config, null, 2)}\n`;
 	await writeFile(paths.configPath, configText);
@@ -2655,6 +2662,7 @@ export async function accountCellUsage(events: JsonRecord[], cell: { arm: Arm; c
 			errors.push(...flight.errors);
 			notes.push(...flight.notes);
 			retried.push(...flight.retries);
+			childProviderErrors.push(...flight.providerErrors);
 			inFlight = flight.workers;
 		}
 		const callText = new Map((reconciliation?.calls ?? []).map((c) => [c.toolCallId, c.resultText]));
@@ -2940,8 +2948,12 @@ export function classifyInfra(failures: ProviderFailures, timedOut: boolean): In
 export function decideInfra(run: {
 	valid: boolean; timedOut: boolean; stoppedByRunner: boolean; notLaunchedInterrupted: boolean; failures: ProviderFailures;
 	retry?: Pick<RetrySummary, "attempts" | "cap" | "capExceeded">;
+	/** Under a validity policy: the run hung before the limit (stalledReason). Absent otherwise. */
+	stalled?: string;
 }): InfraClass {
-	if (run.valid || run.timedOut) return { infra: false };
+	if (run.valid) return { infra: false };
+	if (run.stalled) return { infra: true, reason: run.stalled };
+	if (run.timedOut) return { infra: false };
 	const provider = classifyInfra(run.failures, false);
 	if (provider.infra) return provider;
 	if (run.retry?.capExceeded) {
@@ -2950,6 +2962,30 @@ export function decideInfra(run: {
 	}
 	if (run.stoppedByRunner || run.notLaunchedInterrupted) return { infra: true, reason: "runner interruption" };
 	return { infra: false };
+}
+
+/**
+ * Why a fast empty run may not be the model's choice (fastEmptyBlockers): pired's
+ * manifest for the cell's engagement, and every parent and worker tool result.
+ */
+async function fastEmptyBlockersOf(cell: PreparedCell, events: JsonRecord[], accounting: CellUsage | undefined): Promise<string[]> {
+	const manifest = await readFile(join(cell.workspaceDir, "manifest.json"), "utf8").catch(() => undefined);
+	const workers = (accounting?.children ?? []).flatMap(({ session }) => (session?.toolCalls ?? []).filter((c) => c.isError !== undefined || c.resultText !== undefined)
+		.map((c) => ({ side: "worker" as const, tool: c.name, isError: c.isError === true, text: c.resultText ?? "" })));
+	return fastEmptyBlockers({ manifest, engagement: cell.engagement, results: [...parentToolResults(events), ...workers] });
+}
+
+/**
+ * Seconds between a run's last sign of work and its deadline: the last
+ * transcript line, or the last write to any worker session, whichever is later.
+ */
+async function idleAtLimit(cell: PreparedCell, result: OwnedResult, stream: StreamObservation, timeoutMs: number): Promise<number> {
+	let last = stream.lastLineAt ?? result.startedAt;
+	for (const file of await filesUnder(cell.childSessionDir).catch(() => [] as string[])) {
+		const mtime = await stat(join(cell.childSessionDir, file)).then((s) => s.mtimeMs).catch(() => 0);
+		if (mtime > last) last = mtime;
+	}
+	return Math.max(0, Math.round((result.startedAt + timeoutMs - last) / 1000));
 }
 
 async function inspectRun(ctx: Context, cell: PreparedCell, launched: Launch, attempt: number): Promise<RunOutcome> {
@@ -3002,6 +3038,14 @@ async function inspectRun(ctx: Context, cell: PreparedCell, launched: Launch, at
 		errors.push(...accounting.errors);
 		if (ceilingState) errors.push(...verifyCeiling(events, ceilingState, accounting.usage.parent.totalTokens));
 		errors.push(...await cellConfigErrors(cell));
+		// Under a validity policy a scored run's tool surface is checked as the
+		// probe's is, so a run kept valid had the tools its arm is meant to have.
+		if (options.validity) {
+			const reports = events.filter((e) => e.type === "benchmark_tools");
+			const tools = reports.length === 1 && Array.isArray(reports[0]!.tools) ? (reports[0]!.tools as unknown[]).map(String) : undefined;
+			if (!tools) errors.push(`expected one first-request tool list, found ${reports.length}`);
+			else errors.push(...toolSurfaceErrors(cell.arm, tools, delegationOff(armSettings(options, cell.arm)), loadsSubagents(options, cell.arm)).map((e) => `first request: ${e}`));
+		}
 		try {
 			if (await hashFile(GRADER_SCRIPT) !== ctx.pins.externalGraderSha256) errors.push("external grader changed after preflight");
 			const scored = await scoreWorkspace(cell.workspaceDir, cell.scorePath, cell.target.truth);
@@ -3022,7 +3066,9 @@ async function inspectRun(ctx: Context, cell: PreparedCell, launched: Launch, at
 	// behaviour and stays valid (eval/delegation-compare-validity.ts).
 	const judged = judgeRun({
 		...(options.validity ? { policy: options.validity } : {}), timedOut: result?.timedOut === true, fastEmpty, errors: [...new Set(errors)],
-		...(accounting?.inFlight ? { inFlightWorkers: accounting.inFlight.map((w) => w.key) } : {}),
+		...(accounting?.inFlight ? { inFlightWorkers: accounting.inFlight } : {}),
+		...(options.validity && fastEmpty ? { fastEmptyBlockers: await fastEmptyBlockersOf(cell, events, accounting) } : {}),
+		...(options.validity && result?.timedOut ? { idleAtLimitSeconds: await idleAtLimit(cell, result, launched.stream, options.timeoutMs) } : {}),
 	});
 	const uniqueErrors = judged.errors;
 	const valid = judged.valid;
@@ -3044,8 +3090,13 @@ async function inspectRun(ctx: Context, cell: PreparedCell, launched: Launch, at
 	const abortedAt = runState.abortedAtMs;
 	const stoppedByRunner = abortedAt !== undefined && result !== undefined && !result.timedOut && abortedAt >= result.startedAt &&
 		(abortedAt <= result.finishedAt || graded?.ok !== true);
+	// Under a validity policy a run kept past the limit is read like any other: a
+	// provider failure in it is infrastructure. A stalled one is infrastructure
+	// by itself, so the breaker re-queues it under the attempt ceiling.
+	const stalled = judged.flags?.stalled ? judged.errors.at(-1) : undefined;
 	const classified = decideInfra({
-		valid, timedOut: result?.timedOut === true, stoppedByRunner,
+		valid, timedOut: result?.timedOut === true && !judged.flags, stoppedByRunner,
+		...(stalled ? { stalled } : {}),
 		notLaunchedInterrupted: launched.launchError === "not launched: interrupted", failures,
 		...(accounting?.retry ? { retry: accounting.retry } : {}),
 	});
@@ -3075,6 +3126,7 @@ async function inspectRun(ctx: Context, cell: PreparedCell, launched: Launch, at
 		...(judged.flags ? {
 			reachedLimit: judged.flags.reachedLimit, fastEmpty: judged.flags.fastEmpty, limitEffects: judged.flags.limitEffects,
 			tokensLowerBound: judged.flags.tokensLowerBound, inFlightWorkers: judged.flags.inFlightWorkers,
+			stalled: judged.flags.stalled, idleAtLimitSeconds: judged.flags.idleAtLimitSeconds,
 		} : {}),
 		seconds, process: result ?? null,
 		findings: totalClaims, truePositives, unmatchedClaims: Math.max(0, totalClaims - truePositives),

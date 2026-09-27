@@ -106,6 +106,13 @@ export interface CompareEntryConfig {
 	 */
 	retryPolicy?: RetryPolicy;
 	/**
+	 * Under a run-validity policy (eval/delegation-compare-validity.ts): print
+	 * the tools the first request is offered as a `benchmark_tools` line, so the
+	 * runner checks a scored run's tool surface as the probe checks its own.
+	 * Absent, the transcript is the one every earlier cell wrote.
+	 */
+	reportTools?: true;
+	/**
 	 * A matched-arm session's token ceiling (plan item 2.5): the session aborts
 	 * between requests once its metered usage reaches this many tokens. Absent,
 	 * nothing is watched and the transcript is the one every earlier cell wrote.
@@ -566,6 +573,7 @@ function validateConfig(config: CompareEntryConfig): void {
 		throw new Error("Invalid extensionPaths: expected an array of absolute path strings");
 	}
 	if (config.retryPolicy !== undefined) validateRetryPolicy(config.retryPolicy);
+	if (config.reportTools !== undefined && config.reportTools !== true) throw new Error("Invalid reportTools: expected true or absent");
 	if (config.tokenCeiling !== undefined && (!Number.isSafeInteger(config.tokenCeiling) || config.tokenCeiling < 1)) {
 		throw new Error("Invalid tokenCeiling: expected a positive integer token count");
 	}
@@ -723,7 +731,19 @@ async function main() {
 	}
 	// The scored path: the configured model, the review prompt, nothing scripted.
 	const ceiling = config.tokenCeiling === undefined ? undefined : watchTokenCeiling(runtime.session as unknown as CeilingSession, config.tokenCeiling);
+	// At the first turn pired's session_start and before_agent_start have run,
+	// so these are the tools the first request is offered.
+	const unsubscribeTools = config.reportTools ? (() => {
+		let reported = false;
+		const session = runtime.session as unknown as { subscribe(listener: (event: { type: string }) => void): () => void; getActiveToolNames(): string[] };
+		return session.subscribe((event) => {
+			if (reported || event.type !== "turn_start") return;
+			reported = true;
+			console.log(JSON.stringify({ type: "benchmark_tools", tools: session.getActiveToolNames() }));
+		});
+	})() : undefined;
 	process.exitCode = await runPrintMode(runtime, { mode: "json", initialMessage: config.prompt });
+	unsubscribeTools?.();
 	if (ceiling) {
 		ceiling.stop();
 		// After print mode has flushed its own lines, so this is the transcript's last event.
