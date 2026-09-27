@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-	analyze, cli, clusterBootstrap, diffsByTarget, exactBinomialTwoSided, formatReport, mcnemar, minDetectableEffect, mulberry32,
+	analyze, cli, clusterBootstrap, clusterBootstrapStatistic, diffsByTarget, median, exactBinomialTwoSided, formatReport, mcnemar, minDetectableEffect, mulberry32,
 	dropTwins, pairDiffs, pairRuns, pairsNeeded, parseArgs, parseArms, perIssueFindRate, sampleSd, selectGrids, truthIdsFromManifests, twinIdsFromManifests, type Pair, type RunRecord,
 } from "./paired.ts";
 
@@ -169,6 +169,32 @@ describe("clusterBootstrap", () => {
 	it("draws from mulberry32, whose outputs stay in [0, 1)", () => {
 		const rand = mulberry32(1);
 		for (let i = 0; i < 1000; i++) { const x = rand(); expect(x).toBeGreaterThanOrEqual(0); expect(x).toBeLessThan(1); }
+	});
+});
+
+describe("clusterBootstrapStatistic (v6 decision)", () => {
+	const byTarget = new Map([["a", [1, 0, 2]], ["b", [-1, 0]], ["c", [3, 1, 1, 0]]]);
+	const mean = (xs: readonly number[]) => xs.reduce((s, x) => s + x, 0) / xs.length;
+
+	it("prints clusterBootstrap's interval when the statistic is the mean, so the two resamplers cannot drift apart", () => {
+		const a = clusterBootstrap(byTarget, 2000, 7);
+		const b = clusterBootstrapStatistic(byTarget, mean, 2000, 7);
+		expect([b.value, b.lo, b.hi, b.dropped]).toEqual([a.mean, a.lo, a.hi, 0]);
+	});
+
+	it("leaves a resample whose statistic is not finite out of the percentiles, and counts it", () => {
+		const ratio = new Map([["a", [{ n: 1, d: 0 }]], ["b", [{ n: 1, d: 2 }]]]);
+		const r = clusterBootstrapStatistic(ratio, (u) => u.reduce((s, x) => s + x.n, 0) / u.reduce((s, x) => s + x.d, 0), 400, 1);
+		expect(r.dropped).toBeGreaterThan(0);
+		expect(r.lo).toBeGreaterThanOrEqual(0.5);
+		expect(r.hi).toBeLessThanOrEqual(1);
+		expect(clusterBootstrapStatistic(new Map<string, number[]>(), mean).lo).toBeNaN();
+	});
+
+	it("takes the median as the mean of the middle two for an even count, and NaN for none", () => {
+		expect(median([3, 1, 2])).toBe(2);
+		expect(median([4, 1, 2, 3])).toBe(2.5);
+		expect(median([])).toBeNaN();
 	});
 });
 
