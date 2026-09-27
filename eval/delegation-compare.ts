@@ -53,7 +53,7 @@ import { auditCell, auditLimits, summarizeAudits, type AuditLimits, type Delegat
 import { reapMarkedProcesses } from "./delegation-compare-proc.ts";
 import { classifyRunStop, summarizeStops, type RunStop } from "./delegation-compare-stop.ts";
 // What a run's errors make of it, with or without a pinned validity policy.
-import { FAST_EMPTY_ERROR, FAST_EMPTY_SECONDS, isValidityPolicy, judgeRun, limitError, runNumbers, VALIDITY_POLICIES, VALIDITY_POLICY_TEXT, type ValidityPolicy } from "./delegation-compare-validity.ts";
+import { FAST_EMPTY_ERROR, FAST_EMPTY_SECONDS, inFlightWorkers, isValidityPolicy, judgeRun, limitError, runNumbers, VALIDITY_POLICIES, VALIDITY_POLICY_TEXT, type InFlightWorker, type ValidityPolicy } from "./delegation-compare-validity.ts";
 // The matched-compute arm (plan item 2.5): its policy, budget, union scorer and comparisons.
 import {
 	budgetRatios, matchedComparisons, metricOfUnion, nextSessionStep, parseMatchedPolicy, parseMatchedSpec, scoreUnion, sessionBudget, targetsWithoutBudget,
@@ -2528,6 +2528,8 @@ type CellUsage = {
 	retry?: RetrySummary;
 	/** Under a retry policy only: observations that reported spend, for the request-log cross-check. */
 	meteredCalls?: number;
+	/** Under the v6 validity policy, on a run stopped at the limit: workers cut off in flight, counted from their sessions. */
+	inFlight?: InFlightWorker[];
 };
 
 const isJsonRecord = (value: unknown): value is JsonRecord => typeof value === "object" && value !== null && !Array.isArray(value);
@@ -2588,7 +2590,7 @@ export function childProviderFailure(child: Pick<SubagentChild, "childKey" | "st
  * extension is not loaded, so any subagent call or child session means the
  * wrong snapshot ran and its tokens would land in the wrong arm.
  */
-export async function accountCellUsage(events: JsonRecord[], cell: { arm: Arm; childSessionDir: string; loadsSubagents?: boolean; delegationOff?: boolean }, expect: { provider: string; model: string; thinking: string }, stream: Pick<StreamObservation, "subagentCalls">, retryPolicy?: RetryPolicy, ceiling: { cut?: boolean } = {}): Promise<CellUsage> {
+export async function accountCellUsage(events: JsonRecord[], cell: { arm: Arm; childSessionDir: string; loadsSubagents?: boolean; delegationOff?: boolean }, expect: { provider: string; model: string; thinking: string }, stream: Pick<StreamObservation, "subagentCalls">, retryPolicy?: RetryPolicy, ceiling: { cut?: boolean; limit?: boolean } = {}): Promise<CellUsage> {
 	const errors: string[] = [];
 	const notes: string[] = [];
 	const observations: UsageObservation[] = [];
@@ -2615,6 +2617,7 @@ export async function accountCellUsage(events: JsonRecord[], cell: { arm: Arm; c
 	const children: ChildAccount[] = [];
 	const childProviderErrors: CellUsage["childProviderErrors"] = [];
 	let reconciliation: SubagentReconciliation | undefined;
+	let inFlight: InFlightWorker[] | undefined;
 	// Absent, the arms load what they always did: everything but the baseline, and only the matched arm is off.
 	const loads = cell.loadsSubagents ?? cell.arm !== "baseline";
 	const off = cell.delegationOff ?? cell.arm === "matched";
@@ -2635,6 +2638,24 @@ export async function accountCellUsage(events: JsonRecord[], cell: { arm: Arm; c
 		const workers = reconciliation?.children.length ?? 0;
 		if (off && (workers || childSessionFiles.length)) {
 			errors.push(`${cell.arm} arm launched ${workers} worker(s) (${childSessionFiles.length} child session file(s)); its scope states maxAgents 0`);
+		}
+		// A run the v6 policy keeps after the limit stopped it (ceiling.limit): a
+		// worker still running has no tool result, so its session file is claimed by
+		// no call. Its completed replies are counted from the file, a lower bound.
+		if (ceiling.limit && reconciliation) {
+			const claimed = new Set(reconciliation.children.map((c) => c.sessionPath));
+			const unclaimed = childSessionFiles.filter((f) => !claimed.has(f));
+			const texts = new Map<string, string | undefined>();
+			for (const file of unclaimed) {
+				try { texts.set(file, await readOptional(join(cell.childSessionDir, file))); }
+				catch (error) { errors.push(`in-flight session ${file} unreadable: ${message(error)}`); }
+			}
+			const flight = inFlightWorkers([...texts.keys()], (f) => texts.get(f), { model: `${expect.provider}/${expect.model}`, thinking: expect.thinking }, retry);
+			observations.push(...flight.observations);
+			errors.push(...flight.errors);
+			notes.push(...flight.notes);
+			retried.push(...flight.retries);
+			inFlight = flight.workers;
 		}
 		const callText = new Map((reconciliation?.calls ?? []).map((c) => [c.toolCallId, c.resultText]));
 		for (const child of reconciliation?.children ?? []) {
@@ -2663,7 +2684,8 @@ export async function accountCellUsage(events: JsonRecord[], cell: { arm: Arm; c
 	const usage = accountUsage(observations);
 	errors.push(...usage.errors);
 	if (!usage.valid) errors.push("provider usage attribution is incomplete");
-	if (!retryPolicy) return { errors: [...new Set(errors)], notes, parent, reconciliation, children, childProviderErrors, childSessionFiles, usage };
+	const flight = inFlight ? { inFlight } : {};
+	if (!retryPolicy) return { errors: [...new Set(errors)], notes, parent, reconciliation, children, childProviderErrors, childSessionFiles, usage, ...flight };
 	const meteredCalls = meteredCallCount(observations);
 	const summary = summarizeRetries(retried, retryPolicy, meteredCalls);
 	if (summary.capExceeded) {
@@ -2671,7 +2693,7 @@ export async function accountCellUsage(events: JsonRecord[], cell: { arm: Arm; c
 	}
 	return {
 		errors: [...new Set(errors)], notes, parent, reconciliation, children, childProviderErrors, childSessionFiles, usage,
-		retry: summary, meteredCalls,
+		retry: summary, meteredCalls, ...flight,
 	};
 }
 
@@ -2972,7 +2994,11 @@ async function inspectRun(ctx: Context, cell: PreparedCell, launched: Launch, at
 		if (events.some((e) => e.type === "benchmark_probe" || e.type === "benchmark_probe_delegation")) errors.push("a scored run emitted a probe report");
 		if (assistantReplies(events).some((m) => m.provider === PROBE_FAUX_PROVIDER)) errors.push("a scored run was answered by the probe's scripted model");
 		ceilingState = ceilingOf(events, cell, result, errors);
-		accounting = await accountCellUsage(events, cell, options, launched.stream, options.retryPolicy, { cut: ceilingState?.cut === true });
+		accounting = await accountCellUsage(events, cell, options, launched.stream, options.retryPolicy, {
+			cut: ceilingState?.cut === true,
+			// Only under a validity policy, so every other cell is accounted as before.
+			...(options.validity && result.timedOut ? { limit: true } : {}),
+		});
 		errors.push(...accounting.errors);
 		if (ceilingState) errors.push(...verifyCeiling(events, ceilingState, accounting.usage.parent.totalTokens));
 		errors.push(...await cellConfigErrors(cell));
@@ -2994,7 +3020,10 @@ async function inspectRun(ctx: Context, cell: PreparedCell, launched: Launch, at
 	// Without a validity policy every error invalidates, as in every v5 grid; under
 	// one, a run that reached the limit or ended fast and empty is the model's
 	// behaviour and stays valid (eval/delegation-compare-validity.ts).
-	const judged = judgeRun({ ...(options.validity ? { policy: options.validity } : {}), timedOut: result?.timedOut === true, fastEmpty, errors: [...new Set(errors)] });
+	const judged = judgeRun({
+		...(options.validity ? { policy: options.validity } : {}), timedOut: result?.timedOut === true, fastEmpty, errors: [...new Set(errors)],
+		...(accounting?.inFlight ? { inFlightWorkers: accounting.inFlight.map((w) => w.key) } : {}),
+	});
 	const uniqueErrors = judged.errors;
 	const valid = judged.valid;
 	// Provider-limit and transient failures may be re-run by --resume; the run's
@@ -3043,7 +3072,10 @@ async function inspectRun(ctx: Context, cell: PreparedCell, launched: Launch, at
 		scopeUnit: launched.scopeUnit ?? null, reapedPids: reaped.pids, symlinkActions: cell.symlinkActions,
 		valid,
 		// Only a grid under a validity policy writes these, so a v5 record keeps its bytes.
-		...(judged.flags ? { reachedLimit: judged.flags.reachedLimit, fastEmpty: judged.flags.fastEmpty, limitEffects: judged.flags.limitEffects } : {}),
+		...(judged.flags ? {
+			reachedLimit: judged.flags.reachedLimit, fastEmpty: judged.flags.fastEmpty, limitEffects: judged.flags.limitEffects,
+			tokensLowerBound: judged.flags.tokensLowerBound, inFlightWorkers: judged.flags.inFlightWorkers,
+		} : {}),
 		seconds, process: result ?? null,
 		findings: totalClaims, truePositives, unmatchedClaims: Math.max(0, totalClaims - truePositives),
 		precisionLowerBound: precision, submittedFindings: findings.length,
