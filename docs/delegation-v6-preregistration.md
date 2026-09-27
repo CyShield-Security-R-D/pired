@@ -1,9 +1,9 @@
 # Delegation v6 — pre-registration (DRAFT)
 
-*Plan item 4.2 of [`delegation-v6-plan.md`](delegation-v6-plan.md). **Draft, not frozen.** It is
+*Plan item 4.2 of [`delegation-v6-plan.md`](delegation-v6-plan.md). **Draft, not frozen;** the operator's decisions were recorded 2026-09-27. It is
 frozen, by commit and hash, before the first v6 model call. Any change after that is an amendment,
-dated and logged, and it is written before the results it could affect are read. Items marked
-**[operator]** need the operator's decision before freezing.*
+dated and logged, and it is written before the results it could affect are read. Operator decisions
+are marked with their date.*
 
 ## Questions
 
@@ -21,7 +21,7 @@ dated and logged, and it is written before the results it could affect are read.
 |---|---|---|---|
 | **A · incumbent** | `main` at the freeze, currently 84c7965 | single agent: delegation off by default (ADR-029) | what users get today |
 | **S · candidate solo** | `p3/candidate-v5` at the freeze | `maxAgents: 0`, `maxVerifiers: 0`, budget line on | Phase 3's single-agent changes alone |
-| **D · candidate delegating** | same as S | `maxAgents: 8`, `maxVerifiers: 2` **[operator: the verifier cap]**, budget line on | the full candidate |
+| **D · candidate delegating** | same as S | `maxAgents: 8`, `maxVerifiers: 2` (operator, 2026-09-27), budget line on | the full candidate |
 | **M · matched compute** | same as S | delegation off, k = 3 sessions, total tokens capped at D's realised tokens for the same pair (follow mode, ADR-034), findings unioned | D's compute without delegation |
 
 **The comparisons:**
@@ -33,10 +33,9 @@ dated and logged, and it is written before the results it could affect are read.
 A and S differ only in the Phase 3 changes. D and S differ only in delegation, which carries the verify worker's larger turn budget (about 40, up from 24; 3.1) as part of the delegating configuration. D and M differ only
 in how the same tokens are spent.
 
-**[operator] Staging, to control cost.** Run A and S first. D and M run only if S is not worse than
-A on the primary rule, because a candidate whose own single agent regresses is not shipped with
-delegation on top. The alternative is all four arms at once, which is simpler and costs about twice
-as much per pair.
+**Staging, to control cost (operator, 2026-09-27).** Run A and S first. D and M run only if S is
+not worse than A on the primary rule, because a candidate whose own single agent regresses is not
+shipped with delegation on top.
 
 ## Corpus
 
@@ -84,6 +83,10 @@ as much per pair.
   - The harness refuses a stage grid whose worst case exceeds the login-token horizon unless the
     horizon is given. Before each launch it stops resumably when the token would expire
     mid-run.
+  - **Token refresh (operator, 2026-09-27):** when the harness stops for the token, the openai-codex
+    token is refreshed between runs with pi's own command,
+    `pi auth print-bearer-token --provider openai-codex --min-expiry <h>` with output discarded, and
+    the grid is resumed. The token is never printed, and it is never refreshed inside a cell.
   - The candidate cap is pinned (ADR-032).
   - The stop reason is recorded for every run (ADR-030).
 
@@ -98,8 +101,9 @@ as much per pair.
 | 0.3 | 69 |
 | 0.2 | 154 |
 
-- **[operator] N = 72 pairs:** 12 targets × 6 passes, per comparison. This detects about 0.3
-  true positives per pair.
+- **N is set by the blind pilot below (operator, 2026-09-27),** at most 10 passes per target. For
+  scale, 12 targets × 6 passes gives 72 pairs per comparison, which detects about 0.3 true
+  positives per pair at the v5 spread.
   - At Luna v5c's measured means (A ≈ 5.4M tokens/run, D ≈ 8.8M), the A and S stage alone is about
     72 × 2 runs ≈ 780M tokens. D and M together add about 1.3B.
   - Fewer pairs are possible, but then the trial can detect only larger effects. The table above is
@@ -131,8 +135,14 @@ as much per pair.
   confirmed. The unit is the unique issues an arm claimed on a target, across all its runs there.
   Precision is pooled over targets as Σ valid ÷ Σ claimed issues, and its bound comes from the
   app-clustered bootstrap. Labels reach the analysis through a blind worksheet: per target, claims
-  under shuffled ids, with no arm, run, author or status (`eval/adjudication.md`). Adjudication follows `eval/adjudication.md`, and the judge is not an OpenAI model
-  **[operator: judge model]**.
+  under shuffled ids, with no arm, run, author or status (`eval/adjudication.md`). Adjudication follows `eval/adjudication.md`.
+  - **Judge (operator, 2026-09-27):** Claude Opus 5.5 (`claude-opus-5-5`). It runs as
+    fresh-context sub-agents, one per target, and never sees the arm mapping: the worksheet is
+    blind, and the key map stays with the join step.
+  - **Second judge:** GLM-5.3 Flash or DeepSeek V4.1 Flash, whichever is available, on a random 20%
+    of the issues (at least 40). Labels count only at Cohen's κ ≥ 0.6.
+  - **Operator spot check:** 20 issues, blind.
+  - A small batch is judged first, to confirm the judging is not interrupted.
 - **Cost:** the median per-pair log ratio of total tokens (metered plus the retry estimate), with an
   app-clustered bootstrap interval. Pooled sums are reported beside it and not used for the decision:
   on Luna they swung from 0.51 to 2.86 on single runs.
@@ -156,8 +166,7 @@ as much per pair.
 - **Patched twins:** claims within ±3 lines of each fixed region, per arm. This is re-flagging
   patched code, and it measures whether an arm tells the bug from its fix. Findings per KLOC are
   reported but never folded into precision.
-  - **[operator]** Which arms run the twins. All four doubles the run count; A and S only is the
-    cheaper choice.
+  - **Twin arms (operator, 2026-09-27):** A and S only, in stage 1.
 - **Per-issue find rates and McNemar** (`eval/paired.ts`).
 
 ## Decision rule
@@ -173,8 +182,7 @@ A comparison **passes** when all three hold:
    below log(1.10). The candidate costs at most 10% more at the typical pair.
 
 A comparison is **superior** when rule 1's lower bound is above 0. Rules 2 and 3 still apply, but
-rule 3 is relaxed to log(1.5) when superiority is shown. **[operator: the cost allowance for a real
-gain.]**
+rule 3 is relaxed to log(1.5) when superiority is shown. (operator, 2026-09-27)
 
 **Ship decisions:**
 
@@ -198,8 +206,9 @@ the check that S did not drift between stages.
   tuning on the v5 corpus.
 - The v6 guard is the fresh corpus itself. Nothing in Phase 3 was designed from run data (the
   design documents say so), and no change is made after the freeze.
-- **[operator]** Whether to hold back 3 of the 12 fresh targets as a sealed confirmation set, run
-  only after the main result is known. It costs power; it guards against a result carried by one app.
+- **No sealed confirmation set (operator, 2026-09-27).** 12 apps is already the limit of the
+  clustered interval. Holding 3 back would cost more power than it guards. A result carried by one
+  app is checked instead by reporting each comparison with every target left out in turn.
 
 ## Analysis plan
 
