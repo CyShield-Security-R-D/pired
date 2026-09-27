@@ -24,6 +24,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { isRetryableAssistantError } from "@earendil-works/pi-ai/compat";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { DVBANK, dedupe, engagementTelemetry, fromLedger, scoreFindings, type Finding } from "./dvbank/score.ts";
+import { settleTelemetry } from "./dvbank/settle-telemetry.ts";
 import { scopeClause, stripLeakage } from "./corpus/lib.ts";
 import {
 	benchmarkSettings, DEFAULT_RETRY_POLICY, PROBE_FAUX_MODEL, PROBE_FAUX_PROVIDER, validateRetryPolicy,
@@ -143,7 +144,7 @@ const HARNESS_FILES = [
 	"eval/delegation-compare.ts", "eval/delegation-compare-lib.ts", "eval/delegation-compare-entry.ts",
 	"eval/delegation-compare-stage.ts", "eval/delegation-compare-proc.ts", "eval/delegation-audit.ts", "eval/corpus/fs-seal.c",
 	"eval/delegation-compare-bash-timeout.ts", "eval/delegation-compare-stop.ts", "eval/delegation-compare-matched.ts",
-	"eval/delegation-compare-grid.ts", "eval/delegation-compare.pins.json",
+	"eval/delegation-compare-grid.ts", "eval/delegation-compare.pins.json", "eval/dvbank/settle-telemetry.ts",
 ] as const;
 
 /*
@@ -2957,7 +2958,8 @@ async function inspectRun(ctx: Context, cell: PreparedCell, launched: Launch, at
 			findings = scored.findings;
 			graded = scored.graded;
 			if (!graded.ok) errors.push(graded.error);
-			const measured = await engagementTelemetry(cell.workspaceDir);
+			// The pinned scorer's telemetry, plus the stopping readings kept out of it (3.2).
+			const measured = { ...(await engagementTelemetry(cell.workspaceDir)), ...(await settleTelemetry(cell.workspaceDir)) };
 			telemetry = measured as unknown as JsonRecord;
 			if (findings.length === 0 && measured.hypotheses === 0 && seconds < 120) errors.push("fast empty run (no findings or hypotheses under 120 seconds)");
 		} catch (error) {

@@ -13,9 +13,6 @@ import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { Workspace } from "../../core/workspace.ts";
-import { lastSettle, writesAfter } from "../../core/settle.ts";
-import { computeCoverageView } from "../../core/stats.ts";
-import type { SettleRemainder } from "../../core/ontology.ts";
 import { makeHostServices } from "../../extensions/lib/host.ts";
 
 const run = promisify(execFile);
@@ -245,13 +242,6 @@ export interface EngagementTelemetry {
 	settled: number;
 	findings: number;
 	/**
-	 * The last `record kind=settle` (3.2) and how many ledger writes, by anyone
-	 * but the scribe or the operator, came after it. Absent when none was written.
-	 */
-	/** Coverage cells not settled, when the engagement has a checklist (3.2). */
-	openCells?: number;
-	lastSettle?: { outcome: string; at: string; note?: string; by?: string; laterWrites: number; remainder: SettleRemainder };
-	/**
 	 * Distinct reasoning behind the settled cells.
 	 *
 	 * `record` takes lists for target and class and writes the cross product, so
@@ -286,41 +276,8 @@ export async function engagementTelemetry(engagementDir: string): Promise<Engage
 				return n > max ? n : max;
 			}, 0),
 			findings: (await ws.read("findings")).length,
-			...(await openCellsTelemetry(ws)),
-			...(await lastSettleTelemetry(ws)),
 		};
 	} catch {
 		return empty;
 	}
-}
-
-/**
- * Coverage cells not settled (untested, in progress or blocked), for the
- * arm-neutral stopping measure (3.2): a run that stops with time left and open
- * cells stopped early whether or not it said so. Nothing without a checklist.
- */
-async function openCellsTelemetry(ws: Workspace): Promise<{ openCells?: number }> {
-	const view = await computeCoverageView(ws);
-	if (!view) return {};
-	return { openCells: view.matrix.counts["not-tested"] + view.matrix.counts.testing + view.matrix.counts.blocked };
-}
-
-/**
- * The run's last settle (3.2), with the ledger writes that followed it, for the
- * stop classifier (eval/delegation-compare-stop.ts). Nothing when the run wrote
- * none, which is every baseline run: the baseline has no settle.
- */
-async function lastSettleTelemetry(ws: Workspace): Promise<{ lastSettle?: NonNullable<EngagementTelemetry["lastSettle"]> }> {
-	const last = lastSettle(await ws.read("sessions"));
-	if (!last) return {};
-	const rows = [
-		...(await ws.read("inventory")), ...(await ws.read("hypotheses")), ...(await ws.read("findings")),
-		...(await ws.read("blockers")), ...(await ws.read("loot")),
-	];
-	return {
-		lastSettle: {
-			outcome: last.outcome, at: last.createdAt, ...(last.note ? { note: last.note } : {}), ...(last.by ? { by: last.by } : {}),
-			laterWrites: writesAfter(last.createdAt, rows), remainder: last.remainder,
-		},
-	};
 }
