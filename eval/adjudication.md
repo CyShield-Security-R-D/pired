@@ -145,6 +145,36 @@ Per arm, per target, then summed or averaged as the pre-registration states:
 Paired comparisons between arms use `eval/paired.ts` on these per-pair numbers, with the same
 app-clustered bootstrap.
 
+## Worksheet and labels
+
+*Amendment for the v6 decision (`eval/v6-decision.ts`).* The judge's input and output are files,
+so the blinding above can be checked rather than trusted.
+
+1. **Export.** `eval/v6-decision.ts export --grid <dir>... --seed <n> --out <adj>` writes one
+   worksheet per target to `<adj>/worksheets/<target>.json` and the key map to `<adj>/keymap.json`.
+   - A claim is a citation's `file:line`, deduplicated per target across both arms and every run.
+     It is the same enumeration the precision rule counts, every tier, refuted rows included.
+   - Each claim carries its location and what the rows citing it said: title, description, CWE
+     and class, with orchestration words replaced by `[…]`. There is no arm, run, pass, author,
+     status, verification or evidence path.
+   - Claims are shuffled under the recorded seed and given blind ids (`C001`, …).
+   - The key map, from blind id to claim key, stays out of the judge's view.
+2. **Judge.** It returns one object for all targets:
+   `{ "<target>": { "issues": { "<issueId>": { "label": "<rubric label>", "quotes": ["…"] } },
+   "claims": { "<blindId>": "<issueId>" } } }`. The judge groups claims into issues and labels
+   each issue once.
+3. **Join.** `eval/v6-decision.ts join --keymap <adj>/keymap.json --judged <judged.json> --out
+   <labels.json>` writes `{ "<target>|<file>:<line>": { "label", "issue": "<target>/<issueId>" } }`.
+   - A verdict without a quoted line is recorded as `unverifiable`.
+   - A blind id the worksheet never listed, or an issue the judge never defined, is refused.
+   - A claim the judge left out stays unlabelled, and the precision rule stays pending.
+4. **Decide.** `--labels <labels.json> --keymap <adj>/keymap.json`. A key the worksheet never
+   listed, or an issue carrying two labels, is refused.
+
+Precision is counted per arm and per target, over the unique issues that arm claimed across its
+paired runs there. It is pooled over targets as Σ `valid` ÷ Σ claimed issues. The ratio's bound
+comes from the app-clustered bootstrap.
+
 ## Judge
 
 - **A different model family from the model under test.** LLM judges favour outputs that resemble
