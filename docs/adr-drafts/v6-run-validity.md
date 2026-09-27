@@ -40,10 +40,12 @@ ADR-026 inherits and the breaker's trigger in ADR-031 · built on branch `p2/val
   the stop itself causes are listed as `limitEffects` rather than `errors`: the timeout, the
   stopped process's exit status, a parent reply cut off mid-turn, and a `subagent` call still
   running with its workers' session files.
-- **A limit-reaching run with a worker in flight carries no token count.** That worker's spend is
-  in no tool result, so a count would be short, and short on the delegating arm. Its
-  `totalTokens` is null, and the pre-registration's rule applies: a pair with no token count makes
-  rule 3 inconclusive, not failed.
+- **A limit-reaching run with a worker in flight counts that worker's session, as a lower
+  bound.** The worker's `subagent` call never ended, so no tool result carries its spend. Its
+  session file, which reconciliation finds claimed by no call, is read instead: each completed
+  reply is metered as a finished worker's is, and the same model, effort and usage checks apply.
+  The reply it had in flight was never written, so the run's `totalTokens` stays a number but is a
+  lower bound, flagged `tokensLowerBound: true` with the workers' keys in `inFlightWorkers`.
 - **Under v6, a fast empty run is valid with zero findings,** flagged `fastEmpty: true`.
 - **Every other invalid reason stays invalid,** and on an official grid still trips the breaker at
   once: a leak, a tool-surface error, a runtime or pin mismatch, harness bookkeeping (usage
@@ -52,7 +54,9 @@ ADR-026 inherits and the breaker's trigger in ADR-031 · built on branch `p2/val
   errors it recognises as the stop's, and only on a run the runner stopped at the limit.
 - **The counts are reported per arm.** `eval/v6-decision.ts` reports, for each arm of a
   comparison, how many paired runs reached the limit and how many ended fast and empty. They never
-  decide. `eval/v6-pilot-sd.ts` pairs these runs like any other and does not read the flags, since
+  decide. It also counts per arm the runs whose tokens are a lower bound; rule 3 includes their
+  pairs, and is reported again without them as a sensitivity row that never decides.
+  `eval/v6-pilot-sd.ts` pairs these runs like any other and does not read the flags, since
   a per-arm count would show which arm works longer.
 
 ### Consequences
@@ -61,9 +65,11 @@ ADR-026 inherits and the breaker's trigger in ADR-031 · built on branch `p2/val
   quit at once. Its breaker still trips at once on an integrity failure.
 - A run cut off at the limit is scored on less work than it would have done with more time. That
   is the limit being part of the protocol, in both arms alike.
-- Rule 3 can become inconclusive when the delegating arm reaches the limit with a worker running.
-  How often is measured by the counts above and by the null token counts; accounting a cut-off
-  worker's session directly would remove it, and is not done here.
+- A delegating arm that reaches the limit with a worker running has its cost understated by at
+  most the replies in flight, one per worker cut off. Rule 3 includes those pairs, since leaving
+  them out, or withholding their tokens, would make rule 3 inconclusive for the whole comparison
+  the first time it happens. How much they matter is read from the sensitivity row and the per-arm
+  counts.
 - A transcript line truncated by the SIGKILL that follows SIGTERM by 5 s would still invalidate the
   run. pi exits on SIGTERM after disposing its runtime, and its stdout to a pipe is synchronous on
   Linux, so this should be rare; it is left as an integrity failure rather than guessed at.
@@ -80,6 +86,9 @@ ADR-026 inherits and the breaker's trigger in ADR-031 · built on branch `p2/val
   minutes of a run is as much an integrity failure as in its first. The waiver is limited to the
   texts the stop produces.
 - **Counting a limit run's tokens without its in-flight workers.** It would understate the
-  delegating arm's cost, which is the direction rule 3 guards against.
+  delegating arm's cost by whole worker sessions, which is the direction rule 3 guards against.
+- **Withholding the tokens of such a run (null).** Under the pre-registration a pair with no token
+  count makes rule 3 inconclusive, so one such run would leave the cost rule undecided for the whole
+  comparison.
 - **Making the policy a global default.** The v5 grids were judged by the old rules; changing them
   under a v5 resume would make one grid run under two rules.

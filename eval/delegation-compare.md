@@ -412,12 +412,14 @@ native-worker snapshot from ADR-025, which the candidate probe refuses because i
   (`--validity v6`, recorded in the manifest). Under it a run that reaches the run limit is valid,
   scored by the pinned scorer on its ledger as it stood at the deadline (graded after the process
   group has closed and the scope is reaped), flagged `reachedLimit: true`, with its stop reason
-  still `budget`; the errors the stop caused are listed as `limitEffects`, and when a worker was
-  still running its tokens are withheld as null. A fast empty run is valid with zero findings,
+  still `budget`; the errors the stop caused are listed as `limitEffects`. A worker still running
+  at the limit is counted from its session file (its completed replies), so the run's tokens are a
+  lower bound, flagged `tokensLowerBound: true` with the workers' keys. A fast empty run is valid with zero findings,
   flagged `fastEmpty: true`. Both are model behaviour: excluding them would bias the comparison
   against the arm that works longer or quits sooner, which is what 3.2 changes. Every other
   invalid reason stays invalid and on an official grid still trips the breaker at once.
-  `eval/v6-decision.ts` reports both counts per arm, never deciding. A grid without the policy,
+  `eval/v6-decision.ts` reports these counts per arm, never deciding, and keeps lower-bound pairs
+  in rule 3 with a sensitivity row that leaves them out. A grid without the policy,
   every v5 grid included, is judged exactly as above.
 - **Stage 1 is a pilot, then the full grid.** It starts at `--passes 2`. Until the pass count is
   fixed it is blind: it prints and summarises only the valid pairs and their paired SD, and the
