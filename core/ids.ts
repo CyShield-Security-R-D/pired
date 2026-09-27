@@ -10,9 +10,10 @@
  * failed), 2.9% at 1,000 and 11.2% at 2,000. A bulk hypothesis write (class x
  * element) reaches those sizes on a real engagement.
  *
- * So uniqueness is checked here, against the store as it stands inside the
- * writer's lock and against ids minted earlier in the same write, rather than
- * by lengthening the id: existing ledgers and FORMAT.md stay valid as written.
+ * So uniqueness is checked here, against every id the store has held (a
+ * deleted row's id included) inside the writer's lock and against ids minted
+ * earlier in the same write, rather than by lengthening the id: existing
+ * ledgers and FORMAT.md stay valid as written.
  */
 
 import type { Ids } from "./ports.ts";
@@ -38,12 +39,13 @@ export function freshId(ids: Ids, taken: (id: string) => boolean, attempts = 64)
 }
 
 /**
- * A minting function for one write: fresh against `existing` and against every
- * id it has already handed out, so two rows of one bulk write never share an id.
+ * A minting function for one write: fresh against `written` — every id the
+ * store has ever held, deleted rows included (Workspace.upsert supplies it) —
+ * and against every id it has already handed out, so two rows of one bulk
+ * write never share an id.
  */
-export function idMinter(ids: Ids, existing: Iterable<{ id: string }>): () => string {
-	const taken = new Set<string>();
-	for (const row of existing) taken.add(row.id);
+export function idMinter(ids: Ids, written: Iterable<string>): () => string {
+	const taken = new Set(written);
 	return () => {
 		const id = freshId(ids, (candidate) => taken.has(candidate));
 		taken.add(id);

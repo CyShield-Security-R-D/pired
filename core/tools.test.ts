@@ -2324,11 +2324,11 @@ describe("passes, and the ledger's record of which one found what", () => {
  */
 describe("an id is never minted twice in one store", () => {
 	/** A setup whose id source returns the draws queued on it, then "zzzzzz" forever. */
-	async function scriptedIds(): Promise<{ ws: Workspace; ctx: ToolContext; record: ToolDefinition; queue: string[] }> {
-		const { ws, ctx, record } = await setup();
+	async function scriptedIds(): Promise<{ svc: FakeServices; ws: Workspace; ctx: ToolContext; record: ToolDefinition; queue: string[] }> {
+		const { svc, ws, ctx, record } = await setup();
 		const queue: string[] = [];
 		const scripted: ToolContext = { ...ctx, services: { ...ctx.services, ids: { newId: () => queue.shift() ?? "zzzzzz" } } };
-		return { ws, ctx: scripted, record, queue };
+		return { svc, ws, ctx: scripted, record, queue };
 	}
 
 	it("mints a fresh id when the first draw collides with a stored row", async () => {
@@ -2381,6 +2381,22 @@ describe("an id is never minted twice in one store", () => {
 		const blockers = await ws.read("blockers");
 		expect(blockers.map((b) => b.id).sort()).toEqual(["b00001", "b00002"]);
 		expect(blockers.find((b) => b.id === "b00001")?.question).toBe("Is the staging host in scope?");
+	});
+
+	it("never reuses the id of a deleted row", async () => {
+		// A tombstone hides the row from reads but keeps its history in the file,
+		// so a deletion can be undone by hand (FORMAT.md §4). A new finding minted
+		// onto that id would interleave with the history, and the undo would
+		// restore the wrong record.
+		const { svc, ws, ctx, record, queue } = await scriptedIds();
+		queue.push("aaaaaa");
+		await record.execute({ kind: "finding", title: "IDOR on notes", severity: "high", target: "notes.py:42", class: "idor" }, ctx);
+		await record.execute({ kind: "finding", id: "aaaaaa", delete: true, reason: "recorded against the wrong engagement" }, ctx);
+		queue.push("aaaaaa", "bbbbbb");
+		const next = await record.execute({ kind: "finding", title: "SQL injection in search", severity: "critical", target: "search.py:9", class: "sqli" }, ctx);
+		expect((next.details as { id: string }).id).toBe("bbbbbb");
+		const lines = (await svc.fs.readFileIfExists(ws.storePath("findings")))?.trim().split("\n").map((l) => JSON.parse(l) as { id: string; title?: string });
+		expect(lines?.filter((l) => l.id === "aaaaaa").every((l) => l.title === "IDOR on notes")).toBe(true);
 	});
 
 	it("throws after the attempts are exhausted, rather than overwriting a record", async () => {

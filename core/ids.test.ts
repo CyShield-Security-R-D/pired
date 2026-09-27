@@ -15,10 +15,6 @@ function scripted(draws: string[], rest = "zzzzzz"): Ids & { drawn: number } {
 	return source;
 }
 
-function rows(...ids: string[]): Array<{ id: string }> {
-	return ids.map((id) => ({ id }));
-}
-
 describe("minting an id that is not already in the store", () => {
 	it("returns the first draw when nothing holds it", () => {
 		const ids = scripted(["a1b2c3"]);
@@ -57,7 +53,7 @@ describe("minting ids for one write", () => {
 	});
 
 	it("skips ids the store already holds as well as ids it handed out", () => {
-		const mint = idMinter(scripted(["aaaaaa", "bbbbbb", "bbbbbb", "cccccc"]), rows("aaaaaa"));
+		const mint = idMinter(scripted(["aaaaaa", "bbbbbb", "bbbbbb", "cccccc"]), ["aaaaaa"]);
 		expect([mint(), mint()]).toEqual(["bbbbbb", "cccccc"]);
 	});
 });

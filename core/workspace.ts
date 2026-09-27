@@ -168,14 +168,22 @@ export class Workspace {
 	 * lock that guards the append, against the ledger as it stands at that
 	 * instant. `plan` returning nothing writes nothing — a repeat that says
 	 * nothing new should not cost a line.
+	 *
+	 * `written` is every id the file has ever held, deleted ones included, read
+	 * under the same lock. It is what a new id must miss: `current` drops
+	 * tombstoned rows, and a new record minted onto a deleted row's id would
+	 * interleave with that row's history, so undoing the deletion by hand —
+	 * which FORMAT.md §4 promises anyone who can open the ledger — would bring
+	 * back the wrong record.
 	 */
 	async upsert<S extends StoreName>(
 		store: S,
-		plan: (current: StoreRecordMap[S][]) => StoreRecordMap[S][] | undefined,
+		plan: (current: StoreRecordMap[S][], written: ReadonlySet<string>) => StoreRecordMap[S][] | undefined,
 	): Promise<void> {
 		const path = this.storePath(store);
 		await this.withLock(path, async () => {
-			const records = plan(this.parseStore<S>(await this.fs.readFileIfExists(path)));
+			const { live, written } = this.parseLedger<S>(await this.fs.readFileIfExists(path));
+			const records = plan(live, written);
 			if (records && records.length > 0) await this.writeLines(store, path, records);
 		});
 	}
@@ -202,7 +210,12 @@ export class Workspace {
 
 	/** JSONL to live records: last write wins per id, tombstones removed. */
 	private parseStore<S extends StoreName>(raw: string | undefined): StoreRecordMap[S][] {
-		if (!raw) return [];
+		return this.parseLedger<S>(raw).live;
+	}
+
+	/** Live records, and every id any line has carried — tombstoned ones included. */
+	private parseLedger<S extends StoreName>(raw: string | undefined): { live: StoreRecordMap[S][]; written: Set<string> } {
+		if (!raw) return { live: [], written: new Set() };
 		const byId = new Map<string, StoreRecordMap[S]>();
 		for (const rawLine of raw.split("\n")) {
 			const line = rawLine.trim();
@@ -223,7 +236,7 @@ export class Workspace {
 			if ((rec as { deleted?: unknown }).deleted === true) continue;
 			out.push(rec);
 		}
-		return out;
+		return { live: out, written: new Set(byId.keys()) };
 	}
 
 	// --- Single-object files -------------------------------------------------

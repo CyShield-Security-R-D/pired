@@ -171,6 +171,37 @@ describe("Workspace.upsert", () => {
 		expect(await ws.read("inventory")).toHaveLength(2);
 	});
 
+	it("hands the plan every id the store has held, a deleted row's included", async () => {
+		// `current` hides tombstoned rows, so a new id checked only against it
+		// could land on a deleted row's id, and undoing that deletion by hand
+		// would then bring back the wrong record.
+		const svc = makeFakeServices();
+		const ws = await Workspace.open(DIR, "acme", svc);
+		await ws.append("inventory", host("h1", "app.acme.test", svc.clock.nowIso()));
+		await ws.append("inventory", host("h2", "old.acme.test", svc.clock.nowIso()));
+		await ws.append("inventory", { ...host("h2", "old.acme.test", svc.clock.nowIso()), deleted: true } as HostRecord);
+		let live: string[] = [];
+		let written: string[] = [];
+		await ws.upsert("inventory", (current, ids) => {
+			live = current.map((r) => r.id);
+			written = [...ids].sort();
+			return undefined;
+		});
+		expect(live).toEqual(["h1"]);
+		expect(written).toEqual(["h1", "h2"]);
+	});
+
+	it("hands an empty store's plan no ids at all", async () => {
+		const svc = makeFakeServices();
+		const ws = await Workspace.open(DIR, "acme", svc);
+		let size = -1;
+		await ws.upsert("inventory", (_current, ids) => {
+			size = ids.size;
+			return undefined;
+		});
+		expect(size).toBe(0);
+	});
+
 	it("writes nothing when the plan asks for nothing", async () => {
 		const svc = makeFakeServices();
 		const ws = await Workspace.open(DIR, "acme", svc);
