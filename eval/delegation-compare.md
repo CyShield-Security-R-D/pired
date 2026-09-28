@@ -386,6 +386,44 @@ native-worker snapshot from ADR-025, which the candidate probe refuses because i
   - **Blocked pairs:** a pair invalid for any other reason (a timeout, a fast empty run, a harness
     check) is never re-run. An official grid holding one refuses to resume, because it cannot
     approve.
+  - **Drained pairs:** a pair a drain left half-done is re-run whole, and that attempt is not
+    counted toward the attempt ceiling. See [Pausing a grid](#pausing-a-grid).
+
+### Pausing a grid
+
+To shut the machine down mid-grid, **drain** the grid rather than stopping it. SIGINT, SIGTERM and
+SIGHUP still kill the arms in flight. A pair runs its arms one after the other, so a kill also
+wastes each interrupted pair's finished first arm. At concurrency 4 and a 4 h run limit that is up
+to 16 run-hours of finished arms per pause, besides what the killed arms had run. A drain launches no new pair and kills nothing. The runner's pid is in
+`<out>/.pired-compare.owner` and `progress.json`.
+
+| Level | How | What finishes | Longest wait |
+|---|---|---|---|
+| pairs | `kill -USR1 <pid>`, or `echo pairs > <out>/DRAIN` | every pair in flight, both arms (the second arm of a pair whose first arm is running or done is still launched) | two run limits: a first arm just started, then its partner |
+| arms | `kill -USR2 <pid>`, or `echo arms > <out>/DRAIN` | only the arms already running; no second arm starts | one run limit |
+
+- **Prefer `pairs`.** It wastes no finished arm. Use `arms` when the machine must go down within
+  one run limit. `arms` then costs the finished first arm of each half-done pair, since the pair is
+  re-run whole. A later `arms` request tightens a `pairs` drain; a `pairs` request never loosens an
+  `arms` one.
+- **The DRAIN file** is for an operator who cannot send signals. The runner reads it before every
+  launch and once a minute, then removes it, so the resume that follows is not drained at once. An
+  empty file, or one it cannot read as a level, drains as `pairs`.
+- **While it drains,** `progress.json` reads `draining` with the request. When the last arm ends,
+  `summary.json` records `drained: true` and a `drain` block: level, trigger, `requestedAt`,
+  `finishedAt`, and the pairs `left`. Its `stopReason` reads `drained by operator (…)`,
+  `progress.json` reads `drained`, and the runner exits 0. A drain that arrives after the last
+  launch leaves nothing, so that grid is decided as usual.
+- **Resume** with `node --experimental-strip-types eval/delegation-compare.ts --resume <out>`. It
+  re-runs nothing that finished. Pairs never started run at their next attempt. An arm that `arms`
+  did not start is recorded `drained: true`, not as infrastructure. A drain never feeds the
+  breaker, never counts as an infrastructure failure, and the attempt it left half-done is not
+  counted toward the attempt ceiling.
+- **A signal still wins.** SIGINT/SIGTERM/SIGHUP during a drain stops and kills as before, and the
+  grid reads `interrupted`. A drain after one is ignored.
+- **It is operational only.** It changes no measurement, no validity rule, no pairing rule and no
+  pin other than the harness hash. A grid started on an earlier harness cannot be resumed on this
+  one, and can only be stopped the old way.
 
 ### v6 grids: N targets, patched twins, per-arm scopes, grid kinds (plan 2.8, ADR draft)
 

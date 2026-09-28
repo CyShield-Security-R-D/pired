@@ -1833,8 +1833,8 @@ export function nextPairAction(attempt: number, arms: ReadonlyArray<ArmResult | 
  * How far an operator's drain goes (ADR draft v6-drain). A pair runs its arms
  * one after the other, so a stop that kills the arms in flight also wastes
  * each interrupted pair's finished first arm: at concurrency 4 and a 4 h run
- * limit, up to 16 run-hours per pause. A drain launches no new pair and kills
- * nothing.
+ * limit, up to 16 run-hours of finished arms per pause, besides what the killed
+ * arms had run. A drain launches no new pair and kills nothing.
  *
  * - `pairs` (SIGUSR1, or a DRAIN file reading "pairs") also launches the
  *   second arm of every pair in flight, so no finished arm is wasted. It can
