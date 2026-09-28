@@ -1770,6 +1770,12 @@ export type PairAction =
 export interface PairRules {
 	/** K, the policy's attemptCeiling. Absent for a grid without a breaker, which has no ceiling. */
 	attemptCeiling?: number;
+	/**
+	 * Attempts of this pair an operator's drain left half-done (ADR draft
+	 * v6-drain). No arm failed in them, so the ceiling does not count them: a
+	 * pause must never cost a pair one of its K attempts. Absent: none.
+	 */
+	drainedAttempts?: number;
 	/** The runner's own re-queue. Absent for planResume. */
 	requeue?: RequeueContext;
 }
@@ -1810,8 +1816,10 @@ export function nextPairAction(attempt: number, arms: ReadonlyArray<ArmResult | 
 	const reason = missing
 		? (attempt === 0 ? "the pair has no run yet" : `attempt ${attempt}: an arm has no run at that attempt`)
 		: `attempt ${attempt}: an arm failed for an infrastructure reason`;
-	if (rules.attemptCeiling !== undefined && attempt >= rules.attemptCeiling) {
-		return { kind: "abandoned", reason: `${reason}; ${attempt} is the attempt ceiling of ${rules.attemptCeiling}, so the pair is abandoned and the grid cannot approve` };
+	const drained = rules.drainedAttempts ?? 0;
+	if (rules.attemptCeiling !== undefined && attempt - drained >= rules.attemptCeiling) {
+		const counted = drained ? `${attempt - drained} counted attempt(s) (${drained} drained by the operator, not counted) reach` : `${attempt} is`;
+		return { kind: "abandoned", reason: `${reason}; ${counted} the attempt ceiling of ${rules.attemptCeiling}, so the pair is abandoned and the grid cannot approve` };
 	}
 	const { requeue } = rules;
 	if (!requeue) return { kind: "rerun", attempt: attempt + 1, notBeforeMs: 0, reason };
@@ -1819,6 +1827,54 @@ export function nextPairAction(attempt: number, arms: ReadonlyArray<ArmResult | 
 		return { kind: "give-up", reason: `${reason}; this runner has launched it ${requeue.attemptsThisRun} time(s), the cap of ${requeue.policy.maxAttempts}, so only a --resume re-runs it` };
 	}
 	return { kind: "rerun", attempt: attempt + 1, notBeforeMs: requeue.atMs + requeue.policy.cooldownMs * requeue.attemptsThisRun, reason };
+}
+
+/**
+ * How far an operator's drain goes (ADR draft v6-drain). A pair runs its arms
+ * one after the other, so a stop that kills the arms in flight also wastes
+ * each interrupted pair's finished first arm: at concurrency 4 and a 4 h run
+ * limit, up to 16 run-hours per pause. A drain launches no new pair and kills
+ * nothing.
+ *
+ * - `pairs` (SIGUSR1, or a DRAIN file reading "pairs") also launches the
+ *   second arm of every pair in flight, so no finished arm is wasted. It can
+ *   take up to two run limits: a first arm just started, then its partner.
+ * - `arms` (SIGUSR2, or "arms") lets only the arms already running finish and
+ *   starts no second arm, so it takes at most one run limit. A pair it leaves
+ *   half-done is re-run whole by --resume, as the pairing rule requires, but
+ *   that attempt is not counted toward the ceiling.
+ */
+export type DrainLevel = "pairs" | "arms";
+
+/** One operator request to drain: its level, what sent it, and when. */
+export interface DrainRequest { level: DrainLevel; trigger: string; atMs: number }
+
+/**
+ * The drain in force after `next` arrives. `arms` is the stricter level and
+ * wins; a repeat, or a `pairs` after `arms`, changes nothing, because an arms
+ * drain may already have recorded a second arm as not launched.
+ */
+export function strongerDrain(current: DrainRequest | undefined, next: DrainRequest): DrainRequest {
+	if (!current) return next;
+	return current.level === "pairs" && next.level === "arms" ? next : current;
+}
+
+/**
+ * A DRAIN file's contents as a level. An empty file, or one the runner cannot
+ * read as a level, drains as `pairs`: the operator asked for a pause, and the
+ * level that wastes no finished arm is the safe reading of a typo.
+ */
+export function parseDrainFile(text: string): { level: DrainLevel; note?: string } {
+	const word = text.trim().toLowerCase();
+	if (word === "arms") return { level: "arms" };
+	if (word === "pairs" || word === "") return { level: "pairs" };
+	return { level: "pairs", note: `DRAIN file reads ${JSON.stringify(text.trim().slice(0, 40))}, not "pairs" or "arms"; draining as pairs` };
+}
+
+/** What the drain does, in the words summary.json's stopReason and the console use. */
+export function drainReason(drain: DrainRequest): string {
+	const what = drain.level === "pairs" ? "finish the pairs in flight, both arms" : "finish only the arms running";
+	return `drained by operator (${drain.trigger}: ${what}; requested ${new Date(drain.atMs).toISOString()})`;
 }
 
 /**

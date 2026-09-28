@@ -4,7 +4,7 @@ import { createChildGuard, HANDOFF_GRACE_TURNS } from "../core/child.ts";
 import { agentMarker, PIRED_AGENTS } from "../core/subagents.ts";
 import {
 	accountUsage, APPROVAL_DECISION, childRecordIds, compareMatchedRuns, contentText, createBreaker, DEFAULT_BREAKER, findLeaks, isOfficialGrid,
-	leakTermsFor, meteredCallCount, nextPairAction, normalizePiUsage, observationsFromChildSession, observationsFromPiEvents, OFFICIAL_PASSES, OFFICIAL_TARGET_IDS,
+	drainReason, leakTermsFor, meteredCallCount, nextPairAction, parseDrainFile, strongerDrain, normalizePiUsage, observationsFromChildSession, observationsFromPiEvents, OFFICIAL_PASSES, OFFICIAL_TARGET_IDS,
 	parseBreakerPolicy, piCostUsd, PIRED_BUDGET_STOP, planSchedule, QUALITY_MARGIN, reconcileChildSession, reconcileSubagentCalls, summarizeRetries,
 	type ArmResult, type BreakerEvent, type ChildSessionExtraction, type ExpectedCell, type PairRules, type RetriedAttempt, type RunMetric, type SubagentChild,
 	type UsageObservation,
@@ -1588,12 +1588,50 @@ describe("nextPairAction", () => {
 		expect(nextPairAction(16, [broken, valid], runner(1)).kind).toBe("blocked");
 	});
 
+	// A drain that left a pair half-done spent no failure: at attempt 16 with one
+	// drained attempt the pair has failed 15 times, so a pause cannot abandon it.
+	it("does not count an attempt a drain left half-done toward the ceiling", () => {
+		expect(nextPairAction(16, [valid, undefined], { attemptCeiling: 16, drainedAttempts: 1 })).toMatchObject({ kind: "rerun", attempt: 17 });
+		const atCeiling = nextPairAction(17, [dropped, valid], { attemptCeiling: 16, drainedAttempts: 1 });
+		expect(atCeiling.kind).toBe("abandoned");
+		expect(atCeiling.kind === "abandoned" ? atCeiling.reason : "").toMatch(/16 counted attempt\(s\) \(1 drained by the operator, not counted\) reach the attempt ceiling of 16/);
+	});
+
 	// planResume asks without a context: the resume is itself the decision to
 	// spend more, so there is no wait and no cap.
 	it("re-runs at the next attempt with no wait and no cap when asked without a requeue context", () => {
 		expect(nextPairAction(9, [dropped, valid])).toEqual({ kind: "rerun", attempt: 10, notBeforeMs: 0, reason: "attempt 9: an arm failed for an infrastructure reason" });
 		expect(nextPairAction(0, [undefined, undefined])).toMatchObject({ kind: "rerun", attempt: 1, reason: "the pair has no run yet" });
 		expect(nextPairAction(2, [valid, undefined])).toMatchObject({ kind: "rerun", attempt: 3, reason: "attempt 2: an arm has no run at that attempt" });
+	});
+});
+
+describe("drain requests", () => {
+	const at = Date.UTC(2026, 8, 28, 9, 0);
+	const pairs = { level: "pairs" as const, trigger: "SIGUSR1", atMs: at };
+	const arms = { level: "arms" as const, trigger: "SIGUSR2", atMs: at + 60_000 };
+
+	// An arms drain may already have recorded a second arm as not launched, so a
+	// later pairs request must not reopen launches it has closed.
+	it("escalates from pairs to arms and never back", () => {
+		expect(strongerDrain(undefined, pairs)).toBe(pairs);
+		expect(strongerDrain(pairs, arms)).toBe(arms);
+		expect(strongerDrain(arms, pairs)).toBe(arms);
+		expect(strongerDrain(pairs, { ...pairs, trigger: "DRAIN file (pairs)" })).toBe(pairs);
+	});
+
+	// An operator who cannot send signals writes the file; a typo still pauses
+	// the grid, at the level that wastes no finished arm.
+	it("reads a DRAIN file as arms only when it says arms, and anything else as pairs", () => {
+		expect(parseDrainFile("arms\n")).toEqual({ level: "arms" });
+		expect(parseDrainFile(" Pairs ")).toEqual({ level: "pairs" });
+		expect(parseDrainFile("")).toEqual({ level: "pairs" });
+		expect(parseDrainFile("arm")).toEqual({ level: "pairs", note: 'DRAIN file reads "arm", not "pairs" or "arms"; draining as pairs' });
+	});
+
+	it("names the trigger, the level and the time in the stop reason", () => {
+		expect(drainReason(pairs)).toBe("drained by operator (SIGUSR1: finish the pairs in flight, both arms; requested 2026-09-28T09:00:00.000Z)");
+		expect(drainReason(arms)).toBe("drained by operator (SIGUSR2: finish only the arms running; requested 2026-09-28T09:01:00.000Z)");
 	});
 });
 
