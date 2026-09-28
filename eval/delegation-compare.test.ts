@@ -3,19 +3,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-	accountCellUsage, atHighestAttempt, attemptReport, AUTH_HORIZON_CAP_MS, AUTH_MARGIN_MS, benchmarkRuntimeOf, checkAuthHorizon, childProviderFailure, classifyInfra,
+	accountCellUsage, atHighestAttempt, attemptReport, drainRecord, exitStatus, finalStatus, isDrained, liveStatus, takeDrain, takeDrainFile, AUTH_HORIZON_CAP_MS, AUTH_MARGIN_MS, benchmarkRuntimeOf, checkAuthHorizon, childProviderFailure, classifyInfra,
 	credentialExpiry, decideInfra, DEFAULT_CANDIDATE_MAX_AGENTS, fetchErrorsFromStderr, gridWorstCaseMs, isBrokerEnvVar, loadTargets, metricFromRecord, notLaunchedOutcome, ownerIsLive,
 	newManifest, optionsFromManifest, parseBreakerSpec, parseComparePins, parseOptions, parseOwnerRecord, planResume, providerFailureTexts, requestLogFromStderr,
 	adoptPasses, writeSealed, armOptionsFromManifest, cellModelInputs, credentialStopOutcome, gridAmendments, credentialStopReason, horizonRefusal, redactTermsFor, V6_DECISION, verdictFields, manifestTargetEntry, probeDelegationScope, resumeMismatches, splitTwinRuns, twinOptionsFromManifest, retryPolicyFromManifest, reviewScope, runPairs, runStop, runtimeMismatch, scopedSealCommand, startTimeFromStat, subagentConfigFor,
 	toolSurfaceErrors, trackStream, workerCapReason,
 	ceilingOf, ceilingProbeErrors, latestMatchedSessions, planMatchedResume, sessionRunOf, verifyCeiling,
-	type GridStopState, type MatchedSessionSpec, type ProviderFailures, type RunOutcome,
+	type DrainFs, type GridStopState, type MatchedSessionSpec, type ProviderFailures, type RunOutcome,
 } from "./delegation-compare.ts";
 import { sessionBudget, type MatchedPolicy, type SessionState } from "./delegation-compare-matched.ts";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { gridKindReasons, kindFlags } from "./delegation-compare-grid.ts";
 import { BENCHMARK_SETTINGS, DEFAULT_RETRY_POLICY } from "./delegation-compare-entry.ts";
-import { compareMatchedRuns, DEFAULT_BREAKER, observationsFromChildSession, planSchedule, type Arm, type BreakerPolicy, type ScheduledPair } from "./delegation-compare-lib.ts";
+import { compareMatchedRuns, DEFAULT_BREAKER, observationsFromChildSession, planSchedule, type Arm, type BreakerPolicy, type DrainRequest, type ScheduledPair } from "./delegation-compare-lib.ts";
 
 /** The shipped pins, read once: every stage command line below is built from its kind (kindFlags). */
 const SHIPPED_PINS = parseComparePins(readFileSync(new URL("./delegation-compare.pins.json", import.meta.url), "utf8"));
@@ -1259,6 +1259,229 @@ describe("runPairs", () => {
 	});
 });
 
+describe("runPairs under an operator's drain (ADR draft v6-drain)", () => {
+	// Builders: a scripted outcome as runOne returns it, an in-memory DRAIN file,
+	// and a pair loop whose every arm ends on a later macrotask, so with
+	// concurrency 2 both workers start their arms before either finishes: two
+	// pairs in flight together. `at` runs as the nth arm launches: what an
+	// operator's signal or DRAIN file does at that moment.
+	type Kind = "valid" | "drop";
+	const outcome = (pair: ScheduledPair, arm: Arm, attempt: number, kind: Kind): RunOutcome => {
+		const valid = kind === "valid";
+		return {
+			metric: { key: pair.key, target: pair.target, pass: pair.pass, valid, truePositives: valid ? 1 : 0, precision: valid ? 0.5 : 0, totalClaims: valid ? 2 : 0, totalTokens: valid ? 1000 : Number.NaN },
+			arm, cellId: `cell-${pair.key}-${arm}-${attempt}`, seconds: 600, infraFailure: !valid,
+			record: { key: pair.key, target: pair.target, pass: pair.pass, arm, attempt, valid, infraFailure: !valid, infraReason: valid ? null : "transient provider error" },
+		};
+	};
+	const enoent = (): Error => Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+	const memoryFs = (files: Map<string, string>): DrainFs => ({
+		readFile: async (path) => { const text = files.get(path); if (text === undefined) throw enoent(); return text; },
+		unlink: async (path) => { if (!files.delete(path)) throw enoent(); },
+	});
+	const usr1 = (atMs: number): DrainRequest => ({ level: "pairs", trigger: "SIGUSR1", atMs });
+	const usr2 = (atMs: number): DrainRequest => ({ level: "arms", trigger: "SIGUSR2", atMs });
+	const grid = (targets: string[], opts: {
+		at?: (n: number, state: GridStopState, files: Map<string, string>) => void; breaker?: BreakerPolicy; drainFile?: boolean; firstAttempt?: number; drainedAttempts?: number;
+		script?: (key: string, arm: Arm, attempt: number) => Kind;
+	} = {}) => {
+		let clock = Date.UTC(2026, 8, 28, 9, 0);
+		const launched: string[] = [];
+		const settled: RunOutcome[] = [];
+		const lines: string[] = [];
+		let drainReports = 0;
+		const files = new Map<string, string>();
+		const state: GridStopState = { aborted: false, stopInvalid: false, stopReason: undefined, quotaExhausted: undefined };
+		const run = () => runPairs({
+			pairs: planSchedule(targets, 1), firstAttempt: () => opts.firstAttempt ?? 1, concurrency: 2, official: false,
+			...(opts.breaker ? { breaker: opts.breaker } : {}),
+			state,
+			launch: async (pair, arm, attempt) => {
+				launched.push(`${pair.key} ${arm} ${attempt}`);
+				opts.at?.(launched.length, state, files);
+				await new Promise((done) => { setImmediate(done); });
+				clock += 10 * 60_000;
+				return outcome(pair, arm, attempt, opts.script?.(pair.key, arm, attempt) ?? "valid");
+			},
+			settle: async (o) => { settled.push(o); },
+			report: async () => undefined,
+			nowMs: () => clock,
+			sleep: async (ms) => { clock += ms; },
+			log: (line) => lines.push(line), warn: (line) => lines.push(line), out: "/grid",
+			...(opts.drainFile ? { drainCheck: () => takeDrainFile("/grid/DRAIN", () => clock, (line) => lines.push(line), memoryFs(files)), onDrain: async () => { drainReports++; } } : {}),
+			...(opts.drainedAttempts ? { drainedAttempts: () => opts.drainedAttempts! } : {}),
+		});
+		return { run, launched, settled, lines, state, files, reports: () => drainReports };
+	};
+	const rows = (settled: RunOutcome[]) => settled.map((o) => o.record);
+
+	// The whole point of SIGUSR1: at concurrency 4 a kill wasted each in-flight
+	// pair's finished first arm too, up to 16 run-hours of Luna per pause.
+	it("lets every pair in flight finish both arms on SIGUSR1 and launches no new pair", async () => {
+		const g = grid(["A", "B", "C", "D"], { at: (n, state) => { if (n === 2) takeDrain(state, usr1(0)); } });
+		const result = await g.run();
+		expect([...g.launched].sort()).toEqual(["A#1 baseline 1", "A#1 candidate 1", "B#1 baseline 1", "B#1 candidate 1"]);
+		expect(g.settled.every((o) => o.metric.valid && o.record.notLaunched === undefined)).toBe(true);
+		expect(result.drained).toEqual({ drain: usr1(0), left: ["C#1", "D#1"] });
+		expect(g.state).toMatchObject({ stopInvalid: false, stopReason: undefined, aborted: false });
+	});
+
+	// The operator who cannot send signals: the file is read before the next
+	// launch, the second arms still launch, and it is gone so --resume runs.
+	it("drains the same way on a DRAIN file reading pairs, read before the next launch and removed once taken", async () => {
+		const g = grid(["A", "B", "C", "D"], { drainFile: true, at: (n, _state, files) => { if (n === 2) files.set("/grid/DRAIN", "pairs\n"); } });
+		const result = await g.run();
+		expect([...g.launched].sort()).toEqual(["A#1 baseline 1", "A#1 candidate 1", "B#1 baseline 1", "B#1 candidate 1"]);
+		expect(result.drained?.drain).toMatchObject({ level: "pairs", trigger: "DRAIN file (pairs)" });
+		expect(result.drained?.left).toEqual(["C#1", "D#1"]);
+		expect(g.files.has("/grid/DRAIN")).toBe(false);
+		expect(g.reports()).toBe(1);
+		expect(g.lines.filter((l) => l.startsWith("DRAINING — drained by operator (DRAIN file (pairs): finish the pairs in flight, both arms"))).toHaveLength(1);
+	});
+
+	// SIGUSR2 bounds the pause at one run limit: the arms running finish, and a
+	// pair's second arm is recorded as not launched, neither infra nor a failure.
+	it("lets only the running arms finish on SIGUSR2 or a DRAIN file reading arms, and starts no second arm", async () => {
+		const bySignal = (n: number, state: GridStopState): void => { if (n === 2) takeDrain(state, usr2(0)); };
+		const byFile = (n: number, _state: GridStopState, files: Map<string, string>): void => { if (n === 2) files.set("/grid/DRAIN", "arms"); };
+		for (const at of [bySignal, byFile]) {
+			const g = grid(["A", "B", "C", "D"], { at, drainFile: true, breaker: DEFAULT_BREAKER });
+			const result = await g.run();
+			expect([...g.launched].sort()).toEqual(["A#1 baseline 1", "B#1 candidate 1"]);
+			const second = g.settled.filter((o) => o.record.drained === true);
+			expect(second.map((o) => `${o.metric.key} ${o.arm}`).sort()).toEqual(["A#1 candidate", "B#1 baseline"]);
+			expect(second.every((o) => o.record.notLaunched === true && o.infraFailure === false && o.record.infraFailure === false)).toBe(true);
+			expect(result.drained?.drain.level).toBe("arms");
+			expect(result.drained?.left).toEqual(["A#1", "B#1", "C#1", "D#1"]);
+			// Never the breaker's: nothing tripped, re-queued or abandoned.
+			expect(result).toMatchObject({ breaker: { tripped: false }, requeued: [], gaveUp: [], blocked: [], abandoned: [] });
+			expect(g.state.stopInvalid).toBe(false);
+		}
+	});
+
+	// Without a breaker the first invalid run stops the grid; an arm a drain did
+	// not start is invalid on paper, and must not read as that stop.
+	it("never lets a drained arm trip the fail-fast stop of a grid without a breaker", async () => {
+		const g = grid(["A", "B"], { at: (n, state) => { if (n === 2) takeDrain(state, usr2(0)); } });
+		await g.run();
+		expect(g.state).toMatchObject({ stopInvalid: false, stopReason: undefined });
+		expect(g.settled.filter((o) => o.record.drained === true)).toHaveLength(2);
+	});
+
+	// A pair that fails for infrastructure while the grid drains spent its own
+	// attempt; it is left for --resume rather than re-queued in a paused grid.
+	it("re-queues nothing while draining, leaving an infrastructure-failed pair to the resume", async () => {
+		const g = grid(["A", "B", "C"], {
+			breaker: DEFAULT_BREAKER,
+			at: (n, state) => { if (n === 2) takeDrain(state, usr1(0)); },
+			script: (key, arm) => key === "A#1" && arm === "candidate" ? "drop" : "valid",
+		});
+		const result = await g.run();
+		expect(result.requeued).toEqual([]);
+		expect(result.drained?.left).toEqual(["A#1", "C#1"]);
+		expect(g.launched.filter((l) => l.startsWith("A#1"))).toEqual(["A#1 baseline 1", "A#1 candidate 1"]);
+	});
+
+	// SIGINT/SIGTERM/SIGHUP keep their meaning exactly: stop, and record the
+	// partner of an arm the signal stopped as a runner interruption.
+	it("keeps SIGTERM's stop unchanged, and ignores a drain that arrives after it", async () => {
+		const g = grid(["A", "B", "C"], { at: (n, state) => { if (n === 2) { state.aborted = true; expect(takeDrain(state, usr1(0))).toBe(false); } } });
+		const result = await g.run();
+		expect([...g.launched].sort()).toEqual(["A#1 baseline 1", "B#1 candidate 1"]);
+		const partners = g.settled.filter((o) => o.record.notLaunched === true);
+		expect(partners.map((o) => [o.record.infraFailure, o.record.infraReason, o.record.drained])).toEqual([[true, "runner interruption", undefined], [true, "runner interruption", undefined]]);
+		expect(result.drained).toBeUndefined();
+	});
+
+	// SIGTERM after a drain still kills and still reads as an interruption: the
+	// second arm a pairs drain would have run is not launched, as before.
+	it("lets SIGTERM during a drain stop the grid as an interruption", async () => {
+		const g = grid(["A", "B", "C"], { at: (n, state) => { if (n === 2) takeDrain(state, usr1(0)); if (n === 3) state.aborted = true; } });
+		const result = await g.run();
+		expect(g.launched).toHaveLength(3);
+		expect(g.settled.filter((o) => o.record.notLaunched === true).map((o) => o.record.infraReason)).toEqual(["runner interruption"]);
+		expect(isDrained(result.drained, g.state)).toBe(false);
+		expect(finalStatus({ interrupted: true, stoppedInvalid: false, drained: false, complete: false })).toBe("interrupted");
+	});
+
+	// The resume after SIGUSR1 keeps both arms of each finished pair and runs
+	// only the pairs never started; after SIGUSR2 it re-runs the half-done pairs
+	// whole, as the pairing rule requires, without costing them an attempt.
+	it("resumes a drained grid re-running nothing that finished and charging no attempt for the drain", async () => {
+		const pairs = grid(["A", "B", "C", "D"], { at: (n, state) => { if (n === 2) takeDrain(state, usr1(0)); } });
+		await pairs.run();
+		const afterPairs = planResume(planSchedule(["A", "B", "C", "D"], 1), rows(pairs.settled), DEFAULT_BREAKER.attemptCeiling);
+		expect(afterPairs.keepKeys).toEqual(["A#1", "B#1"]);
+		expect(afterPairs.rerunKeys).toEqual(["C#1", "D#1"]);
+		expect(afterPairs.nextAttempt).toEqual({ "C#1": 1, "D#1": 1 });
+
+		const arms = grid(["A", "B"], { at: (n, state) => { if (n === 2) takeDrain(state, usr2(0)); } });
+		await arms.run();
+		// At the ceiling of 1 a drained attempt 1 would abandon the pair if it counted.
+		const afterArms = planResume(planSchedule(["A", "B"], 1), rows(arms.settled), 1);
+		expect(afterArms).toMatchObject({ rerunKeys: ["A#1", "B#1"], abandonedKeys: [], blockedKeys: [], nextAttempt: { "A#1": 2, "B#1": 2 }, drainedAttempts: { "A#1": 1, "B#1": 1 } });
+		expect(afterArms.reasons["A#1"]).toBe("attempt 1: a drain left the pair half-done; both arms re-run, and the attempt does not count toward the ceiling");
+	});
+
+	// The resumed runner judges its own re-queues by the same count: attempt 2
+	// after one drained attempt is its first counted, so a drop re-queues it.
+	it("does not count a drained attempt toward the ceiling in the resumed runner either", async () => {
+		const policy = { ...DEFAULT_BREAKER, attemptCeiling: 2 };
+		const script = (_key: string, arm: Arm, attempt: number): Kind => arm === "candidate" && attempt === 2 ? "drop" : "valid";
+		const counted = grid(["A"], { breaker: policy, firstAttempt: 2, script });
+		expect((await counted.run()).abandoned.map((a) => a.key)).toEqual(["A#1"]);
+		const drained = grid(["A"], { breaker: policy, firstAttempt: 2, drainedAttempts: 1, script });
+		const result = await drained.run();
+		expect(result.abandoned).toEqual([]);
+		expect(result.requeued.map((r) => r.attempt)).toEqual([3]);
+	});
+
+	// A drain that arrives after the last launch leaves nothing: the grid is
+	// decided as usual, not reported as paused.
+	it("reports drained, with exit status 0, only when the drain left work and nothing else stopped the grid", () => {
+		const left = { drain: usr1(0), left: ["C#1"] };
+		const clear = { aborted: false, stopInvalid: false };
+		expect(isDrained(left, clear)).toBe(true);
+		expect(isDrained({ drain: usr1(0), left: [] }, clear)).toBe(false);
+		expect(isDrained(left, { aborted: false, stopInvalid: true })).toBe(false);
+		expect(isDrained(undefined, clear)).toBe(false);
+		expect(finalStatus({ interrupted: false, stoppedInvalid: false, drained: true, complete: false })).toBe("drained");
+		expect(finalStatus({ interrupted: false, stoppedInvalid: true, drained: false, complete: false })).toBe("stopped-invalid");
+		expect(finalStatus({ interrupted: false, stoppedInvalid: false, drained: false, complete: true })).toBe("complete");
+		expect(exitStatus(false, true)).toBe(0);
+		expect(exitStatus(true, false)).toBe(0);
+		expect(exitStatus(false, false)).toBe(1);
+	});
+
+	it("shows draining in progress.json while the drain runs, below a signal and a stop rule", () => {
+		const state: GridStopState = { aborted: false, stopInvalid: false, stopReason: undefined, quotaExhausted: undefined };
+		expect(liveStatus(state)).toBe("running");
+		expect(takeDrain(state, usr2(Date.UTC(2026, 8, 28, 9, 0)))).toBe(true);
+		expect(liveStatus(state)).toBe("draining");
+		// An arms drain may already have recorded a second arm as not launched, so SIGUSR1 after it changes nothing.
+		expect(takeDrain(state, usr1(0))).toBe(false);
+		expect(state.drain?.level).toBe("arms");
+		expect(drainRecord(state.drain!)).toEqual({
+			level: "arms", trigger: "SIGUSR2", requestedAt: "2026-09-28T09:00:00.000Z",
+			reason: "drained by operator (SIGUSR2: finish only the arms running; requested 2026-09-28T09:00:00.000Z)",
+		});
+		expect(liveStatus({ ...state, stopInvalid: true })).toBe("stopped-invalid");
+		expect(liveStatus({ ...state, aborted: true })).toBe("interrupted");
+	});
+
+	// No file, no request; a typo still drains, with a note in the log.
+	it("reads no request without a DRAIN file, and drains as pairs on contents it cannot read as a level", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "pired-drain-"));
+		const path = join(dir, "DRAIN");
+		const notes: string[] = [];
+		expect(await takeDrainFile(path, () => 0, (l) => notes.push(l))).toBeUndefined();
+		writeFileSync(path, "stop please");
+		expect(await takeDrainFile(path, () => 5, (l) => notes.push(l))).toEqual({ level: "pairs", trigger: "DRAIN file (pairs)", atMs: 5 });
+		expect(notes).toEqual(['DRAIN file reads "stop please", not "pairs" or "arms"; draining as pairs']);
+		expect(existsSync(path)).toBe(false);
+	});
+});
+
 describe("atHighestAttempt", () => {
 	const row = (key: string, arm: string, attempt?: number) => ({ metric: { key }, record: { key, arm, ...(attempt === undefined ? {} : { attempt }) } });
 
@@ -1641,6 +1864,7 @@ describe("the matched-compute arm (plan 2.5)", () => {
 		const grid = (script: (key: string, arm: Arm, session?: MatchedSessionSpec) => Kind, opts: {
 			breaker?: BreakerPolicy; policy?: MatchedPolicy; official?: boolean; resume?: SessionState[];
 			spend?: (session: MatchedSessionSpec) => number; failMatchedSettle?: boolean;
+			onLaunch?: (label: string, state: GridStopState) => void;
 		} = {}) => {
 			let clock = Date.UTC(2026, 8, 26, 12, 0);
 			const launched: string[] = [];
@@ -1672,6 +1896,7 @@ describe("the matched-compute arm (plan 2.5)", () => {
 					budget: (pair, candidate) => sessionBudget(policy, pair.target, { valid: candidate.metric.valid, totalTokens: candidate.metric.totalTokens }),
 					launch: async (pair, attempt, session) => {
 						launched.push(`${pair.key} matched ${attempt} s${session.index}.${session.sessionAttempt}`);
+						opts.onLaunch?.(launched.at(-1)!, state);
 						specs.push(session);
 						clock += 10 * 60_000;
 						return outcome(pair, "matched", attempt, script(pair.key, "matched", session), spend(session), session);
@@ -1682,6 +1907,19 @@ describe("the matched-compute arm (plan 2.5)", () => {
 			return { run, launched, specs, settled, lines, state };
 		};
 		const matchedOf = (g: { launched: string[] }, key: string) => g.launched.filter((l) => l.startsWith(`${key} matched`));
+
+		// A drain (ADR draft v6-drain) kills nothing and starts nothing: the session
+		// running finishes, and the sessions still owed wait for the resume, which
+		// planMatchedResume already queues for a kept pair.
+		it("lets a running matched session finish under a drain and leaves the sessions still owed to the resume", async () => {
+			const g = grid(() => "valid", {
+				onLaunch: (label, state) => { if (label === "A#1 matched 1 s1.1") takeDrain(state, { level: "pairs", trigger: "SIGUSR1", atMs: 0 }); },
+			});
+			const result = await g.run();
+			expect(g.launched).toEqual(["A#1 baseline 1", "A#1 candidate 1", "A#1 matched 1 s1.1"]);
+			expect(result.drained?.left).toEqual(["A#1", "B#1"]);
+			expect(g.state.stopInvalid).toBe(false);
+		});
 
 		it("follow mode runs the sessions after the pair's two arms, the first at the candidate's tokens over k", async () => {
 			const g = grid(() => "valid");
