@@ -361,6 +361,34 @@ The child fails closed the other way. Its `tools` allowlist names `record`, and 
 
 `agentTools` is for other packages. `spawn` and `delegate` are counted against the same budget, one per call, and `agentTools` adds more names to that count. `subagent` is not on the list, because it goes through the launch check above. A tool name the gate does not recognise **fails open**: the cap never fires for it.
 
+### Verifier cap
+
+```jsonc
+{ "maxVerifiers": 2 }   // in the scope file
+```
+
+Independent verification can be allowed without allowing delegated work. `maxVerifiers` defaults to **0**, and at 0 a `pired-verify` launch counts against `maxAgents` like any other worker, so with both at 0 nothing launches. Above 0, `pired-verify` launches are charged to their own cap. A late batch of verification is then never refused because the work launches were spent, and it doesn't spend them either. With `maxAgents` 0 and `maxVerifiers` above it, the session is verify-only: `pired-verify` is the one launch allowed. Either way, a confirmation counts as *independently verified* only when it comes from someone other than the finding's finders, and only on quotes that `record` finds in the cited file ([ADR-036](decisions.md), [draft 3.1](adr-drafts/3.1-grounded-verification.md)).
+
+## Session budget and settle
+
+```jsonc
+{ "budget": { "minutes": 240, "tokens": 20000000, "deadline": "2026-10-01T18:00:00Z" } }   // any of the three
+```
+
+A session that can't see its budget can't tell a ceiling from a target. In the v5 trial, 32 of 41 baseline Luna runs ended by saying the review was incomplete and offering to continue, and unattended, the run simply ends ([research/12](../research/12-delegation-trial-2026-09.md)). With `budget` in the scope, one line in the per-request context block states what is used and what is left, for example "Budget: 12 of 45 min used, 33 left · 6.1M of 20M tokens used, 13.9M left".
+- **From 80%** of the most-used ceiling, the line adds that it is a ceiling, not a target, and that what is established should be recorded.
+- **At the ceiling,** it asks the session to settle.
+- **pired enforces nothing:** the ceiling is stated, not imposed.
+- **Tokens** count the lead, its workers and verifiers, and the scribe.
+- **Minutes** run from session start, or up to `deadline` when one is set.
+- **Without `budget`** there is no line, and nothing changes.
+
+```
+record kind=settle outcome=finished|paused|blocked note="…"
+```
+
+A settle records where the session left the engagement. The caller supplies only the outcome and the note. pired computes everything else from the ledger: open cells, unmapped areas, unchallenged findings, inconclusive hypotheses, open blockers and budget spent. The next session can then read what remains without trusting the model's own summary of it. Settling does not end the session, only the lead settles, and a settle is never edited or deleted ([ADR-036](decisions.md), [draft 3.2](adr-drafts/3.2-budget-and-settle.md)).
+
 ## `pired-ledger`
 
 `record` and `recall`, for a process that never loaded pired's extension: a shell script, CI, or an agent you started outside pi yourself (Claude Code, Codex, Cursor). pired's gate refuses to launch such runners through the `subagent` tool.

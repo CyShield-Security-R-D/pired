@@ -3357,3 +3357,69 @@ labelled. Decided:
   choice favoured the candidate.
 - **Filtering hard on publication date.** None of the three v6 models publishes a cutoff, so any
   date is a guess; the cutoff is conditional on the pool staying large.
+
+---
+
+## ADR-036 — Phase 3 ships to `main` on the operator's decision, ahead of the trial; delegation stays opt-in
+
+**Status:** accepted · 2026-09-30 · operator decision · accepts the drafts 3.1 (grounded
+verification) and 3.2 (budget and settle) as written · overrides, for shipping only, the
+pre-registered rule that Phase 3 reaches `main` when S passes against A · leaves ADR-029 in force
+
+### Context
+
+The v6 pre-registration made shipping Phase 3 conditional on the candidate run solo (S) passing
+all three rules against `main` (A) in stage 1. The drafts say "nothing merges to `main` until the
+Phase 4 trial passes". On 2026-09-29 the first verdict arrived. It was GLM-5.3 Flash, 144 runs,
+official (`docs/delegation-v6-results.md`):
+
+- **Rule 1, advisories found per pair: non-inferior.** +0.167 [−0.083, +0.417]. S found 30 of 39
+  advisory opportunities and A found 24. Non-inferior in 12 of 12 leave-one-app-out checks.
+- **Rule 3, cost: not met.** The median per-pair log token ratio is −0.034 [−0.141, +0.296]. The
+  typical pair costs the same, but the interval reaches 1.34× against a bound of 1.10×. The rule
+  reads "not shown to cost at most 10% more" as a failure.
+- **Rule 2, adjudicated precision:** pending. It could not change the outcome.
+- **Luna's verdict,** which the pre-registration makes primary, is not in yet.
+
+The operator weighed this and decided to adopt the new version now. Finding held up on fresh
+applications, and the cost failure is a failure to show a bound, not a measured increase. They
+chose a better harness in use over waiting for a verdict that cannot come back worse on finding.
+
+### Decision
+
+- **Phase 3 is on `main`.**
+  - **3.1, the grounded verification tier:** quotes are checked against the code, findings are
+    settled by someone other than their finder, and `maxVerifiers` sets the independent verifier
+    cap.
+  - **3.2, the budget line and the explicit settle:** the scope's optional `budget`, and
+    `record kind=settle`.
+  - **The v6 harness,** pinned for the trial, ships with them: stop reason, breaker, worker cap,
+    retry, matched arm, fresh corpus, grid kinds, drain, the decision scripts.
+- **Delegation stays opt-in (ADR-029).**
+  - `maxAgents` and `maxVerifiers` both default to 0, so an engagement that says nothing runs
+    exactly the configuration stage 1 measured as S.
+  - The operator was asked directly and chose opt-in (2026-09-30). Stage 2 (S against D, with the
+    matched arm M) is the test of whether workers earn the default. Its GLM grid is running.
+  - A later ADR citing that result is what turns delegation on by default.
+- **The trial continues unchanged, and its verdicts are still reported as pre-registered.**
+  - Every arm runs from a snapshot pinned by digest. A is `snapshot-main-5573ec4`, S, D and M are
+    `candidate-v6-2026-09-27`, and the harness re-checks the pins before every launch. Moving
+    `main` changes nothing a running or future v6 grid measures.
+  - If Luna's stage 1 fails, that is recorded in `docs/delegation-v6-results.md` beside this
+    decision, and the operator decides whether to revert. Nothing reverts automatically.
+
+### Rejected
+
+- **Wait for Luna's verdict.** The pre-registered path. The operator judged the GLM evidence enough
+  to act on, and the trial's integrity does not depend on `main` staying put.
+- **Ship with workers on by default.** The operator was offered it. It is the configuration v4 and
+  v5 measured as costing more without finding more (ADR-029), and stage 2 is the test that would
+  justify it.
+
+### Costs
+
+- Users get a version whose cost bound against the old `main` is not established. On GLM the
+  median pair costs the same, but a pair costing up to 1.34× is inside the interval. The budget
+  line is where a user sees and caps what a session spends.
+- "Phase 3 passed its trial" can no longer be read off `main`'s history. This entry is where the
+  order of events is recorded.

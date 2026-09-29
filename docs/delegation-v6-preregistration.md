@@ -70,6 +70,18 @@ shipped with delegation on top.
 - **Model:** GPT-6 Luna via `openai-codex`, thinking `medium`, as in v5c.
 - **Other models:** GLM-5.3 Flash and DeepSeek V4.1 Flash are added later under this same document,
   each as its own grid. A later model cannot change the Luna verdict.
+- **GLM-5.3 Flash (2026-09-28):** stage 1 started on z.ai's coding endpoint (`zai`,
+  `glm-5.3-flash`, thinking `medium`) when its weekly limit reset. It uses the same frozen stage 1
+  kind, from the drain-capable harness (`p2/drain`), with its own blind pilot. A z.ai quota stop is
+  resumable and is not a failure.
+- **Qwen 3.8 27B (amendment, 2026-09-27, before any Qwen run):** added at the operator's request as
+  a further model, `Qwen/Qwen3.8-27B` via commandcode (context 262,144, max output 16,000, thinking
+  `medium`).
+  - It runs the same frozen stages, corpus, snapshots, rules and decision script as Luna, in its
+    own grids, with its own blind pilot fixing its own pass count.
+  - It reports its own verdict and cannot change Luna's.
+  - It starts when the commandcode account can serve it. On 2026-09-27 the plan's weekly limit was
+    exhausted until 2026-10-01 10:46 UTC.
 - **Harness:** the v6 harness at the freeze, with `--retry` (ADR-033) and `--breaker default`
   (ADR-031; attempt ceiling 16).
   - The run limit is 4 h, as in v5c. It is written as `budget.minutes`, with a deadline, into the scope of
@@ -89,6 +101,11 @@ shipped with delegation on top.
     the grid is resumed. The token is never printed, and it is never refreshed inside a cell.
   - The candidate cap is pinned (ADR-032).
   - The stop reason is recorded for every run (ADR-030).
+  - **Drain (operational amendment, 2026-09-28):** grids launched after it can be paused
+    gracefully. Writing `pairs` or `arms` to `<out>/DRAIN` stops new launches and lets in-flight
+    work finish; a resume re-runs nothing that finished (branch `p2/drain`). It changes no
+    measurement, validity rule or pin other than the harness hash.
+    - Stage 1 on Luna, launched before it, keeps its frozen harness and pauses by signal.
 
 ## Sample size
 
@@ -143,6 +160,8 @@ shipped with delegation on top.
     of the issues (at least 40). Labels count only at Cohen's κ ≥ 0.6.
   - **Operator spot check:** 20 issues, blind.
   - A small batch is judged first, to confirm the judging is not interrupted.
+  - The judge's exact instructions are `eval/adjudication-judge-prompt.md` (sha256 `92813d12fd34c21a…`),
+    one blind session per target. The second judge gets the same text.
 - **Cost:** the median per-pair log ratio of total tokens (metered plus the retry estimate), with an
   app-clustered bootstrap interval. Pooled sums are reported beside it and not used for the decision:
   on Luna they swung from 0.51 to 2.86 on single runs.
@@ -219,7 +238,13 @@ the check that S did not drift between stages.
 - **Run validity (the v6 policy, pinned in both stage kinds):**
   - A run that reaches the run limit is valid, and is scored on its ledger as it stood at the
     deadline.
-  - A run that ends quickly with nothing recorded is valid, with zero findings.
+  - A run that ends quickly with nothing recorded is valid, with zero findings, **only when the
+    harness demonstrably let the model work**: pired's workspace exists, the tools the model saw
+    are the pinned set, and no tool call failed on a pired tool, a scope-gate block or a sandbox
+    denial. Otherwise it stays invalid, as a harness failure.
+  - A run whose transcript and every worker session were silent for more than 30 minutes before
+    the limit is not a limit run. It is classed as infrastructure ("stalled") and re-run under the
+    attempt ceiling. Stalls are counted per arm.
   - Both are model behaviour, not harness failure. Excluding them would bias the comparison
     against the arm that works longer or quits sooner, which is exactly what 3.2 changes. Their
     counts are reported per arm.
@@ -231,6 +256,10 @@ the check that S did not drift between stages.
     them inconclusive, never passing, but the full report is still produced. A matched-arm
     abandonment affects only D against M.
   - A pair with no token count makes rule 3 inconclusive, not failed.
+  - A run cut at the limit while a worker was still running counts that worker's completed replies
+    as a lower bound on its tokens, and is flagged. Rule 3 includes such pairs. The count of such
+    pairs per arm is reported, and rule 3 is repeated without them as a sensitivity check that
+    decides nothing.
 - **Reported whatever the outcome:** every comparison, every level, every arm, every variant.
 - **Everything in this document is fixed at the freeze.** A metric added later is labelled
   exploratory.
