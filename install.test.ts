@@ -120,6 +120,9 @@ function sandbox(): Sandbox {
 			"#!/bin/sh",
 			'echo "pi $*" >> "$CALLS"',
 			'manifest() { mkdir -p "$PACKAGES/$1"; printf \'{"name":"%s","version":"%s"}\\n\' "$1" "$2" > "$PACKAGES/$1/package.json"; }',
+			// What the registry would hand out as latest, per package, so a test
+			// about one package's floor does not move the other's.
+			'latest() { case "$1" in pi-mcp-adapter) echo "${MCP_LATEST:-3.3.0}" ;; *) echo "${SUBAGENTS_LATEST:-0.71.0}" ;; esac; }',
 			'case "$1" in',
 			`  --version) echo "\${${versionVariable}:-0.87.1}" ;;`,
 			"  list)",
@@ -133,15 +136,17 @@ function sandbox(): Sandbox {
 			'      if [ -f "$PACKAGES/$name/package.json" ]; then echo "    $PACKAGES/$name"; fi',
 			'    done < "$REGISTERED" ;;',
 			"  install)",
-			'    [ "${PI_INSTALL_FAILS:-0}" = 1 ] && { echo "npm error 404 Not Found" >&2; exit 1; }',
+			'    spec=${2#npm:}; name=${spec%@[0-9]*}',
+			// 1 fails every install; a package name fails only that one, so a test
+			// can show one package's failure leaves the other's install alone.
+			'    case "${PI_INSTALL_FAILS:-0}" in 1|"$name") echo "npm error 404 Not Found" >&2; exit 1 ;; esac',
 			// pi reporting success and recording nothing is the failure the old
 			// registration step was guarded against; it is still possible here.
 			'    [ "${PI_INSTALL_SILENT:-0}" = 1 ] && exit 0',
 			// pi matches a recorded entry by package name and replaces it
 			// (addSourceToSettings), so an exact version installed over npm:x leaves
 			// npm:x@<version> in its place: a pin, which is what an undo creates.
-			'    spec=${2#npm:}; name=${spec%@[0-9]*}',
-			'    if [ "$name" = "$spec" ]; then version=${SUBAGENTS_LATEST:-0.71.0}; else version=${spec#"$name"@}; fi',
+			'    if [ "$name" = "$spec" ]; then version=$(latest "$name"); else version=${spec#"$name"@}; fi',
 			'    { grep -vx -e "npm:$name" -e "npm:$name@[0-9].*" "$REGISTERED"; echo "$2"; } > "$REGISTERED.next"',
 			'    mv "$REGISTERED.next" "$REGISTERED"',
 			'    manifest "$name" "$version" ;;',
@@ -151,7 +156,7 @@ function sandbox(): Sandbox {
 			// What pi 0.87.1 does with PI_OFFLINE=1 in the environment: says it
 			// updated the package, exits 0, and leaves the old version on disk.
 			'    [ "${PI_UPDATE_SILENT:-0}" = 1 ] && { echo "Updated $2"; exit 0; }',
-			'    manifest "${2#npm:}" "${SUBAGENTS_LATEST:-0.71.0}"',
+			'    manifest "${2#npm:}" "$(latest "${2#npm:}")"',
 			'    echo "Updated $2" ;;',
 			"esac",
 			"exit 0",
@@ -299,7 +304,7 @@ describe.each(shells())("install.sh under %s", (shell) => {
 		const result = start(box);
 
 		expect(result.status).toBe(0);
-		expect(piInstalls(result)).toEqual(["pi install npm:pi-subagents"]);
+		expect(piInstalls(result)).toEqual(["pi install npm:pi-subagents", "pi install npm:pi-mcp-adapter"]);
 		expect(result.stdout).toContain("subagents  npm:pi-subagents");
 		expect(result.stdout).toContain("Ready.");
 
@@ -329,12 +334,12 @@ describe.each(shells())("install.sh under %s", (shell) => {
 		expect(readFileSync(box.registered, "utf8")).toBe("");
 	});
 
-	it("declines to touch pi when PIRED_SKIP_SUBAGENTS=1, and stops offering to undo what it did not do", () => {
+	it("declines pi-subagents when PIRED_SKIP_SUBAGENTS=1, and stops offering to undo what it did not do", () => {
 		const box = sandbox();
 		const result = start(box, { env: { PIRED_SKIP_SUBAGENTS: "1" } });
 
 		expect(result.status).toBe(0);
-		expect(piInstalls(result)).toEqual([]);
+		expect(piInstalls(result)).toEqual(["pi install npm:pi-mcp-adapter"]);
 		expect(result.stdout).toContain("skipped — PIRED_SKIP_SUBAGENTS=1");
 		expect(result.stdout).not.toContain("pi remove npm:pi-subagents");
 		expect(result.stdout).toContain("Ready.");
@@ -345,7 +350,7 @@ describe.each(shells())("install.sh under %s", (shell) => {
 		registered(box, ["npm:pi-subagents", "0.71.0"]);
 		const result = start(box);
 
-		expect(piInstalls(result)).toEqual([]);
+		expect(piInstalls(result)).toEqual(["pi install npm:pi-mcp-adapter"]);
 		expect(piUpdates(result)).toEqual([]);
 		expect(result.stdout).toMatch(/- subagents\s+~\/\.pi\s+0\.71\.0 — already registered with pi/);
 		expect(result.stdout).toMatch(/ok\s+subagents\s+already registered with pi, 0\.71\.0/);
@@ -356,7 +361,7 @@ describe.each(shells())("install.sh under %s", (shell) => {
 		registered(box, "npm:@gotgenes/pi-subagents");
 		const result = start(box);
 
-		expect(piInstalls(result)).toEqual([]);
+		expect(piInstalls(result)).toEqual(["pi install npm:pi-mcp-adapter"]);
 		expect(result.stdout).toContain("already registered with pi");
 	});
 
@@ -365,7 +370,7 @@ describe.each(shells())("install.sh under %s", (shell) => {
 		registered(box, "npm:@narumitw/pi-btw", "npm:pi-subagents-bridge");
 		const result = start(box);
 
-		expect(piInstalls(result)).toEqual(["pi install npm:pi-subagents"]);
+		expect(piInstalls(result)).toEqual(["pi install npm:pi-subagents", "pi install npm:pi-mcp-adapter"]);
 	});
 
 	it("still finishes the install when pi-subagents cannot be installed, because pired works without it", () => {
@@ -385,7 +390,7 @@ describe.each(shells())("install.sh under %s", (shell) => {
 		const result = start(box, { env: { PI_INSTALL_SILENT: "1" } });
 
 		expect(result.status).toBe(0);
-		expect(piInstalls(result)).toEqual(["pi install npm:pi-subagents"]);
+		expect(piInstalls(result)).toEqual(["pi install npm:pi-subagents", "pi install npm:pi-mcp-adapter"]);
 		expect(result.stdout).toContain("could not install npm:pi-subagents");
 		expect(result.stdout).toContain("Ready.");
 	});
@@ -402,7 +407,7 @@ describe.each(shells())("install.sh under %s", (shell) => {
 
 		expect(result.status).toBe(0);
 		expect(result.stdout).toContain("+ subagents");
-		expect(piInstalls(result)).toEqual([]);
+		expect(piInstalls(result)).toEqual(["pi install npm:pi-mcp-adapter"]);
 		expect(piUpdates(result)).toEqual([]);
 		expect(result.stdout).toMatch(/ok\s+subagents\s+already registered with pi/);
 		// The plan could not know, and its undo said as much rather than offering
@@ -418,7 +423,7 @@ describe.each(shells())("install.sh under %s", (shell) => {
 		const result = start(box);
 
 		expect(result.status).toBe(0);
-		expect(piInstalls(result)).toEqual([]);
+		expect(piInstalls(result)).toEqual(["pi install npm:pi-mcp-adapter"]);
 		expect(piUpdates(result)).toEqual(["pi update npm:pi-subagents"]);
 		expect(installedVersion(box, "pi-subagents")).toBe("0.71.0");
 	});
@@ -587,7 +592,7 @@ describe.each(shells())("install.sh under %s", (shell) => {
 		expect(result.status).toBe(0);
 		expect(result.stdout).toMatch(/\^ subagents\s+~\/\.pi\s+0\.66\.0 -> latest\s+\(pired needs >= 0\.71\.0\)/);
 		expect(piUpdates(result)).toEqual(["pi update npm:pi-subagents"]);
-		expect(piInstalls(result)).toEqual([]);
+		expect(piInstalls(result)).toEqual(["pi install npm:pi-mcp-adapter"]);
 		expect(installedVersion(box, "pi-subagents")).toBe("0.71.0");
 		expect(result.stdout).toMatch(/ok\s+subagents\s+npm:pi-subagents 0\.66\.0 -> 0\.71\.0/);
 	});
@@ -624,7 +629,7 @@ describe.each(shells())("install.sh under %s", (shell) => {
 		const undo = undoLine(upgrade).split(" · ").at(-1) ?? "";
 		expect(undo).toMatch(/^pi install npm:pi-subagents@0\.66\.0 {2}#/);
 		operator(box, undo);
-		expect(readFileSync(box.registered, "utf8")).toBe("npm:pi-subagents@0.66.0\n");
+		expect(readFileSync(box.registered, "utf8")).toBe("npm:pi-mcp-adapter\nnpm:pi-subagents@0.66.0\n");
 		expect(installedVersion(box, "pi-subagents")).toBe("0.66.0");
 
 		writeFileSync(box.calls, "");
@@ -708,7 +713,7 @@ describe.each(shells())("install.sh under %s", (shell) => {
 		const result = start(box);
 
 		expect(piUpdates(result)).toEqual([]);
-		expect(piInstalls(result)).toEqual([]);
+		expect(piInstalls(result)).toEqual(["pi install npm:pi-mcp-adapter"]);
 		expect(installedVersion(box, "pi-subagents")).toBe("0.72.3");
 	});
 
@@ -740,7 +745,7 @@ describe.each(shells())("install.sh under %s", (shell) => {
 		const result = start(box, { env: { SUBAGENTS_LATEST: "0.70.1" } });
 
 		expect(result.status).toBe(0);
-		expect(piInstalls(result)).toEqual(["pi install npm:pi-subagents"]);
+		expect(piInstalls(result)).toEqual(["pi install npm:pi-subagents", "pi install npm:pi-mcp-adapter"]);
 		expect(result.stdout).toContain("npm:pi-subagents is 0.70.1 — pired's delegation needs >= 0.71.0");
 		expect(result.stdout).toContain("retry: pi update npm:pi-subagents");
 	});
@@ -751,7 +756,7 @@ describe.each(shells())("install.sh under %s", (shell) => {
 		const result = start(box);
 
 		expect(result.status).toBe(0);
-		expect(piInstalls(result)).toEqual([]);
+		expect(piInstalls(result)).toEqual(["pi install npm:pi-mcp-adapter"]);
 		expect(piUpdates(result)).toEqual([]);
 		expect(result.stdout).toContain("npm:@gotgenes/pi-subagents — already registered with pi, left alone");
 		expect(result.stdout).toContain("pired's delegation needs pi-subagents >= 0.71.0 features");
@@ -773,7 +778,7 @@ describe.each(shells())("install.sh under %s", (shell) => {
 		const result = start(box);
 
 		expect(result.status).toBe(0);
-		expect(piInstalls(result)).toEqual([]);
+		expect(piInstalls(result)).toEqual(["pi install npm:pi-mcp-adapter"]);
 		expect(piUpdates(result)).toEqual([]);
 		expect(result.stdout).toContain("npm:pi-subagents@0.66.0 — pinned, left alone");
 		expect(result.stdout).toContain("To lift the pin: pi install npm:pi-subagents");
