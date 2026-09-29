@@ -34,6 +34,7 @@ import { type BlockerRecord, type Checklist, type EngagementScope, type FindingR
 import type { ToolContext, ToolDefinition } from "../core/ports.ts";
 import { buildSystemPrompt, PIRED_PROFILES, type PiredProfile } from "../core/prompts.ts";
 import { publishParentScope } from "../core/child.ts";
+import { createMcpDenials, gateMcpCall, MCP_APPROVAL_EVENT } from "../core/mcp.ts";
 import { createScopeGate, isSourceOnly, pickTargetType, type ScopeGate, scopeGuidance, summarizeScope } from "../core/scope.ts";
 import { buildPiredAgentDefinitions, eagerSubagentSchema, hiddenParentTools, SUBAGENTS_ABSENT_NOTICE, SUBAGENTS_EAGER_NOTICE, verifierCap, verifierModel, workerCap } from "../core/subagents.ts";
 import { renderCoveragePanel, type Tone } from "../core/coverage-panel.ts";
@@ -407,6 +408,10 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	let liveCtx: ExtensionContext | undefined;
 	/** Unsubscribe for the foreground-complete lifecycle subscription, torn down on shutdown. */
 	let foregroundCompleteOff: (() => void) | undefined;
+	/** Unsubscribe for pi-mcp-adapter's approval requests, which the scope gate answers (core/mcp.ts). */
+	let mcpApprovalOff: (() => void) | undefined;
+	/** The gate's refusals of MCP calls, until their results come back to be reworded. */
+	const mcpDenials = createMcpDenials();
 
 	const disposeAgents = (): void => {
 		for (const reg of agentRegistrations) {
@@ -1526,6 +1531,19 @@ export default function piredExtension(pi: ExtensionAPI): void {
 				})();
 			});
 		} catch {}
+		// pi-mcp-adapter asks for approval of every MCP call it resolves, including
+		// the ones an mcpScript makes from inside its JavaScript, which never reach
+		// tool_call below. The gate answers; a refused call is denied (core/mcp.ts).
+		try {
+			mcpApprovalOff?.();
+			mcpApprovalOff = pi.events?.on?.(MCP_APPROVAL_EVENT, (request: unknown) => {
+				const decision = gateMcpCall(gate, request);
+				if (!decision || decision.allow) return;
+				const { serverName, originalToolName } = request as { serverName: string; originalToolName: string };
+				mcpDenials.record(serverName, originalToolName, decision.reason);
+				liveCtx?.ui.notify(`⛨ blocked MCP ${serverName}/${originalToolName}: ${decision.reason ?? "out of authorized scope"}`, "warning");
+			});
+		} catch {}
 
 		applyUiPolish(ctx);
 		await refreshStatus(ctx);
@@ -1771,6 +1789,17 @@ export default function piredExtension(pi: ExtensionAPI): void {
 			foregroundCompleteOff?.();
 		} catch {}
 		foregroundCompleteOff = undefined;
+		try {
+			mcpApprovalOff?.();
+		} catch {}
+		mcpApprovalOff = undefined;
+	});
+
+	// The adapter words a broker's denial as the user declining. For a call the
+	// scope refused, the model is told the real reason instead (core/mcp.ts).
+	pi.on("tool_result", async (event) => {
+		const content = mcpDenials.explain({ toolName: event.toolName, content: event.content, details: (event as { details?: unknown }).details });
+		return content ? { content: content as typeof event.content } : undefined;
 	});
 
 	pi.on("tool_call", async (event, ctx) => {

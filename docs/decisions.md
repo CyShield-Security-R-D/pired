@@ -3423,3 +3423,106 @@ chose a better harness in use over waiting for a verdict that cannot come back w
   line is where a user sees and caps what a session spends.
 - "Phase 3 passed its trial" can no longer be read off `main`'s history. This entry is where the
   order of events is recorded.
+
+---
+
+## ADR-037 — pi-mcp-adapter is installed beside pi-subagents, and the scope gate answers its approval broker for every MCP call
+
+**Status:** accepted · 2026-09-30 · operator request · amends ADR-021 ("the installers register
+pi-subagents and nothing else") · extends the engagement scope gate (`core/scope.ts`) to the calls
+pi's `tool_call` hook does not see
+
+### Context
+
+The operator asked for the installers to install pi-mcp-adapter, and for it to work well.
+
+The adapter reaches every MCP server through a few tools it registers:
+- `mcp`, the proxy: search, describe, call;
+- `mcp__<server>`, one wrapper per server;
+- `mcpScript`, a sandboxed JavaScript tool that calls MCP tools from inside its code;
+- optionally, direct tools.
+
+pired's scope gate runs in pi's `tool_call` hook. It already scans any tool's arguments: a full
+http(s) URL anywhere, and a bare host or IP under a target-like key. That covers a proxy call
+with a URL in plain sight. It does not cover two routes, both measured on `main` at 82331ac, in
+a sandbox with:
+- the real adapter 3.3.0, installed by `pi install`;
+- a stdio MCP server that logs every call reaching it;
+- an enforce-mode scope authorising `*.acme.test` and 10.0.0.5;
+- a scripted model.
+
+What reached the server:
+- **Blocked:** `mcp({tool, args: {url: "https://evil.example/x"}})`. The gate saw the URL.
+- **Reached the server:** `mcp({tool, args: "{\"host\":\"10.9.9.9\"}"})`. The adapter accepts
+  arguments as a JSON string, and the gate read the host as text under the key `args`.
+- **Reached the server:** an `mcpScript` that built `http://evil.example/y` at runtime. Calls
+  made inside a script never pass through pi's `tool_call` hook.
+
+A security harness whose scope can be walked around by passing an argument as a string does not
+enforce a scope.
+
+The adapter asks any listening extension for approval of every MCP call it resolves, through the
+event `pi-mcp-adapter:tool-approval-request`. That covers proxy, direct, script, resource and UI
+iframe calls, with the arguments already parsed. The event was added in 2.20.0. From 2.33.0 it
+also covers calls the adapter had cached as approved for the session.
+
+### Decision
+
+- **The installers register `npm:pi-mcp-adapter`** after pi-subagents, with the same survey,
+  plan row, undo line and non-fatal step.
+  - **Floor 2.33.0:** the first release whose broker sees every call.
+  - `PIRED_SKIP_MCP=1` declines it.
+- **The gate answers the broker** (`core/mcp.ts`, wired in `extensions/pired.ts`).
+  - Each call reaches the gate as `mcp__<server>__<tool>` with its parsed arguments.
+  - That name never equals one the gate treats specially. With `toolPrefix: "none"`, a server's
+    tool may be called `read` or `bash`. Under its own name it would have been waved through as a
+    local read, or parsed as a shell command.
+  - A refusal claims the request with `deny`. An allowed call is left unclaimed, so the adapter's
+    own `approveTools` settings still apply to it.
+  - The operator sees the same `⛨ blocked` notice as for any other tool.
+- **The model is told the real reason.** The adapter words a broker's denial as "The user
+  declined approval". A model told that asks the operator. A `tool_result` handler replaces it
+  with the gate's reason, or appends the reasons to an `mcpScript`'s result, since the script
+  receives the denial inside its own JavaScript.
+
+Measured on the branch, same sandbox and script:
+- **Blocked, neither reaching the server:** the JSON-string host (10.9.9.9) and the script's
+  runtime-built host (evil.example).
+- **Unchanged:** the three in-scope calls (proxy, inside a script, through the `mcp__probe`
+  wrapper) reached it.
+- **What the model read:** "pired's engagement scope blocked MCP tool … not the operator:
+  Out-of-scope target(s): …".
+- **The launcher:** `pired -- --help` loads with the adapter present, as the installer's verify
+  step runs it.
+
+### Rejected
+
+- **Parsing JSON-string arguments in the generic scan.** It closes the first route and not the
+  script's. The broker closes both, for every origin the adapter has.
+- **Writing `scriptMode: false` or `allowInstall: false` into the operator's MCP config.** The
+  config is the operator's, and the gate already decides every call a script or an install
+  would make.
+- **Relying on the adapter's `approveTools`.** It asks the operator, knows nothing about the
+  engagement, and is off by default.
+- **Not installing the adapter.** The operator asked for it. That passes ADR-021's test: whose
+  behaviour changes, and whether anyone was asked.
+
+### Costs and limits
+
+- **Standing cost per request, measured in the sandbox** (system prompt plus tool definitions):
+  - pired alone: 50,008 characters;
+  - with the adapter and no servers configured: 54,590 (+9%, about 1,100 tokens);
+  - with one server: 55,315.
+  - Almost all of it is the `mcp` and `mcpScript` schemas, in the cached prefix. The operator
+    can trim it with the adapter's `scriptMode: false` and `namespaceProxyTools: false`.
+  - Benchmark cells load no packages, so no v6 measurement moves.
+- **The gate sees targets in arguments, not where a server sends them.** A server whose tool talks
+  to a fixed remote API reaches that API whatever its arguments say. So does a configured HTTP
+  server's own URL. Both are the operator's configuration, like an installed CLI.
+- **A bare `pi` changes too.** The adapter loads in every pi, as pi-subagents does. So a plain `pi`
+  session gains the `mcp` tools and reads the operator's `~/.config/mcp/mcp.json`, `.mcp.json`
+  and `~/.agents` MCP files, with no pired scope gate in front of it. The plan row says it loads
+  in every pi, and `PIRED_SKIP_MCP=1` declines it.
+- **An adapter below 2.33.0 installed by hand, or a fork without the event, is not gated through
+  the broker.** The `tool_call` scan still applies to its outer calls. The installer's floor, and
+  its warning on a pin or a fork, are what keep a fresh box above it.

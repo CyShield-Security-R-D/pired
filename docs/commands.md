@@ -389,6 +389,32 @@ record kind=settle outcome=finished|paused|blocked note="…"
 
 A settle records where the session left the engagement. The caller supplies only the outcome and the note. pired computes everything else from the ledger: open cells, unmapped areas, unchallenged findings, inconclusive hypotheses, open blockers and budget spent. The next session can then read what remains without trusting the model's own summary of it. Settling does not end the session, only the lead settles, and a settle is never edited or deleted ([ADR-036](decisions.md), [draft 3.2](adr-drafts/3.2-budget-and-settle.md)).
 
+## MCP servers
+
+The installers register [pi-mcp-adapter](https://github.com/nicobailon/pi-mcp-adapter) (≥ 2.33.0; `PIRED_SKIP_MCP=1` declines it), so a pired session can use MCP servers through one `mcp` proxy tool, per-server `mcp__<server>` wrappers and the `mcpScript` JavaScript tool. Servers come from the adapter's usual files:
+- `~/.config/mcp/mcp.json` for every project;
+- `.mcp.json` in the project;
+- `~/.pi/agent/mcp-adapter.json` for adapter settings.
+
+A server defined in a project's own `.mcp.json` runs only once you approve it, and never in a headless session. A target repository that ships one does not start it by being reviewed.
+
+**Every MCP call goes through the engagement's scope gate,** whichever route it takes:
+- the `mcp` proxy;
+- a server wrapper or a direct tool;
+- a resource read;
+- a call an `mcpScript` makes from inside its code.
+
+pired answers the adapter's approval request for each resolved call with the parsed arguments, so a host passed inside a JSON-string argument, or built at runtime in a script, is checked like a host in a `bash` command. A refused call never reaches the server. The model is told it was the scope, not you ([ADR-037](decisions.md)).
+
+The gate checks targets in a call's arguments, not where a server sends its own traffic. A server that wraps a fixed remote API reaches that API whatever the engagement says, like any tool you install.
+
+The adapter costs about 1,100 tokens per request with no servers configured, measured at 54,590 against 50,008 characters of system prompt and tool definitions, almost all of it in the cached prefix. To trim it:
+
+```jsonc
+// ~/.pi/agent/mcp-adapter.json
+{ "settings": { "scriptMode": false, "namespaceProxyTools": false } }
+```
+
 ## `pired-ledger`
 
 `record` and `recall`, for a process that never loaded pired's extension: a shell script, CI, or an agent you started outside pi yourself (Claude Code, Codex, Cursor). pired's gate refuses to launch such runners through the `subagent` tool.
