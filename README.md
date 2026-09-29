@@ -92,9 +92,9 @@ curl -fsSL https://raw.githubusercontent.com/mamgad/pired/main/install.sh | sh
 powershell -c "irm https://raw.githubusercontent.com/mamgad/pired/main/install.ps1 | iex"
 ```
 
-Both scripts survey the box, print exactly what they will install and where, ask once, and then do all of it — Node.js when it is missing or older than 22.19, pi, pired, and the PATH entry that makes the command typeable. **They register nothing with pi**: `pi` stays the pi you already had, and the security layer arrives only when you type `pired`, which passes it to pi with `-e` for that run (ADR-017). On macOS and Linux `--dry-run` prints the plan and stops and `-y` skips the question; on Windows those are `PIRED_DRY_RUN=1` and `PIRED_YES=1`, because the documented `irm | iex` install has no way to pass arguments.
+Both scripts survey the box, print exactly what they will install and where, ask once, and then do all of it — Node.js when it is missing or older than 22.19, pi, pired, and the PATH entry that makes the command typeable. **They do not register pired with pi**: `pi` stays the pi you already had, and the security layer arrives only when you type `pired`, which passes it to pi with `-e` for that run (ADR-017). What they do register with pi is two third-party packages, each a row in the plan with its own opt-out: [pi-subagents](#sub-agents) and [pi-mcp-adapter](#mcp). On macOS and Linux `--dry-run` prints the plan and stops and `-y` skips the question; on Windows those are `PIRED_DRY_RUN=1` and `PIRED_YES=1`, because the documented `irm | iex` install has no way to pass arguments.
 
-**It never asks for root.** A vanilla Ubuntu has neither Node nor git, and neither absence is worth a `sudo`: Node comes from nodejs.org as a checksum-verified user-owned tarball under `~/.local/share/pired`, and a `github:` source is fetched over HTTPS when there is no git to clone with. Everything it writes lives in `~/.local/share/pired` and `~/.pired` — `rm -rf` those two and the box is as it was; `~/.pi` is pi's own and the installer never touches it. No daemon, no service, no shell hooks beyond the one PATH line it shows you first.
+**It never asks for root.** A vanilla Ubuntu has neither Node nor git, and neither absence is worth a `sudo`: Node comes from nodejs.org as a checksum-verified user-owned tarball under `~/.local/share/pired`, and a `github:` source is fetched over HTTPS when there is no git to clone with. Everything it writes lives in `~/.local/share/pired` and `~/.pired` — `rm -rf` those two and the box is as it was. `~/.pi` is pi's own: the installer writes there only to register pi-subagents and pi-mcp-adapter, and the plan's undo line says how to take each back out. No daemon, no service, no shell hooks beyond the one PATH line it shows you first.
 
 Windows gets its own script because npm lays a global install out differently there and PATH is a registry value, not a line in a dotfile. **It never needs administrator either.** The MSI from nodejs.org does, so it is not used: Node arrives as the per-user `.zip`, checksum-verified against the same `SHASUMS256.txt`, unpacked under `%LOCALAPPDATA%\pired` and pointed at by a directory junction — none of which needs elevation, and neither does the `HKCU` PATH entry. The one thing it will not install for you is `bash`: pi runs the tools through it, but Git for Windows is a ~250MB install with shell integration and file associations, so the script reports it and points you at `winget` or pi's own managed copy.
 
@@ -163,7 +163,7 @@ pi install -l git:github.com/mamgad/pired
 pi -e ./extensions/pired.ts -e ./extensions/hosts.ts --pired-profile review
 ```
 
-Both installers detect an existing pi and leave it alone; `PIRED_SKIP_PI=1` forces the skip, `PIRED_SOURCE` chooses what to install from, and `NPM_PREFIX` picks the prefix.
+Both installers keep an existing pi at or above 0.86.1 and upgrade an older one; `PIRED_SKIP_PI=1` forces the skip, `PIRED_SOURCE` chooses what to install from, and `NPM_PREFIX` picks the prefix. They register pi-subagents and then pi-mcp-adapter with pi; `PIRED_SKIP_SUBAGENTS=1` and `PIRED_SKIP_MCP=1` decline each.
 
 </details>
 
@@ -319,6 +319,16 @@ pi install npm:pi-subagents
 ```
 
 Unlike pired itself, this one *is* registered with pi, so it loads in every `pi` run rather than only in `pired`. See [ADR-021](docs/decisions.md).
+
+## MCP
+
+[**pi-mcp-adapter**](https://github.com/nicobailon/pi-mcp-adapter) gives pi's model the MCP servers you configure, through one proxy tool. The installers register it with pi after pi-subagents, and update a registered `npm:pi-mcp-adapter` older than **2.33.0**. The floor is the scope gate's: pired checks every MCP call against the engagement scope through the adapter's approval broker, and before 2.33.0 the adapter did not send the broker a call it had cached as approved for the session, so one session grant let later calls past the check. A version pinned below the floor, or a fork, is left alone, and the installer says what the scope check needs from it. `PIRED_SKIP_MCP=1` declines it. To install it separately:
+
+```bash
+pi install npm:pi-mcp-adapter
+```
+
+Like pi-subagents, it is registered with pi, so it loads in every `pi` run rather than only in `pired`.
 
 ---
 
