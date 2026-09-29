@@ -118,6 +118,23 @@ export interface GridState {
 	invalidUnions: Map<string, string[]>;
 }
 
+/**
+ * The cells the grid was last built to run. manifest.json is written once, at launch, so on an
+ * amended stage-1 grid it lists only the pilot's passes; each resume writes its own manifest with
+ * the cells as amended. Reading the launch manifest printed "36 paired of 24 expected" for
+ * v6-stage1-glm (2026-09-29), and would have left an unpaired pair of pass 3 out of `excluded`.
+ */
+function latestExpectedCells(dir: string, manifest: Row): unknown {
+	const resumes = readdirSync(dir).map((f) => /^resume-(\d+)$/.exec(f)).filter((m) => m !== null).map((m) => Number(m[1])).sort((a, b) => b - a);
+	for (const n of resumes) {
+		const path = join(dir, `resume-${n}`, "manifest.json");
+		if (!existsSync(path)) continue;
+		const cells = readJson(path).expectedCells;
+		if (Array.isArray(cells)) return cells;
+	}
+	return manifest.expectedCells;
+}
+
 const pairKeyOf = (a: unknown): string => String(isRow(a) ? a.key ?? a.session ?? "" : a).replace(/\/\d+$/, "");
 
 /**
@@ -169,8 +186,9 @@ export function gridState(dir: string, stage: Stage): GridState {
 	for (const u of Array.isArray(matched.unions) ? (matched.unions as unknown[]).filter(isRow) : []) {
 		if (u.valid !== true) invalidUnions.set(`${String(u.target)}#${String(u.pass)}`, Array.isArray(u.reasons) ? u.reasons.map(String) : []);
 	}
-	const expected = Array.isArray(manifest.expectedCells)
-		? [...new Set((manifest.expectedCells as unknown[]).filter(isRow).map((c) => `${String(c.target)}#${String(c.pass)}`).filter(gate))].sort(byCodePoint)
+	const cells = latestExpectedCells(dir, manifest);
+	const expected = Array.isArray(cells)
+		? [...new Set((cells as unknown[]).filter(isRow).map((c) => `${String(c.target)}#${String(c.pass)}`).filter(gate))].sort(byCodePoint)
 		: [];
 	return { dir, notReady, gateAbandoned: [...gateAbandoned].sort(byCodePoint), matchedAbandoned: [...new Set(matchedAbandoned)].sort(byCodePoint), harnessExcluded, expected, invalidUnions };
 }

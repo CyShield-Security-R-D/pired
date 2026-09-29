@@ -312,6 +312,22 @@ describe("grid state and the pairs a comparison lost", () => {
 		expect(formatDecision(d, shipTable([d]))).toMatch(/rule 1 ·[\s\S]*rule 3 ·/);
 	});
 
+	it("expects an amended pass's pairs from the latest resume manifest, so a pair of it that never paired is listed as excluded", () => {
+		// v6-stage1-glm (2026-09-29): manifest.json is written once, at the 2-pass pilot; the
+		// extension's resume manifest lists all 3 passes, and the report read "36 paired of 24 expected".
+		const runs = pairs("baseline", "candidate", () => [{ found: 1 }, { found: 2 }], 3).filter((r) => !(r.target === "t1" && r.pass === 3 && r.arm === "candidate"));
+		const g = grid(runs, { expected: ["t1#3"] });
+		const launch = JSON.parse(readFileSync(join(g, "manifest.json"), "utf8")) as Row;
+		mkdirSync(join(g, "resume-1"));
+		writeFileSync(join(g, "resume-1", "manifest.json"), JSON.stringify(launch));
+		// A later resume that stopped before writing a manifest is passed over.
+		mkdirSync(join(g, "resume-2"));
+		writeFileSync(join(g, "manifest.json"), JSON.stringify({ ...launch, expectedCells: (launch.expectedCells as Row[]).filter((c) => Number(c.pass) < 3) }));
+		const d = decide("S-vs-A", [g], labels());
+		expect(d.pairs).toMatchObject({ expected: 18, paired: 17, abandoned: [] });
+		expect(d.pairs!.excluded.map((e) => e.key)).toEqual([`${g}: t1#3`]);
+	});
+
 	it("excludes and lists invalid and blocked pairs, which the harness's validity rules exclude, and decides on the rest", () => {
 		const runs = pairs("baseline", "candidate", () => [{ found: 1 }, { found: 2 }]).filter((r) => !(r.target === "t2" && r.pass === 1 && r.arm === "candidate"));
 		const g = grid(runs, { codes: [code("invalid", ["t2#1: candidate invalid"]), code("blocked", ["t2#1"])] });
