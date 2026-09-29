@@ -272,6 +272,13 @@ function operator(box: Sandbox, command: string): void {
 
 const undoLine = (result: RunResult): string => result.stdout.split("\n").find((line) => line.includes("Undo:")) ?? "";
 
+/** The line indented beneath the Undo line, where a second package's undo goes, or "". */
+const undoNext = (result: RunResult): string => {
+	const lines = result.stdout.split("\n");
+	const below = lines[lines.findIndex((line) => line.includes("Undo:")) + 1] ?? "";
+	return /^ {8}\S/.test(below) ? below.trim() : "";
+};
+
 const piInstalls = (result: RunResult): string[] => result.calls.filter((call) => call.startsWith("pi install"));
 const piUpdates = (result: RunResult): string[] => result.calls.filter((call) => call.startsWith("pi update"));
 const piUpgrades = (result: RunResult): string[] =>
@@ -805,6 +812,300 @@ describe.each(shells())("install.sh under %s", (shell) => {
 		expect(result.stdout).toContain("skipped — PIRED_SKIP_SUBAGENTS=1");
 		expect(installedVersion(box, "pi-subagents")).toBe("0.66.0");
 	});
+
+	// pired's scope gate checks MCP calls on pi-mcp-adapter's approval-broker
+	// event. Below 2.33.0 the adapter did not raise it for a call it had cached
+	// as approved for the session, so one grant let later calls past the gate.
+
+	it("installs pi-mcp-adapter after pi-subagents, so the plan's order is the run's order", () => {
+		const box = sandbox();
+		const result = start(box);
+
+		expect(result.status).toBe(0);
+		expect(piInstalls(result)).toEqual(["pi install npm:pi-subagents", "pi install npm:pi-mcp-adapter"]);
+		expect(installedVersion(box, "pi-mcp-adapter")).toBe("3.3.0");
+		expect(result.stdout).toMatch(/ok\s+mcp\s+npm:pi-mcp-adapter 3\.3\.0/);
+		expect(result.stdout).toContain("Ready.");
+
+		const subagentsRow = result.stdout.indexOf("+ subagents");
+		const mcpRow = result.stdout.indexOf("+ mcp");
+		expect(subagentsRow).toBeGreaterThan(-1);
+		expect(mcpRow).toBeGreaterThan(subagentsRow);
+	});
+
+	it("names the mcp row in the plan, and names pi's directory in it, because it too writes outside the prefix", () => {
+		const box = sandbox();
+		const result = start(box, { args: ["--dry-run"] });
+
+		expect(result.status).toBe(0);
+		expect(result.stdout).toMatch(/\+ mcp\s+~\/\.pi\s+npm:pi-mcp-adapter — MCP servers through one proxy tool, loads in every pi/);
+		expect(undoNext(result)).toBe("pi remove npm:pi-mcp-adapter");
+	});
+
+	it("changes nothing in pi on a dry run, even with a pi-mcp-adapter below the floor to update", () => {
+		const box = sandbox();
+		registered(box, ["npm:pi-mcp-adapter", "2.20.0"]);
+		const result = start(box, { args: ["--dry-run"] });
+
+		expect(result.stdout).toMatch(/\^ mcp\s+~\/\.pi\s+2\.20\.0 -> latest\s+\(pired needs >= 2\.33\.0\)/);
+		expect(piInstalls(result)).toEqual([]);
+		expect(piUpdates(result)).toEqual([]);
+		expect(installedVersion(box, "pi-mcp-adapter")).toBe("2.20.0");
+		expect(readFileSync(box.registered, "utf8")).toBe("npm:pi-mcp-adapter\n");
+	});
+
+	it("declines pi-mcp-adapter when PIRED_SKIP_MCP=1, and stops offering to undo what it did not do", () => {
+		const box = sandbox();
+		const result = start(box, { env: { PIRED_SKIP_MCP: "1" } });
+
+		expect(result.status).toBe(0);
+		expect(piInstalls(result)).toEqual(["pi install npm:pi-subagents"]);
+		expect(result.stdout).toContain("skipped — PIRED_SKIP_MCP=1");
+		expect(result.stdout).not.toContain("pi remove npm:pi-mcp-adapter");
+		expect(undoNext(result)).toBe("");
+		expect(result.stdout).toContain("Ready.");
+	});
+
+	it("leaves an old pi-mcp-adapter alone when PIRED_SKIP_MCP=1, the same as a missing one", () => {
+		const box = sandbox();
+		registered(box, ["npm:pi-mcp-adapter", "2.20.0"]);
+		const result = start(box, { env: { PIRED_SKIP_MCP: "1" } });
+
+		expect(piUpdates(result)).toEqual([]);
+		expect(installedVersion(box, "pi-mcp-adapter")).toBe("2.20.0");
+	});
+
+	it.each([
+		["PIRED_SKIP_SUBAGENTS", "pi install npm:pi-mcp-adapter"],
+		["PIRED_SKIP_MCP", "pi install npm:pi-subagents"],
+	])("still installs the other package when %s=1, because each opt-out names one package", (optOut, other) => {
+		const box = sandbox();
+		const result = start(box, { env: { [optOut]: "1" } });
+
+		expect(result.status).toBe(0);
+		expect(piInstalls(result)).toEqual([other]);
+		expect(result.stdout).toContain(`skipped — ${optOut}=1`);
+	});
+
+	it("leaves an already-registered pi-mcp-adapter at the floor alone rather than installing a second one", () => {
+		const box = sandbox();
+		registered(box, ["npm:pi-mcp-adapter", "2.33.0"]);
+		const result = start(box);
+
+		expect(piInstalls(result)).toEqual(["pi install npm:pi-subagents"]);
+		expect(piUpdates(result)).toEqual([]);
+		expect(result.stdout).toMatch(/- mcp\s+~\/\.pi\s+2\.33\.0 — already registered with pi/);
+		expect(result.stdout).toMatch(/ok\s+mcp\s+already registered with pi, 2\.33\.0/);
+		expect(installedVersion(box, "pi-mcp-adapter")).toBe("2.33.0");
+	});
+
+	it.each(["npm:@someone/pi-mcp-adapter", "git:github.com/someone/pi-mcp-adapter@v2"])(
+		"counts %s as registered, whatever its version, and says what the scope check relies on from it",
+		(fork) => {
+			const box = sandbox();
+			registered(box, [fork, "1.0.0"]);
+			const result = start(box);
+
+			expect(result.status).toBe(0);
+			expect(piInstalls(result)).toEqual(["pi install npm:pi-subagents"]);
+			expect(piUpdates(result)).toEqual([]);
+			expect(result.stdout).toContain(`${fork} — already registered with pi, left alone`);
+			expect(result.stdout).toContain(
+				"pired's MCP scope check relies on the adapter's approval-broker event, which a fork may not have",
+			);
+		},
+	);
+
+	it("is not fooled by a package whose name only resembles the adapter's into thinking MCP is installed", () => {
+		const box = sandbox();
+		registered(box, "npm:pi-mcp-adapter-extras", "npm:pi-mcp", "npm:@acme/pi-mcp", "git:github.com/someone/pi-mcp-adapters");
+		const result = start(box);
+
+		expect(piInstalls(result)).toEqual(["pi install npm:pi-subagents", "pi install npm:pi-mcp-adapter"]);
+	});
+
+	it("still finishes the install when pi-mcp-adapter cannot be installed, and pi-subagents is not taken down with it", () => {
+		const box = sandbox();
+		const result = start(box, { env: { PI_INSTALL_FAILS: "pi-mcp-adapter" } });
+
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain("could not install npm:pi-mcp-adapter — pired works without it");
+		expect(result.stdout).toContain("retry: pi install npm:pi-mcp-adapter");
+		expect(result.stdout).not.toMatch(/ok\s+mcp/);
+		expect(result.stdout).toMatch(/ok\s+subagents\s+npm:pi-subagents 0\.71\.0/);
+		expect(result.stdout).toContain("Ready.");
+	});
+
+	it("does not claim a pi-mcp-adapter pi reported installing but did not record", () => {
+		const box = sandbox();
+		const result = start(box, { env: { PI_INSTALL_SILENT: "1" } });
+
+		expect(result.status).toBe(0);
+		expect(piInstalls(result)).toContain("pi install npm:pi-mcp-adapter");
+		expect(result.stdout).toContain("could not install npm:pi-mcp-adapter");
+		expect(result.stdout).not.toMatch(/ok\s+mcp/);
+	});
+
+	it.each(["2.20.0", "2.32.9"])(
+		"updates an npm:pi-mcp-adapter at %s with pi update, because below 2.33.0 a session grant bypasses the scope check",
+		(old) => {
+			const box = sandbox();
+			registered(box, ["npm:pi-mcp-adapter", old]);
+			const result = start(box);
+
+			expect(result.status).toBe(0);
+			expect(piUpdates(result)).toEqual(["pi update npm:pi-mcp-adapter"]);
+			expect(piInstalls(result)).toEqual(["pi install npm:pi-subagents"]);
+			// Read back from disk, not taken from pi's exit code.
+			expect(installedVersion(box, "pi-mcp-adapter")).toBe("3.3.0");
+			expect(result.stdout).toMatch(new RegExp(`ok\\s+mcp\\s+npm:pi-mcp-adapter ${old.replace(/\./g, "\\.")} -> 3\\.3\\.0`));
+			// The operator had it, so the undo goes back to their version rather than removing it.
+			expect(undoNext(result)).toBe(`pi install npm:pi-mcp-adapter@${old}  # pins it; pi install npm:pi-mcp-adapter unpins`);
+		},
+	);
+
+	it("updates a registered npm:pi-mcp-adapter whose version cannot be read", () => {
+		const box = sandbox();
+		registered(box, "npm:pi-mcp-adapter");
+		const result = start(box);
+
+		expect(result.stdout).toMatch(/\^ mcp\s+~\/\.pi\s+version unknown -> latest/);
+		expect(piUpdates(result)).toEqual(["pi update npm:pi-mcp-adapter"]);
+		expect(result.stdout).toMatch(/ok\s+mcp\s+npm:pi-mcp-adapter 3\.3\.0/);
+	});
+
+	it("does not believe a pi update of pi-mcp-adapter that reports success and moves nothing", () => {
+		const box = sandbox();
+		registered(box, ["npm:pi-mcp-adapter", "2.20.0"]);
+		const result = start(box, { env: { PI_UPDATE_SILENT: "1" } });
+
+		expect(result.status).toBe(0);
+		expect(piUpdates(result)).toEqual(["pi update npm:pi-mcp-adapter"]);
+		expect(result.stdout).toContain("npm:pi-mcp-adapter is 2.20.0 — pired's MCP scope check needs >= 2.33.0");
+		expect(result.stdout).toContain("retry: pi update npm:pi-mcp-adapter");
+		expect(result.stdout).not.toMatch(/ok\s+mcp/);
+		expect(result.stdout).toContain("Ready.");
+	});
+
+	it("warns when a fresh pi-mcp-adapter install lands below the floor, rather than calling it installed", () => {
+		const box = sandbox();
+		const result = start(box, { env: { MCP_LATEST: "2.32.0" } });
+
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain("npm:pi-mcp-adapter is 2.32.0 — pired's MCP scope check needs >= 2.33.0");
+		expect(result.stdout).toContain("retry: pi update npm:pi-mcp-adapter");
+		// The other package's floor is its own.
+		expect(result.stdout).toMatch(/ok\s+subagents\s+npm:pi-subagents 0\.71\.0/);
+	});
+
+	it("leaves a pinned npm:pi-mcp-adapter below the floor alone, and warns that the scope check needs 2.33.0", () => {
+		const box = sandbox();
+		registered(box, ["npm:pi-mcp-adapter@2.20.0", "2.20.0"]);
+		const result = start(box);
+
+		expect(result.status).toBe(0);
+		expect(piUpdates(result)).toEqual([]);
+		expect(piInstalls(result)).toEqual(["pi install npm:pi-subagents"]);
+		expect(result.stdout).toMatch(/- mcp\s+~\/\.pi\s+npm:pi-mcp-adapter@2\.20\.0 — pinned, left alone/);
+		expect(result.stdout).toContain(
+			"pired's MCP scope check needs pi-mcp-adapter >= 2.33.0. To lift the pin: pi install npm:pi-mcp-adapter",
+		);
+		expect(result.stdout).toMatch(/!!\s+mcp\s+npm:pi-mcp-adapter@2\.20\.0 — pinned, left alone/);
+		expect(result.stdout).toContain("pired's MCP scope check needs >= 2.33.0; to lift the pin: pi install npm:pi-mcp-adapter");
+		expect(installedVersion(box, "pi-mcp-adapter")).toBe("2.20.0");
+	});
+
+	it("counts a pi-mcp-adapter pinned at or above the floor as current", () => {
+		const box = sandbox();
+		registered(box, ["npm:pi-mcp-adapter@2.33.0", "2.33.0"]);
+		const result = start(box);
+
+		expect(piUpdates(result)).toEqual([]);
+		expect(result.stdout).toMatch(/ok\s+mcp\s+already registered with pi, 2\.33\.0/);
+	});
+
+	it("holds back pi-mcp-adapter on a pi kept below 0.86.1, the same as pi-subagents", () => {
+		const box = sandbox();
+		const result = start(box, { env: { PI_HAVE: "0.85.1", PIRED_SKIP_PI: "1" } });
+
+		expect(result.status).toBe(0);
+		expect(piInstalls(result)).toEqual([]);
+		expect(result.stdout).toContain("skipped — pired registers it only on pi >= 0.86.1");
+		expect(result.stdout).toContain("held back — pired registers it only on pi >= 0.86.1");
+		expect(result.stdout).not.toContain("+ mcp");
+		expect(result.stdout).not.toContain("pi remove npm:pi-mcp-adapter");
+	});
+
+	it("holds back an old pi-mcp-adapter the same way, and leaves its version on disk alone", () => {
+		const box = sandbox();
+		registered(box, ["npm:pi-mcp-adapter", "2.20.0"]);
+		const result = start(box, { env: { PI_HAVE: "0.85.1", PIRED_SKIP_PI: "1" } });
+
+		expect(piUpdates(result)).toEqual([]);
+		expect(result.stdout).toContain("2.20.0 kept — pired updates it only on pi >= 0.86.1");
+		expect(installedVersion(box, "pi-mcp-adapter")).toBe("2.20.0");
+	});
+
+	it("holds back pi-mcp-adapter at the step when the pi upgrade does not install", () => {
+		const box = sandbox();
+		const result = start(box, { env: { PI_HAVE: "0.85.1", NPM_PI_FAILS: "1" } });
+
+		expect(result.status).toBe(0);
+		expect(piInstalls(result)).toEqual([]);
+		expect(result.stdout).toContain("+ mcp");
+		expect(result.stdout).toContain("held back — pired registers it only on pi >= 0.86.1");
+	});
+
+	it("promises no mcp row it cannot deliver when there is no pi to register it with", () => {
+		const box = sandbox();
+		const result = start(box, { noPi: true, env: { PIRED_SKIP_PI: "1" } });
+
+		expect(result.status).toBe(0);
+		expect(piInstalls(result)).toEqual([]);
+		expect(result.stdout).toMatch(/- mcp\s+skipped — no pi to register it with/);
+		expect(result.stdout).not.toContain("+ mcp");
+		expect(result.stdout).not.toContain("pi remove npm:pi-mcp-adapter");
+	});
+
+	it("asks again at the step for pi-mcp-adapter too, and updates one found there instead of promising pi remove", () => {
+		const box = sandbox();
+		rmSync(join(box.stub, "pi"), { force: true });
+		leftBehind(box);
+		registered(box, ["npm:pi-mcp-adapter", "2.20.0"]);
+		const result = start(box);
+
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain("subagents and mcp steps ask it, and upgrade or keep a package they find there.");
+		expect(undoLine(result)).toContain("pi remove npm:pi-subagents  # only if the step installs it");
+		expect(undoNext(result)).toBe("pi remove npm:pi-mcp-adapter  # only if the step installs it");
+		expect(piInstalls(result)).toEqual(["pi install npm:pi-subagents"]);
+		expect(piUpdates(result)).toEqual(["pi update npm:pi-mcp-adapter"]);
+		expect(result.stdout).toMatch(/ok\s+mcp\s+npm:pi-mcp-adapter 2\.20\.0 -> 3\.3\.0/);
+		expect(result.stdout).toContain("undo: pi install npm:pi-mcp-adapter@2.20.0  # pins it; pi install npm:pi-mcp-adapter unpins");
+	});
+
+	it("gives each package's undo a line of its own, so one's # comment never swallows the other's command", () => {
+		// Both on one line, pasting it ran the first undo and read the second as
+		// part of the first's "# pins it" comment.
+		const box = sandbox();
+		registered(box, ["npm:pi-subagents", "0.66.0"], ["npm:pi-mcp-adapter", "2.20.0"]);
+		const upgrade = start(box);
+
+		expect(undoLine(upgrade)).toMatch(/ · pi install npm:pi-subagents@0\.66\.0 {2}# pins it; pi install npm:pi-subagents unpins$/);
+		expect(undoNext(upgrade)).toBe("pi install npm:pi-mcp-adapter@2.20.0  # pins it; pi install npm:pi-mcp-adapter unpins");
+		expect(installedVersion(box, "pi-mcp-adapter")).toBe("3.3.0");
+
+		// Pasted as printed, comment and all, the next line runs its own command.
+		operator(box, undoNext(upgrade));
+		expect(readFileSync(box.registered, "utf8")).toBe("npm:pi-subagents\nnpm:pi-mcp-adapter@2.20.0\n");
+		expect(installedVersion(box, "pi-mcp-adapter")).toBe("2.20.0");
+
+		// And the pin it leaves is warned about on the next run, not moved.
+		writeFileSync(box.calls, "");
+		const next = start(box);
+		expect(piUpdates(next)).toEqual([]);
+		expect(next.stdout).toMatch(/!!\s+mcp\s+npm:pi-mcp-adapter@2\.20\.0 — pinned, left alone/);
+	});
 });
 
 /**
@@ -854,6 +1155,7 @@ function Listing([string[]]$packages, [string]$root = $packagesRoot) {
 }
 function Reports([string]$version) { Set-Content -LiteralPath $versionFile -Value $version }
 function StateOf([string]$piPath, [bool]$doPi, [bool]$ready = $true) { (Get-SubagentsState -Pi $piPath -DoPi $doPi -PiReady $ready).State }
+function McpStateOf([string]$piPath, [bool]$doPi, [bool]$ready = $true) { (Get-McpState -Pi $piPath -DoPi $doPi -PiReady $ready).State }
 
 Listing @("npm:pi-subagents")
 Check "finds the package pi records" (Test-SubagentsRegistered $pi)
@@ -910,6 +1212,45 @@ Listing @()
 Check "a pi with nothing registered gets the package" ((StateOf $pi $false) -eq "missing")
 Check "unless it is a pi kept below its floor" ((StateOf $pi $false $false) -eq "held")
 
+# pi-mcp-adapter: the same decisions against its own name and its own floor.
+Listing @("npm:pi-mcp-adapter")
+Check "finds the adapter pi records" (Test-McpRegistered $pi)
+Check "and does not take it for pi-subagents" (-not (Test-SubagentsRegistered $pi))
+Listing @("npm:pi-subagents")
+Check "nor pi-subagents for the adapter" (-not (Test-McpRegistered $pi))
+Listing @("npm:pi-mcp-adapter-extras", "npm:pi-mcp", "npm:@acme/pi-mcp")
+Check "is not fooled by a name that only resembles the adapter's" (-not (Test-McpRegistered $pi))
+
+$env:PIRED_SKIP_MCP = "1"
+Listing @("npm:pi-mcp-adapter|2.20.0")
+Check "the adapter's opt-out declines it" ((McpStateOf $pi $false) -eq "declined")
+Check "and only it" ((StateOf $pi $false) -eq "missing")
+$env:PIRED_SKIP_MCP = ""
+$env:PIRED_SKIP_SUBAGENTS = "1"
+Check "pi-subagents' opt-out leaves the adapter alone" ((McpStateOf $pi $false) -eq "old")
+$env:PIRED_SKIP_SUBAGENTS = ""
+
+Check "no pi and none coming is no adapter either" ((McpStateOf "" $false) -eq "nopi")
+Check "a pi arriving in this run gets the adapter" ((McpStateOf "" $true) -eq "missing")
+
+Listing @("npm:pi-mcp-adapter|2.33.0")
+Check "an adapter at 2.33.0 is left alone" ((McpStateOf $pi $false) -eq "present")
+Listing @("npm:pi-mcp-adapter|2.32.9")
+$state = Get-McpState -Pi $pi -DoPi $false
+Check "an adapter below 2.33.0 is updated, since a session grant there bypasses the scope check" ($state.State -eq "old")
+Check "and the plan can say from what" ("$($state.Version)" -eq "2.32.9")
+Check "but not on a pi kept below pired's floor" ((McpStateOf $pi $false $false) -eq "held")
+Listing @("npm:pi-mcp-adapter")
+Check "an adapter with no version on disk to read is updated" ((McpStateOf $pi $false) -eq "old")
+Listing @("npm:pi-mcp-adapter@2.20.0|2.20.0")
+Check "an adapter pinned below the floor is left alone" ((McpStateOf $pi $false) -eq "pinned")
+Listing @("npm:@someone/pi-mcp-adapter|1.0.0")
+Check "a scoped fork of the adapter is left alone whatever its version" ((McpStateOf $pi $false) -eq "fork")
+Listing @("git:github.com/someone/pi-mcp-adapter@v2")
+Check "so is a git checkout of it" ((McpStateOf $pi $false) -eq "fork")
+Listing @()
+Check "a pi kept below its floor gets no adapter" ((McpStateOf $pi $false $false) -eq "held")
+
 Reports "0.85.1"
 $state = Get-PiState $pi
 Check "a pi below 0.86.1 is upgraded" ($state.State -eq "old")
@@ -949,8 +1290,8 @@ Check "and the console's own encoding is put back after the call" ([Console]::Ou
 # The undo line. $prefix stands in for NPM_PREFIX or the %APPDATA%\npm fallback,
 # where a bare npm rm -g would act on npm's own prefix instead.
 $prefix = Join-Path $packagesRoot "prefix"
-function Undo([string]$piState, $piVersion, [bool]$inPrefix, [string]$subagentsState = "present", $subagentsVersion = $null, [bool]$unasked = $false) {
-	Get-UndoText -Prefix $prefix -OwnsTree $false -PiState $piState -PiVersion $piVersion -PiInPrefix $inPrefix -SubagentsState $subagentsState -SubagentsVersion $subagentsVersion -SubagentsUnasked $unasked
+function Undo([string]$piState, $piVersion, [bool]$inPrefix, [string]$subagentsState = "present", $subagentsVersion = $null, [bool]$unasked = $false, [string]$mcpState = "present", $mcpVersion = $null, [bool]$mcpUnasked = $false) {
+	Get-UndoText -Prefix $prefix -OwnsTree $false -PiState $piState -PiVersion $piVersion -PiInPrefix $inPrefix -SubagentsState $subagentsState -SubagentsVersion $subagentsVersion -SubagentsUnasked $unasked -McpState $mcpState -McpVersion $mcpVersion -McpUnasked $mcpUnasked
 }
 $bare = "Undo: npm rm -g --prefix " + [char]34 + $prefix + [char]34 + " pired; Remove-Item -Recurse -Force ~\.pired"
 Check "a pi that already met the floor is not in the undo" ((Undo "present" ([version]"0.87.1") $false) -eq $bare)
@@ -963,13 +1304,22 @@ Check "and one whose version could not be read is left out" ((Undo "old" $null $
 Check "a fresh pi-subagents is removed" ((Undo "present" $null $false "missing").EndsWith("; pi remove npm:pi-subagents"))
 Check "an upgraded one goes back, and the undo says that pins it" ((Undo "present" $null $false "old" ([version]"0.66.0")).EndsWith("; pi install npm:pi-subagents@0.66.0  # pins it; pi install npm:pi-subagents unpins"))
 Check "one the plan could not see is removed only if the step installs it" ((Undo "missing" $null $false "missing" $null $true).EndsWith("; pi remove npm:pi-subagents  # only if the step installs it"))
+Check "a fresh adapter alone rides the Undo line" ((Undo "present" $null $false "present" $null $false "missing").EndsWith("; pi remove npm:pi-mcp-adapter"))
+# A package's undo ends its line: the one after takes its own, or pasting the
+# first would read the second as part of its # comment.
+$both = (Undo "present" $null $false "old" ([version]"0.66.0") $false "old" ([version]"2.20.0")) -split [char]10
+Check "a second package's undo gets a line of its own" ($both.Count -eq 2)
+Check "the first still ends the Undo line" ($both[0].EndsWith("; pi install npm:pi-subagents@0.66.0  # pins it; pi install npm:pi-subagents unpins"))
+Check "and the adapter's goes back to its version beneath it" ($both[1].Trim() -eq "pi install npm:pi-mcp-adapter@2.20.0  # pins it; pi install npm:pi-mcp-adapter unpins")
+$unseen = (Undo "missing" $null $false "missing" $null $true "missing" $null $true) -split [char]10
+Check "an adapter the plan could not see is removed only if the step installs it" ($unseen[1].Trim() -eq "pi remove npm:pi-mcp-adapter  # only if the step installs it")
 
 $env:PI_CODING_AGENT_DIR = Join-Path $packagesRoot "agent"
-Check "no pi to ask and no settings file is a certain missing" (-not (Test-SubagentsUnasked -Pi "" -State "missing"))
+Check "no pi to ask and no settings file is a certain missing" (-not (Test-PackageUnasked -Pi "" -State "missing"))
 New-Item -ItemType Directory -Force -Path $env:PI_CODING_AGENT_DIR | Out-Null
 Set-Content -LiteralPath (Join-Path $env:PI_CODING_AGENT_DIR "settings.json") -Value "{}"
-Check "no pi to ask and a settings file left behind is a guess" (Test-SubagentsUnasked -Pi "" -State "missing")
-Check "a pi that was asked is not a guess" (-not (Test-SubagentsUnasked -Pi $pi -State "missing"))
+Check "no pi to ask and a settings file left behind is a guess" (Test-PackageUnasked -Pi "" -State "missing")
+Check "a pi that was asked is not a guess" (-not (Test-PackageUnasked -Pi $pi -State "missing"))
 $env:PI_CODING_AGENT_DIR = ""
 
 if ($failures.Count -gt 0) {
@@ -1034,26 +1384,41 @@ describe("the installers agree with each other", () => {
 	const sh = readFileSync(INSTALLER, "utf8");
 	const ps1 = readFileSync(join(import.meta.dirname, "install.ps1"), "utf8");
 
-	it("installs the same package from both scripts", () => {
+	it("installs the same packages from both scripts", () => {
 		expect(sh).toContain('SUBAGENTS_PACKAGE="npm:pi-subagents"');
 		expect(ps1).toContain('$SubagentsPackage = "npm:pi-subagents"');
+		expect(sh).toContain('MCP_PACKAGE="npm:pi-mcp-adapter"');
+		expect(ps1).toContain('$McpPackage = "npm:pi-mcp-adapter"');
 	});
 
 	it("holds both scripts to the same floors, because one README states them for both", () => {
 		expect(sh).toContain("PI_FLOOR=0.86.1");
 		expect(sh).toContain("SUBAGENTS_FLOOR=0.71.0");
+		expect(sh).toContain("MCP_FLOOR=2.33.0");
 		expect(ps1).toContain('$PiFloor = [version]"0.86.1"');
 		expect(ps1).toContain('$SubagentsFloor = [version]"0.71.0"');
+		expect(ps1).toContain('$McpFloor = [version]"2.33.0"');
 	});
 
-	it("upgrades pi-subagents the same way from both scripts, with pi update on the one package", () => {
+	it("upgrades each package the same way from both scripts, with pi update on the one package", () => {
 		expect(sh).toContain('"$PI" update "$SUBAGENTS_PACKAGE"');
 		expect(ps1).toContain('@("update", $SubagentsPackage)');
+		expect(sh).toContain('"$PI" update "$MCP_PACKAGE"');
+		expect(ps1).toContain('@("update", $McpPackage)');
 	});
 
-	it("spells the opt-out the same way on both platforms, because one name is documented for both", () => {
-		expect(sh).toContain("PIRED_SKIP_SUBAGENTS");
-		expect(ps1).toContain("PIRED_SKIP_SUBAGENTS");
+	it("spells the opt-outs the same way on both platforms, because one name is documented for both", () => {
+		for (const optOut of ["PIRED_SKIP_SUBAGENTS", "PIRED_SKIP_MCP"]) {
+			expect(sh).toContain(optOut);
+			expect(ps1).toContain(optOut);
+		}
+	});
+
+	it("wires each opt-out to its own package in both scripts, not only into the comments that document it", () => {
+		expect(sh).toContain("PKG_SKIP=PIRED_SKIP_MCP");
+		expect(ps1).toContain('Skip = "PIRED_SKIP_MCP"');
+		expect(sh).toContain("PKG_SKIP=PIRED_SKIP_SUBAGENTS");
+		expect(ps1).toContain('Skip = "PIRED_SKIP_SUBAGENTS"');
 	});
 
 	it("still refuses to register pired itself on both platforms, which is the decision this one sits next to", () => {
@@ -1068,6 +1433,7 @@ describe("the installers agree with each other", () => {
 		const help = run(box, { args: ["--help"] });
 		expect(help.status).toBe(0);
 		expect(help.stdout).toContain("PIRED_SKIP_SUBAGENTS");
+		expect(help.stdout).toContain("PIRED_SKIP_MCP");
 		// The three that the old `sed -n '2,37p'` cut off.
 		expect(help.stdout).toContain("PIRED_SKIP_PI");
 		expect(help.stdout).toContain("PIRED_YES");

@@ -24,6 +24,11 @@
 # the operator would otherwise install by hand, it is named in the plan, and
 # PIRED_SKIP_SUBAGENTS=1 declines it. See ADR-021 and ADR-027.
 #
+# It registers pi-mcp-adapter the same way, after pi-subagents: the MCP proxy
+# whose calls pired's scope gate checks. A registered npm:pi-mcp-adapter older
+# than 2.33.0 is upgraded, because below that a call the adapter had cached as
+# approved for the session never reaches the gate. PIRED_SKIP_MCP=1 declines it.
+#
 # Nothing needs administrator. The MSI from nodejs.org does, so this does not
 # use it:
 #
@@ -43,6 +48,7 @@
 #   PIRED_SKIP_PI  set to 1 to not install or upgrade pi
 #   PIRED_SKIP_SUBAGENTS
 #                  set to 1 to not install or upgrade pi-subagents
+#   PIRED_SKIP_MCP set to 1 to not install or upgrade pi-mcp-adapter
 #   PIRED_YES      set to 1 to skip the confirmation prompt
 #   PIRED_DRY_RUN  set to 1 to print the plan and stop
 #
@@ -66,6 +72,13 @@ $SubagentsPackage = "npm:pi-subagents"
 # box that meets neither has pired without delegation, and says so.
 $PiFloor = [version]"0.86.1"
 $SubagentsFloor = [version]"0.71.0"
+# The MCP proxy. pired's scope gate hears each MCP call on the adapter's
+# approval-broker event (pi-mcp-adapter:tool-approval-request), which 2.20.0
+# added. Before 2.33.0 the adapter did not raise it for a call it had cached as
+# approved for the session, so one session grant let every later call to that
+# tool past the gate unchecked. Hence the floor.
+$McpPackage = "npm:pi-mcp-adapter"
+$McpFloor = [version]"2.33.0"
 $NodeLine = 22
 $NodeMinimum = [version]"22.19.0"
 $NodeDist = "https://nodejs.org/dist/latest-v$NodeLine.x"
@@ -733,24 +746,64 @@ function Get-PiState {
 	return @{ State = $state; Version = $version }
 }
 
-# --- subagents ---------------------------------------------------------------
-# The match is any package whose name ends in `pi-subagents`, not the one spec
-# this script installs. The ecosystem is mostly forks - @gotgenes, @nklisch,
+# --- pi packages -------------------------------------------------------------
+# Two third-party packages are registered with pi: pi-subagents and
+# pi-mcp-adapter. Everything that decides or reports on one is written once
+# below and handed the package's facts; what differs between the two lives in
+# Get-PackageFacts and nowhere else.
+function Get-PackageFacts {
+	param([string]$Key)
+
+	switch ($Key) {
+		"subagents" {
+			return @{
+				Key = "subagents"; Package = $SubagentsPackage; Name = "pi-subagents"; Floor = $SubagentsFloor
+				Skip = "PIRED_SKIP_SUBAGENTS"
+				Row = "delegation, loads in every pi"
+				Needs = "pired's delegation needs"
+				Fork = "pired's delegation needs pi-subagents >= $SubagentsFloor features, which a fork may not have"
+				Held = "pi-subagents $SubagentsFloor needs pi >= $PiFloor"
+				HeldKept = "$SubagentsFloor needs pi >= $PiFloor"
+				Install = @("install", $SubagentsPackage)
+				# `pi update <source>` updates that one package and leaves pi and
+				# every other package where they are (`pi update --help`).
+				Update = @("update", $SubagentsPackage)
+			}
+		}
+		"mcp" {
+			return @{
+				Key = "mcp"; Package = $McpPackage; Name = "pi-mcp-adapter"; Floor = $McpFloor
+				Skip = "PIRED_SKIP_MCP"
+				Row = "MCP servers through one proxy tool, loads in every pi"
+				Needs = "pired's MCP scope check needs"
+				Fork = "pired's MCP scope check relies on the adapter's approval-broker event, which a fork may not have"
+				Held = "pired registers it only on pi >= $PiFloor"
+				HeldKept = "pired updates it only on pi >= $PiFloor"
+				Install = @("install", $McpPackage)
+				Update = @("update", $McpPackage)
+			}
+		}
+	}
+	throw "no such package: $Key"
+}
+
+# The match is any package by that name, not the one spec this script
+# installs. The pi-subagents ecosystem is mostly forks - @gotgenes, @nklisch,
 # @tintinweb - and an operator who chose one did not ask for a second
 # implementation of the same tool registered underneath it, or for this script
 # to decide what version of theirs is new enough.
 #
-# canonical  npm:pi-subagents, which `pi update` moves
-# pinned     npm:pi-subagents@<version>, which it does not
+# canonical  npm:<name>, which `pi update` moves
+# pinned     npm:<name>@<version>, which it does not
 # fork       any other package by that name - a scope, a git remote, a checkout
-function Get-SubagentsKind {
-	param([string]$Source)
+function Get-PackageKind {
+	param([string]$Source, [string]$Name)
 
 	if ($Source -match '^npm:(@[^/@]+/)?([^@]+)(@(.*))?$') {
 		$scope = $Matches[1]
-		$name = $Matches[2]
+		$found = $Matches[2]
 		$version = $Matches[4]
-		if ($name -ne "pi-subagents") { return "" }
+		if ($found -ne $Name) { return "" }
 		if ($scope) { return "fork" }
 		if ((-not $version) -or $version -eq "latest") { return "canonical" }
 		return "pinned"
@@ -759,7 +812,7 @@ function Get-SubagentsKind {
 	$last = $Source.TrimEnd([char]47, [char]92)
 	$last = @($last -split '[/\\:]')[-1]
 	$last = ($last -replace '@[^@]*$', '') -replace '\.git$', ''
-	if ($last -eq "pi-subagents") { return "fork" }
+	if ($last -eq $Name) { return "fork" }
 	return ""
 }
 
@@ -794,10 +847,10 @@ function Restore-Output {
 # `pi list` prints each source with its installed path on the line below, so
 # this reads entries rather than matching lines: a match on `pi-subagents` also
 # hit that path, and counted a pinned npm:pi-subagents@0.66.0 as registered by
-# the name of its directory rather than by its source. npm:pi-subagents is
-# preferred over a fork registered beside it, since it is the one this can move.
-function Get-SubagentsEntry {
-	param([string]$Pi)
+# the name of its directory rather than by its source. npm:<name> is preferred
+# over a fork registered beside it, since it is the one this can move.
+function Get-PackageEntry {
+	param([string]$Pi, [string]$Name)
 	if (-not $Pi) { return $null }
 
 	$previous = $ErrorActionPreference
@@ -820,7 +873,7 @@ function Get-SubagentsEntry {
 		if ($line -match '^  (\S+)') {
 			$source = $Matches[1]
 			$current = $null
-			$kind = Get-SubagentsKind $source
+			$kind = Get-PackageKind $source $Name
 			if (-not $kind) { continue }
 			$current = @{ Kind = $kind; Source = $source; Path = "" }
 			if ($kind -eq "fork") {
@@ -841,7 +894,12 @@ function Get-SubagentsEntry {
 
 function Test-SubagentsRegistered {
 	param([string]$Pi)
-	return ($null -ne (Get-SubagentsEntry $Pi))
+	return ($null -ne (Get-PackageEntry $Pi "pi-subagents"))
+}
+
+function Test-McpRegistered {
+	param([string]$Pi)
+	return ($null -ne (Get-PackageEntry $Pi "pi-mcp-adapter"))
 }
 
 # The version in <path>\package.json, or $null.
@@ -864,28 +922,28 @@ function Get-PackageVersion {
 # would give anyway: install it.
 #
 #   missing   nothing registered
-#   present   npm:pi-subagents at or above the floor, pinned or not
-#   old       npm:pi-subagents below it, or with no version on disk to read
-#   pinned    npm:pi-subagents@<version> below it: `pi update` does not move a
+#   present   npm:<name> at or above the floor, pinned or not
+#   old       npm:<name> below it, or with no version on disk to read
+#   pinned    npm:<name>@<version> below it: `pi update` does not move a
 #             pin, and replacing the operator's pin is not this script's call
 #   fork      another package by that name
 #   held      missing or old, on a pi this run leaves below its own floor
-#   declined  PIRED_SKIP_SUBAGENTS=1
+#   declined  the package's opt-out is set to 1
 #   nopi      no pi to register it with, and none coming
 #
 # A function rather than lines inside the survey because this is the half of
 # the feature that decides, and install.ps1 cannot be run on the machines its
 # tests run on - so what decides has to be callable on its own.
-function Get-SubagentsState {
-	param([string]$Pi, [bool]$DoPi, [bool]$PiReady = $true)
+function Get-PackageState {
+	param([hashtable]$Facts, [string]$Pi, [bool]$DoPi, [bool]$PiReady = $true)
 
 	$result = @{ State = ""; Kind = ""; Source = ""; Version = $null }
-	if ($env:PIRED_SKIP_SUBAGENTS -eq "1") { $result.State = "declined"; return $result }
-	# No pi to register it with, and none coming. A "+ subagents" row here would
-	# be promising something this run cannot do.
+	if ([Environment]::GetEnvironmentVariable($Facts.Skip) -eq "1") { $result.State = "declined"; return $result }
+	# No pi to register it with, and none coming. A "+" row here would be
+	# promising something this run cannot do.
 	if ((-not $DoPi) -and (-not $Pi)) { $result.State = "nopi"; return $result }
 
-	$entry = Get-SubagentsEntry $Pi
+	$entry = Get-PackageEntry $Pi $Facts.Name
 	if (-not $entry) {
 		$result.State = "missing"
 	} else {
@@ -894,7 +952,7 @@ function Get-SubagentsState {
 		$result.Version = Get-PackageVersion $entry.Path
 		if ($entry.Kind -eq "fork") {
 			$result.State = "fork"
-		} elseif ($result.Version -and $result.Version -ge $SubagentsFloor) {
+		} elseif ($result.Version -and $result.Version -ge $Facts.Floor) {
 			$result.State = "present"
 		} elseif ($entry.Kind -eq "pinned") {
 			$result.State = "pinned"
@@ -907,8 +965,23 @@ function Get-SubagentsState {
 	# pi kept below that by PIRED_SKIP_PI=1 is one this run will not lift.
 	# Installing the latest onto it would be installing a package onto a host it
 	# has said it does not support.
+	#
+	# pi-mcp-adapter's own peer range reaches lower, and it is held on the same
+	# floor anyway. It opens a route to MCP servers that pired's scope gate has
+	# to see, and a pi below the one pired is supported on is not a host this
+	# run adds that route to.
 	if ((-not $PiReady) -and ($result.State -in @("missing", "old"))) { $result.State = "held" }
 	return $result
+}
+
+function Get-SubagentsState {
+	param([string]$Pi, [bool]$DoPi, [bool]$PiReady = $true)
+	return (Get-PackageState -Facts (Get-PackageFacts "subagents") -Pi $Pi -DoPi $DoPi -PiReady $PiReady)
+}
+
+function Get-McpState {
+	param([string]$Pi, [bool]$DoPi, [bool]$PiReady = $true)
+	return (Get-PackageState -Facts (Get-PackageFacts "mcp") -Pi $Pi -DoPi $DoPi -PiReady $PiReady)
 }
 
 # Where pi keeps its settings: PI_CODING_AGENT_DIR, or .pi\agent under the
@@ -930,8 +1003,9 @@ function Get-PiAgentDir {
 # the step, asking the pi this run installs, can find the operator's
 # npm:pi-subagents there and upgrade it - under a plan whose undo said
 # `pi remove`, which would take the operator's package away. Only a settings
-# file there can record one, so without it the plan is certain.
-function Test-SubagentsUnasked {
+# file there can record one, so without it the plan is certain. The same holds
+# for either package.
+function Test-PackageUnasked {
 	param([string]$Pi, [string]$State)
 	if ($Pi -or $State -ne "missing") { return $false }
 	$agentDir = Get-PiAgentDir
@@ -940,13 +1014,22 @@ function Test-SubagentsUnasked {
 }
 
 # `pi install` of an exact version replaces the entry it matches by name, so
-# going back from an upgrade leaves npm:pi-subagents@<old> where
-# npm:pi-subagents was: a pin, which `pi update` never moves and the next run
-# of this script leaves alone. The undo says so where it is given, after a `#`
-# so that pasting it runs only the command. It is always last on its line.
-function Format-SubagentsUndo {
-	param($Version)
-	return "pi install $($SubagentsPackage)@$Version  # pins it; pi install $SubagentsPackage unpins"
+# going back from an upgrade leaves npm:<name>@<old> where npm:<name> was: a
+# pin, which `pi update` never moves and the next run of this script leaves
+# alone. The undo says so where it is given, after a `#` so that pasting it
+# runs only the command. It is always last on its line.
+function Format-PackageUndo {
+	param([string]$Package, $Version)
+	return "pi install $($Package)@$Version  # pins it; pi install $Package unpins"
+}
+
+# What undoes this run's change to one package, or "" when it makes none.
+function Get-PackageUndo {
+	param([string]$Package, [string]$State, $Version, [bool]$Unasked)
+	if ($Unasked) { return "pi remove $Package  # only if the step installs it" }
+	if ($State -eq "missing") { return "pi remove $Package" }
+	if ($State -eq "old" -and $Version) { return (Format-PackageUndo $Package $Version) }
+	return ""
 }
 
 # The undo line, a function for the reason Get-SubagentsState is one: it is a
@@ -973,7 +1056,10 @@ function Get-UndoText {
 		[bool]$PiInPrefix,
 		[string]$SubagentsState,
 		$SubagentsVersion,
-		[bool]$SubagentsUnasked
+		[bool]$SubagentsUnasked,
+		[string]$McpState = "",
+		$McpVersion = $null,
+		[bool]$McpUnasked = $false
 	)
 
 	$undoPrefix = "--prefix `"$Prefix`""
@@ -985,19 +1071,28 @@ function Get-UndoText {
 		$undoPiBack = "; npm install -g $undoPrefix $($PiPackage)@$PiVersion"
 	}
 
-	$undoSubagents = ""
-	if ($SubagentsUnasked) {
-		$undoSubagents = "; pi remove $SubagentsPackage  # only if the step installs it"
-	} elseif ($SubagentsState -eq "missing") {
-		$undoSubagents = "; pi remove $SubagentsPackage"
-	} elseif ($SubagentsState -eq "old" -and $SubagentsVersion) {
-		$undoSubagents = "; $(Format-SubagentsUndo $SubagentsVersion)"
+	# A package's undo ends its line. Either note after it is a `#` comment, and
+	# a second package's undo pasted on the same line would be part of the
+	# comment, silently not run. The first rides the Undo line; the next takes
+	# its own line beneath, where pasting it runs it.
+	$subagentsUndo = Get-PackageUndo $SubagentsPackage $SubagentsState $SubagentsVersion $SubagentsUnasked
+	$mcpUndo = Get-PackageUndo $McpPackage $McpState $McpVersion $McpUnasked
+	$tail = ""
+	$next = ""
+	if ($subagentsUndo) {
+		$tail = "; $subagentsUndo"
+		$next = $mcpUndo
+	} elseif ($mcpUndo) {
+		$tail = "; $mcpUndo"
 	}
 
 	if ($OwnsTree) {
-		return "Undo: Remove-Item -Recurse -Force $(Get-Tilde (Get-PiredHome)), ~\.pired$undoSubagents"
+		$text = "Undo: Remove-Item -Recurse -Force $(Get-Tilde (Get-PiredHome)), ~\.pired$tail"
+	} else {
+		$text = "Undo: npm rm -g $undoPrefix pired$undoPiRemove; Remove-Item -Recurse -Force ~\.pired$undoPiBack$tail"
 	}
-	return "Undo: npm rm -g $undoPrefix pired$undoPiRemove; Remove-Item -Recurse -Force ~\.pired$undoPiBack$undoSubagents"
+	if ($next) { $text += "$([char]10)        $next" }
+	return $text
 }
 
 # npm writes both a .cmd and a .ps1 shim, and PowerShell resolves the .ps1
@@ -1175,6 +1270,41 @@ function Write-PlanRow {
 	Write-Host ("    {0} {1}{2} {3}" -f $markup, $What.PadRight(11), $Where.PadRight(31), "$($script:Dim)$Note$($script:Off)")
 }
 
+# The only rows that write outside this script's own prefix, so they say
+# where - ~\.pi is pi's directory, and a plan that hid that would be hiding the
+# lines someone might object to.
+function Write-PackageRow {
+	param([hashtable]$Facts, [hashtable]$State, [string]$PiHome)
+
+	$key = $Facts.Key
+	$where = Get-Tilde $PiHome
+	$was = Format-Version $State.Version
+	switch ($State.State) {
+		"missing" { Write-PlanRow "+" $key $where "$($Facts.Package) - $($Facts.Row)" }
+		"old" { Write-PlanRow "^" $key $where "$was -> latest  (pired needs >= $($Facts.Floor))" }
+		"present" { Write-PlanRow "." $key $where "$was - already registered with pi" }
+		"pinned" { Write-PlanRow "." $key $where "$($State.Source) - pinned, left alone" }
+		"fork" { Write-PlanRow "." $key $where "$($State.Source) - already registered with pi, left alone" }
+		"held" {
+			if ($State.Kind) {
+				Write-PlanRow "." $key $where "$was kept - $($Facts.HeldKept)"
+			} else {
+				Write-PlanRow "." $key "" "skipped - $($Facts.Held)"
+			}
+		}
+		"declined" { Write-PlanRow "." $key "" "skipped - $($Facts.Skip)=1" }
+		"nopi" { Write-PlanRow "." $key "" "skipped - no pi to register it with" }
+	}
+}
+
+function Write-PackageNote {
+	param([hashtable]$Facts, [string]$State)
+	switch ($State) {
+		"pinned" { Write-Note "$($Facts.Needs) $($Facts.Name) >= $($Facts.Floor). To lift the pin: pi install $($Facts.Package)" }
+		"fork" { Write-Note "$($Facts.Fork)." }
+	}
+}
+
 # This is the only question the installer asks. Everything above it is in the
 # plan the answer covers - a second prompt later for the PATH entries would be
 # asking twice for one decision.
@@ -1198,6 +1328,98 @@ function Confirm-Plan {
 	}
 	Write-Say
 	return $true
+}
+
+# --- pi packages, the step ---------------------------------------------------
+# pired ships no sub-agent machinery and no MCP client, and depends on neither.
+# These are the packages it cooperates with when they are there: pi-subagents
+# runs its delegation, and the scope gate checks each call pi-mcp-adapter
+# makes. Installed after pired and never before it, pi-subagents first, so the
+# order of the plan is the order of the run.
+#
+# Non-fatal, and deliberately so: a third-party package that fails to resolve is
+# not a reason to fail an install of pired, which works without it. The warning
+# carries the one command that retries it.
+function Invoke-PackageStep {
+	param([hashtable]$Facts, [hashtable]$Planned, [string]$Pi)
+
+	$key = $Facts.Key
+	$package = $Facts.Package
+	if (-not $Pi) {
+		# Only reachable when the pi step was skipped between the plan and here.
+		Write-Note "$key skipped - no pi to register it with"
+		return
+	}
+	$piNow = Get-PiVersion $Pi
+	if (-not ($piNow -and $piNow -ge $PiFloor)) {
+		# The pi upgrade failed or did not take, and the pi step already said so.
+		Write-Note "$key held back - $($Facts.Held)"
+		return
+	}
+
+	# Asked again rather than trusted from the survey, which may have had no pi
+	# to put the question to - a box with a ~\.pi but no pi on it, which is what
+	# `npm rm -g` then reinstalling leaves behind - or an older one.
+	$now = Get-PackageState -Facts $Facts -Pi $Pi -DoPi $false
+	if ($now.State -in @("pinned", "fork")) {
+		Write-Note "$($now.Source) is registered - left alone"
+		return
+	}
+	if ($now.State -notin @("missing", "old")) { return }
+
+	if ($now.State -eq "old") {
+		Write-Step "updating $package $(Format-Version $now.Version) -> latest"
+		$ran = Invoke-Logged -Command $Pi -Arguments $Facts.Update
+		$retry = "pi update $package"
+	} else {
+		Write-Step "installing $package"
+		$ran = Invoke-Logged -Command $Pi -Arguments $Facts.Install
+		$retry = "pi install $package"
+	}
+	if (-not $ran) { Show-Log }
+
+	# Neither exit code is the answer. `pi install` can exit 0 and record
+	# nothing - the registration ADR-017 removed was guarded against that, and
+	# the guard is the part worth keeping - and `pi update` can exit 0 and move
+	# nothing: with PI_OFFLINE=1 in the environment, pi 0.87.1 prints "Updated
+	# npm:pi-subagents" and leaves 0.66.0 on disk. What pi lists, and what the
+	# package.json under it says, are the answer.
+	$after = Get-PackageState -Facts $Facts -Pi $Pi -DoPi $false
+	switch ($after.State) {
+		"present" {
+			# The plan offered `pi remove` for a package this step found already
+			# there, so the undo it printed is wrong for what ran.
+			if ($Planned.State -eq "missing" -and $now.State -eq "old") {
+				if ($now.Version) {
+					Write-Note "$package was already registered at $($now.Version), so this updated it rather than installing it"
+					Write-Host "    undo: $(Format-PackageUndo $package $now.Version)"
+				} else {
+					Write-Note "$package was already registered, with no version to read, so this updated it rather than"
+					Write-Note "installing it: the plan's pi remove would take away a package that was here before this run"
+				}
+			}
+		}
+		"old" {
+			Write-Note "$package is $(Format-Version $after.Version) - $($Facts.Needs) >= $($Facts.Floor)"
+			Write-Host "    retry: pi update $package"
+		}
+		{ $_ -in @("pinned", "fork") } { Write-Note "$($after.Source) is registered - left alone" }
+		default {
+			Write-Note "could not install $package - pired works without it"
+			Write-Host "    retry: $retry"
+		}
+	}
+}
+
+# Said again after the run, not only in the plan. A pin reaches this state
+# only below the floor, where pired goes without what the floor is for, and the
+# pin need not be one the operator chose: taking the undo of an earlier upgrade
+# leaves one.
+function Write-PackageKept {
+	param([hashtable]$Facts, [hashtable]$State)
+	if ($State.State -ne "pinned") { return }
+	Write-Note "$($State.Source) is pinned below $($Facts.Floor) - left alone; $($Facts.Needs) >= $($Facts.Floor)"
+	Write-Host "    to lift the pin: pi install $($Facts.Package)"
 }
 
 # --- the installer -----------------------------------------------------------
@@ -1247,8 +1469,12 @@ function Invoke-PiredInstaller {
 		$reinstall = (Test-Path -LiteralPath (Join-Path $prefix "pired.cmd") -PathType Leaf)
 
 		$piHome = if ($env:USERPROFILE) { Join-Path $env:USERPROFILE ".pi" } else { ".pi" }
-		$subagents = Get-SubagentsState -Pi $pi -DoPi $doPi -PiReady $piReady
+		$subagentsFacts = Get-PackageFacts "subagents"
+		$subagents = Get-PackageState -Facts $subagentsFacts -Pi $pi -DoPi $doPi -PiReady $piReady
 		$doSubagents = ($subagents.State -in @("missing", "old"))
+		$mcpFacts = Get-PackageFacts "mcp"
+		$mcp = Get-PackageState -Facts $mcpFacts -Pi $pi -DoPi $doPi -PiReady $piReady
+		$doMcp = ($mcp.State -in @("missing", "old"))
 
 		# Two entries when this run brings its own Node: the shims live in the
 		# prefix, node.exe and npm.cmd at the root of the extracted zip.
@@ -1299,26 +1525,8 @@ function Invoke-PiredInstaller {
 		$piredNote = if ($reinstall) { "reinstall from $source" } else { "from $source" }
 		Write-PlanRow "+" "pired" (Get-Tilde $prefix) $piredNote
 
-		# The only row that writes outside this script's own prefix, so it says
-		# where - ~\.pi is pi's directory, and a plan that hid that would be hiding
-		# the one line someone might object to.
-		$subagentsWas = Format-Version $subagents.Version
-		switch ($subagents.State) {
-			"missing" { Write-PlanRow "+" "subagents" (Get-Tilde $piHome) "$SubagentsPackage - delegation, loads in every pi" }
-			"old" { Write-PlanRow "^" "subagents" (Get-Tilde $piHome) "$subagentsWas -> latest  (pired needs >= $SubagentsFloor)" }
-			"present" { Write-PlanRow "." "subagents" (Get-Tilde $piHome) "$subagentsWas - already registered with pi" }
-			"pinned" { Write-PlanRow "." "subagents" (Get-Tilde $piHome) "$($subagents.Source) - pinned, left alone" }
-			"fork" { Write-PlanRow "." "subagents" (Get-Tilde $piHome) "$($subagents.Source) - already registered with pi, left alone" }
-			"held" {
-				if ($subagents.Kind) {
-					Write-PlanRow "." "subagents" (Get-Tilde $piHome) "$subagentsWas kept - $SubagentsFloor needs pi >= $PiFloor"
-				} else {
-					Write-PlanRow "." "subagents" "" "skipped - pi-subagents $SubagentsFloor needs pi >= $PiFloor"
-				}
-			}
-			"declined" { Write-PlanRow "." "subagents" "" "skipped - PIRED_SKIP_SUBAGENTS=1" }
-			"nopi" { Write-PlanRow "." "subagents" "" "skipped - no pi to register it with" }
-		}
+		Write-PackageRow -Facts $subagentsFacts -State $subagents -PiHome $piHome
+		Write-PackageRow -Facts $mcpFacts -State $mcp -PiHome $piHome
 
 		if ($pathNeeded.Count -gt 0) {
 			Write-PlanRow "+" "PATH" "your user environment" (($pathNeeded | ForEach-Object { Get-Tilde $_ }) -join "; ")
@@ -1344,19 +1552,25 @@ function Invoke-PiredInstaller {
 		if ($piState.State -eq "old" -and -not $piInPrefix) {
 			Write-Note "The pi at $(Get-Tilde $pi) stays as it is; pired runs the new one in $(Get-Tilde $prefix)."
 		}
-		switch ($subagents.State) {
-			"pinned" { Write-Note "pired's delegation needs pi-subagents >= $SubagentsFloor. To lift the pin: pi install $SubagentsPackage" }
-			"fork" { Write-Note "pired's delegation needs pi-subagents >= $SubagentsFloor features, which a fork may not have." }
-		}
+		Write-PackageNote -Facts $subagentsFacts -State $subagents.State
+		Write-PackageNote -Facts $mcpFacts -State $mcp.State
 
-		$subagentsUnasked = Test-SubagentsUnasked -Pi $pi -State $subagents.State
-		if ($subagentsUnasked) {
+		$subagentsUnasked = Test-PackageUnasked -Pi $pi -State $subagents.State
+		$mcpUnasked = Test-PackageUnasked -Pi $pi -State $mcp.State
+		if ($subagentsUnasked -or $mcpUnasked) {
 			Write-Note "Only the pi this run installs can say what $(Get-Tilde (Get-PiAgentDir)) already records: the"
-			Write-Note "subagents step asks it, and upgrades or keeps a pi-subagents it finds there."
+			if ($subagentsUnasked -and $mcpUnasked) {
+				Write-Note "subagents and mcp steps ask it, and upgrade or keep a package they find there."
+			} elseif ($subagentsUnasked) {
+				Write-Note "subagents step asks it, and upgrades or keeps a pi-subagents it finds there."
+			} else {
+				Write-Note "mcp step asks it, and upgrades or keeps a pi-mcp-adapter it finds there."
+			}
 		}
 		Write-Note (Get-UndoText -Prefix $prefix -OwnsTree $ownsTree `
 			-PiState $piState.State -PiVersion $piState.Version -PiInPrefix ([bool]$piInPrefix) `
-			-SubagentsState $subagents.State -SubagentsVersion $subagents.Version -SubagentsUnasked $subagentsUnasked)
+			-SubagentsState $subagents.State -SubagentsVersion $subagents.Version -SubagentsUnasked $subagentsUnasked `
+			-McpState $mcp.State -McpVersion $mcp.Version -McpUnasked $mcpUnasked)
 		Write-Say
 
 		if ($script:DryRun) {
@@ -1457,84 +1671,18 @@ function Invoke-PiredInstaller {
 		# installed. `pired` passes -e for its own run and writes nothing.
 		# See ADR-017.
 
-		# --- subagents ---
-		# pired ships no sub-agent machinery and depends on none; this is the
-		# package it cooperates with when it is there. Installed after pired and
-		# never before it, so the order of the plan is the order of the run.
-		#
-		# Non-fatal, and deliberately so: a third-party package that fails to
-		# resolve is not a reason to fail an install of pired, which works without
-		# it. The warning carries the one command that retries it.
+		# --- pi packages ---
+		# pi-subagents first, then pi-mcp-adapter, as the plan listed them. See
+		# Invoke-PackageStep for why each is non-fatal.
 		if ($doSubagents) {
-			$piNow = Get-PiVersion $pi
-			if (-not $pi) {
-				# Only reachable when the pi step was skipped between the plan and here.
-				Write-Note "subagents skipped - no pi to register it with"
-			} elseif (-not ($piNow -and $piNow -ge $PiFloor)) {
-				# The pi upgrade failed or did not take, and the pi step already said so.
-				Write-Note "subagents held back - pi-subagents $SubagentsFloor needs pi >= $PiFloor"
-			} else {
-				# Asked again rather than trusted from the survey, which may have had
-				# no pi to put the question to - a box with a ~\.pi but no pi on it,
-				# which is what `npm rm -g` then reinstalling leaves behind - or an
-				# older one.
-				$now = Get-SubagentsState -Pi $pi -DoPi $false
-				if ($now.State -in @("missing", "old")) {
-					if ($now.State -eq "old") {
-						Write-Step "updating $SubagentsPackage $(Format-Version $now.Version) -> latest"
-						# `pi update <source>` updates that one package and leaves pi and
-						# every other package where they are (`pi update --help`).
-						$ran = Invoke-Logged -Command $pi -Arguments @("update", $SubagentsPackage)
-						$retry = "pi update $SubagentsPackage"
-					} else {
-						Write-Step "installing $SubagentsPackage"
-						$ran = Invoke-Logged -Command $pi -Arguments @("install", $SubagentsPackage)
-						$retry = "pi install $SubagentsPackage"
-					}
-					if (-not $ran) { Show-Log }
-
-					# Neither exit code is the answer. `pi install` can exit 0 and record
-					# nothing - the registration ADR-017 removed was guarded against that,
-					# and the guard is the part worth keeping - and `pi update` can exit
-					# 0 and move nothing: with PI_OFFLINE=1 in the environment, pi 0.87.1
-					# prints "Updated npm:pi-subagents" and leaves 0.66.0 on disk. What pi
-					# lists, and what the package.json under it says, are the answer.
-					$after = Get-SubagentsState -Pi $pi -DoPi $false
-					switch ($after.State) {
-						"present" {
-							# The plan offered `pi remove` for a package this step found
-							# already there, so the undo it printed is wrong for what ran.
-							if ($subagents.State -eq "missing" -and $now.State -eq "old") {
-								if ($now.Version) {
-									Write-Note "$SubagentsPackage was already registered at $($now.Version), so this updated it rather than installing it"
-									Write-Host "    undo: $(Format-SubagentsUndo $now.Version)"
-								} else {
-									Write-Note "$SubagentsPackage was already registered, with no version to read, so this updated it rather than"
-									Write-Note "installing it: the plan's pi remove would take away a package that was here before this run"
-								}
-							}
-						}
-						"old" {
-							Write-Note "$SubagentsPackage is $(Format-Version $after.Version) - pired's delegation needs >= $SubagentsFloor"
-							Write-Host "    retry: pi update $SubagentsPackage"
-						}
-						{ $_ -in @("pinned", "fork") } { Write-Note "$($after.Source) is registered - left alone" }
-						default {
-							Write-Note "could not install $SubagentsPackage - pired works without it"
-							Write-Host "    retry: $retry"
-						}
-					}
-				} elseif ($now.State -in @("pinned", "fork")) {
-					Write-Note "$($now.Source) is registered - left alone"
-				}
-			}
-		} elseif ($subagents.State -eq "pinned") {
-			# Said again after the run, not only in the plan. A pin reaches this
-			# state only below the floor, where pired has no delegation, and the pin
-			# need not be one the operator chose: taking the undo of an earlier
-			# upgrade leaves one.
-			Write-Note "$($subagents.Source) is pinned below $SubagentsFloor - left alone; pired's delegation needs >= $SubagentsFloor"
-			Write-Host "    to lift the pin: pi install $SubagentsPackage"
+			Invoke-PackageStep -Facts $subagentsFacts -Planned $subagents -Pi $pi
+		} else {
+			Write-PackageKept -Facts $subagentsFacts -State $subagents
+		}
+		if ($doMcp) {
+			Invoke-PackageStep -Facts $mcpFacts -Planned $mcp -Pi $pi
+		} else {
+			Write-PackageKept -Facts $mcpFacts -State $mcp
 		}
 
 		# --- PATH ---
