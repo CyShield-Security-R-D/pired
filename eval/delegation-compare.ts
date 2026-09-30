@@ -5035,9 +5035,15 @@ export function attemptReport(rows: JsonRecord[], abandonedKeys: string[], recla
 	return report;
 }
 
-/** Every stored run the grid's harness amendments re-judged, in order; [] for a manifest that records none. */
+/**
+ * Every stored run the grid's harness amendments re-judged, in order; [] for a
+ * manifest that records none. Read for the attempt report only: a record that
+ * does not parse is already an amendment-mismatch reason, and must not also
+ * cost the grid its summary.
+ */
 function harnessReclassified(recorded: unknown): Reclassification[] {
-	return Array.isArray(recorded) ? parseHarnessAmendments(recorded).flatMap((a) => a.reclassified) : [];
+	try { return Array.isArray(recorded) ? parseHarnessAmendments(recorded).flatMap((a) => a.reclassified) : []; }
+	catch { return []; }
 }
 
 /**
