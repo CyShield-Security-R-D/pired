@@ -371,10 +371,13 @@ native-worker snapshot from ADR-025, which the candidate probe refuses because i
   - the entry's `benchmark_fetch_error` lines
 
   A failure counts as infrastructure when pi's own `isRetryableAssistantError` accepts it, when the
-  provider's message asks the client to try again, when it carries zai `1302`/`1308`/`1310`, when
-  it is a quota message, or when it is an undici or socket code. An arm the runner stopped on a
-  signal also counts, as runner interruption. The try-again class was added before the luna v5c
-  grid (ADR-026, fifth amendment); a quota message that also says "try again" is still a quota stop.
+  provider's message asks the client to try again, when it is the provider's auth-context check
+  ("auth context mismatch"), when it carries zai `1302`/`1308`/`1310`, when it is a quota message,
+  or when it is an undici or socket code. An arm the runner stopped on a signal also counts, as
+  runner interruption. The try-again class was added before the luna v5c grid (ADR-026, fifth
+  amendment); the auth-context class after `v6-stage1-luna` stopped on it
+  (`docs/adr-drafts/v6-harness-amendment.md`). A quota message that also says either is still a
+  quota stop.
 - **Resume:** `--resume <out-dir>` continues a stopped grid. Its rules:
   - **Pins:** it refuses unless every pin is byte-identical to the grid's original
     `manifest.json`, which is written once and never overwritten. Each resume keeps its own
@@ -386,6 +389,18 @@ native-worker snapshot from ADR-025, which the candidate probe refuses because i
   - **Blocked pairs:** a pair invalid for any other reason (a timeout, a fast empty run, a harness
     check) is never re-run. An official grid holding one refuses to resume, because it cannot
     approve.
+  - **Harness amendments (`docs/adr-drafts/v6-harness-amendment.md`):**
+    `--resume <out-dir> --amend-harness "<reason>"` is the one way to go on under a changed
+    harness. Its pins may differ from the grid's record in harness file hashes only, and it is
+    refused when none differs. Before deciding what is blocked, it re-judges each stored invalid
+    non-infrastructure run that has provider text and did not time out, with the current
+    classifier; a partner that was not launched follows its arm. A pair now judged infrastructure
+    is re-run at attempt + 1. `runs.jsonl` is never rewritten. The change is recorded in
+    `harness-amendments.jsonl`, the resume's `resumes.jsonl` row and its manifest: the changed
+    files, the re-judged runs, who, why, and hashes of `runs.jsonl` and `summary.json`, whose
+    bytes are kept as `resume-<n>/summary-before-amendment.json`. Later resumes check the harness
+    against the original pins as amended and apply the recorded verdicts to the same runs;
+    `summary.json` lists the amendments.
 
 ### v6 grids: N targets, patched twins, per-arm scopes, grid kinds (plan 2.8, ADR draft)
 
