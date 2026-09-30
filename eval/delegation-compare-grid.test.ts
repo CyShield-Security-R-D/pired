@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
 	corpusReasons, DEFAULT_BUDGET_ARMS, delegationOff, kindlessArmReasons, kindlessCorpus, kindlessValidityReasons, parseArmList, parseCorpora, parseMaxVerifiers, scopeFor, scopeSettingsFor, shapeOf,
 	amendmentsMismatch, blindSummary, currentPasses, pilotPairedSd, extensionRefusal, gridKindReasons, kindFlags, kindPassesReasons, kindSnapshotReasons, parseAmendments, parseGridKinds, scheduleExtends, summarizeTwins, twinTargets, type CorpusInput, type GridKind, type GridOptions, type PinnedCorpus,
+	amendedHarness, harnessAmendmentsMismatch, parseHarnessAmendments,
 } from "./delegation-compare-grid.ts";
 import { armsOfPair, DEFAULT_BREAKER, isOfficialGrid, OFFICIAL_PASSES, OFFICIAL_TARGET_IDS, planSchedule, type ExpectedCell } from "./delegation-compare-lib.ts";
 
@@ -572,5 +573,80 @@ describe("the pilot's blinding", () => {
 		expect(shown.pilot).toMatchObject({ blinded: true, validPairs: 3, sd: 0.8, sealed: "/g/sealed/comparison.json" });
 		expect(JSON.stringify(shown)).not.toMatch(/mean|truePositives|tokens/);
 		expect(Object.keys(sealed).sort()).toEqual(["breakerAbandoned", "comparison", "delegationAudit", "id", "meteredOnlyComparison", "rows", "stops", "twins"]);
+	});
+});
+
+describe("amending a grid's harness", () => {
+	// A harness amendment as a resume records it (docs/adr-drafts/v6-harness-amendment.md):
+	// the files it changed, the stored runs it re-judged, and what the grid held.
+	const reclassified = (over: Record<string, unknown> = {}) => ({
+		key: "CVE-2026-64619#3", arm: "candidate", attempt: 1, cellId: "1bc99d70d57647e7", reason: "provider auth-context check",
+		evidence: "native turn auth context mismatch: scopes", ...over,
+	});
+	const harness = (over: Record<string, unknown> = {}) => ({
+		kind: "harness", at: "2026-09-30T21:00:00Z", by: "op@host", reason: "provider auth-context check is infrastructure", resume: 4,
+		files: { "eval/delegation-compare.ts": { from: sha("a"), to: sha("b") } },
+		reclassified: [reclassified(), reclassified({ arm: "baseline", cellId: null, reason: "partner arm candidate failed: provider auth-context check", evidence: null })],
+		runsSha256: sha("1"), summarySha256: sha("2"), ...over,
+	});
+	const pins = { "eval/delegation-compare.ts": sha("a"), "eval/delegation-compare-lib.ts": sha("c") };
+
+	it("reads a harness amendment back field for field", () => {
+		const [a] = parseHarnessAmendments([harness()]);
+		expect(a).toEqual(harness());
+		expect(parseHarnessAmendments([])).toEqual([]);
+	});
+
+	// Read strictly: a malformed row could widen what a later resume accepts, so
+	// it refuses the resume instead of being skipped.
+	it.each([
+		["another kind", { kind: "extend-passes" }],
+		["a blank reason", { reason: "  " }],
+		["no files", { files: {} }],
+		["a file whose hash did not change", { files: { "eval/delegation-compare.ts": { from: sha("a"), to: sha("a") } } }],
+		["a file hash that is not a sha256", { files: { "eval/delegation-compare.ts": { from: sha("a"), to: "b" } } }],
+		["a reclassified run with no reason", { reclassified: [reclassified({ reason: "" })] }],
+		["a reclassified run of the matched arm", { reclassified: [reclassified({ arm: "matched" })] }],
+		["a reclassified run with an attempt of 0", { reclassified: [reclassified({ attempt: 0 })] }],
+		["no runs hash", { runsSha256: null }],
+		["no resume number", { resume: 0 }],
+	])("refuses a harness amendment row with %s", (_what, over) => {
+		expect(() => parseHarnessAmendments([harness(over)])).toThrow(/harness-amendments.jsonl row 1 is not a harness amendment/);
+	});
+
+	// amendments.jsonl is read by eval/v6-decision.ts and stage 2's --passes-from
+	// as pass counts only; a harness row there would stop both.
+	it("keeps amendments.jsonl to pass counts: a harness row there is refused", () => {
+		expect(() => parseAmendments([harness()])).toThrow(/row 1 is not a pass-count amendment/);
+	});
+
+	// A later resume checks the harness against the original pins overlaid by
+	// every recorded amendment, so the supervisor's plain --resume works after it.
+	it("overlays the grid's original harness pins with each recorded amendment, in order", () => {
+		const first = parseHarnessAmendments([harness()]);
+		expect(amendedHarness(pins, first)).toEqual({ "eval/delegation-compare.ts": sha("b"), "eval/delegation-compare-lib.ts": sha("c") });
+		const second = parseHarnessAmendments([harness(), harness({ resume: 6, files: { "eval/delegation-compare.ts": { from: sha("b"), to: sha("d") } }, reclassified: [] })]);
+		expect(amendedHarness(pins, second)["eval/delegation-compare.ts"]).toBe(sha("d"));
+		expect(amendedHarness(pins, [])).toEqual(pins);
+		// The original is not modified.
+		expect(pins["eval/delegation-compare.ts"]).toBe(sha("a"));
+	});
+
+	it("refuses an overlay whose chain does not start where the record stands, or names a file the grid never pinned", () => {
+		expect(() => amendedHarness(pins, parseHarnessAmendments([harness({ files: { "eval/delegation-compare.ts": { from: sha("e"), to: sha("b") } } })])))
+			.toThrow(/harness amendment 1 changes eval\/delegation-compare.ts from eeeeeeeeeeee, but the grid's record holds aaaaaaaaaaaa/);
+		expect(() => amendedHarness(pins, parseHarnessAmendments([harness({ files: { "eval/new.ts": { from: sha("a"), to: sha("b") } } })])))
+			.toThrow(/eval\/new.ts, which the grid's manifest does not pin/);
+	});
+
+	// Either file can be edited; one edited without the other must refuse, as for pass counts.
+	it("holds harness-amendments.jsonl to the amendments resumes.jsonl recorded, field for field, apart from pass amendments", () => {
+		const a = parseHarnessAmendments([harness()]);
+		expect(harnessAmendmentsMismatch(a, [{ n: 1, amendment: { kind: "extend-passes" } }, { n: 4, harnessAmendment: harness() }])).toBeUndefined();
+		expect(harnessAmendmentsMismatch([], [{ n: 1 }])).toBeUndefined();
+		expect(harnessAmendmentsMismatch(a, [{ n: 4 }])).toMatch(/holds 1 amendment\(s\) and resumes.jsonl records 0/);
+		expect(harnessAmendmentsMismatch(a, [{ n: 4, harnessAmendment: harness({ reason: "edited" }) }])).toMatch(/harness amendment 1 differs/);
+		// A harness amendment in resumes.jsonl is not a pass amendment, and the reverse.
+		expect(amendmentsMismatch([], [{ n: 4, harnessAmendment: harness() }])).toBeUndefined();
 	});
 });

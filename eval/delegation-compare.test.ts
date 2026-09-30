@@ -9,13 +9,16 @@ import {
 	adoptPasses, writeSealed, armOptionsFromManifest, cellModelInputs, credentialStopOutcome, gridAmendments, credentialStopReason, horizonRefusal, redactTermsFor, V6_DECISION, verdictFields, manifestTargetEntry, probeDelegationScope, resumeMismatches, splitTwinRuns, twinOptionsFromManifest, retryPolicyFromManifest, reviewScope, runPairs, runStop, runtimeMismatch, scopedSealCommand, startTimeFromStat, subagentConfigFor,
 	toolSurfaceErrors, trackStream, workerCapReason,
 	ceilingOf, ceilingProbeErrors, latestMatchedSessions, planMatchedResume, sessionRunOf, verifyCeiling,
+	amendmentRecordReasons, gridHarnessAmendments, gridVerdictReasons, rejudgeStoredRun, resumeGateRefusal, resumePinCheck, resumeReclassifier,
 	type GridStopState, type MatchedSessionSpec, type ProviderFailures, type RunOutcome,
 } from "./delegation-compare.ts";
 import { sessionBudget, type MatchedPolicy, type SessionState } from "./delegation-compare-matched.ts";
 import { readFileSync } from "node:fs";
-import { gridKindReasons, kindFlags } from "./delegation-compare-grid.ts";
+import { gridKindReasons, kindFlags, parseAmendments, parseHarnessAmendments, type HarnessAmendment } from "./delegation-compare-grid.ts";
+import { gridState } from "./v6-decision.ts";
+import { currentRuns } from "./rescore.ts";
 import { BENCHMARK_SETTINGS, DEFAULT_RETRY_POLICY } from "./delegation-compare-entry.ts";
-import { compareMatchedRuns, DEFAULT_BREAKER, observationsFromChildSession, planSchedule, type Arm, type BreakerPolicy, type ScheduledPair } from "./delegation-compare-lib.ts";
+import { APPROVAL_DECISION, compareMatchedRuns, DEFAULT_BREAKER, observationsFromChildSession, planSchedule, type Arm, type BreakerPolicy, type ScheduledPair } from "./delegation-compare-lib.ts";
 
 /** The shipped pins, read once: every stage command line below is built from its kind (kindFlags). */
 const SHIPPED_PINS = parseComparePins(readFileSync(new URL("./delegation-compare.pins.json", import.meta.url), "utf8"));
@@ -2555,5 +2558,392 @@ describe("the pilot's sealed file (plan 2.8 review)", () => {
 		expect((await stat(path)).mode & 0o777).toBe(0o600);
 		expect((await stat(join(dir, "sealed"))).mode & 0o777).toBe(0o700);
 		expect(JSON.parse(await readFile(path, "utf8"))).toEqual({ comparison: { x: 1 } });
+	});
+});
+
+describe("amending a stopped grid's harness on resume (docs/adr-drafts/v6-harness-amendment.md)", () => {
+	// v6-stage1-luna stopped at 119/192 on 2026-09-30 when its CVE-2026-64619
+	// pass 3 candidate (cell 1bc99d70d57647e7) ended at assistant reply #319 on
+	// this text from OpenAI's backend. The builders below write the rows the
+	// grid's runs.jsonl holds for that pair, field for field where the planner
+	// or the classifier reads them.
+	const AUTH = "native turn auth context mismatch: scopes";
+	const KEY = "CVE-2026-64619#3";
+	type Row = Record<string, unknown>;
+	const stoppedCandidate = (over: Row = {}): Row => ({
+		key: KEY, target: "CVE-2026-64619", pass: 3, arm: "candidate", cellId: "1bc99d70d57647e7", attempt: 1,
+		infraFailure: false, infraReason: null, infraEvidence: null, quotaExhausted: false,
+		providerFailures: { parent: [AUTH], workers: [], fetchErrors: [] }, stoppedByRunner: false, interruptedAt: null, valid: false,
+		reachedLimit: false, fastEmpty: false, stalled: false, process: { exitCode: 0, signal: null, timedOut: false, oversized: false },
+		totalTokens: null,
+		errors: ["final assistant reply ended with error, not stop", `assistant reply assistant#319 failed: ${AUTH}`, "parent did not finish with an assistant stopReason=stop"],
+		...over,
+	});
+	// The partner the runner did not launch, as notLaunchedOutcome wrote it.
+	const partnerOf = (candidate: Row): Row => notLaunchedOutcome(planSchedule(["CVE-2026-64619"], 3)[2]!, "baseline", 1, {
+		metric: { key: KEY, target: "CVE-2026-64619", pass: 3, valid: false, truePositives: 0, precision: 0, totalClaims: 0, totalTokens: Number.NaN },
+		arm: "candidate", cellId: String(candidate.cellId), seconds: 6100, record: candidate, infraFailure: false,
+	}, false).record;
+	const validRun = (key: string, arm: "baseline" | "candidate", attempt = 1): Row => ({
+		key, target: key.split("#")[0], pass: Number(key.split("#")[1]), arm, attempt, cellId: `${arm}-${key}-${attempt}`, valid: true,
+		infraFailure: false, infraReason: null, truePositives: 1, precisionLowerBound: 0.5, findings: 2, totalTokens: 1000 + attempt,
+		providerFailures: { parent: [], workers: [], fetchErrors: [] }, process: { exitCode: 0, timedOut: false },
+	});
+
+	describe("the classifier", () => {
+		it("classes the provider's auth-context check as infrastructure, with the text as evidence", () => {
+			const verdict = classifyInfra(parentFails(AUTH), false);
+			expect(verdict).toEqual({ infra: true, reason: "provider auth-context check", evidence: AUTH });
+			expect(classifyInfra({ parent: [], workers: [`Codex error: ${AUTH}`], fetchErrors: [] }, false)).toMatchObject({ infra: true, reason: "provider auth-context check" });
+		});
+
+		// The quota patterns run first: a spent plan must still stop the grid
+		// rather than be re-queued as a transient.
+		it("still stops the grid on a spent quota, whichever text names the auth-context mismatch", () => {
+			expect(classifyInfra(parentFails(AUTH, "Codex error: The usage limit has been reached"), false)).toMatchObject({ reason: "provider quota exhausted", exhausted: true });
+			expect(classifyInfra(parentFails(`insufficient_quota; ${AUTH}`), false)).toMatchObject({ reason: "provider quota exhausted", exhausted: true });
+		});
+
+		it("never reads the auth-context check from a timed-out run as infrastructure", () => {
+			expect(classifyInfra(parentFails(AUTH), true).infra).toBe(false);
+			expect(decideInfra({ valid: false, timedOut: true, stoppedByRunner: false, notLaunchedInterrupted: false, failures: parentFails(AUTH) }).infra).toBe(false);
+		});
+
+		it("does not read a different auth failure the provider did not attribute to its context check", () => {
+			expect(classifyInfra(parentFails("401: invalid_api_key"), false).infra).toBe(false);
+		});
+	});
+
+	describe("re-judging a stored run", () => {
+		it("re-judges the stopped candidate from its stored provider text", () => {
+			expect(rejudgeStoredRun(stoppedCandidate())).toEqual({ infra: true, reason: "provider auth-context check", evidence: AUTH });
+		});
+
+		// A timeout is never infrastructure, whatever else the row holds; a row
+		// with no provider text has nothing a classifier could read.
+		it.each([
+			["a run whose process timed out", stoppedCandidate({ process: { exitCode: null, timedOut: true } })],
+			["a run with no provider text", stoppedCandidate({ providerFailures: { parent: [], workers: [], fetchErrors: [] } })],
+			["a run with no providerFailures field", stoppedCandidate({ providerFailures: null })],
+			["a run whose stored providerFailures is malformed", stoppedCandidate({ providerFailures: { parent: "x", workers: [], fetchErrors: [] } })],
+			["a run whose provider text is still its own failure", stoppedCandidate({ providerFailures: { parent: ['400: {"message":"invalid tool schema"}'], workers: [], fetchErrors: [] } })],
+			["a valid run", stoppedCandidate({ valid: true })],
+			["a run already judged infrastructure", stoppedCandidate({ infraFailure: true, infraReason: "transient provider failure" })],
+			["a partner that was never launched", stoppedCandidate({ notLaunched: true })],
+		])("leaves %s as it was recorded", (_what, run) => {
+			expect(rejudgeStoredRun(run)).toBeUndefined();
+		});
+	});
+
+	describe("planResume", () => {
+		const schedule = planSchedule(["CVE-2026-23846", "CVE-2026-64619"], 3);
+		const rows = (candidate = stoppedCandidate()): Row[] => [
+			...["CVE-2026-23846#1", "CVE-2026-64619#1", "CVE-2026-23846#2", "CVE-2026-64619#2", "CVE-2026-23846#3"].flatMap((k) => [validRun(k, "baseline"), validRun(k, "candidate")]),
+			candidate, partnerOf(candidate),
+		];
+
+		// Today's behaviour, and every plain resume's: the stored flag decides.
+		it("blocks the pair from its stored flag when no reclassifier is given, as the stopped grid's resume would", () => {
+			const plan = planResume(schedule, rows(), 16);
+			expect(plan.blockedKeys).toEqual([KEY]);
+			expect(plan.reclassified).toEqual([]);
+			expect(resumeGateRefusal(plan, new Set(), true)?.reason).toMatch(/1 pair\(s\) of this official grid are invalid for a non-infrastructure reason \(CVE-2026-64619#3: attempt 1/);
+		});
+
+		// The partner's stored infraFailure:false would keep the pair blocked; it
+		// follows its arm, as notLaunchedOutcome records one.
+		it("re-runs the pair at attempt 2 under a reclassifier, and lists the run and its not-launched partner", () => {
+			const plan = planResume(schedule, rows(), 16, rejudgeStoredRun);
+			expect(plan.rerunKeys).toEqual([KEY]);
+			expect(plan.nextAttempt[KEY]).toBe(2);
+			expect(plan.blockedKeys).toEqual([]);
+			expect(plan.keepKeys).toEqual(["CVE-2026-23846#1", "CVE-2026-64619#1", "CVE-2026-23846#2", "CVE-2026-64619#2", "CVE-2026-23846#3"]);
+			expect(plan.reclassified).toEqual([
+				{ key: KEY, arm: "candidate", attempt: 1, cellId: "1bc99d70d57647e7", reason: "provider auth-context check", evidence: AUTH },
+				{ key: KEY, arm: "baseline", attempt: 1, cellId: null, reason: "partner arm candidate failed: provider auth-context check", evidence: null },
+			]);
+			// The stored rows are what the plan carries: never rewritten.
+			expect(plan.latest[`${KEY}\u0000candidate`]).toMatchObject({ infraFailure: false, infraReason: null });
+			expect(resumeGateRefusal(plan, new Set(), true)).toBeUndefined();
+		});
+
+		it("keeps a pair blocked, and the resume refused, when re-judging still finds the run's own failure", () => {
+			const own = stoppedCandidate({ providerFailures: { parent: ['400: {"message":"invalid tool schema"}'], workers: [], fetchErrors: [] } });
+			const plan = planResume(schedule, rows(own), 16, rejudgeStoredRun);
+			expect(plan.blockedKeys).toEqual([KEY]);
+			expect(plan.reclassified).toEqual([]);
+			expect(resumeGateRefusal(plan, new Set(), true)?.detail).toEqual({ blocked: [KEY] });
+			const timedOut = planResume(schedule, rows(stoppedCandidate({ process: { exitCode: null, timedOut: true } })), 16, rejudgeStoredRun);
+			expect(timedOut.blockedKeys).toEqual([KEY]);
+		});
+
+		// A resume re-runs only what its reclassifier says; older attempts are
+		// never re-judged, since a pair is judged at its highest attempt only.
+		it("re-judges only the pair's highest attempt", () => {
+			const superseded = [...rows(), validRun(KEY, "baseline", 2), validRun(KEY, "candidate", 2)];
+			const plan = planResume(schedule, superseded, 16, rejudgeStoredRun);
+			expect(plan.keepKeys).toContain(KEY);
+			expect(plan.reclassified).toEqual([]);
+		});
+
+		it("refuses nothing for a patched twin or an exploratory grid, as before", () => {
+			const plan = planResume(schedule, rows(), 16);
+			expect(resumeGateRefusal(plan, new Set([KEY]), true)).toBeUndefined();
+			expect(resumeGateRefusal(plan, new Set(), false)).toBeUndefined();
+			expect(resumeGateRefusal({ blockedKeys: [], abandonedKeys: ["A#1"], reasons: { "A#1": "ceiling" } }, new Set(), true)?.reason).toMatch(/reached the attempt ceiling \(A#1: ceiling\)/);
+		});
+	});
+
+	describe("the option", () => {
+		it("takes --amend-harness with --resume, alone or beside --extend-passes, and never with a blank reason", () => {
+			expect(parseOptions(["--resume", "/grid", "--amend-harness", " auth-context check is infrastructure "])).toEqual({ kind: "resume", dir: "/grid", amendHarness: "auth-context check is infrastructure" });
+			expect(parseOptions(["--resume", "/grid", "--amend-harness", "why", "--extend-passes", "4", "--extend-reason", "rule"])).toEqual({ kind: "resume", dir: "/grid", extendPasses: 4, extendReason: "rule", amendHarness: "why" });
+			expect(() => parseOptions(["--resume", "/grid", "--amend-harness", "  "])).toThrow(/--amend-harness needs a reason/);
+			expect(() => parseOptions(["--resume", "/grid", "--amend-harness"])).toThrow(/--resume takes exactly one argument/);
+			expect(() => parseOptions(["--resume", "/grid", "--amend-harness", "a", "--amend-harness", "b"])).toThrow(/--resume takes exactly one argument/);
+			expect(() => parseOptions(["--resume", "/grid", "--extend-reason", "x", "--amend-harness", "y"])).toThrow(/needs --extend-passes/);
+		});
+
+		it("refuses --amend-harness on a new grid, which has no record to amend", () => {
+			expect(() => parseOptions(["--baseline", "/b", "--candidate", "/c", "--corpus", "/x", "--truth", "/t", "--out", "/o", "--provider", "p", "--model", "m", "--amend-harness", "why"]))
+				.toThrow(/--amend-harness is allowed only with --resume/);
+		});
+	});
+
+	describe("the pin comparison", () => {
+		const h = (c: string): string => c.repeat(64);
+		const HARNESS = { "eval/delegation-compare.ts": h("a"), "eval/delegation-compare-lib.ts": h("b"), "eval/delegation-compare-entry.ts": h("c") };
+		// Every identity a resume compares, as a v6 manifest holds it.
+		const manifest = (harness: Record<string, string> = HARNESS): Row => ({
+			pins: {
+				node: "v22.23.2", piRuntimeSha256: h("1"), harnessSha256: { ...harness }, landlockWrapperSha256: h("2"), graderSourceGitBlob: "blob",
+				piSubagentsSha256: h("3"), delegationAuditLimits: { maxAgents: 8 }, benchmarkRuntime: { provider: "openai-codex", model: "gpt-6-luna", thinking: "medium" },
+			},
+			provider: { provider: "openai-codex", baseHost: "chatgpt.com" }, prompt: "p", promptSha256ByTarget: { A: h("4") },
+			schedule: [{ key: "A#1", order: ["baseline", "candidate"] }], passes: 2,
+			requested: { provider: "openai-codex", model: "gpt-6-luna", thinking: "medium", passes: 2, only: [] },
+			inputs: { sourceSha256: { A: h("5") }, truthSha256: { A: h("6") }, corpusManifest: { sha256: h("7") }, baseline: { sha256: h("8"), stagedDigest: h("9") }, candidate: { sha256: h("0"), stagedDigest: h("e") } },
+		});
+		const amended = { ...HARNESS, "eval/delegation-compare.ts": h("f") };
+		const amendment = (files: HarnessAmendment["files"]): HarnessAmendment => parseHarnessAmendments([{
+			kind: "harness", at: "2026-09-30T21:00:00Z", by: "op@host", reason: "auth-context check", resume: 4, files, reclassified: [], runsSha256: h("1"), summarySha256: null,
+		}])[0]!;
+
+		it("refuses a plain resume across a harness edit, naming the harness apart from the other pins", () => {
+			const check = resumePinCheck(manifest(), manifest(amended));
+			expect(check.mismatches).toEqual(["pins.harnessSha256"]);
+			expect(check.refusal).toMatch(/recomputed pins differ from the grid's original manifest.json at: pins.harnessSha256\./);
+		});
+
+		it("accepts an amending resume whose only difference is harness file hashes, and names each changed file", () => {
+			const check = resumePinCheck(manifest(), manifest(amended), { amendHarness: true });
+			expect(check).toEqual({ mismatches: [], harnessFiles: { "eval/delegation-compare.ts": { from: h("a"), to: h("f") } } });
+		});
+
+		it("refuses an amendment that changes no harness file as a no-op", () => {
+			expect(resumePinCheck(manifest(), manifest(), { amendHarness: true }).refusal).toMatch(/--amend-harness was given, but no harness file differs from the grid's record, so there is nothing to amend/);
+		});
+
+		// The amendment changes how runs are classified, never what a run measures.
+		it.each([
+			["the pi runtime tree", (m: Row) => { (m.pins as Row).piRuntimeSha256 = "x"; }, "pins"],
+			["node", (m: Row) => { (m.pins as Row).node = "v24.0.0"; }, "pins"],
+			["the grader blob", (m: Row) => { (m.pins as Row).graderSourceGitBlob = "other"; }, "pins"],
+			["the fs-seal binary", (m: Row) => { (m.pins as Row).landlockWrapperSha256 = "x"; }, "pins"],
+			["the pi-subagents tree", (m: Row) => { (m.pins as Row).piSubagentsSha256 = "x"; }, "pins.piSubagents"],
+			["the model runtime", (m: Row) => { ((m.pins as Row).benchmarkRuntime as Row).model = "gpt-6"; }, "pins.benchmarkRuntime"],
+			["a snapshot", (m: Row) => { ((m.inputs as Row).candidate as Row).sha256 = "x"; }, "inputs.candidate.sha256"],
+			["the corpus manifest", (m: Row) => { ((m.inputs as Row).corpusManifest as Row).sha256 = "x"; }, "inputs.corpusManifest.sha256"],
+			["the truth", (m: Row) => { (m.inputs as Row).truthSha256 = { A: "x" }; }, "inputs.truthSha256"],
+			["the prompt", (m: Row) => { m.prompt = "q"; }, "prompt"],
+			["the provider", (m: Row) => { (m.provider as Row).baseHost = "api.openai.com"; }, "provider"],
+			["the model", (m: Row) => { (m.requested as Row).model = "gpt-6"; }, "requested.model"],
+			["the thinking level", (m: Row) => { (m.requested as Row).thinking = "high"; }, "requested.thinking"],
+			["the schedule", (m: Row) => { m.schedule = [{ key: "A#1", order: ["candidate", "baseline"] }]; }, "schedule"],
+			["the pass count", (m: Row) => { m.passes = 3; }, "passes"],
+		])("refuses an amending resume that also changed %s", (_what, edit, label) => {
+			const fresh = manifest(amended);
+			edit(fresh);
+			const check = resumePinCheck(manifest(), fresh, { amendHarness: true });
+			expect(check.mismatches).toContain(label);
+			expect(check.refusal).toMatch(/--resume refused: the recomputed pins differ/);
+		});
+
+		it("refuses an amendment that adds a file to the pinned set rather than editing one", () => {
+			const check = resumePinCheck(manifest(), manifest({ ...amended, "eval/new.ts": h("d") }), { amendHarness: true });
+			expect(check.mismatches).toEqual(["pins.harnessSha256 (the pinned file set)"]);
+		});
+
+		// The supervisor's plain --resume after the amendment must work, and an
+		// edit nobody recorded must still refuse.
+		it("compares a later resume with the original pins as amended, so a plain resume passes and a further edit refuses", () => {
+			const recorded = [amendment({ "eval/delegation-compare.ts": { from: h("a"), to: h("f") } })];
+			expect(resumePinCheck(manifest(), manifest(amended), { harnessAmendments: recorded })).toEqual({ mismatches: [], harnessFiles: {} });
+			const further = resumePinCheck(manifest(), manifest({ ...amended, "eval/delegation-compare-lib.ts": h("d") }), { harnessAmendments: recorded });
+			expect(further.mismatches).toEqual(["pins.harnessSha256"]);
+			expect(further.refusal).toMatch(/\(its harness as amended by 1 recorded harness amendment\(s\)\) at: pins.harnessSha256/);
+			// Back at the original bytes is also a change from the record.
+			expect(resumePinCheck(manifest(), manifest(), { harnessAmendments: recorded }).mismatches).toEqual(["pins.harnessSha256"]);
+			// A second amendment names only what changed since the first.
+			expect(resumePinCheck(manifest(), manifest({ ...amended, "eval/delegation-compare-lib.ts": h("d") }), { harnessAmendments: recorded, amendHarness: true }).harnessFiles)
+				.toEqual({ "eval/delegation-compare-lib.ts": { from: h("b"), to: h("d") } });
+		});
+
+		it("refuses when the recorded amendments do not chain from the grid's original pins", () => {
+			const broken = [amendment({ "eval/delegation-compare.ts": { from: h("d"), to: h("f") } })];
+			expect(resumePinCheck(manifest(), manifest(amended), { harnessAmendments: broken }).refusal).toMatch(/--resume refused: harness amendment 1 changes eval\/delegation-compare.ts from dddddddddddd/);
+		});
+	});
+
+	describe("later resumes", () => {
+		const recorded = parseHarnessAmendments([{
+			kind: "harness", at: "2026-09-30T21:00:00Z", by: "op@host", reason: "auth-context check", resume: 4,
+			files: { "eval/delegation-compare.ts": { from: "a".repeat(64), to: "f".repeat(64) } },
+			reclassified: [
+				{ key: KEY, arm: "candidate", attempt: 1, cellId: "1bc99d70d57647e7", reason: "provider auth-context check", evidence: AUTH },
+				{ key: KEY, arm: "baseline", attempt: 1, cellId: null, reason: "partner arm candidate failed: provider auth-context check", evidence: null },
+			],
+			runsSha256: "1".repeat(64), summarySha256: null,
+		}]);
+
+		it("plans a grid with no harness amendment exactly as before", () => {
+			expect(resumeReclassifier([], false)).toBeUndefined();
+			expect(resumeReclassifier(parseHarnessAmendments([{ ...recorded[0], reclassified: [] }]), false)).toBeUndefined();
+		});
+
+		// Were the amending resume interrupted before the pair launched, the next
+		// plain resume would find the stored row, block the pair and refuse, and a
+		// second amendment would be refused as a no-op: the grid could never go on.
+		it("applies the recorded verdicts to the same stored runs on a plain resume, and re-judges nothing else", () => {
+			const reclassify = resumeReclassifier(recorded, false)!;
+			const schedule = planSchedule(["CVE-2026-64619"], 3);
+			const plan = planResume(schedule, [stoppedCandidate(), partnerOf(stoppedCandidate())], 16, reclassify);
+			expect(plan.nextAttempt[KEY]).toBe(2);
+			expect(plan.blockedKeys).toEqual([]);
+			// Another run with the same text, never recorded, is judged by its stored flag.
+			expect(reclassify(stoppedCandidate({ cellId: "another" }))).toBeUndefined();
+			expect(reclassify(stoppedCandidate({ attempt: 2 }))).toBeUndefined();
+		});
+
+		it("applies the recorded verdicts first, then the current classifier, on a resume that amends again", () => {
+			const reclassify = resumeReclassifier(recorded, true)!;
+			expect(reclassify(stoppedCandidate())).toEqual({ infra: true, reason: "provider auth-context check", evidence: AUTH });
+			expect(reclassify(stoppedCandidate({ cellId: "another" }))).toMatchObject({ infra: true, reason: "provider auth-context check" });
+		});
+	});
+
+	describe("the history a summary keeps", () => {
+		it("counts a re-judged run as the infrastructure failure it was judged, while its row stays as written", () => {
+			const candidate = stoppedCandidate();
+			const rows = [candidate, partnerOf(candidate), validRun(KEY, "baseline", 2), validRun(KEY, "candidate", 2)];
+			const reclassified = planResume(planSchedule(["CVE-2026-64619"], 3), rows.slice(0, 2), 16, rejudgeStoredRun).reclassified;
+			const report = attemptReport(rows, [], reclassified);
+			expect(report.attemptsByPair[KEY]).toBe(2);
+			expect(report.launchedInfraFailures).toEqual({ baseline: {}, candidate: { "provider auth-context check": 1 } });
+			// Without the amendment's list, the same rows count no failure: it was not infrastructure when written.
+			expect(attemptReport(rows, []).launchedInfraFailures).toEqual({ baseline: {}, candidate: {} });
+			expect(candidate).toMatchObject({ infraFailure: false, infraReason: null });
+		});
+
+		it("keeps a summary from ready when either amendment record disagrees with resumes.jsonl or changed during the grid", () => {
+			const base = { passes: { amendments: [] }, expectedPasses: undefined, harness: { amendments: [] as HarnessAmendment[] }, expectedHarness: undefined, pilotPending: false, out: "/g" };
+			expect(amendmentRecordReasons(base)).toEqual([]);
+			const reasons = amendmentRecordReasons({ ...base, harness: { amendments: [], mismatch: "harness-amendments.jsonl holds 0 amendment(s) and resumes.jsonl records 1" }, expectedHarness: [{ kind: "harness" }] });
+			expect(reasons).toEqual([
+				"harness amendments: harness-amendments.jsonl holds 0 amendment(s) and resumes.jsonl records 1",
+				"harness amendments: harness-amendments.jsonl changed during the grid",
+			]);
+			const { codes } = gridVerdictReasons({
+				official: true, exploratoryReasons: [], gridKind: "v6-stage1", interrupted: false, stoppedInvalid: false, gaveUp: [], abandoned: [], blocked: [],
+				runtimeStable: true, comparison: { complete: true, missingOrInvalid: [], decision: APPROVAL_DECISION }, amendmentReasons: reasons, blinded: false,
+			});
+			expect(codes.map((c) => c.code)).toEqual(["amendment-mismatch", "amendment-mismatch"]);
+		});
+
+		it("reads a grid's harness amendments strictly, and cross-checks them with resumes.jsonl", async () => {
+			const dir = await mkdtemp(join(tmpdir(), "pired-harness-"));
+			const row = { kind: "harness", at: "2026-09-30T21:00:00Z", by: "op@host", reason: "why", resume: 4, files: { "eval/delegation-compare.ts": { from: "a".repeat(64), to: "f".repeat(64) } }, reclassified: [], runsSha256: "1".repeat(64), summarySha256: null };
+			expect(await gridHarnessAmendments(dir)).toEqual({ amendments: [] });
+			await writeFile(join(dir, "harness-amendments.jsonl"), `${JSON.stringify(row)}\n`);
+			expect((await gridHarnessAmendments(dir)).mismatch).toMatch(/holds 1 amendment\(s\) and resumes.jsonl records 0/);
+			await writeFile(join(dir, "resumes.jsonl"), `${JSON.stringify({ n: 4, harnessAmendment: row })}\n`);
+			expect(await gridHarnessAmendments(dir)).toEqual({ amendments: [row] });
+			await writeFile(join(dir, "harness-amendments.jsonl"), `${JSON.stringify({ ...row, reason: "" })}\n`);
+			await expect(gridHarnessAmendments(dir)).rejects.toThrow(/row 1 is not a harness amendment/);
+		});
+	});
+
+	// The whole path on a fixture in the state v6-stage1-luna stopped in: an
+	// official v6-stage1 grid under the breaker, amended from 2 to 4 passes,
+	// its pass-3 pair CVE-2026-64619#3 stored non-infrastructure and the pairs
+	// after it never launched because the breaker tripped.
+	describe("a grid in v6-stage1-luna's state, resumed with the amendment", () => {
+		const targets = ["CVE-2026-23846", "CVE-2026-64619", "CVE-2026-25803"];
+		const schedule = planSchedule(targets, 4);
+		const expectedCells = schedule.map(({ key, target, pass }) => ({ key, target, pass }));
+		const candidate = stoppedCandidate();
+		const stored: Row[] = [
+			...schedule.filter((p) => p.pass <= 2 || p.key === "CVE-2026-23846#3").flatMap((p) => [validRun(p.key, "baseline"), validRun(p.key, "candidate")]),
+			candidate, partnerOf(candidate),
+		];
+		const verdictOf = (state: Partial<Parameters<typeof gridVerdictReasons>[0]> & Pick<Parameters<typeof gridVerdictReasons>[0], "comparison">) => gridVerdictReasons({
+			official: true, exploratoryReasons: [], gridKind: "v6-stage1", interrupted: false, stoppedInvalid: false, gaveUp: [], abandoned: [], blocked: [],
+			runtimeStable: true, amendmentReasons: [], blinded: false, ...state,
+		});
+		const compare = (rows: Row[]) => {
+			const top = atHighestAttempt(rows.map((record) => ({ metric: metricFromRecord(record), record })));
+			return compareMatchedRuns(top.filter((o) => o.record.arm === "baseline").map((o) => o.metric), top.filter((o) => o.record.arm === "candidate").map((o) => o.metric), expectedCells);
+		};
+
+		it("was not ready when the breaker stopped it, and a plain resume refuses", () => {
+			const stopped = verdictOf({
+				stoppedInvalid: true, blocked: [KEY], comparison: compare(stored),
+				stopReason: "circuit breaker tripped on the candidate run of CVE-2026-64619 pass 3 attempt 1: a run of this official grid is invalid for a non-infrastructure reason",
+			});
+			expect(stopped.codes.map((c) => c.code)).toEqual(["stopped", "invalid", "blocked"]);
+			expect(resumeGateRefusal(planResume(schedule, stored, 16), new Set(), true)).toBeDefined();
+		});
+
+		it("re-runs the stopped pair and the pairs never launched, blocks nothing, and finishes ready with no stale code", async () => {
+			const plan = planResume(schedule, stored, 16, resumeReclassifier([], true));
+			expect(resumeGateRefusal(plan, new Set(), true)).toBeUndefined();
+			expect(plan.nextAttempt[KEY]).toBe(2);
+			expect(plan.rerunKeys).toEqual(schedule.filter((p) => p.pass >= 3 && p.key !== "CVE-2026-23846#3").map((p) => p.key));
+			expect(plan.reclassified.map((r) => `${r.arm} ${r.reason}`)).toEqual(["candidate provider auth-context check", "baseline partner arm candidate failed: provider auth-context check"]);
+
+			// The resumed runner launches the re-run pairs at their next attempt and each ends valid.
+			const fresh = plan.rerunKeys.flatMap((key) => [validRun(key, "baseline", plan.nextAttempt[key]), validRun(key, "candidate", plan.nextAttempt[key])]);
+			const carried = schedule.filter((p) => plan.keepKeys.includes(p.key)).flatMap((p) => [plan.latest[`${p.key}\u0000baseline`]!, plan.latest[`${p.key}\u0000candidate`]!]);
+			const comparison = compare([...carried, ...fresh]);
+			expect(comparison.complete).toBe(true);
+			// The codes are the resumed runner's own: the breaker stop of the runner before it leaves none.
+			const done = verdictOf({ comparison, blocked: plan.blockedKeys });
+			expect(done).toEqual({ notApprovedReasons: [], codes: [] });
+			const head = verdictFields("v6-stage1", { approved: false, notApprovedReasons: done.notApprovedReasons, comparison, codes: done.codes }).head;
+			expect(head.decision).toEqual({ rule: "v6 pre-registration", computedBy: "eval/v6-decision.ts", ready: true, notReadyReasons: [], reasons: [] });
+
+			// eval/v6-decision.ts reads that summary as ready, and the attempt-2 rows as the pair.
+			const dir = await mkdtemp(join(tmpdir(), "pired-luna-amended-"));
+			await writeFile(join(dir, "manifest.json"), JSON.stringify({ gridKind: "v6-stage1", targets: targets.map((id) => ({ id })), expectedCells }));
+			const passAmendment = { kind: "extend-passes", at: "2026-09-30T02:34:07.951Z", from: 2, to: 4, by: "op@host", reason: "pilot rule -> 4", runsCompleted: 104, runsSha256: "9".repeat(64), summarySha256: "1".repeat(64), resume: 2 };
+			expect(parseAmendments([passAmendment])).toHaveLength(1);
+			await writeFile(join(dir, "amendments.jsonl"), `${JSON.stringify(passAmendment)}\n`);
+			await writeFile(join(dir, "summary.json"), JSON.stringify({ ...head, breaker: { abandoned: [] } }));
+			const state = gridState(dir, "v6-stage1");
+			expect(state).toMatchObject({ notReady: [], harnessExcluded: [], gateAbandoned: [] });
+			expect(state.expected).toHaveLength(12);
+			const current = currentRuns([...stored, ...fresh]).filter((r) => r.key === KEY);
+			expect(current.map((r) => `${String(r.arm)}@${String(r.attempt)}`).sort()).toEqual(["baseline@2", "candidate@2"]);
+
+			// The history keeps the stop: the stored rows are unchanged, the attempts
+			// report counts the re-judged run, and the amendment row lists it.
+			expect(stored.find((r) => r.cellId === "1bc99d70d57647e7")).toMatchObject({ valid: false, infraFailure: false });
+			expect(attemptReport([...stored, ...fresh], [], plan.reclassified).launchedInfraFailures.candidate).toEqual({ "provider auth-context check": 1 });
+			const [row] = parseHarnessAmendments([{
+				kind: "harness", at: "2026-09-30T21:00:00Z", by: "op@host", reason: "provider auth-context check is infrastructure", resume: 4,
+				files: { "eval/delegation-compare.ts": { from: "a".repeat(64), to: "f".repeat(64) } }, reclassified: plan.reclassified, runsSha256: "1".repeat(64), summarySha256: "2".repeat(64),
+			}]);
+			expect(row!.reclassified).toHaveLength(2);
+		});
 	});
 });

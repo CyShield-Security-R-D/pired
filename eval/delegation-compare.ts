@@ -4282,25 +4282,25 @@ export function planResume(pairs: ScheduledPair[], runs: JsonRecord[], attemptCe
 		const infra = new Map(records.map(({ arm, record }) => [arm, record?.infraFailure === true]));
 		if (reclassify) {
 			const judged = new Map<PairArm, InfraClass>();
-			for (const { arm, record } of records) {
-				if (!record || record.valid === true || record.infraFailure === true || record.notLaunched === true) continue;
-				const verdict = reclassify(record);
-				if (verdict?.infra) judged.set(arm, verdict);
-			}
-			for (const { arm, record } of records) {
-				if (!record || record.valid === true || record.infraFailure === true) continue;
-				let verdict = judged.get(arm);
-				if (!verdict && record.notLaunched === true) {
-					const partner = [...judged.entries()].find(([other]) => other !== arm);
-					if (partner) verdict = { infra: true, reason: `partner arm ${partner[0]} failed: ${partner[1].reason ?? "infrastructure"}` };
-				}
-				if (!verdict) continue;
+			const note = (arm: PairArm, record: JsonRecord, verdict: InfraClass): void => {
 				infra.set(arm, true);
 				plan.reclassified.push({
 					key: pair.key, arm, attempt: typeof record.attempt === "number" ? record.attempt : 1,
 					cellId: typeof record.cellId === "string" && record.cellId ? record.cellId : null,
 					reason: verdict.reason ?? "infrastructure", evidence: verdict.evidence ?? null,
 				});
+			};
+			const unresolved = (record: JsonRecord | undefined): record is JsonRecord => !!record && record.valid !== true && record.infraFailure !== true;
+			// The launched arms first, then any partner that was not launched because of one.
+			for (const { arm, record } of records) {
+				if (!unresolved(record) || record.notLaunched === true) continue;
+				const verdict = reclassify(record);
+				if (verdict?.infra) { judged.set(arm, verdict); note(arm, record, verdict); }
+			}
+			for (const { arm, record } of records) {
+				if (!unresolved(record) || record.notLaunched !== true) continue;
+				const partner = [...judged.entries()].find(([other]) => other !== arm);
+				if (partner) note(arm, record, { infra: true, reason: `partner arm ${partner[0]} failed: ${partner[1].reason ?? "infrastructure"}` });
 			}
 		}
 		const arms = records.map(({ arm, record }) => record && { valid: record.valid === true, infra: infra.get(arm) === true });
@@ -4788,6 +4788,37 @@ async function resumeMain(dir: string, extendPasses?: number, extendReason?: str
 	});
 }
 
+/**
+ * Why a resume of an official grid refuses to launch, from its plan, or
+ * undefined when it may. Pure. It reads the plan after planResume has
+ * re-judged stored runs (a harness amendment), so a pair an amended harness
+ * classes as infrastructure is re-run, not blocked; a pair still invalid for
+ * the run's own reason refuses the resume exactly as it always did.
+ */
+export function resumeGateRefusal(plan: Pick<ResumePlan, "blockedKeys" | "abandonedKeys" | "reasons">, twinKeys: ReadonlySet<string>, official: boolean): { reason: string; detail: JsonRecord } | undefined {
+	if (!official) return undefined;
+	// A blocked pair already fixes an official grid's decision at
+	// incomplete_or_invalid; fail-fast only watched new outcomes, so a resume
+	// used to spend every remaining pair (up to ~50 two-hour sessions) anyway.
+	const gateBlocked = plan.blockedKeys.filter((k) => !twinKeys.has(k));
+	const gateAbandoned = plan.abandonedKeys.filter((k) => !twinKeys.has(k));
+	if (gateBlocked.length) {
+		return {
+			reason: `--resume refused: ${gateBlocked.length} pair(s) of this official grid are invalid for a non-infrastructure reason (${gateBlocked.map((k) => `${k}: ${plan.reasons[k] ?? ""}`).join("; ")}), so its decision is already incomplete_or_invalid and launching the remaining pairs would spend tokens on a fixed outcome.`,
+			detail: { blocked: gateBlocked },
+		};
+	}
+	// An abandoned pair fixes the decision the same way, and refusing is what
+	// ends an auto-resume loop that would otherwise re-run it forever.
+	if (gateAbandoned.length) {
+		return {
+			reason: `--resume refused: ${gateAbandoned.length} pair(s) of this official grid reached the attempt ceiling (${gateAbandoned.map((k) => `${k}: ${plan.reasons[k] ?? ""}`).join("; ")}), so its decision is already incomplete_or_invalid.`,
+			detail: { abandoned: gateAbandoned },
+		};
+	}
+	return undefined;
+}
+
 /** Refuse a resume, recording why in the resume's own manifest and status file only. */
 async function refuseResume(manifest: JsonRecord, saveManifest: () => Promise<void>, why: string, detail: JsonRecord): Promise<never> {
 	manifest.resumeDecision = { status: "refused", reason: why, ...detail };
@@ -4870,23 +4901,8 @@ async function driveGrid(options: Options, manifest: JsonRecord, resume: ResumeI
 			for (const r of plan.reclassified) console.log(`  reclassified ${r.key} ${r.arm} attempt ${r.attempt}${r.cellId ? ` (cell ${r.cellId})` : ""}: ${r.reason}${r.evidence ? ` · ${r.evidence}` : ""}`);
 			for (const key of plan.blockedKeys) console.log(`  blocked ${key}: ${plan.reasons[key] ?? ""}`);
 			for (const key of plan.abandonedKeys) console.log(`  abandoned ${key}: ${plan.reasons[key] ?? ""}`);
-			// A blocked pair already fixes an official grid's decision at
-			// incomplete_or_invalid; fail-fast only watched new outcomes, so a resume
-			// used to spend every remaining pair (up to ~50 two-hour sessions) anyway.
-			const gateBlocked = plan.blockedKeys.filter((k) => !twinKeys.has(k));
-			const gateAbandoned = plan.abandonedKeys.filter((k) => !twinKeys.has(k));
-			if (gateBlocked.length && pre.official) {
-				await refuseResume(manifest, saveManifest,
-					`--resume refused: ${gateBlocked.length} pair(s) of this official grid are invalid for a non-infrastructure reason (${gateBlocked.map((k) => `${k}: ${plan.reasons[k] ?? ""}`).join("; ")}), so its decision is already incomplete_or_invalid and launching the remaining pairs would spend tokens on a fixed outcome.`,
-					{ blocked: gateBlocked });
-			}
-			// An abandoned pair fixes the decision the same way, and refusing is what
-			// ends an auto-resume loop that would otherwise re-run it forever.
-			if (gateAbandoned.length && pre.official) {
-				await refuseResume(manifest, saveManifest,
-					`--resume refused: ${gateAbandoned.length} pair(s) of this official grid reached the attempt ceiling (${gateAbandoned.map((k) => `${k}: ${plan.reasons[k] ?? ""}`).join("; ")}), so its decision is already incomplete_or_invalid.`,
-					{ abandoned: gateAbandoned });
-			}
+			const gate = resumeGateRefusal(plan, twinKeys, pre.official);
+			if (gate) await refuseResume(manifest, saveManifest, gate.reason, gate.detail);
 			manifest.resumeDecision = {
 				status: "accepted", rerun: plan.rerunKeys, kept: plan.keepKeys, blocked: plan.blockedKeys, ...(options.breaker ? { abandoned: plan.abandonedKeys } : {}),
 				...(plan.reclassified.length ? { reclassified: plan.reclassified } : {}),
