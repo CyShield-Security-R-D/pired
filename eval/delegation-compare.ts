@@ -400,12 +400,15 @@ const RESUME_POLICY =
 	"the first arm's failure was. Every attempt is appended to runs.jsonl with its " +
 	"attempt number, and no row is ever rewritten. --amend-harness <reason> is the one " +
 	"way a resume runs under a changed harness: its pins may differ from the grid's " +
-	"record in harness file hashes only, it re-judges each stored invalid " +
+	"record in the hashes of eval/delegation-compare.ts and eval/delegation-compare-grid.ts " +
+	"only, official, exploratoryReasons and runtimeConfiguration are compared on every " +
+	"resume, and it re-judges each stored invalid " +
 	"non-infrastructure run that has provider text and did not time out with the " +
 	"current classifier (a not-launched partner follows its arm), and it records the " +
-	"changed files, the re-judged runs, who, why and hashes of runs.jsonl and " +
+	"changed files, the commit, the re-judged runs, who, why and hashes of runs.jsonl and " +
 	"summary.json in harness-amendments.jsonl and resumes.jsonl, which must agree. " +
-	"Later resumes apply the recorded verdicts to the same runs and re-judge nothing.";
+	"Later resumes check that record against runs.jsonl, apply its verdicts to the same " +
+	"runs and re-judge nothing.";
 
 /**
  * How a resume treats the matched arm, written into a manifest only when the
@@ -512,15 +515,18 @@ Options:
                         With --extend-passes: why; required on an official grid
   --amend-harness <reason>
                         With --resume only: run the rest of the grid under the
-                        harness as it now is. Refused unless some harness file
-                        changed and every other pin is byte-identical. Stored
+                        harness as it now is. Refused unless the runner or the
+                        grid module (eval/delegation-compare.ts,
+                        eval/delegation-compare-grid.ts) changed and every
+                        other harness file and pin is byte-identical. Stored
                         invalid non-infrastructure runs are re-judged from their
                         provider text by the current classifier (never a timed-
                         out run); a pair now judged infrastructure is re-run at
                         attempt + 1, and runs.jsonl is not rewritten. Recorded,
-                        with the changed files, the re-judged runs, who, why and
-                        a hash of runs.jsonl and summary.json, in
-                        <out>/harness-amendments.jsonl, resumes.jsonl and the
+                        with the changed files, the git commit, the re-judged
+                        runs, who, why and a hash of runs.jsonl and
+                        summary.json, in <out>/harness-amendments.jsonl,
+                        resumes.jsonl and the
                         resume's manifest; later resumes check the harness
                         against the grid's pins as amended
   --passes-from <dir>   With --grid-kind: run at the pass count the grid in

@@ -391,16 +391,20 @@ native-worker snapshot from ADR-025, which the candidate probe refuses because i
     approve.
   - **Harness amendments (`docs/adr-drafts/v6-harness-amendment.md`):**
     `--resume <out-dir> --amend-harness "<reason>"` is the one way to go on under a changed
-    harness. Its pins may differ from the grid's record in harness file hashes only, and it is
-    refused when none differs. Before deciding what is blocked, it re-judges each stored invalid
+    harness. Its pins may differ from the grid's record only in the hashes of
+    `eval/delegation-compare.ts` and `eval/delegation-compare-grid.ts`; any other harness file
+    still refuses, and `official`, `exploratoryReasons` and `runtimeConfiguration` are compared on
+    every resume. It is refused when no file differs, and when it would re-judge no run on a grid
+    with no pair left to run. Before deciding what is blocked, it re-judges each stored invalid
     non-infrastructure run that has provider text and did not time out, with the current
     classifier; a partner that was not launched follows its arm. A pair now judged infrastructure
     is re-run at attempt + 1. `runs.jsonl` is never rewritten. The change is recorded in
     `harness-amendments.jsonl`, the resume's `resumes.jsonl` row and its manifest: the changed
-    files, the re-judged runs, who, why, and hashes of `runs.jsonl` and `summary.json`, whose
-    bytes are kept as `resume-<n>/summary-before-amendment.json`. Later resumes check the harness
-    against the original pins as amended and apply the recorded verdicts to the same runs;
-    `summary.json` lists the amendments.
+    files, the resuming worktree's git commit, the re-judged runs, who, why, and the row count and
+    hash of `runs.jsonl` and the hash of `summary.json`, whose bytes are kept as
+    `resume-<n>/summary-before-amendment.json`. Later resumes check the harness against the
+    original pins as amended, check the record against `runs.jsonl`, and apply the recorded
+    verdicts to the same runs; `summary.json` lists the amendments.
 
 ### v6 grids: N targets, patched twins, per-arm scopes, grid kinds (plan 2.8, ADR draft)
 
