@@ -12,7 +12,7 @@
 import { execFile, execFileSync, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream, createWriteStream, readFileSync } from "node:fs";
-import { access, appendFile, chmod, cp, link, lstat, mkdir, open, readdir, readFile, realpath, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { access, appendFile, chmod, copyFile, cp, link, lstat, mkdir, open, readdir, readFile, realpath, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { homedir, hostname, userInfo } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { StringDecoder } from "node:string_decoder";
@@ -42,6 +42,7 @@ import {
 import {
 	ARM_ORDER, corpusReasons, DEFAULT_BUDGET_ARMS, DEFAULT_SUBAGENTS_ARMS, delegationOff, loadsSubagentsFor, gridKindReasons, kindlessArmReasons, kindlessCorpus, kindlessValidityReasons, kindSnapshotReasons, parseArmList, parseCorpora,
 	amendmentsMismatch, blindSummary, currentPasses, pilotPairedSd, extensionRefusal, kindPassesReasons, parseAmendments, parseGridKinds, parseMaxVerifiers, scheduleExtends, type PassesAmendment, sameArms, scopeFor, scopeSettingsFor, shapeOf, summarizeTwins, twinTargets, type GridKind, type PinnedCorpus, type ScopeSettings,
+	amendedHarness, harnessAmendmentsMismatch, parseHarnessAmendments, type HarnessAmendment, type HarnessFileChange, type Reclassification,
 } from "./delegation-compare-grid.ts";
 // The staging, target-copy and tree-hash helpers moved to their own module so
 // the same digest rule draws the panel here, in the preflight and in tests.
@@ -338,7 +339,7 @@ type Options = {
 type JsonRecord = Record<string, unknown>;
 type Provider = { provider: string; model: string; baseHost: string; allowedHosts: string[] };
 type EntryConfig = CompareEntryConfig & { probe?: ProbeConfig };
-type Parsed = "help" | { kind: "run"; options: Options } | { kind: "resume"; dir: string; extendPasses?: number; extendReason?: string };
+type Parsed = "help" | { kind: "run"; options: Options } | { kind: "resume"; dir: string; extendPasses?: number; extendReason?: string; amendHarness?: string };
 
 /**
  * The pre-registered re-run rule, printed in --help and written verbatim into
@@ -355,7 +356,8 @@ const RESUME_POLICY =
 	"reads, pins file, pinned pi-subagents tree, fs-seal source and binary, grader, " +
 	"snapshots, source and truth hashes, prompt, provider endpoint, provider/model/" +
 	"thinking, the probe-resolved model runtime, passes, schedule) with that original " +
-	"manifest. It refuses unless all are byte-identical; a refused or failed resume " +
+	"manifest, its harness files as amended by <out>/harness-amendments.jsonl. It " +
+	"refuses unless all are byte-identical; a refused or failed resume " +
 	"records why only under resume-<n>/ and leaves manifest.json and progress.json as " +
 	"they were. Each pair is judged at its highest attempt only, never by mixing " +
 	"attempts: it is kept when both arms are valid at that attempt, and re-run (both " +
@@ -367,6 +369,7 @@ const RESUME_POLICY =
 	"the same text), and the entry's " +
 	"benchmark_fetch_error lines. It is a failure pi itself would retry " +
 	"(isRetryableAssistantError), a provider message that asks the client to try again, " +
+	"a provider auth-context check (\"auth context mismatch\"), " +
 	"a zai 1302/1308/1310 code, a provider quota or usage " +
 	"limit, an undici/socket error code (UND_ERR_*, ECONNRESET, ECONNREFUSED, " +
 	"ETIMEDOUT, EAI_AGAIN), or an arm stopped by this runner's own signal handling " +
@@ -377,7 +380,14 @@ const RESUME_POLICY =
 	"already incomplete_or_invalid. When a pair's first arm is invalid its second arm " +
 	"is not launched and is recorded as not launched, as infrastructure exactly when " +
 	"the first arm's failure was. Every attempt is appended to runs.jsonl with its " +
-	"attempt number.";
+	"attempt number, and no row is ever rewritten. --amend-harness <reason> is the one " +
+	"way a resume runs under a changed harness: its pins may differ from the grid's " +
+	"record in harness file hashes only, it re-judges each stored invalid " +
+	"non-infrastructure run that has provider text and did not time out with the " +
+	"current classifier (a not-launched partner follows its arm), and it records the " +
+	"changed files, the re-judged runs, who, why and hashes of runs.jsonl and " +
+	"summary.json in harness-amendments.jsonl and resumes.jsonl, which must agree. " +
+	"Later resumes apply the recorded verdicts to the same runs and re-judge nothing.";
 
 /**
  * How a resume treats the matched arm, written into a manifest only when the
@@ -469,7 +479,7 @@ Options:
                         OAuth check sizes (see --auth-horizon-hours)
   --out <dir>           New or empty directory; must not contain an advisory ID
   --resume <out-dir>    Continue a stopped grid in place; takes no other option
-                        but --extend-passes and --extend-reason
+                        but --extend-passes, --extend-reason and --amend-harness
   --extend-passes <n>   With --resume only: amend the grid's pass count to n
                         (n equal to it fixes the count). Passes already
                         scheduled keep their pairs and cells; new ones follow
@@ -482,6 +492,19 @@ Options:
                         extendablePasses
   --extend-reason <text>
                         With --extend-passes: why; required on an official grid
+  --amend-harness <reason>
+                        With --resume only: run the rest of the grid under the
+                        harness as it now is. Refused unless some harness file
+                        changed and every other pin is byte-identical. Stored
+                        invalid non-infrastructure runs are re-judged from their
+                        provider text by the current classifier (never a timed-
+                        out run); a pair now judged infrastructure is re-run at
+                        attempt + 1, and runs.jsonl is not rewritten. Recorded,
+                        with the changed files, the re-judged runs, who, why and
+                        a hash of runs.jsonl and summary.json, in
+                        <out>/harness-amendments.jsonl, resumes.jsonl and the
+                        resume's manifest; later resumes check the harness
+                        against the grid's pins as amended
   --passes-from <dir>   With --grid-kind: run at the pass count the grid in
                         <dir> fixed by its one amendment (stage 2 adopts stage
                         1's); takes the place of --passes
@@ -626,25 +649,35 @@ Exit status: 0 for a passing --dry-run or an official approval decision;
 export function parseOptions(argv: string[]): Parsed {
 	if (argv.includes("--help") || argv.includes("-h")) return "help";
 	if (argv.includes("--resume")) {
-		// --extend-passes and --extend-reason (plan item 2.8) are the only options a
-		// resume takes: they amend the grid's pass count, and everything else is read
-		// from the grid's manifest.
-		const usage = "--resume takes exactly one argument, the output directory, and no other option but --extend-passes <n> [--extend-reason <text>].";
+		// --extend-passes and --extend-reason (plan item 2.8) and --amend-harness
+		// (docs/adr-drafts/v6-harness-amendment.md) are the only options a resume
+		// takes: they amend the grid's pass count or its harness, on the record, and
+		// everything else is read from the grid's manifest.
+		const usage = "--resume takes exactly one argument, the output directory, and no other option but --extend-passes <n> [--extend-reason <text>] and --amend-harness <reason>.";
 		if (argv[0] !== "--resume" || !argv[1] || argv[1].startsWith("--") || argv.length % 2 !== 0) throw new Error(usage);
 		const extra = new Map<string, string>();
 		for (let i = 2; i < argv.length; i += 2) {
 			const flag = argv[i]!;
 			const value = argv[i + 1];
-			if ((flag !== "--extend-passes" && flag !== "--extend-reason") || value === undefined || extra.has(flag)) throw new Error(usage);
+			if ((flag !== "--extend-passes" && flag !== "--extend-reason" && flag !== "--amend-harness") || value === undefined || extra.has(flag)) throw new Error(usage);
 			extra.set(flag, value);
 		}
-		if (!extra.size) return { kind: "resume", dir: resolve(argv[1]!) };
-		if (!extra.has("--extend-passes")) throw new Error("--extend-reason needs --extend-passes <n>");
+		const dir = resolve(argv[1]!);
+		// A harness amendment is the operator's stated decision, on the record; a
+		// blank one would record a change to how the grid measures with no why.
+		const amend = extra.get("--amend-harness");
+		if (amend !== undefined && !amend.trim()) throw new Error("--amend-harness needs a reason: why the harness changed, and what it re-judges");
+		const amendHarness = amend === undefined ? {} : { amendHarness: amend.trim() };
+		if (!extra.has("--extend-passes")) {
+			if (extra.has("--extend-reason")) throw new Error("--extend-reason needs --extend-passes <n>");
+			return { kind: "resume", dir, ...amendHarness };
+		}
 		const passes = Number(extra.get("--extend-passes"));
 		if (!Number.isSafeInteger(passes) || passes < 1) throw new Error("--extend-passes must be an integer pass count, at least the grid's");
 		const reason = extra.get("--extend-reason");
-		return { kind: "resume", dir: resolve(argv[1]!), extendPasses: passes, ...(reason === undefined ? {} : { extendReason: reason }) };
+		return { kind: "resume", dir, extendPasses: passes, ...(reason === undefined ? {} : { extendReason: reason }), ...amendHarness };
 	}
+	if (argv.includes("--amend-harness")) throw new Error("--amend-harness is allowed only with --resume <out-dir>: it amends a stopped grid's harness on the record, and a new grid has no record to amend");
 	const valueFlags = new Set([
 		"--baseline", "--candidate", "--corpus", "--truth", "--out", "--provider", "--model",
 		"--thinking", "--passes", "--only", "--concurrency", "--timeout", "--manifest", "--fs-seal", "--auth-horizon-hours",
@@ -916,16 +949,65 @@ export async function adoptPasses(dir: string): Promise<PassesFromRecord> {
  * told from one made before.
  */
 async function makeAmendment(dir: string, from: number, to: number, reason: string | undefined, resume: number): Promise<PassesAmendment> {
+	const held = await gridHeld(dir);
+	return {
+		kind: to === from ? "fix-passes" : "extend-passes", at: new Date().toISOString(), from, to, by: held.by, reason: reason ?? null,
+		runsCompleted: held.runsCompleted, runsSha256: held.runsSha256, summarySha256: held.summarySha256, resume,
+	};
+}
+
+/** What a grid holds when an amendment is made, and who is making it: both kinds of amendment record these. */
+async function gridHeld(dir: string): Promise<{ by: string; runsCompleted: number; runsSha256: string; summarySha256: string | null }> {
 	const runsText = await readFile(join(dir, "runs.jsonl"), "utf8").catch(() => "");
 	const summaryText = await readFile(join(dir, "summary.json")).catch(() => undefined);
 	let user = "unknown";
 	try { user = userInfo().username; } catch { /* no passwd entry: the host still names the machine */ }
 	return {
-		kind: to === from ? "fix-passes" : "extend-passes", at: new Date().toISOString(), from, to, by: `${user}@${hostname()}`, reason: reason ?? null,
-		runsCompleted: runsText.split("\n").filter((l) => parseJsonObject(l)).length, runsSha256: sha256(runsText),
-		summarySha256: summaryText === undefined ? null : sha256(summaryText), resume,
+		by: `${user}@${hostname()}`, runsCompleted: runsText.split("\n").filter((l) => parseJsonObject(l)).length, runsSha256: sha256(runsText),
+		summarySha256: summaryText === undefined ? null : sha256(summaryText),
 	};
 }
+
+/** Where a grid's harness amendments are recorded; never amendments.jsonl, which holds pass counts only. */
+const HARNESS_AMENDMENTS_FILE = "harness-amendments.jsonl";
+
+/**
+ * A grid's harness amendments (docs/adr-drafts/v6-harness-amendment.md),
+ * read strictly and cross-checked against resumes.jsonl, as gridAmendments
+ * does for pass counts: an edit to either file refuses a resume and keeps a
+ * summary from ready.
+ */
+export async function gridHarnessAmendments(dir: string): Promise<{ amendments: HarnessAmendment[]; mismatch?: string }> {
+	const amendments = parseHarnessAmendments(await jsonlRows(join(dir, HARNESS_AMENDMENTS_FILE)));
+	const mismatch = harnessAmendmentsMismatch(amendments, await jsonlRows(join(dir, "resumes.jsonl")));
+	return { amendments, ...(mismatch ? { mismatch } : {}) };
+}
+
+/**
+ * The reclassifier a resume plans with. A grid with no recorded harness
+ * amendment, resumed without making one, gets none, so its plan is exactly what
+ * it always was. A grid with recorded amendments has their verdicts applied to
+ * the same stored runs (key, arm, attempt, cell): without that, a resume after
+ * the amending one was interrupted before the re-run pair launched would find
+ * the stored non-infrastructure row again, block the pair, and refuse, and a
+ * second amendment would be refused as a no-op. Only the resume that makes an
+ * amendment also re-judges the other stored runs with the current classifier
+ * (rejudgeStoredRun).
+ */
+export function resumeReclassifier(recorded: readonly HarnessAmendment[], amending: boolean): Reclassifier | undefined {
+	const entries = recorded.flatMap((a) => a.reclassified);
+	if (!amending && !entries.length) return undefined;
+	return (run) => {
+		const attempt = typeof run.attempt === "number" ? run.attempt : 1;
+		const cellId = typeof run.cellId === "string" && run.cellId ? run.cellId : null;
+		const hit = entries.find((e) => e.key === run.key && e.arm === run.arm && e.attempt === attempt && e.cellId === cellId);
+		if (hit) return { infra: true, reason: hit.reason, ...(hit.evidence === null ? {} : { evidence: hit.evidence }) };
+		return amending ? rejudgeStoredRun(run) : undefined;
+	};
+}
+
+/** Whether two reclassifications name the same stored run. */
+const sameRun = (a: Reclassification, b: Reclassification): boolean => a.key === b.key && a.arm === b.arm && a.attempt === b.attempt && a.cellId === b.cellId;
 
 /**
  * The patched twins a grid ran (plan item 2.8): its twin arms and the twins
@@ -2345,7 +2427,13 @@ export function probeDelegationScope(engagement: string, workspace: string): Rec
 	return { engagement, workspace, mode: "enforce", authorized: true, targets: { ips: ["127.0.0.1"] }, maxAgents: DEFAULT_CANDIDATE_MAX_AGENTS };
 }
 
-/** Re-checked before every launch: a grid must not straddle an edit to what it measures. */
+/**
+ * Re-checked before every launch: a grid must not straddle an edit to what it
+ * measures. ctx.pins are the pins this runner's own preflight measured, never
+ * the grid's original manifest's, so a resume that amended the harness
+ * (--amend-harness) checks each launch against the harness it was accepted
+ * under, and an edit after its preflight still invalidates the run.
+ */
 async function verifyFrozen(ctx: Context, arm: Arm): Promise<string[]> {
 	const errors: string[] = [];
 	if (await hashFile(ENTRY) !== ctx.pins.harnessSha256["eval/delegation-compare-entry.ts"]) errors.push("entry script changed after preflight");
@@ -2893,6 +2981,18 @@ const QUOTA_TEXT = /insufficient_quota|quota exceeded|out of budget|billing|avai
  * stops the grid.
  */
 const PROVIDER_SAYS_RETRY = /\bplease try again\b/i;
+/**
+ * A provider-side auth-context check. v6-stage1-luna's candidate run of CVE-2026-64619
+ * pass 3 attempt 1 (cell 1bc99d70d57647e7, 2026-09-30) ended about 1.7 h in, at assistant
+ * reply #319, on "native turn auth context mismatch: scopes", and pi did not retry it.
+ * The text is OpenAI's: it appears nowhere in node_modules, so pi did not write it. The
+ * operator's auth.json had not changed since 2026-09-25, its token was valid to 2026-10-05,
+ * and the check failed in 1 of ~130 Luna runs of that grid; a credential the run had spoiled
+ * would have failed the runs after it too. Classed as the run's own failure, it tripped the
+ * breaker of an official grid and made every resume refuse, as v5b's Daybreak Blue check
+ * did. It runs after the quota patterns, so a spent plan still stops the grid.
+ */
+const PROVIDER_AUTH_CONTEXT = /\bauth context mismatch\b/i;
 /** undici and socket failure codes the entry's fetch wrapper records. */
 const TRANSIENT_FETCH_CODE = /^(UND_ERR_[A-Z_]+|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN)$/;
 
@@ -2927,6 +3027,7 @@ export function classifyInfra(failures: ProviderFailures, timedOut: boolean): In
 		if (zaiCode("1302").test(text)) return { infra: true, reason: "zai 1302 request rate limit", evidence: evidence(text) };
 		if (isRetryableAssistantError(failedReply(text))) return { infra: true, reason: "transient provider failure", evidence: evidence(text) };
 		if (PROVIDER_SAYS_RETRY.test(text)) return { infra: true, reason: "provider asked for a retry", evidence: evidence(text) };
+		if (PROVIDER_AUTH_CONTEXT.test(text)) return { infra: true, reason: "provider auth-context check", evidence: evidence(text) };
 	}
 	for (const fetchError of failures.fetchErrors) {
 		const code = [fetchError.code, ...(fetchError.codes ?? [])].find((c): c is string => typeof c === "string" && TRANSIENT_FETCH_CODE.test(c));
@@ -2962,6 +3063,39 @@ export function decideInfra(run: {
 	}
 	if (run.stoppedByRunner || run.notLaunchedInterrupted) return { infra: true, reason: "runner interruption" };
 	return { infra: false };
+}
+
+/** A stored run's providerFailures read back strictly, or undefined when the row has none or it is malformed. */
+function storedProviderFailures(value: unknown): ProviderFailures | undefined {
+	if (!isJsonRecord(value)) return undefined;
+	const texts = (v: unknown): string[] | undefined => Array.isArray(v) && v.every((t) => typeof t === "string") ? v as string[] : undefined;
+	const parent = texts(value.parent);
+	const workers = texts(value.workers);
+	const fetchErrors = Array.isArray(value.fetchErrors) && value.fetchErrors.every(isJsonRecord) ? value.fetchErrors as ProviderFailures["fetchErrors"] : undefined;
+	return parent && workers && fetchErrors ? { parent, workers, fetchErrors } : undefined;
+}
+
+/**
+ * Re-judge a stored run with the current classifier, for a resume that carries
+ * a harness amendment (docs/adr-drafts/v6-harness-amendment.md). planResume
+ * reads the infraFailure flag written when the run ended, so a classifier fixed
+ * afterwards never reached the run that exposed the gap: v6-stage1-luna's
+ * CVE-2026-64619#3 candidate stayed blocked on "native turn auth context
+ * mismatch: scopes" whatever classifyInfra later said.
+ *
+ * Only a launched run that is invalid and non-infrastructure, with provider
+ * text on record, is re-judged, and only from that text, as it was judged live.
+ * A run whose process timed out never is: a timeout is never infrastructure.
+ * Returns the new verdict only when it is infrastructure; the row itself is
+ * never rewritten.
+ */
+export function rejudgeStoredRun(run: JsonRecord): InfraClass | undefined {
+	if (run.valid === true || run.infraFailure === true || run.notLaunched === true) return undefined;
+	if (isJsonRecord(run.process) && run.process.timedOut === true) return undefined;
+	const failures = storedProviderFailures(run.providerFailures);
+	if (!failures || (!failures.parent.length && !failures.workers.length && !failures.fetchErrors.length)) return undefined;
+	const verdict = classifyInfra(failures, false);
+	return verdict.infra ? verdict : undefined;
 }
 
 /**
@@ -4088,7 +4222,20 @@ export interface ResumePlan {
 	/** `${pairKey}\u0000${arm}` -> that arm's record at its pair's highest attempt (absent when the arm has none there). */
 	latest: Record<string, JsonRecord>;
 	reasons: Record<string, string>;
+	/**
+	 * Stored runs at a pair's highest attempt that the reclassifier judged
+	 * infrastructure, in schedule order; their pairs are judged as such. Always
+	 * empty without a reclassifier. The records in `latest` are the stored ones.
+	 */
+	reclassified: Reclassification[];
 }
+
+/**
+ * Re-judges one stored run for planResume; an undefined or non-infrastructure
+ * verdict leaves it as recorded. Only a resume that carries a harness
+ * amendment, or a grid that has recorded one, passes one.
+ */
+export type Reclassifier = (run: JsonRecord) => InfraClass | undefined;
 
 /**
  * Decide, from a stopped grid's persisted runs, which pairs a --resume re-runs.
@@ -4103,8 +4250,18 @@ export interface ResumePlan {
  * (an arm missing there, or invalid for infrastructure) re-run, both arms, at
  * the next attempt. Two rows for one arm at one attempt resolve to the last line
  * written. Pure: takes the schedule and the run records, touches no disk.
+ *
+ * With a reclassifier (docs/adr-drafts/v6-harness-amendment.md), each launched
+ * arm at the highest attempt that is stored invalid and non-infrastructure is
+ * re-judged by it, and a partner that was not launched because of that arm
+ * follows it, as notLaunchedOutcome records one: infrastructure exactly when
+ * the launched arm's failure is. Without this the partner's stored
+ * `infraFailure: false` would keep the pair blocked. A pair whose arms are
+ * infrastructure after re-judging is re-run at attempt + 1 like any other; one
+ * still non-infrastructure stays blocked. Without a reclassifier, the plan is
+ * what it always was.
  */
-export function planResume(pairs: ScheduledPair[], runs: JsonRecord[], attemptCeiling?: number): ResumePlan {
+export function planResume(pairs: ScheduledPair[], runs: JsonRecord[], attemptCeiling?: number, reclassify?: Reclassifier): ResumePlan {
 	const maxAttempt: Record<string, number> = {};
 	const rows: Array<{ key: string; arm: Arm; attempt: number; run: JsonRecord }> = [];
 	for (const run of runs) {
@@ -4117,12 +4274,36 @@ export function planResume(pairs: ScheduledPair[], runs: JsonRecord[], attemptCe
 	}
 	const latest: Record<string, JsonRecord> = {};
 	for (const row of rows) if (row.attempt === maxAttempt[row.key]) latest[`${row.key}\u0000${row.arm}`] = row.run;
-	const plan: ResumePlan = { rerunKeys: [], blockedKeys: [], keepKeys: [], abandonedKeys: [], nextAttempt: {}, latest, reasons: {} };
+	const plan: ResumePlan = { rerunKeys: [], blockedKeys: [], keepKeys: [], abandonedKeys: [], nextAttempt: {}, latest, reasons: {}, reclassified: [] };
 	for (const pair of pairs) {
-		// A patched twin counts when its twin arms are valid at one attempt (plan item 2.8).
-		const arms = armsOfPair(pair).map((arm) => latest[`${pair.key}\u0000${arm}`])
-			.map((r) => r && { valid: r.valid === true, infra: r.infraFailure === true });
 		const attempt = maxAttempt[pair.key] ?? 0;
+		// A patched twin counts when its twin arms are valid at one attempt (plan item 2.8).
+		const records = armsOfPair(pair).map((arm) => ({ arm, record: latest[`${pair.key}\u0000${arm}`] }));
+		const infra = new Map(records.map(({ arm, record }) => [arm, record?.infraFailure === true]));
+		if (reclassify) {
+			const judged = new Map<PairArm, InfraClass>();
+			for (const { arm, record } of records) {
+				if (!record || record.valid === true || record.infraFailure === true || record.notLaunched === true) continue;
+				const verdict = reclassify(record);
+				if (verdict?.infra) judged.set(arm, verdict);
+			}
+			for (const { arm, record } of records) {
+				if (!record || record.valid === true || record.infraFailure === true) continue;
+				let verdict = judged.get(arm);
+				if (!verdict && record.notLaunched === true) {
+					const partner = [...judged.entries()].find(([other]) => other !== arm);
+					if (partner) verdict = { infra: true, reason: `partner arm ${partner[0]} failed: ${partner[1].reason ?? "infrastructure"}` };
+				}
+				if (!verdict) continue;
+				infra.set(arm, true);
+				plan.reclassified.push({
+					key: pair.key, arm, attempt: typeof record.attempt === "number" ? record.attempt : 1,
+					cellId: typeof record.cellId === "string" && record.cellId ? record.cellId : null,
+					reason: verdict.reason ?? "infrastructure", evidence: verdict.evidence ?? null,
+				});
+			}
+		}
+		const arms = records.map(({ arm, record }) => record && { valid: record.valid === true, infra: infra.get(arm) === true });
 		// No requeue context: a resume is the operator's decision to spend more on
 		// the pair, so it waits no cooldown and applies no per-runner attempt cap.
 		// The ceiling does apply, or an auto-resumer could re-run a pair forever.
@@ -4144,8 +4325,18 @@ export function planResume(pairs: ScheduledPair[], runs: JsonRecord[], attemptCe
 	return plan;
 }
 
-/** Identity fields a resume must find byte-identical between the grid's original manifest and its own recomputation. */
-export function resumeMismatches(prior: JsonRecord, fresh: JsonRecord, allow: { passes?: number } = {}): string[] {
+/**
+ * Identity fields a resume must find byte-identical between the grid's original
+ * manifest and its own recomputation.
+ *
+ * The harness files' hashes are compared under their own name, against
+ * `allow.harness` when given: the original pins overlaid by the grid's recorded
+ * harness amendments (amendedHarness). With `allow.amendHarness`, a resume that
+ * is making such an amendment, only their set of paths must match; which files
+ * changed is resumePinCheck's to report. Every other pin is compared as it
+ * always was.
+ */
+export function resumeMismatches(prior: JsonRecord, fresh: JsonRecord, allow: { passes?: number; harness?: Record<string, string>; amendHarness?: boolean } = {}): string[] {
 	const diffs: string[] = [];
 	const eq = (label: string, a: unknown, b: unknown): void => { if (JSON.stringify(a ?? null) !== JSON.stringify(b ?? null)) diffs.push(label); };
 	// An extended grid (plan item 2.8) runs at its amended pass count: its
@@ -4157,11 +4348,17 @@ export function resumeMismatches(prior: JsonRecord, fresh: JsonRecord, allow: { 
 	// So is the pinned pi-subagents install: a re-installed or edited tree is a
 	// different candidate, not a harness change, and the refusal should say so.
 	const subagentFields = (pins: JsonRecord): JsonRecord => Object.fromEntries(Object.entries(pins).filter(([k]) => k.startsWith("piSubagents")));
-	const { benchmarkRuntime: priorRuntime, ...priorPins } = (prior.pins ?? {}) as JsonRecord;
-	const { benchmarkRuntime: freshRuntime, ...freshPins } = (fresh.pins ?? {}) as JsonRecord;
+	const { benchmarkRuntime: priorRuntime, harnessSha256: priorHarness, ...priorPins } = (prior.pins ?? {}) as JsonRecord;
+	const { benchmarkRuntime: freshRuntime, harnessSha256: freshHarness, ...freshPins } = (fresh.pins ?? {}) as JsonRecord;
 	const withoutSubagents = (pins: JsonRecord): JsonRecord => Object.fromEntries(Object.entries(pins).filter(([k]) => !k.startsWith("piSubagents")));
 	eq("pins", prior.pins === undefined ? undefined : withoutSubagents(priorPins), fresh.pins === undefined ? undefined : withoutSubagents(freshPins));
 	eq("pins.piSubagents", subagentFields(priorPins), subagentFields(freshPins));
+	// The harness is named apart from the other pins: it is the one part an audited
+	// amendment (--amend-harness) may change, and only file by file.
+	const expectedHarness = allow.harness ?? priorHarness;
+	const paths = (h: unknown): string[] | undefined => isJsonRecord(h) ? Object.keys(h).sort() : undefined;
+	if (allow.amendHarness) eq("pins.harnessSha256 (the pinned file set)", paths(expectedHarness), paths(freshHarness));
+	else eq("pins.harnessSha256", expectedHarness, freshHarness);
 	eq("pins.benchmarkRuntime", priorRuntime, freshRuntime);
 	eq("provider", prior.provider, fresh.provider);
 	eq("prompt", prior.prompt, fresh.prompt);
@@ -4217,6 +4414,56 @@ export function resumeMismatches(prior: JsonRecord, fresh: JsonRecord, allow: { 
 		eq(`inputs.${arm}.stagedDigest`, pa.stagedDigest, fa.stagedDigest);
 	}
 	return diffs;
+}
+
+/** What a resume's pin comparison found, and whether the resume may go on. */
+export interface ResumePinCheck {
+	/** Fields that differ and may not; resumeMismatches' labels. */
+	mismatches: string[];
+	/** Harness files whose hash differs from the grid's record (its original pins overlaid by every recorded harness amendment), by path. */
+	harnessFiles: Record<string, HarnessFileChange>;
+	/** Why the resume refuses, or undefined when it may go on. */
+	refusal?: string;
+}
+
+/**
+ * A resume's pin comparison, pure (docs/adr-drafts/v6-harness-amendment.md).
+ * The harness is expected at the grid's original pins overlaid, in order, by
+ * every recorded harness amendment, so the plain --resume after an amendment
+ * passes, and a further unrecorded edit still refuses. A resume making an
+ * amendment (`amendHarness`) may differ in harness file hashes only: every
+ * other pin (runtime tree and node, grader, snapshots, corpus and truth,
+ * pi-subagents, fs-seal, prompt, provider, model, thinking, model runtime,
+ * schedule, passes) must still be byte-identical, and an amendment that changes
+ * no file is refused as a no-op rather than recorded.
+ */
+export function resumePinCheck(prior: JsonRecord, fresh: JsonRecord, opts: { passes?: number; harnessAmendments?: readonly HarnessAmendment[]; amendHarness?: boolean } = {}): ResumePinCheck {
+	const amendments = opts.harnessAmendments ?? [];
+	const priorHarness = isJsonRecord(prior.pins) && isJsonRecord(prior.pins.harnessSha256) ? prior.pins.harnessSha256 as Record<string, string> : undefined;
+	const freshHarness = isJsonRecord(fresh.pins) && isJsonRecord(fresh.pins.harnessSha256) ? fresh.pins.harnessSha256 as Record<string, string> : {};
+	let expected: Record<string, string> | undefined = priorHarness;
+	if (amendments.length) {
+		try { expected = amendedHarness(priorHarness ?? {}, amendments); }
+		catch (error) { return { mismatches: ["pins.harnessSha256"], harnessFiles: {}, refusal: `--resume refused: ${message(error)}` }; }
+	}
+	const mismatches = resumeMismatches(prior, fresh, {
+		...(opts.passes === undefined ? {} : { passes: opts.passes }),
+		...(expected === undefined ? {} : { harness: expected }),
+		...(opts.amendHarness ? { amendHarness: true } : {}),
+	});
+	const harnessFiles: Record<string, HarnessFileChange> = {};
+	for (const [path, to] of Object.entries(freshHarness)) {
+		const from = expected?.[path];
+		if (typeof from === "string" && from !== to) harnessFiles[path] = { from, to };
+	}
+	const as = amendments.length ? ` (its harness as amended by ${amendments.length} recorded harness amendment(s))` : "";
+	if (mismatches.length) {
+		return { mismatches, harnessFiles, refusal: `--resume refused: the recomputed pins differ from the grid's original manifest.json${as} at: ${mismatches.join(", ")}. The inputs or harness changed; a resume must measure with the same rules.` };
+	}
+	if (opts.amendHarness && !Object.keys(harnessFiles).length) {
+		return { mismatches, harnessFiles, refusal: `--resume refused: --amend-harness was given, but no harness file differs from the grid's record${as}, so there is nothing to amend; resume without it.` };
+	}
+	return { mismatches, harnessFiles };
 }
 
 async function ensureEmptyOutput(out: string): Promise<void> {
@@ -4424,7 +4671,7 @@ async function main(): Promise<void> {
 	// including any `--only CVE-…`. Replace them before any child starts. The
 	// owner record also relies on this title to recognise a live runner.
 	process.title = RUNNER_TITLE;
-	if (parsed.kind === "resume") return await resumeMain(parsed.dir, parsed.extendPasses, parsed.extendReason);
+	if (parsed.kind === "resume") return await resumeMain(parsed.dir, parsed.extendPasses, parsed.extendReason, parsed.amendHarness);
 	const options = parsed.options;
 	if (options.passesFromDir !== undefined) {
 		options.passesFrom = await adoptPasses(options.passesFromDir);
@@ -4460,6 +4707,14 @@ type ResumeInput = {
 	passes?: number;
 	/** The extension this resume makes, appended to amendments.jsonl when it is accepted. */
 	extension?: PassesAmendment;
+	/** The harness amendments the grid has recorded, in order (harness-amendments.jsonl). */
+	harnessAmendments: HarnessAmendment[];
+	/**
+	 * The harness amendment this resume makes (--amend-harness), less what only
+	 * its preflight and its plan can say: the files that changed and the runs it
+	 * re-judges. Appended to harness-amendments.jsonl when the resume is accepted.
+	 */
+	amendHarness?: Omit<HarnessAmendment, "kind" | "files" | "reclassified">;
 };
 type GridPaths = { manifestPath: string; preflightRoot: string; statusPath: string };
 
@@ -4472,7 +4727,7 @@ type GridPaths = { manifestPath: string; preflightRoot: string; statusPath: stri
  * manifest go to resume-<n>/, its recomputed pins are compared with the
  * untouched original, and only an accepted resume touches progress.json.
  */
-async function resumeMain(dir: string, extendPasses?: number, extendReason?: string): Promise<void> {
+async function resumeMain(dir: string, extendPasses?: number, extendReason?: string, amendHarness?: string): Promise<void> {
 	const priorPath = join(dir, "manifest.json");
 	if (!await exists(priorPath)) throw new Error(`--resume: no manifest.json in ${dir}`);
 	// Before anything is written: a resume beside a live runner would re-launch its in-flight pairs.
@@ -4484,6 +4739,10 @@ async function resumeMain(dir: string, extendPasses?: number, extendReason?: str
 	// resumes.jsonl, or one of them was edited.
 	const { amendments, mismatch } = await gridAmendments(dir);
 	if (mismatch) throw new Error(`--resume refused: ${mismatch}`);
+	// The harness amendments the same way, in their own file: the pins a resume
+	// compares against are the original ones overlaid by these.
+	const harness = await gridHarnessAmendments(dir);
+	if (harness.mismatch) throw new Error(`--resume refused: ${harness.mismatch}`);
 	options.passes = currentPasses(options.passes, amendments);
 	const amendFrom = options.passes;
 	if (extendPasses !== undefined) {
@@ -4504,13 +4763,27 @@ async function resumeMain(dir: string, extendPasses?: number, extendReason?: str
 	}
 	const { n, root } = await claimResumeDir(dir);
 	const extension = extendPasses === undefined ? undefined : await makeAmendment(dir, amendFrom, extendPasses, extendReason, n);
+	let harnessRequest: ResumeInput["amendHarness"];
+	if (amendHarness !== undefined) {
+		const held = await gridHeld(dir);
+		harnessRequest = { at: new Date().toISOString(), by: held.by, reason: amendHarness, resume: n, runsSha256: held.runsSha256, summarySha256: held.summarySha256 };
+		// The summary an amendment is made over holds the stop it answers (the
+		// breaker's trip, the decision codes), and the resumed runner overwrites
+		// summary.json when it finishes. The row keeps its hash; this keeps the bytes.
+		await copyFile(join(dir, "summary.json"), join(root, "summary-before-amendment.json")).catch(() => undefined);
+	}
 	const manifest = newManifest(options, "resume");
 	manifest.resumedFrom = { id: prior.id ?? null, n, priorRuns: priorRuns.length, originalManifest: priorPath };
 	// Every amendment so far, this resume's included, and only when there is one.
 	const all = [...amendments, ...(extension ? [extension] : [])];
 	if (all.length) manifest.amendments = all;
-	console.log(`resume ${n}: preflight and pin check in ${root}; the grid's manifest.json and progress.json are not written unless the resume is accepted${extension ? `; ${extension.kind === "fix-passes" ? `fixes the grid at ${extension.to}` : `extends the grid from ${extension.from} to ${extension.to}`} passes` : ""}`);
-	await driveGrid(options, manifest, { prior, priorRuns, n, root, ...(all.length ? { passes: options.passes } : {}), ...(extension ? { extension } : {}) }, {
+	// The recorded harness amendments; driveGrid adds this resume's once its preflight and plan have said what it is.
+	if (harness.amendments.length) manifest.harnessAmendments = harness.amendments;
+	console.log(`resume ${n}: preflight and pin check in ${root}; the grid's manifest.json and progress.json are not written unless the resume is accepted${extension ? `; ${extension.kind === "fix-passes" ? `fixes the grid at ${extension.to}` : `extends the grid from ${extension.from} to ${extension.to}`} passes` : ""}${harnessRequest ? "; amends the grid's harness" : ""}`);
+	await driveGrid(options, manifest, {
+		prior, priorRuns, n, root, ...(all.length ? { passes: options.passes } : {}), ...(extension ? { extension } : {}),
+		harnessAmendments: harness.amendments, ...(harnessRequest ? { amendHarness: harnessRequest } : {}),
+	}, {
 		manifestPath: join(root, "manifest.json"), preflightRoot: root, statusPath: join(root, "status.json"),
 	});
 }
@@ -4551,11 +4824,15 @@ async function driveGrid(options: Options, manifest: JsonRecord, resume: ResumeI
 			await reportStatus({ status: runState.aborted ? "interrupted" : "preflight-failed", completedRuns: 0, error: message(error) });
 			throw error;
 		});
-		if (resume) {
-			const diffs = resumeMismatches(resume.prior, manifest, resume.passes === undefined ? {} : { passes: resume.passes });
-			if (diffs.length) {
-				await refuseResume(manifest, saveManifest, `--resume refused: the recomputed pins differ from the grid's original manifest.json at: ${diffs.join(", ")}. The inputs or harness changed; a resume must measure with the same rules.`, { mismatches: diffs });
-			}
+		// The harness a resume must find is the original pins overlaid by every
+		// recorded harness amendment; one making an amendment may differ from it in
+		// harness file hashes only (resumePinCheck).
+		const pinCheck = resume ? resumePinCheck(resume.prior, manifest, {
+			...(resume.passes === undefined ? {} : { passes: resume.passes }),
+			harnessAmendments: resume.harnessAmendments, ...(resume.amendHarness ? { amendHarness: true } : {}),
+		}) : undefined;
+		if (pinCheck?.refusal) {
+			await refuseResume(manifest, saveManifest, pinCheck.refusal, { mismatches: pinCheck.mismatches, ...(resume?.amendHarness ? { harnessFiles: pinCheck.harnessFiles } : {}) });
 		}
 		if (!pre.official) console.log(`EXPLORATORY — not an acceptance decision (${pre.exploratoryReasons.join("; ") || "grid is not the official five targets x three passes"})`);
 		if (options.dryRun) {
@@ -4568,12 +4845,29 @@ async function driveGrid(options: Options, manifest: JsonRecord, resume: ResumeI
 			return;
 		}
 		const schedule = gridSchedule(pre, options);
-		const plan = resume ? planResume(schedule, resume.priorRuns, options.breaker?.attemptCeiling) : undefined;
+		// Re-judging comes before the refusals below, so a pair an amended harness
+		// classes as infrastructure is re-run rather than blocked; one it still
+		// classes as the run's own failure refuses the resume exactly as before.
+		const reclassify = resume ? resumeReclassifier(resume.harnessAmendments, resume.amendHarness !== undefined) : undefined;
+		const plan = resume ? planResume(schedule, resume.priorRuns, options.breaker?.attemptCeiling, reclassify) : undefined;
 		// A patched twin never enters the gate, so a blocked or abandoned twin does
 		// not fix an official grid's decision and does not refuse its resume.
 		const twinKeys = new Set(schedule.filter((p) => p.twin).map((p) => p.key));
 		if (plan && resume) {
+			// This resume's harness amendment, complete: the files its preflight
+			// measured as changed and the stored runs it re-judged that no earlier
+			// amendment already records. The same row goes to the resume's manifest,
+			// its resumes.jsonl entry and harness-amendments.jsonl.
+			const recorded = resume.harnessAmendments.flatMap((a) => a.reclassified);
+			const harnessRow: HarnessAmendment | undefined = resume.amendHarness && pinCheck ? {
+				kind: "harness", at: resume.amendHarness.at, by: resume.amendHarness.by, reason: resume.amendHarness.reason, resume: resume.amendHarness.resume,
+				files: pinCheck.harnessFiles, reclassified: plan.reclassified.filter((r) => !recorded.some((e) => sameRun(e, r))),
+				runsSha256: resume.amendHarness.runsSha256, summarySha256: resume.amendHarness.summarySha256,
+			} : undefined;
+			if (harnessRow) manifest.harnessAmendments = [...resume.harnessAmendments, harnessRow];
 			console.log(`resume: ${plan.rerunKeys.length} pair(s) to re-run, ${plan.keepKeys.length} kept, ${plan.blockedKeys.length} blocked (invalid, non-infra)${options.breaker ? `, ${plan.abandonedKeys.length} abandoned (attempt ceiling ${options.breaker.attemptCeiling})` : ""}`);
+			if (harnessRow) console.log(`  harness amendment: ${Object.keys(harnessRow.files).join(", ")} changed; ${harnessRow.reclassified.length} stored run(s) re-judged as infrastructure`);
+			for (const r of plan.reclassified) console.log(`  reclassified ${r.key} ${r.arm} attempt ${r.attempt}${r.cellId ? ` (cell ${r.cellId})` : ""}: ${r.reason}${r.evidence ? ` · ${r.evidence}` : ""}`);
 			for (const key of plan.blockedKeys) console.log(`  blocked ${key}: ${plan.reasons[key] ?? ""}`);
 			for (const key of plan.abandonedKeys) console.log(`  abandoned ${key}: ${plan.reasons[key] ?? ""}`);
 			// A blocked pair already fixes an official grid's decision at
@@ -4593,16 +4887,21 @@ async function driveGrid(options: Options, manifest: JsonRecord, resume: ResumeI
 					`--resume refused: ${gateAbandoned.length} pair(s) of this official grid reached the attempt ceiling (${gateAbandoned.map((k) => `${k}: ${plan.reasons[k] ?? ""}`).join("; ")}), so its decision is already incomplete_or_invalid.`,
 					{ abandoned: gateAbandoned });
 			}
-			manifest.resumeDecision = { status: "accepted", rerun: plan.rerunKeys, kept: plan.keepKeys, blocked: plan.blockedKeys, ...(options.breaker ? { abandoned: plan.abandonedKeys } : {}) };
+			manifest.resumeDecision = {
+				status: "accepted", rerun: plan.rerunKeys, kept: plan.keepKeys, blocked: plan.blockedKeys, ...(options.breaker ? { abandoned: plan.abandonedKeys } : {}),
+				...(plan.reclassified.length ? { reclassified: plan.reclassified } : {}),
+			};
 			await saveManifest();
 			await reportStatus({ status: "accepted", rerun: plan.rerunKeys.length, kept: plan.keepKeys.length, blocked: plan.blockedKeys.length, ...(options.breaker ? { abandoned: plan.abandonedKeys.length } : {}) });
 			await appendJsonl(join(output, "resumes.jsonl"), {
 				n: resume.n, id: manifest.id, manifest: relative(output, paths.manifestPath), acceptedAt: new Date().toISOString(),
 				rerun: plan.rerunKeys, kept: plan.keepKeys, blocked: plan.blockedKeys, ...(options.breaker ? { abandoned: plan.abandonedKeys } : {}),
 				...(resume.extension ? { extendedPasses: { from: resume.extension.from, to: resume.extension.to }, amendment: resume.extension } : {}),
+				...(harnessRow ? { harnessAmendment: harnessRow } : {}),
 			});
 			// The amendment is on record only once the resume that makes it is accepted.
 			if (resume.extension) await appendJsonl(join(output, "amendments.jsonl"), resume.extension);
+			if (harnessRow) await appendJsonl(join(output, HARNESS_AMENDMENTS_FILE), harnessRow);
 			// Accepted: from here the resume is the grid's runner and reports in progress.json.
 			statusFile.path = join(output, "progress.json");
 		}
@@ -4675,22 +4974,33 @@ export interface AttemptReport {
  * 22/8 on v5 GLM, 10/14 on cc GLM). An abandoned pair lists each attempt, so
  * the reason a pair never counted can be read without opening runs.jsonl.
  */
-export function attemptReport(rows: JsonRecord[], abandonedKeys: string[]): AttemptReport {
+export function attemptReport(rows: JsonRecord[], abandonedKeys: string[], reclassified: readonly Reclassification[] = []): AttemptReport {
 	const attemptOf = (r: JsonRecord): number => typeof r.attempt === "number" ? r.attempt : 1;
 	const armOf = (r: JsonRecord): PairArm | undefined => r.arm === "baseline" || r.arm === "candidate" ? r.arm : undefined;
+	// A stored run a harness amendment re-judged is counted as what it was judged
+	// (docs/adr-drafts/v6-harness-amendment.md), so the per-arm failure counts say
+	// which arm the provider failed; its row in runs.jsonl is left as written.
+	const rejudged = (r: JsonRecord): Reclassification | undefined => reclassified.find((c) => c.key === r.key && c.arm === r.arm && c.attempt === attemptOf(r)
+		&& c.cellId === (typeof r.cellId === "string" && r.cellId ? r.cellId : null));
+	const infraOf = (r: JsonRecord): { infra: boolean; reason: string | null } => {
+		const c = r.valid === true || r.infraFailure === true ? undefined : rejudged(r);
+		if (c) return { infra: true, reason: c.reason };
+		return { infra: r.infraFailure === true, reason: typeof r.infraReason === "string" && r.infraReason ? r.infraReason : null };
+	};
 	const report: AttemptReport = { attemptsByPair: {}, launchedInfraFailures: { baseline: {}, candidate: {} }, abandoned: [] };
 	for (const r of rows) {
 		if (typeof r.key !== "string") continue;
 		report.attemptsByPair[r.key] = Math.max(report.attemptsByPair[r.key] ?? 0, attemptOf(r));
 		const arm = armOf(r);
-		if (arm && r.notLaunched !== true && r.valid !== true && r.infraFailure === true) {
-			const reason = typeof r.infraReason === "string" && r.infraReason ? r.infraReason : "unstated";
+		const judged = infraOf(r);
+		if (arm && r.notLaunched !== true && r.valid !== true && judged.infra) {
+			const reason = judged.reason ?? "unstated";
 			report.launchedInfraFailures[arm][reason] = (report.launchedInfraFailures[arm][reason] ?? 0) + 1;
 		}
 	}
 	const armRow = (r: JsonRecord): AttemptArm => ({
-		launched: r.notLaunched !== true, valid: r.valid === true, infra: r.infraFailure === true,
-		reason: r.valid === true ? null : typeof r.infraReason === "string" && r.infraReason ? r.infraReason : Array.isArray(r.errors) && r.errors.length ? String(r.errors[0]) : null,
+		launched: r.notLaunched !== true, valid: r.valid === true, infra: infraOf(r).infra,
+		reason: r.valid === true ? null : infraOf(r).reason ?? (Array.isArray(r.errors) && r.errors.length ? String(r.errors[0]) : null),
 		seconds: typeof r.seconds === "number" ? r.seconds : null,
 		tokens: typeof r.totalTokens === "number" ? r.totalTokens : null,
 	});
@@ -4707,6 +5017,11 @@ export function attemptReport(rows: JsonRecord[], abandonedKeys: string[]): Atte
 		report.abandoned.push({ key, attempts: [...byAttempt.entries()].sort(([a], [b]) => a - b).map(([attempt, arms]) => ({ attempt, ...arms })) });
 	}
 	return report;
+}
+
+/** Every stored run the grid's harness amendments re-judged, in order; [] for a manifest that records none. */
+function harnessReclassified(recorded: unknown): Reclassification[] {
+	return Array.isArray(recorded) ? parseHarnessAmendments(recorded).flatMap((a) => a.reclassified) : [];
 }
 
 /**
@@ -5264,6 +5579,87 @@ export type DecisionCode = "exploratory" | "interrupted" | "stopped" | "quota" |
 export interface DecisionReason { code: DecisionCode; reason: string; keys?: string[] }
 
 /**
+ * Why a grid's amendment record keeps it from a decision (plan item 2.8 review;
+ * docs/adr-drafts/v6-harness-amendment.md): either jsonl disagrees with
+ * resumes.jsonl, either changed while this runner ran (it differs from what the
+ * runner's manifest recorded at its start), or a pilot's pass count is not
+ * fixed yet. Pure: the runner reads the files and passes what they hold.
+ */
+export function amendmentRecordReasons(input: {
+	passes: { amendments: readonly PassesAmendment[]; mismatch?: string }; expectedPasses: unknown;
+	harness: { amendments: readonly HarnessAmendment[]; mismatch?: string }; expectedHarness: unknown;
+	pilotPending: boolean; out: string;
+}): string[] {
+	return [
+		...(input.passes.mismatch ? [`pass-count amendments: ${input.passes.mismatch}`] : []),
+		...(JSON.stringify(input.passes.amendments) !== JSON.stringify(input.expectedPasses ?? []) ? ["pass-count amendments: amendments.jsonl changed during the grid"] : []),
+		...(input.harness.mismatch ? [`harness amendments: ${input.harness.mismatch}`] : []),
+		...(JSON.stringify(input.harness.amendments) !== JSON.stringify(input.expectedHarness ?? []) ? [`harness amendments: ${HARNESS_AMENDMENTS_FILE} changed during the grid`] : []),
+		// A pilot's grid is not ready until its one amendment fixes the pass count.
+		...(input.pilotPending ? [`the pass count is not fixed yet: the pilot's amendment (--resume ${input.out} --extend-passes <n> --extend-reason <text>) is pending`] : []),
+	];
+}
+
+/** What one runner of a grid ended with, as gridVerdictReasons reads it. */
+export interface GridVerdictState {
+	official: boolean;
+	exploratoryReasons: readonly string[];
+	gridKind?: string | undefined;
+	interrupted: boolean;
+	stoppedInvalid: boolean;
+	stopReason?: string | undefined;
+	quotaExhausted?: string | undefined;
+	credentialExpiring?: string | undefined;
+	/** Gate pairs (twins excluded) that reached the attempt cap, abandoned at the ceiling, or blocked. */
+	gaveUp: readonly string[];
+	abandoned: readonly string[];
+	blocked: readonly string[];
+	runtimeStable: boolean;
+	comparison: Pick<MatchedComparison, "complete" | "missingOrInvalid" | "decision">;
+	amendmentReasons: readonly string[];
+	blinded: boolean;
+}
+
+/**
+ * Why a grid is not approved, or not ready, as prose for the console and as
+ * the codes eval/v6-decision.ts reads (v6 decision review). Pure. Every reason
+ * is this runner's own or read from the runs it holds at each pair's highest
+ * attempt: a stop an earlier runner hit is not carried, so a resume that
+ * finishes the grid, re-running what stopped it, leaves no stale code.
+ */
+export function gridVerdictReasons(v: GridVerdictState): { notApprovedReasons: string[]; codes: DecisionReason[] } {
+	const notApprovedReasons = [
+		...(!v.official ? [`exploratory: ${v.exploratoryReasons.join("; ") || "not the official grid"}`] : []),
+		...(v.interrupted ? ["interrupted before the grid finished"] : []),
+		...(v.stoppedInvalid && !v.interrupted ? [`stopped early: ${v.stopReason ?? "an invalid run"}`] : []),
+		...(v.quotaExhausted ? [`provider quota exhausted (${v.quotaExhausted}); it must reset before --resume`] : []),
+		...(v.credentialExpiring ? [`stopped before the OAuth token expired (${v.credentialExpiring})`] : []),
+		...(v.gaveUp.length ? [`${v.gaveUp.length} pair(s) reached the attempt cap (${v.gaveUp.join(", ")}); --resume re-runs them`] : []),
+		...(v.abandoned.length ? [`${v.abandoned.length} pair(s) abandoned at the attempt ceiling (${v.abandoned.join(", ")}); no resume re-runs them`] : []),
+		...(!v.runtimeStable ? ["the pi runtime changed during the grid"] : []),
+		...(!v.comparison.complete ? [`grid incomplete or invalid: ${v.comparison.missingOrInvalid.slice(0, 4).join("; ") || "missing pairs"}`] : []),
+		...(v.comparison.complete && v.comparison.decision !== APPROVAL && v.gridKind === undefined ? [`comparison decision: ${v.comparison.decision}`] : []),
+		...v.amendmentReasons,
+	];
+	const code = (c: DecisionCode, reason: string, keys?: string[]): DecisionReason => ({ code: c, reason, ...(keys ? { keys } : {}) });
+	const codes: DecisionReason[] = [
+		...(!v.official ? [code("exploratory", v.exploratoryReasons.join("; ") || "not the official grid")] : []),
+		...(v.interrupted ? [code("interrupted", "interrupted before the grid finished")] : []),
+		...(v.stoppedInvalid && !v.interrupted ? [code("stopped", v.stopReason ?? "an invalid run")] : []),
+		...(v.quotaExhausted ? [code("quota", String(v.quotaExhausted))] : []),
+		...(v.credentialExpiring ? [code("credential", String(v.credentialExpiring))] : []),
+		...(v.gaveUp.length ? [code("gave-up", "reached the attempt cap; --resume re-runs them", [...v.gaveUp])] : []),
+		...(v.abandoned.length ? [code("abandoned", "abandoned at the attempt ceiling; no resume re-runs them", [...v.abandoned])] : []),
+		...(!v.runtimeStable ? [code("runtime-changed", "the pi runtime changed during the grid")] : []),
+		...(!v.comparison.complete ? [code("invalid", "grid incomplete or invalid", v.comparison.missingOrInvalid)] : []),
+		...(v.blocked.length ? [code("blocked", "invalid for a non-infrastructure reason", [...new Set(v.blocked)])] : []),
+		...v.amendmentReasons.map((r) => code(r.startsWith("the pass count is not fixed") ? "amendment-pending" : "amendment-mismatch", r)),
+		...(v.blinded ? [code("blinded", "the pilot is blind until its amendment fixes the pass count")] : []),
+	];
+	return { notApprovedReasons, codes };
+}
+
+/**
  * The verdict fields of summary.json. A grid without a kind carries ADR-026's
  * approval exactly as before. A grid of a kind (plan item 2.8) is decided by
  * the v6 pre-registration's rule, which a separate analysis computes from its
@@ -5432,15 +5828,14 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 	// written; the gate's own completeness decides, as the arm never enters it.
 	// So does a stop a patched twin's run caused (plan item 2.8).
 	const stopWithholdsApproval = stoppedInvalid && runState.stoppedBy === undefined;
-	// The pass-count amendments, cross-checked again at the summary: an edit to
-	// amendments.jsonl or resumes.jsonl during the grid keeps it from a decision.
+	// The pass-count and harness amendments, cross-checked again at the summary:
+	// an edit to either jsonl or to resumes.jsonl during the grid keeps it from a decision.
 	const recorded = await gridAmendments(output).catch((error: unknown) => ({ amendments: [] as PassesAmendment[], mismatch: `amendments unreadable: ${message(error)}` }));
-	const amendmentReasons = [
-		...(recorded.mismatch ? [`pass-count amendments: ${recorded.mismatch}`] : []),
-		...(JSON.stringify(recorded.amendments) !== JSON.stringify(manifest.amendments ?? []) ? ["pass-count amendments: amendments.jsonl changed during the grid"] : []),
-		// A pilot's grid is not ready until its one amendment fixes the pass count.
-		...(pre.kind?.extendablePasses && !recorded.amendments.length ? [`the pass count is not fixed yet: the pilot's amendment (--resume ${output} --extend-passes <n> --extend-reason <text>) is pending`] : []),
-	];
+	const recordedHarness = await gridHarnessAmendments(output).catch((error: unknown) => ({ amendments: [] as HarnessAmendment[], mismatch: `harness amendments unreadable: ${message(error)}` }));
+	const amendmentReasons = amendmentRecordReasons({
+		passes: recorded, expectedPasses: manifest.amendments, harness: recordedHarness, expectedHarness: manifest.harnessAmendments,
+		pilotPending: pre.kind?.extendablePasses === true && !recorded.amendments.length, out: output,
+	});
 	// A grid of a kind (plan item 2.8) is decided by the v6 pre-registration's
 	// rule, computed elsewhere: ADR-026's approval is neither computed nor printed.
 	const approved = options.gridKind === undefined && official && !interrupted && !stopWithholdsApproval && runtimeStable && comparison.complete && comparison.decision === APPROVAL
@@ -5450,38 +5845,12 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 	const twinKeys = new Set(pairs.filter((p) => p.twin).map((p) => p.key));
 	const gateGaveUp = loop.gaveUp.filter((g) => !twinKeys.has(g.key));
 	const gateAbandoned = abandonedKeys.filter((k) => !twinKeys.has(k));
-	// Why a non-approval is a non-approval, so the console and summary never show
-	// the approval string alone when the candidate was not approved.
-	const notApprovedReasons = [
-		...(!official ? [`exploratory: ${pre.exploratoryReasons.join("; ") || "not the official grid"}`] : []),
-		...(interrupted ? ["interrupted before the grid finished"] : []),
-		...(stoppedInvalid && !interrupted ? [`stopped early: ${runState.stopReason ?? "an invalid run"}`] : []),
-		...(runState.quotaExhausted ? [`provider quota exhausted (${runState.quotaExhausted}); it must reset before --resume`] : []),
-		...(runState.credentialExpiring ? [`stopped before the OAuth token expired (${runState.credentialExpiring})`] : []),
-		...(gateGaveUp.length ? [`${gateGaveUp.length} pair(s) reached the attempt cap (${gateGaveUp.map((g) => g.key).join(", ")}); --resume re-runs them`] : []),
-		...(gateAbandoned.length ? [`${gateAbandoned.length} pair(s) abandoned at the attempt ceiling (${gateAbandoned.join(", ")}); no resume re-runs them`] : []),
-		...(!runtimeStable ? ["the pi runtime changed during the grid"] : []),
-		...(!comparison.complete ? [`grid incomplete or invalid: ${comparison.missingOrInvalid.slice(0, 4).join("; ") || "missing pairs"}`] : []),
-		...(comparison.complete && comparison.decision !== APPROVAL && options.gridKind === undefined ? [`comparison decision: ${comparison.decision}`] : []),
-		...amendmentReasons,
-	];
-	// The same reasons as codes, for eval/v6-decision.ts (v6 decision review).
 	const gateBlocked = [...(plan?.blockedKeys ?? []), ...loop.blocked.map((b) => b.key)].filter((k) => !twinKeys.has(k));
-	const code = (c: DecisionCode, reason: string, keys?: string[]): DecisionReason => ({ code: c, reason, ...(keys ? { keys } : {}) });
-	const decisionCodes: DecisionReason[] = [
-		...(!official ? [code("exploratory", pre.exploratoryReasons.join("; ") || "not the official grid")] : []),
-		...(interrupted ? [code("interrupted", "interrupted before the grid finished")] : []),
-		...(stoppedInvalid && !interrupted ? [code("stopped", runState.stopReason ?? "an invalid run")] : []),
-		...(runState.quotaExhausted ? [code("quota", String(runState.quotaExhausted))] : []),
-		...(runState.credentialExpiring ? [code("credential", String(runState.credentialExpiring))] : []),
-		...(gateGaveUp.length ? [code("gave-up", "reached the attempt cap; --resume re-runs them", gateGaveUp.map((g) => g.key))] : []),
-		...(gateAbandoned.length ? [code("abandoned", "abandoned at the attempt ceiling; no resume re-runs them", gateAbandoned)] : []),
-		...(!runtimeStable ? [code("runtime-changed", "the pi runtime changed during the grid")] : []),
-		...(!comparison.complete ? [code("invalid", "grid incomplete or invalid", comparison.missingOrInvalid)] : []),
-		...(gateBlocked.length ? [code("blocked", "invalid for a non-infrastructure reason", [...new Set(gateBlocked)])] : []),
-		...amendmentReasons.map((r) => code(r.startsWith("the pass count is not fixed") ? "amendment-pending" : "amendment-mismatch", r)),
-		...(blinded ? [code("blinded", "the pilot is blind until its amendment fixes the pass count")] : []),
-	];
+	const { notApprovedReasons, codes: decisionCodes } = gridVerdictReasons({
+		official, exploratoryReasons: pre.exploratoryReasons, gridKind: options.gridKind, interrupted, stoppedInvalid, stopReason: runState.stopReason,
+		quotaExhausted: runState.quotaExhausted, credentialExpiring: runState.credentialExpiring,
+		gaveUp: gateGaveUp.map((g) => g.key), abandoned: gateAbandoned, blocked: gateBlocked, runtimeStable, comparison, amendmentReasons, blinded,
+	});
 	const verdictOut = verdictFields(options.gridKind, { approved, notApprovedReasons, comparison, ...(meteredOnlyComparison ? { meteredOnlyComparison } : {}), codes: decisionCodes });
 	const inputsRecord = (manifest.inputs ?? {}) as JsonRecord;
 	const baselineInput = (inputsRecord.baseline ?? {}) as JsonRecord;
@@ -5493,6 +5862,10 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 		...(options.gridKind === undefined ? {} : { gridKind: options.gridKind }),
 		// Only a grid whose passes were extended lists the amendments (plan item 2.8).
 		...(Array.isArray(manifest.amendments) ? { passesAmendments: manifest.amendments } : {}),
+		// Only a grid whose harness was amended lists those, with the stored runs
+		// each re-judged (docs/adr-drafts/v6-harness-amendment.md); runs.jsonl keeps
+		// the rows as they were written, and resumes.jsonl the resume that made each.
+		...(Array.isArray(manifest.harnessAmendments) ? { harnessAmendments: manifest.harnessAmendments } : {}),
 		interrupted, interruptedAt: runState.abortedAtMs === undefined ? null : new Date(runState.abortedAtMs).toISOString(),
 		stoppedInvalid, stopReason: runState.stopReason ?? null, quotaExhausted: runState.quotaExhausted ?? null,
 		// Only a grid that stopped before its token expired says so.
@@ -5504,7 +5877,7 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 				policy: options.breaker, tripped: loop.breaker?.tripped ?? false, reason: loop.breaker?.reason ?? null,
 				requeued: loop.requeued, gaveUp: loop.gaveUp,
 				blocked: [...(plan?.blockedKeys ?? []).map((key) => ({ key, reason: plan?.reasons[key] ?? null })), ...loop.blocked],
-				...attemptReport([...priorRuns, ...fresh], abandonedKeys),
+				...attemptReport([...priorRuns, ...fresh], abandonedKeys, harnessReclassified(manifest.harnessAmendments)),
 			},
 		}),
 		completeRunGrid: comparison.complete,

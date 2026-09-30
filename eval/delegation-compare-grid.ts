@@ -742,6 +742,113 @@ export function amendmentsMismatch(amendments: readonly PassesAmendment[], resum
 	return undefined;
 }
 
+/**
+ * A stored run a resume re-judged as infrastructure under an amended harness
+ * (docs/adr-drafts/v6-harness-amendment.md). The run's row in runs.jsonl is
+ * never rewritten; this is the record that its pair was re-run anyway, and why.
+ * A partner arm that was not launched because this run failed carries a null
+ * cellId and a reason naming its partner, as notLaunchedOutcome writes one.
+ */
+export interface Reclassification {
+	key: string;
+	arm: PairArm;
+	attempt: number;
+	cellId: string | null;
+	reason: string;
+	evidence: string | null;
+}
+
+/** One harness file an amendment changed: its pinned sha256 before, and the one the amending resume measured. */
+export interface HarnessFileChange { from: string; to: string }
+
+/**
+ * An audited change to a running grid's harness (docs/adr-drafts/v6-harness-amendment.md).
+ * v6-stage1-luna stopped on 2026-09-30 on a provider auth-context check the
+ * classifier did not know. Fixing the classifier changes eval/delegation-compare.ts,
+ * a harness pin, so every resume would refuse; and planResume judges a pair
+ * from the stored infraFailure flag, so the fix alone would not re-run that pair
+ * either. `--resume <out> --amend-harness <reason>` records one of these: the
+ * harness files it changed, the stored runs it re-judged, and what the grid
+ * held at that moment. It lives in <out>/harness-amendments.jsonl, never in
+ * amendments.jsonl, which eval/v6-decision.ts and stage 2's --passes-from read
+ * as pass-count amendments only; it is mirrored in its resume's row of resumes.jsonl.
+ */
+export interface HarnessAmendment {
+	kind: "harness";
+	at: string;
+	/** user@host of the operator who ran the resume. */
+	by: string;
+	reason: string;
+	resume: number;
+	/** The pinned harness files whose hash changed, by path; a file that did not change is not listed. */
+	files: Record<string, HarnessFileChange>;
+	reclassified: Reclassification[];
+	runsSha256: string;
+	summarySha256: string | null;
+}
+
+function isReclassification(value: unknown): value is Reclassification {
+	return isRecord(value) && typeof value.key === "string" && value.key !== "" && (value.arm === "baseline" || value.arm === "candidate")
+		&& Number.isSafeInteger(value.attempt) && (value.attempt as number) >= 1 && (value.cellId === null || (typeof value.cellId === "string" && value.cellId !== ""))
+		&& typeof value.reason === "string" && value.reason.trim() !== "" && (value.evidence === null || typeof value.evidence === "string");
+}
+
+/**
+ * The harness amendments a grid's harness-amendments.jsonl holds, read
+ * strictly: a malformed row refuses the resume, as a malformed pass amendment
+ * does, since either could otherwise widen what a later resume accepts.
+ */
+export function parseHarnessAmendments(rows: readonly unknown[]): HarnessAmendment[] {
+	return rows.map((row, i) => {
+		const files = isRecord(row) && isRecord(row.files) ? Object.entries(row.files) : [];
+		const ok = isRecord(row) && row.kind === "harness" && typeof row.at === "string" && row.at !== "" && typeof row.by === "string" && row.by !== ""
+			&& typeof row.reason === "string" && row.reason.trim() !== "" && Number.isSafeInteger(row.resume) && (row.resume as number) >= 1
+			&& files.length > 0 && files.every(([path, change]) => path !== "" && isRecord(change) && hex64(change.from) && hex64(change.to) && change.from !== change.to)
+			&& Array.isArray(row.reclassified) && row.reclassified.every(isReclassification)
+			&& hex64(row.runsSha256) && (row.summarySha256 === null || hex64(row.summarySha256));
+		if (!ok) throw new Error(`harness-amendments.jsonl row ${i + 1} is not a harness amendment`);
+		const r = row as Record<string, unknown>;
+		return {
+			kind: "harness", at: r.at as string, by: r.by as string, reason: r.reason as string, resume: r.resume as number,
+			files: Object.fromEntries(files.map(([path, change]) => [path, { from: (change as HarnessFileChange).from, to: (change as HarnessFileChange).to }])),
+			reclassified: (r.reclassified as Reclassification[]).map((c) => ({ key: c.key, arm: c.arm, attempt: c.attempt, cellId: c.cellId, reason: c.reason, evidence: c.evidence })),
+			runsSha256: r.runsSha256 as string, summarySha256: r.summarySha256 as string | null,
+		};
+	});
+}
+
+/**
+ * The harness hashes a resume must find: the grid's original pins, then each
+ * recorded amendment's changes in order. An amendment whose `from` is not the
+ * hash the record holds at that point, or that names a file the grid never
+ * pinned, means a record was edited, and refuses the resume.
+ */
+export function amendedHarness(original: Readonly<Record<string, string>>, amendments: readonly HarnessAmendment[]): Record<string, string> {
+	const current = { ...original };
+	for (const [i, a] of amendments.entries()) {
+		for (const [path, change] of Object.entries(a.files)) {
+			if (!(path in current)) throw new Error(`harness amendment ${i + 1} changes ${path}, which the grid's manifest does not pin`);
+			if (current[path] !== change.from) throw new Error(`harness amendment ${i + 1} changes ${path} from ${change.from.slice(0, 12)}, but the grid's record holds ${String(current[path]).slice(0, 12)} at that point`);
+			current[path] = change.to;
+		}
+	}
+	return current;
+}
+
+/**
+ * Why harness-amendments.jsonl and resumes.jsonl disagree, or undefined when
+ * every harness amendment is recorded in both, in the same order, field for
+ * field: the check amendmentsMismatch makes for pass-count amendments.
+ */
+export function harnessAmendmentsMismatch(amendments: readonly HarnessAmendment[], resumeRows: readonly unknown[]): string | undefined {
+	const recorded = resumeRows.flatMap((row) => isRecord(row) && row.harnessAmendment !== undefined ? [row.harnessAmendment] : []);
+	if (recorded.length !== amendments.length) return `harness-amendments.jsonl holds ${amendments.length} amendment(s) and resumes.jsonl records ${recorded.length}`;
+	for (const [i, a] of amendments.entries()) {
+		if (JSON.stringify(a) !== JSON.stringify(recorded[i])) return `harness amendment ${i + 1} differs between harness-amendments.jsonl and resumes.jsonl`;
+	}
+	return undefined;
+}
+
 /** What a resume is asked to amend, and the grid it amends. */
 export interface AmendmentRequest {
 	passes: number;
