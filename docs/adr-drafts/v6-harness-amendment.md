@@ -14,10 +14,10 @@ classifier's infrastructure list (ADR-026, fifth amendment; ADR-031) · to be nu
   not retry it.
 - **The text is the provider's.** It appears nowhere in `node_modules`, so pi did not write it.
   The operator's `~/.pi/agent/auth.json` had not changed since 2026-09-25, and its token was valid
-  to 2026-10-05. It happened in 1 of the grid's 130 launched runs (135 rows in `runs.jsonl`, 5 of
-  them partners that were never launched, as copied at 20:40 UTC while the stopped runner was
-  still finishing the pair it had in flight). A credential the run had spoiled would have failed the
-  runs after it too.
+  to 2026-10-05. It happened in 1 of the grid's 132 launched runs (137 rows in `runs.jsonl`, 5 of
+  them partners that were never launched, as copied at 20:44 UTC after the stopped runner had
+  finished the pair it had in flight). A credential the run had spoiled would have failed the runs
+  after it too.
 - **The harness classed it as the run's own failure.** The row reads `valid: false`,
   `infraFailure: false`, `infraReason: null`, `process.exitCode: 0`, `timedOut: false`,
   `providerFailures.parent: ["native turn auth context mismatch: scopes"]`. `classifyInfra` knew
@@ -36,7 +36,7 @@ classifier's infrastructure list (ADR-026, fifth amendment; ADR-031) · to be nu
   - `amendments.jsonl` holds pass-count amendments only. `parseAmendments` refuses any other row,
     and `eval/v6-decision.ts` and stage 2's `--passes-from` read it.
 - **Measured on a copy of the grid's state** (manifest, runs, resumes, amendments, summary; no
-  preflight, pure planning functions only): a plain resume plans 37 pairs to re-run, 58 kept and 1
+  preflight, pure planning functions only): a plain resume plans 36 pairs to re-run, 59 kept and 1
   blocked (`CVE-2026-64619#3`), and refuses. The grid holds 2 invalid non-infrastructure rows, both
   for that pair: the candidate and its unlaunched partner.
 
@@ -107,7 +107,7 @@ classifier's infrastructure list (ADR-026, fifth amendment; ADR-031) · to be nu
   - `resumes.jsonl` holds the refused and accepted resumes as before.
   - An edit to either amendment file, or to `resumes.jsonl`, during the grid gives
     `amendment-mismatch`, which `eval/v6-decision.ts` reads as not ready.
-- **Measured on the same copy:** the amending resume's plan is 38 to re-run, 58 kept and 0
+- **Measured on the same copy:** the amending resume's plan is 37 to re-run, 59 kept and 0
   blocked. The one pair that changes is `CVE-2026-64619#3` (blocked → re-run at attempt 2), with 2
   runs reclassified: the candidate and its partner. The pin check names two changed files,
   `eval/delegation-compare.ts` and `eval/delegation-compare-grid.ts`.
@@ -133,8 +133,8 @@ classifier's infrastructure list (ADR-026, fifth amendment; ADR-031) · to be nu
   with no code change. It would also make the record say something the harness never measured,
   leave no trace of who changed it or why, and break `runsSha256` in the pass amendment already
   on record.
-- **Restarting the grid.** The v5c remedy. It discards the grid's 130 launched runs: 238.6
-  run-hours, and 4.41 billion tokens in the 121 valid ones (summed from `runs.jsonl`). It also
+- **Restarting the grid.** The v5c remedy. It discards the grid's 132 launched runs: 241.9
+  run-hours, and 4.47 billion tokens in the 123 valid ones (summed from `runs.jsonl`). It also
   discards a pilot whose pass count the pre-registered rule has already fixed from those runs,
   and re-draws every pair already measured.
 - **A classifier pattern with no audited resume.** It changes a harness pin, so every resume would
@@ -147,7 +147,7 @@ classifier's infrastructure list (ADR-026, fifth amendment; ADR-031) · to be nu
 
 ### Costs
 
-- **The grid is measured under two classifier versions.** Its 130 runs launched before the
+- **The grid is measured under two classifier versions.** Its 132 runs launched before the
   amendment were classified under the old rule, and every run after under the new. The rules
   differ only in one provider message that no other row carries, and the amendment lists every
   run it re-judged.
