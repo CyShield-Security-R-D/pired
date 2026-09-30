@@ -42,7 +42,7 @@ import {
 import {
 	ARM_ORDER, corpusReasons, DEFAULT_BUDGET_ARMS, DEFAULT_SUBAGENTS_ARMS, delegationOff, loadsSubagentsFor, gridKindReasons, kindlessArmReasons, kindlessCorpus, kindlessValidityReasons, kindSnapshotReasons, parseArmList, parseCorpora,
 	amendmentsMismatch, blindSummary, currentPasses, pilotPairedSd, extensionRefusal, kindPassesReasons, parseAmendments, parseGridKinds, parseMaxVerifiers, scheduleExtends, type PassesAmendment, sameArms, scopeFor, scopeSettingsFor, shapeOf, summarizeTwins, twinTargets, type GridKind, type PinnedCorpus, type ScopeSettings,
-	amendedHarness, harnessAmendmentsMismatch, parseHarnessAmendments, type HarnessAmendment, type HarnessFileChange, type Reclassification,
+	amendedHarness, harnessAmendmentsMismatch, isPassCountReason, parseHarnessAmendments, type HarnessAmendment, type HarnessFileChange, type Reclassification,
 } from "./delegation-compare-grid.ts";
 // The staging, target-copy and tree-hash helpers moved to their own module so
 // the same digest rule draws the panel here, in the preflight and in tests.
@@ -149,6 +149,24 @@ const HARNESS_FILES = [
 	"eval/delegation-compare-bash-timeout.ts", "eval/delegation-compare-stop.ts", "eval/delegation-compare-matched.ts",
 	"eval/delegation-compare-grid.ts", "eval/delegation-compare.pins.json", "eval/dvbank/settle-telemetry.ts",
 ] as const;
+
+/**
+ * The harness files a resume may change with --amend-harness
+ * (docs/adr-drafts/v6-harness-amendment.md): the runner, which classifies runs
+ * and keeps the grid's books, and the grid module, which reads its amendments.
+ * Every other pinned file changes what a run measures or what the grid is: the
+ * entry script runs inside each cell; the pins file names the snapshots,
+ * corpora and kinds; fs-seal.c is the seal; the lib holds the acceptance rule,
+ * the usage accounting and the schedule; stage, proc and bash-timeout decide
+ * what a cell stages, reaps and waits for; stop, matched, the audit and the
+ * settle telemetry write the numbers the summary reports. An edit to any of
+ * them is a different grid, and still refuses, with the flag or without.
+ * The runner and the grid module also shape a cell (its scope and settings);
+ * the fields that decide a result are compared on every resume (resumeMismatches)
+ * so an amendment cannot move them, and the rest is what the recorded commit
+ * and hashes make reviewable.
+ */
+export const AMENDABLE_HARNESS_FILES: readonly string[] = ["eval/delegation-compare.ts", "eval/delegation-compare-grid.ts"];
 
 /*
  * The frozen research inputs an official decision is pinned to (the corpus
@@ -984,6 +1002,25 @@ export async function gridHarnessAmendments(dir: string): Promise<{ amendments: 
 }
 
 /**
+ * Whether runs.jsonl's text begins with the text an amendment hashed: the first
+ * `rows` JSON rows (as gridHeld counts them) and whatever blank lines follow,
+ * whose sha256 is `digest`. runs.jsonl is only ever appended to, so a false
+ * here means a row the amendment saw was edited or removed.
+ */
+export function runsPrefixMatches(text: string, rows: number, digest: string): boolean {
+	const ends: number[] = rows === 0 ? [0] : [];
+	let count = 0;
+	for (let start = 0; start < text.length && count <= rows;) {
+		const nl = text.indexOf("\n", start);
+		const end = nl === -1 ? text.length : nl + 1;
+		if (parseJsonObject(text.slice(start, nl === -1 ? text.length : nl))) count++;
+		if (count === rows) ends.push(end);
+		start = end;
+	}
+	return ends.some((end) => sha256(text.slice(0, end)) === digest);
+}
+
+/**
  * The reclassifier a resume plans with. A grid with no recorded harness
  * amendment, resumed without making one, gets none, so its plan is exactly what
  * it always was. A grid with recorded amendments has their verdicts applied to
@@ -993,14 +1030,33 @@ export async function gridHarnessAmendments(dir: string): Promise<{ amendments: 
  * second amendment would be refused as a no-op. Only the resume that makes an
  * amendment also re-judges the other stored runs with the current classifier
  * (rejudgeStoredRun).
+ *
+ * The record is checked before it is trusted, and a failed check throws, which
+ * refuses the resume: runs.jsonl must still begin with the text each amendment
+ * hashed, and each run an amendment re-judged must still be what it re-judged,
+ * a launched invalid non-infrastructure run with provider text on record (or,
+ * for a partner, one not launched), so an edited row cannot inherit a verdict.
  */
-export function resumeReclassifier(recorded: readonly HarnessAmendment[], amending: boolean): Reclassifier | undefined {
+export function resumeReclassifier(recorded: readonly HarnessAmendment[], amending: boolean, runs: { text: string; rows: readonly JsonRecord[] }): Reclassifier | undefined {
+	for (const [i, a] of recorded.entries()) {
+		if (!runsPrefixMatches(runs.text, a.runsCompleted, a.runsSha256)) {
+			throw new Error(`harness amendment ${i + 1} hashed ${a.runsCompleted} runs.jsonl row(s) as ${a.runsSha256.slice(0, 12)}, and runs.jsonl no longer begins with them`);
+		}
+	}
 	const entries = recorded.flatMap((a) => a.reclassified);
+	const attemptOf = (run: JsonRecord): number => typeof run.attempt === "number" ? run.attempt : 1;
+	const cellOf = (run: JsonRecord): string | null => typeof run.cellId === "string" && run.cellId ? run.cellId : null;
+	const rowOf = (e: Reclassification): JsonRecord | undefined => runs.rows.findLast((r) => r.key === e.key && r.arm === e.arm && attemptOf(r) === e.attempt && cellOf(r) === e.cellId);
+	for (const e of entries) {
+		const row = rowOf(e);
+		const still = row !== undefined && (e.cellId === null
+			? row.notLaunched === true && row.valid !== true && row.infraFailure !== true
+			: rejudgeableFailures(row) !== undefined);
+		if (!still) throw new Error(`a recorded harness amendment re-judged ${e.key} ${e.arm} attempt ${e.attempt}${e.cellId ? ` (cell ${e.cellId})` : ""}, and runs.jsonl ${row ? "no longer holds it as an invalid non-infrastructure run with provider text" : "holds no such run"}`);
+	}
 	if (!amending && !entries.length) return undefined;
 	return (run) => {
-		const attempt = typeof run.attempt === "number" ? run.attempt : 1;
-		const cellId = typeof run.cellId === "string" && run.cellId ? run.cellId : null;
-		const hit = entries.find((e) => e.key === run.key && e.arm === run.arm && e.attempt === attempt && e.cellId === cellId);
+		const hit = entries.find((e) => e.key === run.key && e.arm === run.arm && e.attempt === attemptOf(run) && e.cellId === cellOf(run));
 		if (hit) return { infra: true, reason: hit.reason, ...(hit.evidence === null ? {} : { evidence: hit.evidence }) };
 		return amending ? rejudgeStoredRun(run) : undefined;
 	};
@@ -3076,6 +3132,18 @@ function storedProviderFailures(value: unknown): ProviderFailures | undefined {
 }
 
 /**
+ * The provider text a stored run could be re-judged from, or undefined when it
+ * may not be: a launched run, invalid and non-infrastructure, whose process did
+ * not time out, with provider text on record.
+ */
+function rejudgeableFailures(run: JsonRecord): ProviderFailures | undefined {
+	if (run.valid === true || run.infraFailure === true || run.notLaunched === true) return undefined;
+	if (isJsonRecord(run.process) && run.process.timedOut === true) return undefined;
+	const failures = storedProviderFailures(run.providerFailures);
+	return failures && (failures.parent.length || failures.workers.length || failures.fetchErrors.length) ? failures : undefined;
+}
+
+/**
  * Re-judge a stored run with the current classifier, for a resume that carries
  * a harness amendment (docs/adr-drafts/v6-harness-amendment.md). planResume
  * reads the infraFailure flag written when the run ended, so a classifier fixed
@@ -3084,16 +3152,15 @@ function storedProviderFailures(value: unknown): ProviderFailures | undefined {
  * mismatch: scopes" whatever classifyInfra later said.
  *
  * Only a launched run that is invalid and non-infrastructure, with provider
- * text on record, is re-judged, and only from that text, as it was judged live.
- * A run whose process timed out never is: a timeout is never infrastructure.
- * Returns the new verdict only when it is infrastructure; the row itself is
- * never rewritten.
+ * text on record, is re-judged, and only from that text. That is narrower than
+ * the live judgement: a run whose process timed out is never re-judged, though
+ * under the v6 validity policy the live classifier reads a limit run's provider
+ * text; a stored timeout stays the run's own. Returns the new verdict only when
+ * it is infrastructure; the row itself is never rewritten.
  */
 export function rejudgeStoredRun(run: JsonRecord): InfraClass | undefined {
-	if (run.valid === true || run.infraFailure === true || run.notLaunched === true) return undefined;
-	if (isJsonRecord(run.process) && run.process.timedOut === true) return undefined;
-	const failures = storedProviderFailures(run.providerFailures);
-	if (!failures || (!failures.parent.length && !failures.workers.length && !failures.fetchErrors.length)) return undefined;
+	const failures = rejudgeableFailures(run);
+	if (!failures) return undefined;
 	const verdict = classifyInfra(failures, false);
 	return verdict.infra ? verdict : undefined;
 }
@@ -4395,6 +4462,19 @@ export function resumeMismatches(prior: JsonRecord, fresh: JsonRecord, allow: { 
 	eq("matched", prior.matched, fresh.matched);
 	// Half a grid judged with limit-reaching runs valid and half without would not compare.
 	eq("validity", prior.validity, fresh.validity);
+	// What decides the result and what every cell runs with, compared on every
+	// resume so a harness amendment (docs/adr-drafts/v6-harness-amendment.md)
+	// cannot move them: whether the grid is official and why not, and the cells'
+	// runtime configuration. Measured equal across v6-stage1-luna's manifest and
+	// its resume-1..3, and v6-stage1-glm's, so a plain resume of those is
+	// unaffected. The one exploratory reason that names the pass count changes
+	// when a kindless exploratory grid's passes are extended, so an extended
+	// grid is compared without it.
+	eq("official", prior.official, fresh.official);
+	const reasons = (m: JsonRecord): unknown => Array.isArray(m.exploratoryReasons) && extended
+		? m.exploratoryReasons.filter((r) => typeof r !== "string" || !isPassCountReason(r)) : m.exploratoryReasons;
+	eq("exploratoryReasons", reasons(prior), reasons(fresh));
+	eq("runtimeConfiguration", prior.runtimeConfiguration, fresh.runtimeConfiguration);
 	const pr = (prior.requested ?? {}) as JsonRecord;
 	const fr = (fresh.requested ?? {}) as JsonRecord;
 	for (const k of ["provider", "model", "thinking", "passes", "only"]) {
@@ -4431,16 +4511,22 @@ export interface ResumePinCheck {
  * The harness is expected at the grid's original pins overlaid, in order, by
  * every recorded harness amendment, so the plain --resume after an amendment
  * passes, and a further unrecorded edit still refuses. A resume making an
- * amendment (`amendHarness`) may differ in harness file hashes only: every
- * other pin (runtime tree and node, grader, snapshots, corpus and truth,
- * pi-subagents, fs-seal, prompt, provider, model, thinking, model runtime,
- * schedule, passes) must still be byte-identical, and an amendment that changes
- * no file is refused as a no-op rather than recorded.
+ * amendment (`amendHarness`) may differ in the hashes of AMENDABLE_HARNESS_FILES
+ * only: any other harness file, and every other pin (runtime tree and node,
+ * grader, snapshots, corpus and truth, pi-subagents, fs-seal, prompt, provider,
+ * model, thinking, model runtime, schedule, passes), and the fields that decide
+ * the result (official, exploratoryReasons, runtimeConfiguration) must still be
+ * byte-identical. An amendment that changes no file is refused as a no-op
+ * rather than recorded, and a recorded one naming a file outside the
+ * allow-list refuses every later resume.
  */
 export function resumePinCheck(prior: JsonRecord, fresh: JsonRecord, opts: { passes?: number; harnessAmendments?: readonly HarnessAmendment[]; amendHarness?: boolean } = {}): ResumePinCheck {
 	const amendments = opts.harnessAmendments ?? [];
 	const priorHarness = isJsonRecord(prior.pins) && isJsonRecord(prior.pins.harnessSha256) ? prior.pins.harnessSha256 as Record<string, string> : undefined;
 	const freshHarness = isJsonRecord(fresh.pins) && isJsonRecord(fresh.pins.harnessSha256) ? fresh.pins.harnessSha256 as Record<string, string> : {};
+	// A recorded amendment of a file outside the allow-list was not written by this harness.
+	const unamendable = amendments.flatMap((a, i) => Object.keys(a.files).filter((path) => !AMENDABLE_HARNESS_FILES.includes(path)).map((path) => `harness amendment ${i + 1} changes ${path}, which --amend-harness may not change`));
+	if (unamendable.length) return { mismatches: ["pins.harnessSha256"], harnessFiles: {}, refusal: `--resume refused: ${unamendable.join("; ")}` };
 	let expected: Record<string, string> | undefined = priorHarness;
 	if (amendments.length) {
 		try { expected = amendedHarness(priorHarness ?? {}, amendments); }
@@ -4455,6 +4541,10 @@ export function resumePinCheck(prior: JsonRecord, fresh: JsonRecord, opts: { pas
 	for (const [path, to] of Object.entries(freshHarness)) {
 		const from = expected?.[path];
 		if (typeof from === "string" && from !== to) harnessFiles[path] = { from, to };
+	}
+	// Only the allow-listed files may differ, even with the flag (AMENDABLE_HARNESS_FILES).
+	if (opts.amendHarness) {
+		for (const path of Object.keys(harnessFiles)) if (!AMENDABLE_HARNESS_FILES.includes(path)) mismatches.push(`pins.harnessSha256 (${path}, which --amend-harness may not change)`);
 	}
 	const as = amendments.length ? ` (its harness as amended by ${amendments.length} recorded harness amendment(s))` : "";
 	if (mismatches.length) {
@@ -4703,6 +4793,8 @@ async function claimResumeDir(dir: string): Promise<{ n: number; root: string }>
 
 type ResumeInput = {
 	prior: JsonRecord; priorRuns: JsonRecord[]; n: number; root: string;
+	/** runs.jsonl's text as the resume read it; a recorded harness amendment's hash is checked against it. */
+	priorRunsText: string;
 	/** The pass count the grid runs at when its amendments differ from its manifest's (plan item 2.8). */
 	passes?: number;
 	/** The extension this resume makes, appended to amendments.jsonl when it is accepted. */
@@ -4714,8 +4806,11 @@ type ResumeInput = {
 	 * its preflight and its plan can say: the files that changed and the runs it
 	 * re-judges. Appended to harness-amendments.jsonl when the resume is accepted.
 	 */
-	amendHarness?: Omit<HarnessAmendment, "kind" | "files" | "reclassified">;
+	amendHarness?: HarnessRequest;
 };
+
+/** A harness amendment as its resume starts it, less what only its preflight and its plan can say: the files that changed and the runs it re-judges. */
+export type HarnessRequest = Omit<HarnessAmendment, "kind" | "files" | "reclassified">;
 type GridPaths = { manifestPath: string; preflightRoot: string; statusPath: string };
 
 /**
@@ -4753,35 +4848,46 @@ async function resumeMain(dir: string, extendPasses?: number, extendReason?: str
 		if (why) throw new Error(`--resume refused: ${why}`);
 		options.passes = extendPasses;
 	}
+	const priorRunsText = await readFile(join(dir, "runs.jsonl"), "utf8").catch(() => "");
 	const priorRuns: JsonRecord[] = [];
-	const runsPath = join(dir, "runs.jsonl");
-	if (await exists(runsPath)) {
-		for (const line of (await readFile(runsPath, "utf8")).split("\n")) {
-			const row = parseJsonObject(line);
-			if (row) priorRuns.push(row);
-		}
+	for (const line of priorRunsText.split("\n")) {
+		const row = parseJsonObject(line);
+		if (row) priorRuns.push(row);
+	}
+	// The commit the amendment is made from is part of its record; without a
+	// HEAD to name, the hashes alone could not be traced to a reviewable diff.
+	let commit: string | undefined;
+	if (amendHarness !== undefined) {
+		try { commit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: ROOT, encoding: "utf8" }).trim(); }
+		catch (error) { throw new Error(`--amend-harness: cannot read the resuming worktree's git HEAD (${message(error)}); an amendment records the commit it was made from`); }
+		if (!/^[0-9a-f]{40}$/.test(commit)) throw new Error(`--amend-harness: the resuming worktree's HEAD is not a commit id: ${commit}`);
 	}
 	const { n, root } = await claimResumeDir(dir);
 	const extension = extendPasses === undefined ? undefined : await makeAmendment(dir, amendFrom, extendPasses, extendReason, n);
-	let harnessRequest: ResumeInput["amendHarness"];
-	if (amendHarness !== undefined) {
+	let harnessRequest: HarnessRequest | undefined;
+	if (amendHarness !== undefined && commit !== undefined) {
 		const held = await gridHeld(dir);
-		harnessRequest = { at: new Date().toISOString(), by: held.by, reason: amendHarness, resume: n, runsSha256: held.runsSha256, summarySha256: held.summarySha256 };
+		harnessRequest = {
+			at: new Date().toISOString(), by: held.by, commit, reason: amendHarness, resume: n,
+			runsCompleted: held.runsCompleted, runsSha256: held.runsSha256, summarySha256: held.summarySha256,
+		};
 		// The summary an amendment is made over holds the stop it answers (the
 		// breaker's trip, the decision codes), and the resumed runner overwrites
 		// summary.json when it finishes. The row keeps its hash; this keeps the bytes.
 		await copyFile(join(dir, "summary.json"), join(root, "summary-before-amendment.json")).catch(() => undefined);
 	}
 	const manifest = newManifest(options, "resume");
-	manifest.resumedFrom = { id: prior.id ?? null, n, priorRuns: priorRuns.length, originalManifest: priorPath };
+	manifest.resumedFrom = {
+		id: prior.id ?? null, n, priorRuns: priorRuns.length, originalManifest: priorPath,
+		// Recorded from the start, so a refused amendment also says what it was made from.
+		...(harnessRequest ? { amendHarness: { commit: harnessRequest.commit, reason: harnessRequest.reason } } : {}),
+	};
 	// Every amendment so far, this resume's included, and only when there is one.
 	const all = [...amendments, ...(extension ? [extension] : [])];
 	if (all.length) manifest.amendments = all;
-	// The recorded harness amendments; driveGrid adds this resume's once its preflight and plan have said what it is.
-	if (harness.amendments.length) manifest.harnessAmendments = harness.amendments;
-	console.log(`resume ${n}: preflight and pin check in ${root}; the grid's manifest.json and progress.json are not written unless the resume is accepted${extension ? `; ${extension.kind === "fix-passes" ? `fixes the grid at ${extension.to}` : `extends the grid from ${extension.from} to ${extension.to}`} passes` : ""}${harnessRequest ? "; amends the grid's harness" : ""}`);
+	console.log(`resume ${n}: preflight and pin check in ${root}; the grid's manifest.json and progress.json are not written unless the resume is accepted${extension ? `; ${extension.kind === "fix-passes" ? `fixes the grid at ${extension.to}` : `extends the grid from ${extension.from} to ${extension.to}`} passes` : ""}${harnessRequest ? `; amends the grid's harness from ${harnessRequest.commit}` : ""}`);
 	await driveGrid(options, manifest, {
-		prior, priorRuns, n, root, ...(all.length ? { passes: options.passes } : {}), ...(extension ? { extension } : {}),
+		prior, priorRuns, priorRunsText, n, root, ...(all.length ? { passes: options.passes } : {}), ...(extension ? { extension } : {}),
 		harnessAmendments: harness.amendments, ...(harnessRequest ? { amendHarness: harnessRequest } : {}),
 	}, {
 		manifestPath: join(root, "manifest.json"), preflightRoot: root, statusPath: join(root, "status.json"),
@@ -4817,6 +4923,105 @@ export function resumeGateRefusal(plan: Pick<ResumePlan, "blockedKeys" | "abando
 		};
 	}
 	return undefined;
+}
+
+/** What acceptResume reads: the resume's schedule and stored runs, and the amendments it carries. */
+export interface ResumeAcceptanceInput {
+	schedule: ScheduledPair[];
+	priorRuns: JsonRecord[];
+	priorRunsText: string;
+	attemptCeiling?: number | undefined;
+	official: boolean;
+	breaker: boolean;
+	n: number;
+	manifestId: unknown;
+	/** The resume's manifest, relative to the grid, as resumes.jsonl names it. */
+	manifestPath: string;
+	harnessAmendments: readonly HarnessAmendment[];
+	/** A resume that amends the harness: its request, and the files its pin check measured as changed. */
+	amendHarness?: { request: HarnessRequest; files: Record<string, HarnessFileChange> };
+	extension?: PassesAmendment;
+	now: () => string;
+}
+
+/** What acceptResume does to the world, in the order it does it; the runner passes its own, a test passes a recorder. */
+export interface ResumeEffects {
+	log: (line: string) => void;
+	/** Record the refusal in the resume's own manifest and status file, and throw. */
+	refuse: (reason: string, detail: JsonRecord) => Promise<never>;
+	setManifest: (fields: JsonRecord) => void;
+	save: () => Promise<void>;
+	status: (fields: JsonRecord) => Promise<void>;
+	/** Append one row to a file of the grid (resumes.jsonl, amendments.jsonl, harness-amendments.jsonl). */
+	append: (file: string, row: JsonRecord) => Promise<void>;
+}
+
+/**
+ * Accept a resume, or refuse it, in one fixed order (docs/adr-drafts/v6-harness-amendment.md):
+ *
+ * 1. plan, with the reclassifier (resumeReclassifier), so a stored run an
+ *    amended harness classes as infrastructure is re-run rather than blocked,
+ *    and a harness record that does not check out refuses here;
+ * 2. the gate's refusal (resumeGateRefusal): a pair still invalid for its own
+ *    reason refuses an official grid's resume exactly as before;
+ * 3. the harness row: the changed files, the runs re-judged that no earlier
+ *    amendment records, and what the grid held. An amendment that re-judges no
+ *    run and leaves no pair to run is refused, so a finished grid's record is
+ *    never amended by mistake;
+ * 4. the resume's manifest: its decision, and every harness amendment, this
+ *    one included, only now that the resume is accepted;
+ * 5. the appends: resumes.jsonl, then amendments.jsonl, then
+ *    harness-amendments.jsonl. Nothing is appended by a refused resume.
+ *
+ * Returns the plan the runner then runs.
+ */
+export async function acceptResume(input: ResumeAcceptanceInput, effects: ResumeEffects): Promise<ResumePlan> {
+	let reclassify: Reclassifier | undefined;
+	try { reclassify = resumeReclassifier(input.harnessAmendments, input.amendHarness !== undefined, { text: input.priorRunsText, rows: input.priorRuns }); }
+	catch (error) { return await effects.refuse(`--resume refused: ${message(error)}`, { harnessAmendments: message(error) }); }
+	const plan = planResume(input.schedule, input.priorRuns, input.attemptCeiling, reclassify);
+	effects.log(`resume: ${plan.rerunKeys.length} pair(s) to re-run, ${plan.keepKeys.length} kept, ${plan.blockedKeys.length} blocked (invalid, non-infra)${input.breaker ? `, ${plan.abandonedKeys.length} abandoned (attempt ceiling ${String(input.attemptCeiling)})` : ""}`);
+	for (const r of plan.reclassified) effects.log(`  reclassified ${r.key} ${r.arm} attempt ${r.attempt}${r.cellId ? ` (cell ${r.cellId})` : ""}: ${r.reason}${r.evidence ? ` · ${r.evidence}` : ""}`);
+	for (const key of plan.blockedKeys) effects.log(`  blocked ${key}: ${plan.reasons[key] ?? ""}`);
+	for (const key of plan.abandonedKeys) effects.log(`  abandoned ${key}: ${plan.reasons[key] ?? ""}`);
+	// A patched twin never enters the gate, so a blocked or abandoned twin does
+	// not fix an official grid's decision and does not refuse its resume.
+	const twinKeys = new Set(input.schedule.filter((p) => p.twin).map((p) => p.key));
+	const gate = resumeGateRefusal(plan, twinKeys, input.official);
+	if (gate) return await effects.refuse(gate.reason, gate.detail);
+	const recorded = input.harnessAmendments.flatMap((a) => a.reclassified);
+	const amend = input.amendHarness;
+	const harnessRow: HarnessAmendment | undefined = amend ? {
+		kind: "harness", at: amend.request.at, by: amend.request.by, commit: amend.request.commit, reason: amend.request.reason, resume: amend.request.resume,
+		files: amend.files, reclassified: plan.reclassified.filter((r) => !recorded.some((e) => sameRun(e, r))),
+		runsCompleted: amend.request.runsCompleted, runsSha256: amend.request.runsSha256, summarySha256: amend.request.summarySha256,
+	} : undefined;
+	if (harnessRow && !harnessRow.reclassified.length && !plan.rerunKeys.length) {
+		return await effects.refuse(
+			"--resume refused: --amend-harness would re-judge no stored run, and the grid has no pair left to run; amending a finished grid's harness would change its record and nothing else.",
+			{ harnessFiles: harnessRow.files });
+	}
+	if (harnessRow) effects.log(`  harness amendment from ${harnessRow.commit}: ${Object.keys(harnessRow.files).join(", ")} changed; ${harnessRow.reclassified.length} stored run(s) re-judged as infrastructure`);
+	const allHarness = [...input.harnessAmendments, ...(harnessRow ? [harnessRow] : [])];
+	effects.setManifest({
+		...(allHarness.length ? { harnessAmendments: allHarness } : {}),
+		resumeDecision: {
+			status: "accepted", rerun: plan.rerunKeys, kept: plan.keepKeys, blocked: plan.blockedKeys, ...(input.breaker ? { abandoned: plan.abandonedKeys } : {}),
+			...(plan.reclassified.length ? { reclassified: plan.reclassified } : {}),
+		},
+	});
+	await effects.save();
+	await effects.status({ status: "accepted", rerun: plan.rerunKeys.length, kept: plan.keepKeys.length, blocked: plan.blockedKeys.length, ...(input.breaker ? { abandoned: plan.abandonedKeys.length } : {}) });
+	await effects.append("resumes.jsonl", {
+		n: input.n, id: input.manifestId, manifest: input.manifestPath, acceptedAt: input.now(),
+		rerun: plan.rerunKeys, kept: plan.keepKeys, blocked: plan.blockedKeys, ...(input.breaker ? { abandoned: plan.abandonedKeys } : {}),
+		...(input.extension ? { extendedPasses: { from: input.extension.from, to: input.extension.to }, amendment: input.extension } : {}),
+		...(harnessRow ? { harnessAmendment: harnessRow } : {}),
+	});
+	// An amendment is on record only once the resume that makes it is accepted.
+	if (input.extension) await effects.append("amendments.jsonl", input.extension as unknown as JsonRecord);
+	if (harnessRow) await effects.append(HARNESS_AMENDMENTS_FILE, harnessRow as unknown as JsonRecord);
+	return plan;
 }
 
 /** Refuse a resume, recording why in the resume's own manifest and status file only. */
@@ -4876,48 +5081,25 @@ async function driveGrid(options: Options, manifest: JsonRecord, resume: ResumeI
 			return;
 		}
 		const schedule = gridSchedule(pre, options);
-		// Re-judging comes before the refusals below, so a pair an amended harness
-		// classes as infrastructure is re-run rather than blocked; one it still
-		// classes as the run's own failure refuses the resume exactly as before.
-		const reclassify = resume ? resumeReclassifier(resume.harnessAmendments, resume.amendHarness !== undefined) : undefined;
-		const plan = resume ? planResume(schedule, resume.priorRuns, options.breaker?.attemptCeiling, reclassify) : undefined;
-		// A patched twin never enters the gate, so a blocked or abandoned twin does
-		// not fix an official grid's decision and does not refuse its resume.
-		const twinKeys = new Set(schedule.filter((p) => p.twin).map((p) => p.key));
+		// The acceptance itself is acceptResume's, in the order it tests: plan
+		// (re-judging included), the gate's refusal, the harness row, the manifest,
+		// then the appends; this only hands it the runner's effects.
+		const plan = resume ? await acceptResume({
+			schedule, priorRuns: resume.priorRuns, priorRunsText: resume.priorRunsText, attemptCeiling: options.breaker?.attemptCeiling,
+			official: pre.official, breaker: options.breaker !== undefined, n: resume.n, manifestId: manifest.id,
+			manifestPath: relative(output, paths.manifestPath), harnessAmendments: resume.harnessAmendments,
+			...(resume.amendHarness && pinCheck ? { amendHarness: { request: resume.amendHarness, files: pinCheck.harnessFiles } } : {}),
+			...(resume.extension ? { extension: resume.extension } : {}),
+			now: () => new Date().toISOString(),
+		}, {
+			log: (line) => console.log(line),
+			refuse: (reason, detail) => refuseResume(manifest, saveManifest, reason, detail),
+			setManifest: (fields) => { Object.assign(manifest, fields); },
+			save: saveManifest,
+			status: (fields) => reportStatus(fields),
+			append: (file, row) => appendJsonl(join(output, file), row),
+		}) : undefined;
 		if (plan && resume) {
-			// This resume's harness amendment, complete: the files its preflight
-			// measured as changed and the stored runs it re-judged that no earlier
-			// amendment already records. The same row goes to the resume's manifest,
-			// its resumes.jsonl entry and harness-amendments.jsonl.
-			const recorded = resume.harnessAmendments.flatMap((a) => a.reclassified);
-			const harnessRow: HarnessAmendment | undefined = resume.amendHarness && pinCheck ? {
-				kind: "harness", at: resume.amendHarness.at, by: resume.amendHarness.by, reason: resume.amendHarness.reason, resume: resume.amendHarness.resume,
-				files: pinCheck.harnessFiles, reclassified: plan.reclassified.filter((r) => !recorded.some((e) => sameRun(e, r))),
-				runsSha256: resume.amendHarness.runsSha256, summarySha256: resume.amendHarness.summarySha256,
-			} : undefined;
-			if (harnessRow) manifest.harnessAmendments = [...resume.harnessAmendments, harnessRow];
-			console.log(`resume: ${plan.rerunKeys.length} pair(s) to re-run, ${plan.keepKeys.length} kept, ${plan.blockedKeys.length} blocked (invalid, non-infra)${options.breaker ? `, ${plan.abandonedKeys.length} abandoned (attempt ceiling ${options.breaker.attemptCeiling})` : ""}`);
-			if (harnessRow) console.log(`  harness amendment: ${Object.keys(harnessRow.files).join(", ")} changed; ${harnessRow.reclassified.length} stored run(s) re-judged as infrastructure`);
-			for (const r of plan.reclassified) console.log(`  reclassified ${r.key} ${r.arm} attempt ${r.attempt}${r.cellId ? ` (cell ${r.cellId})` : ""}: ${r.reason}${r.evidence ? ` · ${r.evidence}` : ""}`);
-			for (const key of plan.blockedKeys) console.log(`  blocked ${key}: ${plan.reasons[key] ?? ""}`);
-			for (const key of plan.abandonedKeys) console.log(`  abandoned ${key}: ${plan.reasons[key] ?? ""}`);
-			const gate = resumeGateRefusal(plan, twinKeys, pre.official);
-			if (gate) await refuseResume(manifest, saveManifest, gate.reason, gate.detail);
-			manifest.resumeDecision = {
-				status: "accepted", rerun: plan.rerunKeys, kept: plan.keepKeys, blocked: plan.blockedKeys, ...(options.breaker ? { abandoned: plan.abandonedKeys } : {}),
-				...(plan.reclassified.length ? { reclassified: plan.reclassified } : {}),
-			};
-			await saveManifest();
-			await reportStatus({ status: "accepted", rerun: plan.rerunKeys.length, kept: plan.keepKeys.length, blocked: plan.blockedKeys.length, ...(options.breaker ? { abandoned: plan.abandonedKeys.length } : {}) });
-			await appendJsonl(join(output, "resumes.jsonl"), {
-				n: resume.n, id: manifest.id, manifest: relative(output, paths.manifestPath), acceptedAt: new Date().toISOString(),
-				rerun: plan.rerunKeys, kept: plan.keepKeys, blocked: plan.blockedKeys, ...(options.breaker ? { abandoned: plan.abandonedKeys } : {}),
-				...(resume.extension ? { extendedPasses: { from: resume.extension.from, to: resume.extension.to }, amendment: resume.extension } : {}),
-				...(harnessRow ? { harnessAmendment: harnessRow } : {}),
-			});
-			// The amendment is on record only once the resume that makes it is accepted.
-			if (resume.extension) await appendJsonl(join(output, "amendments.jsonl"), resume.extension);
-			if (harnessRow) await appendJsonl(join(output, HARNESS_AMENDMENTS_FILE), harnessRow);
 			// Accepted: from here the resume is the grid's runner and reports in progress.json.
 			statusFile.path = join(output, "progress.json");
 		}

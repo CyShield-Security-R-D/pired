@@ -121,6 +121,17 @@ export interface CorpusInput {
 	passesByGrid?: boolean;
 }
 
+/** The one exploratory reason that names a grid's pass count; corpusReasons writes it, isPassCountReason reads it. */
+const passCountReason = (passes: number, corpusPasses: number): string => `--passes ${passes} is not ${corpusPasses}`;
+
+/**
+ * Whether an exploratory reason is the one that names the grid's pass count. A
+ * kindless exploratory grid extended with --extend-passes gains or changes it,
+ * so a resume compares its exploratory reasons without it
+ * (docs/adr-drafts/v6-harness-amendment.md); every other reason must match.
+ */
+export const isPassCountReason = (text: string): boolean => /^--passes \d+ is not \d+$/.test(text);
+
 /**
  * Why a grid is not the official grid of `corpus`, or [] when its shape and
  * every pinned input match. The reasons, and their order, are the ones the
@@ -136,7 +147,7 @@ export function corpusReasons(name: string, corpus: PinnedCorpus, input: CorpusI
 	];
 	if (unfrozen.length) reasons.push(`corpus ${name} is not frozen: eval/delegation-compare.pins.json has no ${unfrozen.join(", ")} for it`);
 	if (input.selected) reasons.push("--only selects a subset");
-	if (corpus.passes !== null && !input.passesByGrid && input.passes !== corpus.passes) reasons.push(`--passes ${input.passes} is not ${corpus.passes}`);
+	if (corpus.passes !== null && !input.passesByGrid && input.passes !== corpus.passes) reasons.push(passCountReason(input.passes, corpus.passes));
 	const pinned = corpus.targets;
 	if (pinned && !input.selected && (input.gateIds.length !== pinned.length || input.gateIds.some((id) => !pinned.includes(id)))) {
 		reasons.push(`manifest targets differ from ${corpus.label}`);
@@ -778,11 +789,19 @@ export interface HarnessAmendment {
 	at: string;
 	/** user@host of the operator who ran the resume. */
 	by: string;
+	/** `git rev-parse HEAD` of the worktree the amending resume ran from; the file hashes below are what it measured. */
+	commit: string;
 	reason: string;
 	resume: number;
 	/** The pinned harness files whose hash changed, by path; a file that did not change is not listed. */
 	files: Record<string, HarnessFileChange>;
 	reclassified: Reclassification[];
+	/**
+	 * What runs.jsonl held when the amendment was made: its JSON rows and the
+	 * sha256 of its text. runs.jsonl is append-only, so a later resume finds this
+	 * text as a prefix of the file, or the file was edited.
+	 */
+	runsCompleted: number;
 	runsSha256: string;
 	summarySha256: string | null;
 }
@@ -802,17 +821,19 @@ export function parseHarnessAmendments(rows: readonly unknown[]): HarnessAmendme
 	return rows.map((row, i) => {
 		const files = isRecord(row) && isRecord(row.files) ? Object.entries(row.files) : [];
 		const ok = isRecord(row) && row.kind === "harness" && typeof row.at === "string" && row.at !== "" && typeof row.by === "string" && row.by !== ""
+			&& typeof row.commit === "string" && /^[0-9a-f]{40}$/.test(row.commit)
 			&& typeof row.reason === "string" && row.reason.trim() !== "" && Number.isSafeInteger(row.resume) && (row.resume as number) >= 1
 			&& files.length > 0 && files.every(([path, change]) => path !== "" && isRecord(change) && hex64(change.from) && hex64(change.to) && change.from !== change.to)
 			&& Array.isArray(row.reclassified) && row.reclassified.every(isReclassification)
+			&& Number.isSafeInteger(row.runsCompleted) && (row.runsCompleted as number) >= 0
 			&& hex64(row.runsSha256) && (row.summarySha256 === null || hex64(row.summarySha256));
 		if (!ok) throw new Error(`harness-amendments.jsonl row ${i + 1} is not a harness amendment`);
 		const r = row as Record<string, unknown>;
 		return {
-			kind: "harness", at: r.at as string, by: r.by as string, reason: r.reason as string, resume: r.resume as number,
+			kind: "harness", at: r.at as string, by: r.by as string, commit: r.commit as string, reason: r.reason as string, resume: r.resume as number,
 			files: Object.fromEntries(files.map(([path, change]) => [path, { from: (change as HarnessFileChange).from, to: (change as HarnessFileChange).to }])),
 			reclassified: (r.reclassified as Reclassification[]).map((c) => ({ key: c.key, arm: c.arm, attempt: c.attempt, cellId: c.cellId, reason: c.reason, evidence: c.evidence })),
-			runsSha256: r.runsSha256 as string, summarySha256: r.summarySha256 as string | null,
+			runsCompleted: r.runsCompleted as number, runsSha256: r.runsSha256 as string, summarySha256: r.summarySha256 as string | null,
 		};
 	});
 }

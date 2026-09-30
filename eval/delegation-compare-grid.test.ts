@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
 	corpusReasons, DEFAULT_BUDGET_ARMS, delegationOff, kindlessArmReasons, kindlessCorpus, kindlessValidityReasons, parseArmList, parseCorpora, parseMaxVerifiers, scopeFor, scopeSettingsFor, shapeOf,
 	amendmentsMismatch, blindSummary, currentPasses, pilotPairedSd, extensionRefusal, gridKindReasons, kindFlags, kindPassesReasons, kindSnapshotReasons, parseAmendments, parseGridKinds, scheduleExtends, summarizeTwins, twinTargets, type CorpusInput, type GridKind, type GridOptions, type PinnedCorpus,
-	amendedHarness, harnessAmendmentsMismatch, parseHarnessAmendments,
+	amendedHarness, harnessAmendmentsMismatch, isPassCountReason, parseHarnessAmendments,
 } from "./delegation-compare-grid.ts";
 import { armsOfPair, DEFAULT_BREAKER, isOfficialGrid, OFFICIAL_PASSES, OFFICIAL_TARGET_IDS, planSchedule, type ExpectedCell } from "./delegation-compare-lib.ts";
 
@@ -584,10 +584,10 @@ describe("amending a grid's harness", () => {
 		evidence: "native turn auth context mismatch: scopes", ...over,
 	});
 	const harness = (over: Record<string, unknown> = {}) => ({
-		kind: "harness", at: "2026-09-30T21:00:00Z", by: "op@host", reason: "provider auth-context check is infrastructure", resume: 4,
+		kind: "harness", at: "2026-09-30T21:00:00Z", by: "op@host", commit: "5dc1069".padEnd(40, "0"), reason: "provider auth-context check is infrastructure", resume: 4,
 		files: { "eval/delegation-compare.ts": { from: sha("a"), to: sha("b") } },
 		reclassified: [reclassified(), reclassified({ arm: "baseline", cellId: null, reason: "partner arm candidate failed: provider auth-context check", evidence: null })],
-		runsSha256: sha("1"), summarySha256: sha("2"), ...over,
+		runsCompleted: 137, runsSha256: sha("1"), summarySha256: sha("2"), ...over,
 	});
 	const pins = { "eval/delegation-compare.ts": sha("a"), "eval/delegation-compare-lib.ts": sha("c") };
 
@@ -609,9 +609,21 @@ describe("amending a grid's harness", () => {
 		["a reclassified run of the matched arm", { reclassified: [reclassified({ arm: "matched" })] }],
 		["a reclassified run with an attempt of 0", { reclassified: [reclassified({ attempt: 0 })] }],
 		["no runs hash", { runsSha256: null }],
+		["no commit", { commit: undefined }],
+		["an abbreviated commit", { commit: "5dc1069" }],
+		["no count of the runs it hashed", { runsCompleted: undefined }],
 		["no resume number", { resume: 0 }],
 	])("refuses a harness amendment row with %s", (_what, over) => {
 		expect(() => parseHarnessAmendments([harness(over)])).toThrow(/harness-amendments.jsonl row 1 is not a harness amendment/);
+	});
+
+	// A resume compares an extended grid's exploratory reasons without this one.
+	it("recognises the exploratory reason corpusReasons writes for a pass count, and no other", () => {
+		const [reason] = corpusReasons("c", corpus({ passes: 3 }), input({ passes: 6 }));
+		expect(reason).toBe("--passes 6 is not 3");
+		expect(isPassCountReason(reason!)).toBe(true);
+		expect(isPassCountReason("--only selects a subset")).toBe(false);
+		expect(isPassCountReason("grid kind v6-stage1: the pilot runs 2 passes, not 6")).toBe(false);
 	});
 
 	// amendments.jsonl is read by eval/v6-decision.ts and stage 2's --passes-from
