@@ -78,16 +78,16 @@ describe("buildSystemPrompt", () => {
 		expect(p).toContain("Verifier launches are counted apart: 2 `pired-verify` launches per session (maxVerifiers)");
 		expect(p).not.toMatch(/turned off/i);
 
-		// maxAgents 0 still takes the work launches away; the two default
-		// verifier launches stay unless maxVerifiers is 0 too (the next test).
-		const workOff = buildSystemPrompt({ profile: "pentest", scope: { ...scope, maxAgents: 0 }, delegation: true });
-		expect(workOff).toContain("Work delegation is off for this engagement (maxAgents=0)");
-		expect(workOff).not.toContain("pired-scout");
+		// maxAgents 0 alone turns delegation off, verifiers included: the default of two
+		// applies only to an engagement that has not said "off" (ADR-038).
+		const off = buildSystemPrompt({ profile: "pentest", scope: { ...scope, maxAgents: 0 }, delegation: true });
+		expect(off).toMatch(/turned off|disabled/i);
+		expect(off).not.toContain("pired-verify");
+		expect(off).not.toContain("pired-scout");
 	});
 
 	it("says delegation is off in the block when the engagement sets maxAgents and maxVerifiers to zero", () => {
-		// Both caps: since ADR-038 a scope that names no maxVerifiers keeps two
-		// verifier launches, so maxAgents 0 alone gets the verify-only block.
+		// Both caps stated, as the benchmark's solo arms state them.
 		const p = buildSystemPrompt({ profile: "pentest", scope: { ...scope, maxAgents: 0, maxVerifiers: 0 }, delegation: true });
 		expect(p).toContain("<delegation>\n");
 		expect(p).toMatch(/turned off|disabled/i);

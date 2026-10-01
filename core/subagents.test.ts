@@ -477,10 +477,11 @@ describe("verifier launches (3.1)", () => {
 	it("keeps the launcher visible for a verify-only session, and hides it only when both caps are 0", () => {
 		expect(hiddenParentTools(scope({ maxAgents: 0, maxVerifiers: 2 })).has("subagent")).toBe(false);
 		expect(hiddenParentTools(scope({ maxAgents: 0, maxVerifiers: 0 })).has("subagent")).toBe(true);
-		// This was hidden while verifiers defaulted to 0. Since ADR-038 a scope
-		// that names no maxVerifiers keeps two verifier launches, so maxAgents 0
-		// alone is a verify-only session and its launcher stays.
-		expect(hiddenParentTools(scope({ maxAgents: 0 })).has("subagent")).toBe(false);
+		// maxAgents 0 alone is "off", whatever the verifier default (ADR-038): a scope
+		// that turns delegation off must not keep two verifier launches it never asked for.
+		expect(hiddenParentTools(scope({ maxAgents: 0 })).has("subagent")).toBe(true);
+		expect(verifierCap(scope({ maxAgents: 0 }))).toBe(0);
+		expect(verifierCap(scope({ maxAgents: 0, maxVerifiers: 3 }))).toBe(3);
 	});
 
 	it("gives a verify-only session its own block: the one launch it may make, and why a fresh context is worth it", () => {

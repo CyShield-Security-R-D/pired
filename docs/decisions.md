@@ -3526,3 +3526,75 @@ Measured on the branch, same sandbox and script:
 - **An adapter below 2.33.0 installed by hand, or a fork without the event, is not gated through
   the broker.** The `tool_call` scan still applies to its outer calls. The installer's floor, and
   its warning on a pin or a fork, are what keep a fresh box above it.
+
+---
+
+## ADR-038 — Delegation is on by default again: eight workers and two verifiers, on the operator's decision after GLM's stage 2
+
+**Status:** accepted · 2026-10-01 · operator decision · reverses the default of ADR-029, keeping its
+caps and gate · the v6 pre-registration's ship rule for delegation was not met, and this records
+that it was overridden
+
+### Context
+
+The v6 pre-registration made delegation the default again only when the delegating build (D)
+passed all three rules against both the same build solo (S) and the solo build given D's tokens
+(M). GLM-5.3 Flash's stage 2 finished on 2026-10-01: grid `v6-stage2-glm`, 180/180 runs, official,
+decisions in pired-research under `v6/decisions/`.
+
+- **Finding:** D found 33 of 39 advisory opportunities, S 29 and M 29. Rule 1 was non-inferior
+  against both: +0.111 [−0.056, +0.278] against S, and +0.111 [−0.083, +0.306] against M. It was
+  superior against neither (McNemar p = 0.22 and 0.34).
+- **Cost:** D's typical pair costs about 1.17× S's tokens, and 1.25× pooled. Rule 3 against S fails
+  on a measured increase (median log ratio +0.161 [+0.002, +0.335]). Against M, which matches D's
+  tokens by design, rule 3 holds.
+- **Precision:** rule 2 is pending adjudication for both comparisons. The provisional, key-based
+  indicator is level against S (0.058 vs 0.055) and lower against M (0.058 vs 0.084). It decides
+  nothing until the claims are judged.
+- **Time:** D's median run took 57 minutes against S's 44. D stopped with time left and open work
+  in 26/36 runs, against S's 20/36.
+- **Not a defect:** sessions that launched 9–10 workers stayed within both caps (8 work, 2 verify).
+  The harness's audit counts verifier launches against `maxAgents`.
+- **What M shows:** solo sessions given D's tokens found no more than solo (29 = 29). So D's edge,
+  unproven as it is, comes from dividing the work, not from the extra tokens.
+- **Luna:** stage 2 has not run. It is the model on which v5's delegating build spent 62% more
+  tokens for one more true positive (ADR-029).
+
+The operator read this and decided to make delegation the default now, with Luna's stage 2 still to
+run as planned.
+
+### Decision
+
+- **The new defaults** (`core/subagents.ts`): `DEFAULT_MAX_AGENTS` is 8 (`SUGGESTED_MAX_AGENTS`) and
+  `DEFAULT_MAX_VERIFIERS` is 2. This is exactly the D configuration the trial measured: 8 work
+  launches per session, plus 2 `pired-verify` launches on their own cap.
+- **What an engagement that says nothing now gets:** the `<delegation>` block, the launcher, and
+  the gate's budget of 8 + 2.
+- **What stays as it was:** the gate, the launch shape, the one-at-a-time rule, the worker
+  definitions, and the scope enforcement on workers (ADR-027, ADR-028, ADR-032).
+- **Opting out:** `"maxAgents": 0` turns delegation off for an engagement, verifiers included. The
+  verifier default of 2 applies only when `maxAgents` is not 0 (`verifierCap`). Without that rule,
+  a scope saying "off" would still have launched two verifiers, and so would the benchmark's solo
+  arms, which state `maxAgents: 0`.
+  - A verify-only session is `maxAgents: 0` with `maxVerifiers` above 0.
+  - `"maxVerifiers": 0` puts verifiers back on the shared work cap.
+- **Luna's stage 2 runs as pre-registered** after its stage 1. If it shows D failing against M on
+  finding, or costing far more than GLM's 1.17×, that is the evidence that reverts this, by a new
+  ADR citing it.
+
+### Rejected
+
+- **Wait for Luna's stage 2 before changing the default.** That was the recommendation. The
+  operator judged GLM's direction (33 vs 29, and not explained by tokens) worth adopting now.
+- **Turn on only the verifier by default.** It was offered. It has no separate measurement, and it
+  is not the configuration that produced GLM's result.
+
+### Costs
+
+- Every engagement that does not opt out spends more: on GLM, about 17% more tokens at the typical
+  run (25% pooled) and about 13 more minutes. On Luna the cost is unmeasured for this design; v5's
+  build cost 62% more there.
+- The finding gain is not established: p ≈ 0.2 on one model and 12 applications.
+- Benchmark arms that run `main` as users get it delegate from now on. Arm A in a future grid built
+  from this `main` is a delegating arm unless its scope states `maxAgents: 0`. The running v6 grids
+  are unaffected: their snapshots are pinned by digest.

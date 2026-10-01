@@ -174,26 +174,31 @@ export const VERIFIER_AGENT_NAMES: ReadonlySet<string> = new Set(PIRED_AGENTS.fi
  * unbounded work nobody asked for, on the operator's budget and the client's
  * systems — and the gate is already the place that says no to that.
  *
- * The default is **zero**: delegation is opt-in, per engagement, by setting
- * `maxAgents` in the scope file (ADR-029). It shipped on at eight, and the
- * pre-registered trial that was to justify that did not (ADR-026 outcome). On
- * GPT-6 Luna the delegating build found 7 true positives to the baseline's 6
- * while making 115 claims to 58 and spending 62% more tokens; across six
- * official grids it found 58 to the baseline's 69. A default is what every
- * engagement that never thought about it runs, so it is the measured-better
- * configuration until a design beats it.
+ * The default is **eight**, with two verifier launches on their own cap: the
+ * configuration the v6 trial measured as D (ADR-038). An engagement turns
+ * delegation off with `maxAgents: 0`.
+ * - **History:** delegation shipped on at eight, and v5 did not justify it. On
+ *   GPT-6 Luna that build made 115 claims to 58 and spent 62% more tokens for
+ *   one more true positive, so ADR-029 made it opt-in.
+ * - **GLM-5.3 Flash, v6 stage 2:** the redesigned workers found 33 of 39
+ *   advisory opportunities, against 29 for the same build solo and 29 for a
+ *   solo build given D's tokens. That costs about 1.17× the solo build's
+ *   tokens at the typical pair, so the pre-registered cost rule failed.
+ * - **The operator's decision:** make it the default anyway (2026-10-01), while
+ *   Luna's stage 2 is still to run. A Luna result against it is the evidence
+ *   that would reverse this.
  *
- * `SUGGESTED_MAX_AGENTS` is the cap to opt in with. Eight is enough for the
- * patterns `ops-delegation` describes (a verifier per cleared cell of a class, a
- * scout per host) and low enough that a loop is caught in one session rather
- * than one invoice.
+ * `SUGGESTED_MAX_AGENTS` is the cap the delegation guidance names. Eight is
+ * enough for the patterns `ops-delegation` describes (a verifier per cleared
+ * cell of a class, a scout per host), and low enough that a loop is caught in
+ * one session rather than one invoice.
  *
  * Both live here, beside the workers, rather than in core/scope.ts, which
  * enforces them: the delegation block states the cap too, and core/scope.ts
  * already imports this module, so the reverse import would make a cycle.
  */
-export const DEFAULT_MAX_AGENTS = 0;
 export const SUGGESTED_MAX_AGENTS = 8;
+export const DEFAULT_MAX_AGENTS = SUGGESTED_MAX_AGENTS;
 
 /**
  * The session's worker cap: the engagement's `maxAgents`, or the default when
@@ -207,21 +212,28 @@ export function workerCap(scope: EngagementScope | undefined): number {
 }
 
 /**
- * Verifier launches are off unless the scope asks for them (Phase 3, 3.1), for
- * the reason delegation is: they cost parent turns, and their benefit is not yet
- * measured.
+ * Two verifier launches per session, on their own cap beside `maxAgents`. That is
+ * the measured D configuration (ADR-038), so a late batch of verification is never
+ * refused because the work launches were spent. `maxVerifiers: 0` returns
+ * verifiers to the shared work cap, as before 3.1.
  */
-export const DEFAULT_MAX_VERIFIERS = 0;
+export const DEFAULT_MAX_VERIFIERS = 2;
 
 /**
  * The session's verifier cap: the engagement's `maxVerifiers` when it is a
  * non-negative integer, else the default — the rule `workerCap` applies, and
  * stricter by the integer, since a fraction of a launch is not a request either.
- * Declared by the Phase 3 groundwork; nothing enforces it until 3.1.
+ *
+ * An engagement that sets `maxAgents: 0` and names no verifier cap gets none:
+ * `maxAgents: 0` is how delegation is turned off. With a verifier default of 2,
+ * reading it alone would have left a verify-only session running under a scope
+ * that says "off", and left the benchmark's solo arms (`maxAgents: 0`) launching
+ * verifiers. A verify-only session is still one setting away: `maxVerifiers` above 0.
  */
 export function verifierCap(scope: EngagementScope | undefined): number {
 	const n = scope?.maxVerifiers;
-	return typeof n === "number" && Number.isInteger(n) && n >= 0 ? n : DEFAULT_MAX_VERIFIERS;
+	if (typeof n === "number" && Number.isInteger(n) && n >= 0) return n;
+	return scope?.maxAgents === 0 ? 0 : DEFAULT_MAX_VERIFIERS;
 }
 
 /**
@@ -245,9 +257,9 @@ export function verifierModel(scope: EngagementScope | undefined): string | unde
  * Always the wait and supervisor tools: pired delegates in the foreground only.
  * With delegation off, the launcher and its loader stub as well. The gate
  * refuses every launch at a cap of zero, so leaving them active only spends the
- * stub's ~0.5k characters on every request and invites a call that must fail —
- * and with delegation off by default, that is every engagement that never
- * opted in.
+ * stub's ~0.5k characters on every request and invites a call that must fail,
+ * on every engagement that set `maxAgents: 0` (delegation is on by default
+ * since ADR-038).
  */
 export function hiddenParentTools(scope: EngagementScope | undefined): ReadonlySet<string> {
 	// A verify-only session (maxAgents 0, maxVerifiers above it) still launches
