@@ -64,19 +64,36 @@ describe("buildSystemPrompt", () => {
 		expect(off).toMatch(/recall context/i);
 	});
 
-	it("says delegation is off when the engagement never opted in, even with pi-subagents present", () => {
-		// ADR-029: delegation is opt-in, so the default engagement gets the off block.
+	it("delegates by default, up to eight workers and two verifiers (ADR-038), and maxAgents 0 turns the work launches off", () => {
+		// ADR-029 gave an engagement that named no cap the off block. ADR-038
+		// (2026-10-01, after the v6 GLM stage-2 trial) made the measured D
+		// configuration the default, so that engagement is authorized and told
+		// both caps it will be held to.
 		const p = buildSystemPrompt({ profile: "pentest", scope, delegation: true });
-		expect(p).toMatch(/turned off/i);
-		expect(p).not.toContain("pired-scout");
-		expect(p).not.toContain("subagents_enable");
+		expect(p).toContain("<delegation>\n");
+		expect(p).toMatch(/standing authorization/i);
+		expect(p).toContain("pired-scout");
+		expect(p).toContain("subagents_enable");
+		expect(p).toContain("This engagement allows 8 worker launches per session");
+		expect(p).toContain("Verifier launches are counted apart: 2 `pired-verify` launches per session (maxVerifiers)");
+		expect(p).not.toMatch(/turned off/i);
+
+		// maxAgents 0 still takes the work launches away; the two default
+		// verifier launches stay unless maxVerifiers is 0 too (the next test).
+		const workOff = buildSystemPrompt({ profile: "pentest", scope: { ...scope, maxAgents: 0 }, delegation: true });
+		expect(workOff).toContain("Work delegation is off for this engagement (maxAgents=0)");
+		expect(workOff).not.toContain("pired-scout");
 	});
 
-	it("says delegation is off in the block when the engagement sets maxAgents to zero", () => {
-		const p = buildSystemPrompt({ profile: "pentest", scope: { ...scope, maxAgents: 0 }, delegation: true });
+	it("says delegation is off in the block when the engagement sets maxAgents and maxVerifiers to zero", () => {
+		// Both caps: since ADR-038 a scope that names no maxVerifiers keeps two
+		// verifier launches, so maxAgents 0 alone gets the verify-only block.
+		const p = buildSystemPrompt({ profile: "pentest", scope: { ...scope, maxAgents: 0, maxVerifiers: 0 }, delegation: true });
 		expect(p).toContain("<delegation>\n");
 		expect(p).toMatch(/turned off|disabled/i);
 		expect(p).not.toContain("pired-scout");
+		// Off names no launcher to load (asserted of the old default before ADR-038).
+		expect(p).not.toContain("subagents_enable");
 	});
 
 	it("lists methodology skills when provided", () => {
