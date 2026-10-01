@@ -12,7 +12,7 @@
 import { execFile, execFileSync, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream, createWriteStream, readFileSync } from "node:fs";
-import { access, appendFile, chmod, copyFile, cp, link, lstat, mkdir, open, readdir, readFile, realpath, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { access, appendFile, chmod, copyFile, cp, link, lstat, mkdir, open, readdir, readFile, realpath, rename, rm, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import { homedir, hostname, userInfo } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { StringDecoder } from "node:string_decoder";
@@ -31,10 +31,10 @@ import {
 	type CompareEntryConfig, type ProbeConfig, type RetryPolicy,
 } from "./delegation-compare-entry.ts";
 import {
-	accountUsage, APPROVAL_DECISION, compareMatchedRuns, contentText, createBreaker, DEFAULT_BREAKER, findLeaks, isOfficialGrid, leakTermsFor,
+	accountUsage, APPROVAL_DECISION, compareMatchedRuns, contentText, createBreaker, DEFAULT_BREAKER, drainReason, findLeaks, isOfficialGrid, leakTermsFor, parseDrainFile, strongerDrain,
 	meteredCallCount, nextPairAction, observationsFromChildSession, observationsFromPiEvents,
 	armsOfPair, parseBreakerPolicy, planSchedule, reconcileChildSession, reconcileSubagentCalls, SUBAGENT_TOOL, summarizeRetries,
-	type Arm, type BreakerPolicy, type PairArm, type BreakerVerdict, type ChildSessionExtraction, type ChildVerdict, type ExpectedCell, type PiUsageExtraction,
+	type Arm, type BreakerPolicy, type DrainLevel, type DrainRequest, type PairArm, type BreakerVerdict, type ChildSessionExtraction, type ChildVerdict, type ExpectedCell, type PiUsageExtraction,
 	type MatchedComparison, type OfficialShape, type ScheduledTwins, type RetriedAttempt, type RetrySummary, type RunMetric, type ScheduledPair, type SubagentChild, type SubagentReconciliation,
 	type UsageAccounting, type UsageObservation,
 } from "./delegation-compare-lib.ts";
@@ -131,6 +131,8 @@ const OWNER_FILE = ".pired-compare.owner";
 const RUNNER_TITLE = "pired-compare";
 /** progress.json is rewritten at least this often while a grid runs, so a stale updatedAt means a dead runner. */
 const HEARTBEAT_MS = 60_000;
+/** `<out>/DRAIN`, reading "pairs" or "arms": the operator's drain without a signal (ADR draft v6-drain). */
+const DRAIN_FILE = "DRAIN";
 /**
  * Hashed into the pins, so a harness edited between two grids shows up as a
  * different pin instead of two results silently measured by different rules.
@@ -397,7 +399,10 @@ const RESUME_POLICY =
 	"an official grid holding such a pair refuses to launch, since its decision is " +
 	"already incomplete_or_invalid. When a pair's first arm is invalid its second arm " +
 	"is not launched and is recorded as not launched, as infrastructure exactly when " +
-	"the first arm's failure was. Every attempt is appended to runs.jsonl with its " +
+	"the first arm's failure was. An arm an operator's drain did not start (recorded " +
+	"not launched with drained:true) is read as missing and is never re-judged: the " +
+	"pair is re-run, both arms, at attempt + 1, and an attempt a drain left half-done " +
+	"is not counted toward the attempt ceiling. Every attempt is appended to runs.jsonl with its " +
 	"attempt number, and no row is ever rewritten. --amend-harness <reason> is the one " +
 	"way a resume runs under a changed harness: its pins may differ from the grid's " +
 	"record in the hashes of eval/delegation-compare.ts and eval/delegation-compare-grid.ts " +
@@ -499,8 +504,9 @@ Options:
                         unless given. It lengthens the worst case the
                         OAuth check sizes (see --auth-horizon-hours)
   --out <dir>           New or empty directory; must not contain an advisory ID
-  --resume <out-dir>    Continue a stopped grid in place; takes no other option
-                        but --extend-passes, --extend-reason and --amend-harness
+  --resume <out-dir>    Continue a stopped or drained grid in place; takes no
+                        other option but --extend-passes, --extend-reason and
+                        --amend-harness
   --extend-passes <n>   With --resume only: amend the grid's pass count to n
                         (n equal to it fixes the count). Passes already
                         scheduled keep their pairs and cells; new ones follow
@@ -521,8 +527,9 @@ Options:
                         other harness file and pin is byte-identical. Stored
                         invalid non-infrastructure runs are re-judged from their
                         provider text by the current classifier (never a timed-
-                        out run); a pair now judged infrastructure is re-run at
-                        attempt + 1, and runs.jsonl is not rewritten. Recorded,
+                        out run, nor an arm a drain did not start); a pair now
+                        judged infrastructure is re-run at attempt + 1, and
+                        runs.jsonl is not rewritten. Recorded,
                         with the changed files, the git commit, the re-judged
                         runs, who, why and a hash of runs.jsonl and
                         summary.json, in <out>/harness-amendments.jsonl,
@@ -659,14 +666,23 @@ SIGINT/SIGTERM/SIGHUP stops new launches, terminates only process groups and
 scopes this runner started (a second signal kills them), reaps their strays,
 records each arm it stopped as a runner interruption (infrastructure, re-run by
 --resume) with the signal time, and still writes summary.json marked
-interrupted. The runner claims <out> exclusively in
+interrupted. SIGUSR1, or a file <out>/${DRAIN_FILE} reading "pairs", drains
+instead: no new pair launches and nothing is killed; every pair in flight
+finishes both arms (up to two run limits). SIGUSR2, or ${DRAIN_FILE} reading
+"arms", lets only the arms running finish and starts no second arm (up to one
+run limit); --resume re-runs a pair it left half-done, without counting that
+attempt toward the ceiling. The file is read before every launch and removed
+once taken. A drained grid writes summary.json with status drained and exits 0;
+--resume continues it with nothing re-run that finished.
+The runner claims <out> exclusively in
 ${OWNER_FILE} and refreshes progress.json updatedAt every ${HEARTBEAT_MS / 1000} s while it
 runs, so a stale timestamp means a dead runner.
 
 Resume: ${RESUME_POLICY}
 
-Exit status: 0 for a passing --dry-run or an official approval decision;
-1 for anything else, including every exploratory grid.
+Exit status: 0 for a passing --dry-run, an official approval decision or a
+grid drained by the operator; 1 for anything else, including every exploratory
+grid.
 `;
 }
 
@@ -1055,8 +1071,11 @@ export function resumeReclassifier(recorded: readonly HarnessAmendment[], amendi
 	const rowOf = (e: Reclassification): JsonRecord | undefined => runs.rows.findLast((r) => r.key === e.key && r.arm === e.arm && attemptOf(r) === e.attempt && cellOf(r) === e.cellId);
 	for (const e of entries) {
 		const row = rowOf(e);
+		// A partner a drain did not start (ADR draft v6-drain) is not the partner an
+		// amendment re-judged: it was not launched because nothing was to be, not
+		// because its arm failed, so it cannot inherit a verdict.
 		const still = row !== undefined && (e.cellId === null
-			? row.notLaunched === true && row.valid !== true && row.infraFailure !== true
+			? row.notLaunched === true && row.drained !== true && row.valid !== true && row.infraFailure !== true
 			: rejudgeableFailures(row) !== undefined);
 		if (!still) throw new Error(`a recorded harness amendment re-judged ${e.key} ${e.arm} attempt ${e.attempt}${e.cellId ? ` (cell ${e.cellId})` : ""}, and runs.jsonl ${row ? "no longer holds it as an invalid non-infrastructure run with provider text" : "holds no such run"}`);
 	}
@@ -2080,6 +2099,8 @@ const runState = {
 	stoppedBy: undefined as "matched" | "twin" | undefined,
 	/** The OAuth token would expire inside the next arm (plan item 2.8 review): refresh outside the grid, then --resume. */
 	credentialExpiring: undefined as string | undefined,
+	/** An operator's drain (ADR draft v6-drain): no new launch, nothing killed. Set by SIGUSR1/SIGUSR2 or the DRAIN file. */
+	drain: undefined as DrainRequest | undefined,
 };
 
 async function runOwned(command: string, args: string[], config: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number; stdoutPath: string; stderrPath: string; onLine?: LineSink; scopeUnit?: string }): Promise<OwnedResult> {
@@ -3140,10 +3161,11 @@ function storedProviderFailures(value: unknown): ProviderFailures | undefined {
 /**
  * The provider text a stored run could be re-judged from, or undefined when it
  * may not be: a launched run, invalid and non-infrastructure, whose process did
- * not time out, with provider text on record.
+ * not time out, with provider text on record. An arm an operator's drain did
+ * not start (ADR draft v6-drain) is never one: nothing failed in it.
  */
 function rejudgeableFailures(run: JsonRecord): ProviderFailures | undefined {
-	if (run.valid === true || run.infraFailure === true || run.notLaunched === true) return undefined;
+	if (run.valid === true || run.infraFailure === true || run.notLaunched === true || run.drained === true) return undefined;
 	if (isJsonRecord(run.process) && run.process.timedOut === true) return undefined;
 	const failures = storedProviderFailures(run.providerFailures);
 	return failures && (failures.parent.length || failures.workers.length || failures.fetchErrors.length) ? failures : undefined;
@@ -4292,6 +4314,8 @@ export interface ResumePlan {
 	abandonedKeys: string[];
 	/** The attempt number the next run of a rerun pair gets. */
 	nextAttempt: Record<string, number>;
+	/** Rerun pair keys -> the attempts a drain left half-done (ADR draft v6-drain), which the ceiling does not count. Only pairs with one. */
+	drainedAttempts: Record<string, number>;
 	/** `${pairKey}\u0000${arm}` -> that arm's record at its pair's highest attempt (absent when the arm has none there). */
 	latest: Record<string, JsonRecord>;
 	reasons: Record<string, string>;
@@ -4322,7 +4346,10 @@ export type Reclassifier = (run: JsonRecord) => InfraClass | undefined;
  * re-running it would chase a candidate defect with more tokens); and otherwise
  * (an arm missing there, or invalid for infrastructure) re-run, both arms, at
  * the next attempt. Two rows for one arm at one attempt resolve to the last line
- * written. Pure: takes the schedule and the run records, touches no disk.
+ * written. An arm an operator's drain did not start (ADR draft v6-drain) is a
+ * missing arm, and its attempt is not counted toward the ceiling: nothing
+ * failed, so a pause must not bring a pair nearer to being abandoned. Pure:
+ * takes the schedule and the run records, touches no disk.
  *
  * With a reclassifier (docs/adr-drafts/v6-harness-amendment.md), each launched
  * arm at the highest attempt that is stored invalid and non-infrastructure is
@@ -4331,8 +4358,11 @@ export type Reclassifier = (run: JsonRecord) => InfraClass | undefined;
  * the launched arm's failure is. Without this the partner's stored
  * `infraFailure: false` would keep the pair blocked. A pair whose arms are
  * infrastructure after re-judging is re-run at attempt + 1 like any other; one
- * still non-infrastructure stays blocked. Without a reclassifier, the plan is
- * what it always was.
+ * still non-infrastructure stays blocked. An arm a drain did not start is read
+ * as missing before the reclassifier sees it, so it is never re-judged: it is
+ * not launched, but nothing failed, and neither a recorded verdict nor a
+ * partner's may reach it. Without a reclassifier, the plan is what it always
+ * was.
  */
 export function planResume(pairs: ScheduledPair[], runs: JsonRecord[], attemptCeiling?: number, reclassify?: Reclassifier): ResumePlan {
 	const maxAttempt: Record<string, number> = {};
@@ -4347,11 +4377,19 @@ export function planResume(pairs: ScheduledPair[], runs: JsonRecord[], attemptCe
 	}
 	const latest: Record<string, JsonRecord> = {};
 	for (const row of rows) if (row.attempt === maxAttempt[row.key]) latest[`${row.key}\u0000${row.arm}`] = row.run;
-	const plan: ResumePlan = { rerunKeys: [], blockedKeys: [], keepKeys: [], abandonedKeys: [], nextAttempt: {}, latest, reasons: {}, reclassified: [] };
+	const drainedAt: Record<string, Set<number>> = {};
+	for (const row of rows) if (row.run.drained === true) (drainedAt[row.key] ??= new Set()).add(row.attempt);
+	const plan: ResumePlan = { rerunKeys: [], blockedKeys: [], keepKeys: [], abandonedKeys: [], nextAttempt: {}, drainedAttempts: {}, latest, reasons: {}, reclassified: [] };
 	for (const pair of pairs) {
 		const attempt = maxAttempt[pair.key] ?? 0;
+		const drained = drainedAt[pair.key]?.size ?? 0;
 		// A patched twin counts when its twin arms are valid at one attempt (plan item 2.8).
-		const records = armsOfPair(pair).map((arm) => ({ arm, record: latest[`${pair.key}\u0000${arm}`] }));
+		// An arm a drain did not start is a missing arm (ADR draft v6-drain), and it
+		// is read as one before the reclassifier runs, so it is never re-judged.
+		const records = armsOfPair(pair).map((arm) => {
+			const record = latest[`${pair.key}\u0000${arm}`];
+			return { arm, record: record?.drained === true ? undefined : record };
+		});
 		const infra = new Map(records.map(({ arm, record }) => [arm, record?.infraFailure === true]));
 		if (reclassify) {
 			const judged = new Map<PairArm, InfraClass>();
@@ -4380,7 +4418,10 @@ export function planResume(pairs: ScheduledPair[], runs: JsonRecord[], attemptCe
 		// No requeue context: a resume is the operator's decision to spend more on
 		// the pair, so it waits no cooldown and applies no per-runner attempt cap.
 		// The ceiling does apply, or an auto-resumer could re-run a pair forever.
-		const action = nextPairAction(attempt, arms, attemptCeiling === undefined ? {} : { attemptCeiling });
+		const action = nextPairAction(attempt, arms, {
+			...(attemptCeiling === undefined ? {} : { attemptCeiling }),
+			...(drained ? { drainedAttempts: drained } : {}),
+		});
 		if (action.kind === "keep") {
 			plan.keepKeys.push(pair.key);
 		} else if (action.kind === "blocked") {
@@ -4392,7 +4433,10 @@ export function planResume(pairs: ScheduledPair[], runs: JsonRecord[], attemptCe
 		} else {
 			plan.rerunKeys.push(pair.key);
 			plan.nextAttempt[pair.key] = attempt + 1;
-			plan.reasons[pair.key] = action.reason;
+			if (drained) plan.drainedAttempts[pair.key] = drained;
+			plan.reasons[pair.key] = drainedAt[pair.key]?.has(attempt)
+				? `attempt ${attempt}: a drain left the pair half-done; both arms re-run, and the attempt does not count toward the ceiling`
+				: action.reason;
 		}
 	}
 	return plan;
@@ -5059,6 +5103,22 @@ async function driveGrid(options: Options, manifest: JsonRecord, resume: ResumeI
 	process.on("SIGINT", onSignal);
 	process.on("SIGTERM", onSignal);
 	process.on("SIGHUP", onSignal);
+	// SIGUSR1/SIGUSR2 drain instead (ADR draft v6-drain): no new launch, nothing
+	// killed, so a pause wastes no finished arm. Node reserves SIGUSR1 for its
+	// inspector and documents that a listener may interfere with it; the DRAIN
+	// file drains without any signal.
+	const onDrain = (level: DrainLevel, trigger: string) => (): void => {
+		if (!takeDrain(runState, { level, trigger, atMs: Date.now() })) return;
+		console.log(drainNotice(runState.drain!, output));
+		const last = statusFile.record;
+		if (last && (last.status === "running" || last.status === "draining")) {
+			void reportStatus({ ...last, status: "draining", drain: drainRecord(runState.drain!) }).catch(() => undefined);
+		}
+	};
+	const onUsr1 = onDrain("pairs", "SIGUSR1");
+	const onUsr2 = onDrain("arms", "SIGUSR2");
+	process.on("SIGUSR1", onUsr1);
+	process.on("SIGUSR2", onUsr2);
 	const stopHeartbeat = startHeartbeat();
 	try {
 		await reportStatus({ status: resume ? "resume-preflight" : "preflight", completedRuns: 0 });
@@ -5116,6 +5176,8 @@ async function driveGrid(options: Options, manifest: JsonRecord, resume: ResumeI
 		process.off("SIGINT", onSignal);
 		process.off("SIGTERM", onSignal);
 		process.off("SIGHUP", onSignal);
+		process.off("SIGUSR1", onUsr1);
+		process.off("SIGUSR2", onUsr2);
 	}
 }
 
@@ -5261,7 +5323,98 @@ function runnerFaultOutcome(pair: ScheduledPair, arm: Arm, attempt: number, erro
 }
 
 /** The part of runState the pair loop reads and sets; the signal handlers share the same object. */
-export type GridStopState = { aborted: boolean; stopInvalid: boolean; stopReason: string | undefined; quotaExhausted: string | undefined; stoppedBy?: "matched" | "twin" | undefined; credentialExpiring?: string | undefined };
+export type GridStopState = { aborted: boolean; stopInvalid: boolean; stopReason: string | undefined; quotaExhausted: string | undefined; stoppedBy?: "matched" | "twin" | undefined; credentialExpiring?: string | undefined; drain?: DrainRequest | undefined };
+
+/**
+ * Take an operator's drain request (ADR draft v6-drain) into the grid's stop
+ * state. True when it changed the drain in force, so the caller announces it
+ * once. A grid already interrupted by a signal ignores it: its arms are being
+ * killed, and a later drain must not relabel that stop.
+ */
+export function takeDrain(state: GridStopState, request: DrainRequest): boolean {
+	if (state.aborted) return false;
+	const next = strongerDrain(state.drain, request);
+	if (next === state.drain) return false;
+	state.drain = next;
+	return true;
+}
+
+/** A drain as progress.json and summary.json record it. */
+export function drainRecord(drain: DrainRequest): JsonRecord {
+	return { level: drain.level, trigger: drain.trigger, requestedAt: new Date(drain.atMs).toISOString(), reason: drainReason(drain) };
+}
+
+/** The console line a drain prints when it is taken, naming how it ends and how the grid resumes. */
+export function drainNotice(drain: DrainRequest, out: string): string {
+	const rest = drain.level === "pairs"
+		? "pairs in flight finish both arms (up to two run limits)"
+		: "arms running finish and no second arm starts (up to one run limit)";
+	return `DRAINING — ${drainReason(drain)}. No new pair will launch and nothing is killed; ${rest}. Then summary.json reads drained, and --resume ${out} continues with nothing re-run that finished.`;
+}
+
+/** The two file operations the DRAIN file needs; the tests pass an in-memory pair. */
+export interface DrainFs { readFile: (path: string) => Promise<string>; unlink: (path: string) => Promise<void> }
+const NODE_DRAIN_FS: DrainFs = { readFile: (path) => readFile(path, "utf8"), unlink };
+
+/**
+ * Take the DRAIN file, for an operator who cannot send a signal: its level,
+ * with the file removed, so the --resume that follows is not drained before it
+ * launches anything. The summary keeps the request. No file: no request.
+ */
+export async function takeDrainFile(path: string, nowMs: () => number, warn: (line: string) => void, fs: DrainFs = NODE_DRAIN_FS): Promise<DrainRequest | undefined> {
+	const text = await fs.readFile(path).catch(() => undefined);
+	if (text === undefined) return undefined;
+	const parsed = parseDrainFile(text);
+	if (parsed.note) warn(parsed.note);
+	// Two readers can race to it (the loop and the heartbeat); the one that finds it gone has nothing to say.
+	await fs.unlink(path).catch((error: unknown) => {
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") warn(`DRAIN file taken but not removed (${message(error)}); remove it before --resume, or the resume drains at once`);
+	});
+	return { level: parsed.level, trigger: `DRAIN file (${parsed.level})`, atMs: nowMs() };
+}
+
+/** progress.json's status while the grid runs: a signal, then a stop rule, then a drain, name it. */
+export function liveStatus(state: GridStopState): string {
+	return state.aborted ? "interrupted" : state.stopInvalid ? "stopped-invalid" : state.drain ? "draining" : "running";
+}
+
+/**
+ * Whether the grid ended drained: the drain left work for --resume and no
+ * other stop happened. A drain that arrived after the last launch leaves
+ * nothing, so the grid is decided as usual; a signal or a stop rule names the
+ * grid's state instead, as it would have without the drain.
+ */
+export function isDrained(drained: PairLoopResult["drained"], state: Pick<GridStopState, "aborted" | "stopInvalid">): boolean {
+	return drained !== undefined && drained.left.length > 0 && !state.aborted && !state.stopInvalid;
+}
+
+/** progress.json's last status. */
+export function finalStatus(end: { interrupted: boolean; stoppedInvalid: boolean; drained: boolean; complete: boolean }): string {
+	return end.interrupted ? "interrupted" : end.stoppedInvalid ? "stopped-invalid" : end.drained ? "drained" : end.complete ? "complete" : "incomplete";
+}
+
+/** The runner's exit status: 0 for a decided grid, and for a drain, which is the pause the operator asked for. */
+export function exitStatus(decided: boolean, drained: boolean): 0 | 1 {
+	return decided || drained ? 0 : 1;
+}
+
+/**
+ * The record of a pair's second arm an arms drain did not start (ADR draft
+ * v6-drain). Not launched and not infrastructure: nothing failed, so it feeds
+ * neither the breaker nor the fail-fast stop, and planResume reads it as a
+ * missing arm, re-running the pair without counting the attempt.
+ */
+export function drainedOutcome(pair: ScheduledPair, arm: Arm, attempt: number, drain: DrainRequest): RunOutcome {
+	const record: JsonRecord = {
+		key: pair.key, target: pair.target, pass: pair.pass, arm, attempt, cellId: null, valid: false, notLaunched: true, drained: true,
+		infraFailure: false, infraReason: null, totalTokens: null,
+		errors: [`not launched: ${drainReason(drain)}; --resume re-runs the pair, and this attempt does not count toward the ceiling`],
+	};
+	return {
+		metric: { key: pair.key, target: pair.target, pass: pair.pass, valid: false, truePositives: 0, precision: 0, totalClaims: 0, totalTokens: Number.NaN },
+		arm, cellId: "", seconds: 0, record, infraFailure: false,
+	};
+}
 
 /** What the pair loop needs from the grid around it. runGrid passes the real runner; the tests pass fakes and a fake clock. */
 export interface PairLoop {
@@ -5293,6 +5446,16 @@ export interface PairLoop {
 	 * provider's OAuth token would not outlive the next arm. Absent, no check.
 	 */
 	credentialCheck?: () => Promise<string | undefined>;
+	/**
+	 * Read before every launch (ADR draft v6-drain): an operator's drain request
+	 * from the DRAIN file. Absent, only a signal drains. A throw is logged and
+	 * read as no request.
+	 */
+	drainCheck?: () => Promise<DrainRequest | undefined>;
+	/** After a drain the loop took from drainCheck: progress.json reads draining. */
+	onDrain?: () => Promise<void>;
+	/** Attempts a drain left half-done before this runner (planResume), which the ceiling does not count. Absent: none. */
+	drainedAttempts?: (pair: ScheduledPair) => number;
 }
 
 /**
@@ -5333,6 +5496,8 @@ export interface PairLoopResult {
 	abandoned: Array<{ key: string; attempt: number; reason: string }>;
 	/** Present only when the loop ran a matched arm. */
 	matched?: MatchedLoopResult;
+	/** Present only when an operator drained the loop: the drain in force, and the pairs it left for --resume. */
+	drained?: { drain: DrainRequest; left: string[] };
 }
 
 /** The longest an idle pair-worker sleeps before it looks again, so a signal or a trip is seen within a second while it waits out a cooldown. */
@@ -5388,6 +5553,11 @@ export async function runPairs(loop: PairLoop): Promise<PairLoopResult> {
 	 */
 	const keep = async (outcome: RunOutcome, pair: ScheduledPair, arm: Arm, attempt: number, launched: boolean, gate: boolean): Promise<void> => {
 		await loop.settle(outcome);
+		// An arm a drain did not start failed nothing: no stop rule and no breaker reads it.
+		if (outcome.record.drained === true) {
+			await loop.report(outcome, pair, arm, attempt);
+			return;
+		}
 		if (outcome.quotaExhausted && !state.quotaExhausted) {
 			state.quotaExhausted = `${String(outcome.record.infraReason ?? "provider quota exhausted")}: ${String(outcome.record.infraEvidence ?? "")}`;
 			loop.log(`QUOTA EXHAUSTED — ${state.quotaExhausted}. No further pair will launch; wait for the provider's quota or usage window to reset, then run --resume ${loop.out}.`);
@@ -5429,17 +5599,41 @@ export async function runPairs(loop: PairLoop): Promise<PairLoopResult> {
 		}
 		return why;
 	};
+	/** Pairs a drain left for --resume: not started, half-done, or with matched sessions owed. */
+	const left = new Map<string, number>();
+	/** Take a DRAIN-file request before a launch; a signal sets state.drain directly and is announced by its handler. */
+	const pollDrain = async (): Promise<void> => {
+		if (!loop.drainCheck) return;
+		let request: DrainRequest | undefined;
+		try {
+			request = await loop.drainCheck();
+		} catch (error) {
+			loop.warn(`DRAIN check failed, read as no request: ${message(error)}`);
+			return;
+		}
+		if (!request || !takeDrain(state, request)) return;
+		loop.log(drainNotice(state.drain!, loop.out));
+		await loop.onDrain?.();
+	};
 	const runPair = async ({ pair, attempt, firstAttempt, matchedOnly }: Queued): Promise<void> => {
 		if (matchedOnly) {
 			await runMatched(pair, attempt, matchedOnly.candidate, matchedOnly.sessions);
 			return;
 		}
 		let first: RunOutcome | undefined;
+		let drainedPair = false;
 		const byArm: Partial<Record<Arm, RunOutcome>> = {};
 		for (const arm of pair.order) {
 			// Nothing of this pair ran yet: leave it without a row, which a resume
 			// reads as a pair with no run at this attempt.
 			if (state.aborted && !first) break;
+			// A drain is read before every launch; one that finds nothing of the
+			// pair run leaves it the same way, and a resume runs it at this attempt.
+			await pollDrain();
+			if (state.drain && !first) {
+				left.set(pair.key, pair.index);
+				break;
+			}
 			// Every write for this arm is inside one try: a bookkeeping failure
 			// (ENOSPC on runs.jsonl) then stops new launches and drains the pool with
 			// the signal handlers still installed, rather than rejecting Promise.all.
@@ -5447,9 +5641,16 @@ export async function runPairs(loop: PairLoop): Promise<PairLoopResult> {
 				let outcome: RunOutcome;
 				let launched = false;
 				const partnerBlocked = first !== undefined && (!first.metric.valid || state.aborted);
-				const expiring = !partnerBlocked ? await credentialStop() : undefined;
+				// An arms drain starts no second arm; a pairs drain launches it, so the
+				// finished first arm is not wasted.
+				const drainedHere = first !== undefined && !partnerBlocked && state.drain?.level === "arms";
+				const expiring = !partnerBlocked && !drainedHere ? await credentialStop() : undefined;
 				if (expiring && !first) break;
-				if (partnerBlocked) {
+				if (drainedHere) {
+					outcome = drainedOutcome(pair, arm, attempt, state.drain!);
+					drainedPair = true;
+					left.set(pair.key, pair.index);
+				} else if (partnerBlocked) {
 					// The partner is not launched: a first arm invalid for a non-infra
 					// reason blocks the pair and one invalid for infra re-runs both arms,
 					// so up to two hours of this arm could never be compared. It is
@@ -5483,10 +5684,15 @@ export async function runPairs(loop: PairLoop): Promise<PairLoopResult> {
 			await runMatched(pair, attempt, byArm.candidate, []);
 		}
 		// A signal leaves the pair as it is; its resume decides from runs.jsonl.
-		if (!policy || state.aborted) return;
+		// So does a drain that left it half-done: no arm failed, so the pair is
+		// neither re-queued nor judged here.
+		if (!policy || state.aborted || drainedPair) return;
 		const now = loop.nowMs();
 		const arms = armsOfPair(pair).map((arm) => byArm[arm]).map((o) => o && { valid: o.metric.valid, infra: o.infraFailure });
-		const action = nextPairAction(attempt, arms, { attemptCeiling: policy.attemptCeiling, requeue: { policy, atMs: now, attemptsThisRun: attempt - firstAttempt + 1 } });
+		const action = nextPairAction(attempt, arms, {
+			attemptCeiling: policy.attemptCeiling, drainedAttempts: loop.drainedAttempts?.(pair) ?? 0,
+			requeue: { policy, atMs: now, attemptsThisRun: attempt - firstAttempt + 1 },
+		});
 		if (action.kind === "blocked") {
 			result.blocked.push({ key: pair.key, attempt, reason: action.reason });
 		} else if (action.kind === "abandoned") {
@@ -5502,6 +5708,9 @@ export async function runPairs(loop: PairLoop): Promise<PairLoopResult> {
 		} else if (action.kind === "give-up") {
 			result.gaveUp.push({ key: pair.key, attempt, reason: action.reason });
 			loop.log(`ATTEMPT CAP ${pair.target} pass ${pair.pass} · ${action.reason}`);
+		} else if (action.kind === "rerun" && !state.stopInvalid && state.drain) {
+			// A draining grid re-queues nothing either; the failure spent its own attempt.
+			left.set(pair.key, pair.index);
 		} else if (action.kind === "rerun" && !state.stopInvalid) {
 			// A stopped grid re-queues nothing: its resume re-runs the pair from runs.jsonl.
 			queue.push({ pair, attempt: action.attempt, firstAttempt, notBeforeMs: action.notBeforeMs });
@@ -5511,7 +5720,7 @@ export async function runPairs(loop: PairLoop): Promise<PairLoopResult> {
 	};
 	/** Wait until `atMs` in slices, so a signal or a trip is seen within a second. */
 	const waitUntil = async (atMs: number): Promise<void> => {
-		for (let now = loop.nowMs(); now < atMs && !state.aborted && !state.stopInvalid; now = loop.nowMs()) {
+		for (let now = loop.nowMs(); now < atMs && !state.aborted && !state.stopInvalid && !state.drain; now = loop.nowMs()) {
 			await loop.sleep(Math.min(atMs - now, IDLE_SLICE_MS));
 		}
 	};
@@ -5546,7 +5755,13 @@ export async function runPairs(loop: PairLoop): Promise<PairLoopResult> {
 				loop.log(`MATCHED SESSION ${step.kind.toUpperCase()} ${pair.target} pass ${pair.pass} session ${step.index} · ${step.reason}`);
 				return;
 			}
-			// A session is an arm too: none starts that the token would not outlive.
+			// A session is an arm too: none starts during a drain, and none that the
+			// token would not outlive. A resume runs the sessions still owed.
+			await pollDrain();
+			if (state.drain) {
+				left.set(pair.key, pair.index);
+				return;
+			}
 			if (await credentialStop()) return;
 			const name = `${pair.key}/${step.index}`;
 			const spec: MatchedSessionSpec = {
@@ -5598,6 +5813,9 @@ export async function runPairs(loop: PairLoop): Promise<PairLoopResult> {
 			// Stop taking pairs once the grid is stopped or a signal arrived; a pair
 			// already in flight runs its second arm only when its first arm was valid.
 			if (state.aborted || state.stopInvalid || !queue.length) return;
+			// A drain takes no new pair; the pairs already taken finish as it allows.
+			await pollDrain();
+			if (state.drain) return;
 			const next = takeReady();
 			if (next) {
 				await runPair(next);
@@ -5609,6 +5827,10 @@ export async function runPairs(loop: PairLoop): Promise<PairLoopResult> {
 	};
 	await Promise.all(Array.from({ length: Math.min(loop.concurrency, Math.max(1, loop.pairs.length)) }, worker));
 	result.breaker = breaker ? breaker.verdict : null;
+	if (state.drain) {
+		for (const q of queue) left.set(q.pair.key, q.pair.index);
+		result.drained = { drain: state.drain, left: [...left].sort(([, a], [, b]) => a - b).map(([key]) => key) };
+	}
 	return result;
 }
 
@@ -5780,11 +6002,11 @@ export const V6_DECISION = { rule: "v6 pre-registration", computedBy: "eval/v6-d
  * that matched on their wording would break on the next rewording. The
  * pre-registration treats them differently: an abandoned pair makes the
  * comparisons that use it inconclusive; invalid and blocked pairs are excluded
- * and listed; interrupted, stopped, quota, credential, gave-up,
+ * and listed; interrupted, drained, stopped, quota, credential, gave-up,
  * amendment-pending and blinded clear on a resume; exploratory,
  * runtime-changed and amendment-mismatch mean the grid cannot be decided.
  */
-export type DecisionCode = "exploratory" | "interrupted" | "stopped" | "quota" | "credential" | "gave-up" | "abandoned" | "runtime-changed"
+export type DecisionCode = "exploratory" | "interrupted" | "drained" | "stopped" | "quota" | "credential" | "gave-up" | "abandoned" | "runtime-changed"
 	| "invalid" | "blocked" | "amendment-mismatch" | "amendment-pending" | "blinded";
 export interface DecisionReason { code: DecisionCode; reason: string; keys?: string[] }
 
@@ -5816,6 +6038,12 @@ export interface GridVerdictState {
 	exploratoryReasons: readonly string[];
 	gridKind?: string | undefined;
 	interrupted: boolean;
+	/**
+	 * Present only when an operator's drain (ADR draft v6-drain) left work for
+	 * --resume and no signal or stop rule ended the grid (isDrained): the drain's
+	 * reason and the pairs it left.
+	 */
+	drained?: { reason: string; left: readonly string[] } | undefined;
 	stoppedInvalid: boolean;
 	stopReason?: string | undefined;
 	quotaExhausted?: string | undefined;
@@ -5841,6 +6069,7 @@ export function gridVerdictReasons(v: GridVerdictState): { notApprovedReasons: s
 	const notApprovedReasons = [
 		...(!v.official ? [`exploratory: ${v.exploratoryReasons.join("; ") || "not the official grid"}`] : []),
 		...(v.interrupted ? ["interrupted before the grid finished"] : []),
+		...(v.drained ? [`${v.drained.reason}; ${v.drained.left.length} pair(s) left for --resume`] : []),
 		...(v.stoppedInvalid && !v.interrupted ? [`stopped early: ${v.stopReason ?? "an invalid run"}`] : []),
 		...(v.quotaExhausted ? [`provider quota exhausted (${v.quotaExhausted}); it must reset before --resume`] : []),
 		...(v.credentialExpiring ? [`stopped before the OAuth token expired (${v.credentialExpiring})`] : []),
@@ -5855,6 +6084,8 @@ export function gridVerdictReasons(v: GridVerdictState): { notApprovedReasons: s
 	const codes: DecisionReason[] = [
 		...(!v.official ? [code("exploratory", v.exploratoryReasons.join("; ") || "not the official grid")] : []),
 		...(v.interrupted ? [code("interrupted", "interrupted before the grid finished")] : []),
+		// A drained grid is paused, not decided: eval/v6-decision.ts reads the code as not ready.
+		...(v.drained ? [code("drained", v.drained.reason, [...v.drained.left])] : []),
 		...(v.stoppedInvalid && !v.interrupted ? [code("stopped", v.stopReason ?? "an invalid run")] : []),
 		...(v.quotaExhausted ? [code("quota", String(v.quotaExhausted))] : []),
 		...(v.credentialExpiring ? [code("credential", String(v.credentialExpiring))] : []),
@@ -5961,6 +6192,20 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 		...(options.breaker ? { attempts: fresh.length } : {}), ...extra,
 	});
 	await progress("running");
+	const statusNow = (): string => liveStatus(runState);
+	const drainFields = (): JsonRecord => runState.drain ? { drain: drainRecord(runState.drain) } : {};
+	const readDrainFile = (): Promise<DrainRequest | undefined> => takeDrainFile(join(output, DRAIN_FILE), () => Date.now(), (line) => console.error(line));
+	// The loop reads the DRAIN file before every launch; this reads it once a
+	// heartbeat too, so progress.json reads draining within a minute of the file
+	// appearing even while every arm runs.
+	const drainTimer = setInterval(() => {
+		void readDrainFile().then(async (request) => {
+			if (!request || !takeDrain(runState, request)) return;
+			console.log(drainNotice(runState.drain!, output));
+			await progress(statusNow(), { stopReason: runState.stopReason ?? null, ...drainFields() });
+		}).catch(() => undefined);
+	}, HEARTBEAT_MS);
+	drainTimer.unref();
 	const loop = await runPairs({
 		pairs: launchPairs,
 		firstAttempt: (pair) => plan ? (plan.nextAttempt[pair.key] ?? 1) : 1,
@@ -5974,9 +6219,9 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 			await appendJsonl(join(output, "runs.jsonl"), outcome.record);
 		},
 		report: async (outcome, pair, arm, attempt) => {
-			await progress(runState.aborted ? "interrupted" : runState.stopInvalid ? "stopped-invalid" : "running", { lastCell: outcome.cellId, stopReason: runState.stopReason ?? null });
+			await progress(statusNow(), { lastCell: outcome.cellId, stopReason: runState.stopReason ?? null, ...drainFields() });
 			const tokens = Number.isFinite(outcome.metric.totalTokens) ? String(outcome.metric.totalTokens) : "n/a";
-			const state = outcome.metric.valid ? "valid" : outcome.record.notLaunched === true ? "NOT LAUNCHED" : "INVALID";
+			const state = outcome.metric.valid ? "valid" : outcome.record.drained === true ? "NOT LAUNCHED (drained)" : outcome.record.notLaunched === true ? "NOT LAUNCHED" : "INVALID";
 			const session = sessionOf(outcome.record);
 			const label = session && options.matched ? `${arm} session ${session.index} (k=${options.matched.k}, up to ${options.matched.kMax}; session attempt ${session.sessionAttempt})` : arm;
 			// A blind pilot prints no run's time or tokens: they are an arm's cost.
@@ -5991,6 +6236,9 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 			const authText = await readFile(join(AGENT_BASE, "auth.json"), "utf8").catch(() => undefined);
 			return credentialStopReason(credentialExpiry(authText, options.provider), options.provider, Date.now(), options.timeoutMs + AUTH_MARGIN_MS);
 		},
+		drainCheck: readDrainFile,
+		onDrain: () => progress(statusNow(), { stopReason: runState.stopReason ?? null, ...drainFields() }),
+		drainedAttempts: (pair) => plan?.drainedAttempts[pair.key] ?? 0,
 		...(options.matched ? {
 			matched: {
 				policy: options.matched,
@@ -6003,8 +6251,14 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 			},
 		} : {}),
 	});
+	clearInterval(drainTimer);
+	const drainFinishedAt = new Date().toISOString();
 	const interrupted = runState.aborted;
 	const stoppedInvalid = runState.stopInvalid;
+	// Drained (ADR draft v6-drain) only when the drain left work for --resume and
+	// no other stop happened: a signal or a stop rule names the grid's state instead.
+	const drained = isDrained(loop.drained, runState);
+	const drainStop = drained ? drainReason(loop.drained!.drain) : undefined;
 	const abandonedKeys = [...new Set([...(plan?.abandonedKeys ?? []), ...loop.abandoned.map((a) => a.key)])];
 	// The gate reads the gate targets' runs only; a twin's are summarised apart.
 	const { gate: compared, twins: twinOutcomes } = splitTwinRuns(atHighestAttempt(outcomes), twinIds);
@@ -6048,7 +6302,8 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 	});
 	// A grid of a kind (plan item 2.8) is decided by the v6 pre-registration's
 	// rule, computed elsewhere: ADR-026's approval is neither computed nor printed.
-	const approved = options.gridKind === undefined && official && !interrupted && !stopWithholdsApproval && runtimeStable && comparison.complete && comparison.decision === APPROVAL
+	// A drained grid is paused, not decided: its resume decides it.
+	const approved = options.gridKind === undefined && official && !interrupted && !drained && !stopWithholdsApproval && runtimeStable && comparison.complete && comparison.decision === APPROVAL
 		&& amendmentReasons.length === 0;
 	// A patched twin that gave up or was abandoned is no reason the gate did not
 	// approve; it is listed in the breaker block and the twins block instead.
@@ -6058,6 +6313,7 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 	const gateBlocked = [...(plan?.blockedKeys ?? []), ...loop.blocked.map((b) => b.key)].filter((k) => !twinKeys.has(k));
 	const { notApprovedReasons, codes: decisionCodes } = gridVerdictReasons({
 		official, exploratoryReasons: pre.exploratoryReasons, gridKind: options.gridKind, interrupted, stoppedInvalid, stopReason: runState.stopReason,
+		...(drained ? { drained: { reason: drainStop!, left: loop.drained!.left } } : {}),
 		quotaExhausted: runState.quotaExhausted, credentialExpiring: runState.credentialExpiring,
 		gaveUp: gateGaveUp.map((g) => g.key), abandoned: gateAbandoned, blocked: gateBlocked, runtimeStable, comparison, amendmentReasons, blinded,
 	});
@@ -6077,7 +6333,9 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 		// the rows as they were written, and resumes.jsonl the resume that made each.
 		...(Array.isArray(manifest.harnessAmendments) ? { harnessAmendments: manifest.harnessAmendments } : {}),
 		interrupted, interruptedAt: runState.abortedAtMs === undefined ? null : new Date(runState.abortedAtMs).toISOString(),
-		stoppedInvalid, stopReason: runState.stopReason ?? null, quotaExhausted: runState.quotaExhausted ?? null,
+		stoppedInvalid, stopReason: runState.stopReason ?? drainStop ?? null, quotaExhausted: runState.quotaExhausted ?? null,
+		// Only a grid an operator drained has these (ADR draft v6-drain), so every other summary keeps its bytes.
+		...(loop.drained ? { drained, drain: { ...drainRecord(loop.drained.drain), finishedAt: drainFinishedAt, left: loop.drained.left } } : {}),
 		// Only a grid that stopped before its token expired says so.
 		...(runState.credentialExpiring ? { credentialExpiring: runState.credentialExpiring } : {}),
 		runtimeStable,
@@ -6130,9 +6388,10 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 	} else {
 		await serially(() => writeJson(join(output, "summary.json"), summary));
 	}
-	await progress(interrupted ? "interrupted" : stoppedInvalid ? "stopped-invalid" : comparison.complete ? "complete" : "incomplete");
+	await progress(finalStatus({ interrupted, stoppedInvalid, drained, complete: comparison.complete }));
 	if (!official) console.log("EXPLORATORY — not an acceptance decision");
 	if (interrupted) console.log("INTERRUPTED — grid incomplete");
+	if (drained) console.log(`DRAINED — ${drainStop!}; ${loop.drained!.left.length} pair(s) left. Continue with: node --experimental-strip-types eval/delegation-compare.ts --resume ${output}`);
 	if (stoppedInvalid && !interrupted) console.log(`STOPPED EARLY — ${runState.stopReason ?? "an invalid run"}`);
 	if (runState.quotaExhausted) console.log(`QUOTA EXHAUSTED — wait for the reset, then: node --experimental-strip-types eval/delegation-compare.ts --resume ${output}`);
 	if (runState.credentialExpiring) console.log(`CREDENTIAL EXPIRING — refresh the token outside the grid, then: node --experimental-strip-types eval/delegation-compare.ts --resume ${output}`);
@@ -6174,14 +6433,15 @@ async function runGrid(pre: Preflight, options: Options, manifest: JsonRecord, p
 		const decision = verdictOut.head.decision as { ready: boolean; notReadyReasons: string[] };
 		console.log(`decision: v6 pre-registration, computed by eval/v6-decision.ts · ${decision.ready ? "grid ready for it" : `NOT READY · ${decision.notReadyReasons.join(" · ")}`}`);
 		console.log(`summary ${join(output, "summary.json")}`);
-		process.exitCode = decision.ready ? 0 : 1;
+		// A drain is the pause the operator asked for, so it exits 0 like a finished grid.
+		process.exitCode = exitStatus(decision.ready, drained);
 		return;
 	}
 	// When not approved, print the reason, never the bare approval decision string.
 	if (approved) console.log(`APPROVED (this model) · ${comparison.decision}`);
 	else console.log(`NOT APPROVED (this model) · ${notApprovedReasons.join(" · ")}`);
 	console.log(`summary ${join(output, "summary.json")}`);
-	process.exitCode = approved ? 0 : 1;
+	process.exitCode = exitStatus(approved, drained);
 }
 
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {

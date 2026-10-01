@@ -101,7 +101,7 @@ const byCodePoint = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 // --- Grid state ------------------------------------------------------------------
 
 /** Codes that a resume clears, or that mean the grid cannot be decided: either way, not ready. */
-const NOT_READY_CODES = new Set(["interrupted", "stopped", "quota", "credential", "gave-up", "amendment-pending", "blinded", "exploratory", "runtime-changed", "amendment-mismatch"]);
+const NOT_READY_CODES = new Set(["interrupted", "drained", "stopped", "quota", "credential", "gave-up", "amendment-pending", "blinded", "exploratory", "runtime-changed", "amendment-mismatch"]);
 
 export interface GridState {
 	dir: string;
