@@ -3424,6 +3424,17 @@ chose a better harness in use over waiting for a verdict that cannot come back w
 - "Phase 3 passed its trial" can no longer be read off `main`'s history. This entry is where the
   order of events is recorded.
 
+### Outcome: Luna's stage 1 (2026-10-02)
+
+GPT-6 Luna's stage 1 failed rules 1 and 3. Grid `v6-stage1-luna`, 192/192, official:
+- **Rule 1:** −0.146 [−0.375, +0.083] advisories per pair. S found 24 of 52 against A's 30.
+- **Rule 3:** median log token ratio +0.371, pooled 1.31×.
+- **Time and cost:** S's median run took 218 minutes against A's 53, at $34.56 against $22.17.
+
+The operator decided to keep Phase 3 on `main` (2026-10-02). The record is in
+`docs/delegation-v6-results.md` on `plan/delegation-v6`. This entry stands as an operator decision
+taken against the pre-registered verdict, not one supported by it.
+
 ---
 
 ## ADR-037 — pi-mcp-adapter is installed beside pi-subagents, and the scope gate answers its approval broker for every MCP call
@@ -3598,3 +3609,9 @@ run as planned.
 - Benchmark arms that run `main` as users get it delegate from now on. Arm A in a future grid built
   from this `main` is a delegating arm unless its scope states `maxAgents: 0`. The running v6 grids
   are unaffected: their snapshots are pinned by digest.
+
+### Outcome: Luna's stage 1 (2026-10-02)
+
+Luna's stage 1 failed rule 1, so by the pre-registration Luna's stage 2 does not run. The operator
+kept this default, and ordered Luna's stage 2 run anyway as an **exploratory** grid. Its result is
+reported, and decides nothing under the ship table.
