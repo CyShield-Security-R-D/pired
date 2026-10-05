@@ -3615,3 +3615,51 @@ run as planned.
 Luna's stage 1 failed rule 1, so by the pre-registration Luna's stage 2 does not run. The operator
 kept this default, and ordered Luna's stage 2 run anyway as an **exploratory** grid. Its result is
 reported, and decides nothing under the ship table.
+
+---
+
+## ADR-039 — Delegation is opt-in again: on GPT-6 Luna the delegating session quits early and finds less
+
+**Status:** accepted · 2026-10-06 · operator decision · reverses ADR-038's default · ADR-029's
+opt-in default is back
+
+### Context
+
+ADR-038 made delegation the default on GLM-5.3 Flash's stage-2 evidence (D 33, S 29, M 29 of 39
+advisory opportunities). It named Luna's stage 2 as the evidence that would revert it. That grid
+ran as an **exploratory** grid, `v6-stage2-luna-c8`, because Luna's stage 1 had failed. It was
+complete on 2026-10-05, with 240 arms planned and 48 pairs paired; decisions are in pired-research
+under `v6/decisions/`.
+
+- **D vs S fails:**
+  - **Finding:** −0.125 [−0.333, +0.083] advisories per pair. D found 16 of 52 opportunities and
+    S 22. McNemar b=12, c=6, p=0.24.
+  - **Cost:** median log token ratio −0.21 [−1.16, +0.33]; pooled 0.63×.
+- **D vs M fails:**
+  - **Finding:** −0.194 [−0.433, +0.031] over 36 paired. M, the solo build given D's tokens, found
+    more than D. McNemar b=9, c=2, p=0.065.
+  - **Cost:** rule 3 holds.
+- **Bridged D vs A, descriptive:** −0.271 [−0.563, 0.000] advisories per pair.
+- **Why D costs less:** the delegating session stopped at a median 20 minutes against S's
+  209 minutes (time share 0.08 against 0.87), with open work in 48 of 48 runs. It launched a median
+  2.5 workers. On Luna, handing work to workers ends the lead's session early, and the findings go
+  with it.
+
+GLM showed the opposite sign, so the effect depends on the model. On the model the pre-registration
+makes primary, the default costs findings.
+
+### Decision
+
+- **Defaults:** `DEFAULT_MAX_AGENTS` is 0 and `DEFAULT_MAX_VERIFIERS` is 0, as under ADR-029. An
+  engagement opts in with `"maxAgents": 8` (and `maxVerifiers`). The ADR-038 code and tests are
+  reverted; ADR-038 stays on record.
+- **Next:** the early-stop is a product defect to investigate before delegation is tried as a
+  default again. A lead that has delegated should keep working, or settle with what remains,
+  instead of ending.
+
+### Rejected
+
+- **Keep the default for GLM's gain.** It is unproven (p≈0.2), it costs 1.17×, and Luna loses
+  findings.
+- **Fix the early-stop first, then decide.** That was offered. The operator chose to stop shipping a
+  default measured as worse on the primary model while the fix is pending.

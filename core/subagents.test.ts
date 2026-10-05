@@ -304,7 +304,7 @@ describe("the scope a worker is told", () => {
 });
 
 describe("the delegation prompt block", () => {
-	/** An engagement that states the suggested cap, which is also the default since ADR-038. */
+	/** An engagement that opted in with the suggested cap; the default is off (ADR-029). */
 	const scope = (over: Partial<EngagementScope> = {}): EngagementScope => ({
 		v: 1, engagement: "acme", authorized: true, mode: "enforce", targets: {}, maxAgents: SUGGESTED_MAX_AGENTS, ...over,
 	});
@@ -371,22 +371,20 @@ describe("the delegation prompt block", () => {
 		expect(delegationBlock(scope())).toContain(`allows ${SUGGESTED_MAX_AGENTS} worker launches per session`);
 		expect(delegationBlock(scope({ maxAgents: 3 }))).toContain("allows 3 worker launches per session");
 		expect(delegationBlock(scope({ maxAgents: 1 }))).toContain("allows 1 worker launch per session");
-		// A nonsense cap is the default, in the prompt as at the gate: eight since ADR-038.
-		expect(delegationBlock(scope({ maxAgents: -3 }))).toContain("allows 8 worker launches per session");
-		expect(DEFAULT_MAX_AGENTS).toBe(SUGGESTED_MAX_AGENTS);
+		// A nonsense cap is the default, in the prompt as at the gate: off.
+		expect(delegationBlock(scope({ maxAgents: -3 }))).toMatch(/turned off/);
 		expect(workerCap(undefined)).toBe(DEFAULT_MAX_AGENTS);
 		expect(workerCap(scope({ maxAgents: -3 }))).toBe(DEFAULT_MAX_AGENTS);
 		expect(workerCap(scope({ maxAgents: 0 }))).toBe(0);
 	});
 
-	it("reads the verifier cap apart from the worker cap, two unless the scope names a whole count (ADR-038)", () => {
+	it("reads the verifier cap apart from the worker cap, off unless the scope names a whole count", () => {
 		// Verification is not to compete with work launches for one budget, so it
-		// has its own, read by the rule maxAgents follows. It was off by default;
-		// ADR-038 made two the default, the D configuration the v6 trial measured,
-		// and a nonsense value falls back to that.
-		expect(DEFAULT_MAX_VERIFIERS).toBe(2);
-		expect(verifierCap(undefined)).toBe(2);
-		expect(verifierCap(scope())).toBe(2);
+		// has its own. Nothing enforces it until the verification tier lands; the
+		// number it will enforce is settled here, by the rule maxAgents follows.
+		expect(DEFAULT_MAX_VERIFIERS).toBe(0);
+		expect(verifierCap(undefined)).toBe(0);
+		expect(verifierCap(scope())).toBe(0);
 		expect(verifierCap(scope({ maxVerifiers: 3 }))).toBe(3);
 		expect(verifierCap(scope({ maxVerifiers: 0, maxAgents: 8 }))).toBe(0);
 		for (const bad of [-1, 2.5, Number.NaN, "4"]) {
@@ -409,10 +407,7 @@ describe("the delegation prompt block", () => {
 	});
 
 	it("says delegation is off, without listing workers, when the engagement disables it", () => {
-		// Disabling it is both caps at 0: since ADR-038 a scope that names no
-		// maxVerifiers keeps two verifier launches, so maxAgents 0 alone gets the
-		// verify-only block (tested under "verifier launches" below).
-		const block = delegationBlock(scope({ maxAgents: 0, maxVerifiers: 0 }));
+		const block = delegationBlock(scope({ maxAgents: 0 }));
 		expect(block.toLowerCase()).toMatch(/turned off|disabled/);
 		expect(block).not.toContain("pired-scout");
 		expect(block).not.toMatch(/worker launch/);
@@ -449,23 +444,19 @@ describe("the pi-subagents tools the parent does not see", () => {
 	});
 
 	it("hides the launcher and its loader when delegation is off, so the stub costs nothing and invites no refused call", () => {
-		// Off was the default under ADR-029; since ADR-038 it is an engagement's
-		// choice, and it takes both caps at 0, since maxAgents 0 alone leaves two
-		// verifier launches that go through the launcher.
-		const hidden = hiddenParentTools(scope({ maxAgents: 0, maxVerifiers: 0 }));
-		for (const name of ["subagent", "subagents_enable", "bg_wait", "subagent_supervisor"]) expect(hidden.has(name), name).toBe(true);
+		// ADR-029: off is the default, so this is every engagement that never opted in.
+		for (const off of [undefined, scope(), scope({ maxAgents: 0 })]) {
+			const hidden = hiddenParentTools(off);
+			for (const name of ["subagent", "subagents_enable", "bg_wait", "subagent_supervisor"]) expect(hidden.has(name), name).toBe(true);
+		}
 	});
 
-	it("keeps the launcher and its loader for an engagement that delegates, by default (ADR-038) or by its own cap, and still hides the background tools", () => {
-		// The first two were the off case under ADR-029: an engagement that names
-		// no cap now delegates, so its launcher stays.
-		for (const on of [undefined, scope(), scope({ maxAgents: SUGGESTED_MAX_AGENTS })]) {
-			const hidden = hiddenParentTools(on);
-			expect(hidden.has("subagent")).toBe(false);
-			expect(hidden.has("subagents_enable")).toBe(false);
-			expect(hidden.has("bg_wait")).toBe(true);
-			expect(hidden.has("subagent_supervisor")).toBe(true);
-		}
+	it("keeps the launcher and its loader for an engagement that opted in, and still hides the background tools", () => {
+		const hidden = hiddenParentTools(scope({ maxAgents: SUGGESTED_MAX_AGENTS }));
+		expect(hidden.has("subagent")).toBe(false);
+		expect(hidden.has("subagents_enable")).toBe(false);
+		expect(hidden.has("bg_wait")).toBe(true);
+		expect(hidden.has("subagent_supervisor")).toBe(true);
 	});
 });
 
@@ -477,11 +468,7 @@ describe("verifier launches (3.1)", () => {
 	it("keeps the launcher visible for a verify-only session, and hides it only when both caps are 0", () => {
 		expect(hiddenParentTools(scope({ maxAgents: 0, maxVerifiers: 2 })).has("subagent")).toBe(false);
 		expect(hiddenParentTools(scope({ maxAgents: 0, maxVerifiers: 0 })).has("subagent")).toBe(true);
-		// maxAgents 0 alone is "off", whatever the verifier default (ADR-038): a scope
-		// that turns delegation off must not keep two verifier launches it never asked for.
 		expect(hiddenParentTools(scope({ maxAgents: 0 })).has("subagent")).toBe(true);
-		expect(verifierCap(scope({ maxAgents: 0 }))).toBe(0);
-		expect(verifierCap(scope({ maxAgents: 0, maxVerifiers: 3 }))).toBe(3);
 	});
 
 	it("gives a verify-only session its own block: the one launch it may make, and why a fresh context is worth it", () => {
@@ -493,14 +480,10 @@ describe("verifier launches (3.1)", () => {
 		expect(block).not.toMatch(/pired-scout|pired-investigate|pired-escalate/);
 	});
 
-	it("says verifier launches are counted apart, two of them by default (ADR-038), and not when the scope sets maxVerifiers 0", () => {
+	it("says verifier launches are counted apart when the scope sets both caps", () => {
 		expect(delegationBlock(scope({ maxAgents: 4, maxVerifiers: 1 }))).toMatch(/Verifier launches are counted apart: 1 `pired-verify` launch per session \(maxVerifiers\), which do not spend the work launches/);
-		// A scope that names no maxVerifiers had no separate cap to state; since
-		// ADR-038 it has the default two, and the block says so.
-		expect(delegationBlock(scope({ maxAgents: 4 }))).toMatch(/Verifier launches are counted apart: 2 `pired-verify` launches per session \(maxVerifiers\), which do not spend the work launches/);
-		// At 0 verifiers share the work cap, so there is nothing apart to state.
-		expect(delegationBlock(scope({ maxAgents: 4, maxVerifiers: 0 }))).not.toMatch(/counted apart/);
-		expect(delegationBlock(scope({ maxAgents: 4, maxVerifiers: 0 }))).toMatch(/A finding a worker records lands suspected, and a verifier or you settle it/);
+		expect(delegationBlock(scope({ maxAgents: 4 }))).not.toMatch(/counted apart/);
+		expect(delegationBlock(scope({ maxAgents: 4 }))).toMatch(/A finding a worker records lands suspected, and a verifier or you settle it/);
 	});
 
 	it("names the verify role's agents as the ones maxVerifiers counts", () => {

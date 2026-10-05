@@ -318,27 +318,11 @@ describe("the subagent budget", () => {
 		expect(denied.reason).toMatch(/maxAgents/);
 	});
 
-	it("delegates by default, up to eight workers and two verifiers (ADR-038), and maxAgents 0 still turns the work launches off", () => {
-		// ADR-038: after the v6 GLM stage-2 trial the operator made the measured D
-		// configuration the default (2026-10-01), reversing ADR-029's opt-in. An
-		// engagement that names no cap gets eight work launches and two pired-verify
-		// launches on their own cap, so the two verifiers spend none of the eight.
-		expect(DEFAULT_MAX_AGENTS).toBe(8);
-		const gate = createScopeGate(eng(), { cwd: "/work" });
-		const launch = (agent: string) => gate({ name: "subagent", args: { agent, task: "map" } }) as GateDecision;
-		const ran = () => gate.settle({ name: "subagent", isError: false, result: { details: { results: [{}] } } });
-		for (let i = 0; i < 2; i++) {
-			expect(launch("pired-verify").allow, `verifier ${i + 1}`).toBe(true);
-			ran();
-		}
-		expect(launch("pired-verify").reason).toMatch(/Verifier budget spent: 2 pired-verify launches per session/);
-		for (let i = 0; i < 8; i++) {
-			expect(launch("pired-scout").allow, `worker ${i + 1}`).toBe(true);
-			ran();
-		}
-		expect(launch("pired-scout").reason).toMatch(/Subagent budget spent: 8 per session, 8 already launched/);
-
-		const denied = decide(createScopeGate(eng({ maxAgents: 0 })), spawn);
+	it("refuses delegation when the engagement never opted in, because the default is off", () => {
+		// ADR-029: the trial that was to justify delegation on by default did not
+		// (ADR-026 outcome), so an engagement that says nothing does the work itself.
+		expect(DEFAULT_MAX_AGENTS).toBe(0);
+		const denied = decide(createScopeGate(eng()), spawn);
 		expect(denied.allow).toBe(false);
 		expect(denied.reason).toMatch(/Delegation is disabled/);
 	});
@@ -382,18 +366,13 @@ describe("the subagent budget", () => {
 	});
 
 	it("reads a nonsense budget as the default rather than as a cap of its own", () => {
-		// The default is eight since ADR-038, so -3 allows eight spawns, not none.
-		const gate = createScopeGate(eng({ maxAgents: -3 }));
-		for (let i = 0; i < DEFAULT_MAX_AGENTS; i++) expect(decide(gate, spawn).allow, `spawn ${i + 1}`).toBe(true);
-		expect(decide(gate, spawn).reason).toMatch(/budget spent: 8 per session/);
+		expect(decide(createScopeGate(eng({ maxAgents: -3 })), spawn).allow).toBe(DEFAULT_MAX_AGENTS > 0);
 	});
 
 	it("tells a parent past the cap how to finish, the same way whichever tool hit it", () => {
-		// maxVerifiers 0 puts the pired-verify launch below on the work cap this
-		// test is about; ADR-038's default would give it two launches of its own.
-		const spawned = createScopeGate(eng({ maxAgents: 1, maxVerifiers: 0 }));
+		const spawned = createScopeGate(eng({ maxAgents: 1 }));
 		decide(spawned, spawn);
-		const launched = createScopeGate(eng({ maxAgents: 1, maxVerifiers: 0 }), { cwd: "/work" });
+		const launched = createScopeGate(eng({ maxAgents: 1 }), { cwd: "/work" });
 		decide(launched, { name: "subagent", args: { agent: "pired-scout", task: "map" } });
 		launched.settle({ name: "subagent", isError: false, result: { details: { results: [{}] } } });
 		const viaSpawn = decide(spawned, spawn).reason;
@@ -414,13 +393,8 @@ describe("the refusal at the worker cap", () => {
 	const eng = (over: Partial<EngagementScope> = {}): EngagementScope => ({
 		v: 1, engagement: "e", authorized: true, mode: "off", targets: {}, ...over,
 	});
-	/**
-	 * maxVerifiers 0 charges the pired-verify launch to the one spent work launch,
-	 * which is the refusal under test; at ADR-038's default of two verifier
-	 * launches it would be allowed on its own cap.
-	 */
 	const capped = (): string => {
-		const gate = createScopeGate(eng({ maxAgents: 1, maxVerifiers: 0 }), { cwd: "/work" });
+		const gate = createScopeGate(eng({ maxAgents: 1 }), { cwd: "/work" });
 		expect((gate({ id: "a", name: "subagent", args: { agent: "pired-scout", task: "map" } }) as GateDecision).allow).toBe(true);
 		gate.settle({ id: "a", name: "subagent", isError: false, result: { details: { results: [{}] } } });
 		const refused = gate({ name: "subagent", args: { agent: "pired-verify", task: "check" } }) as GateDecision;
@@ -454,7 +428,7 @@ describe("the refusal at the worker cap", () => {
  * mutates state — is refused. It counts launched children, not tool calls.
  */
 describe("the subagent gate", () => {
-	/** An engagement that delegates, its cap stated: the gate below is only reached by one. */
+	/** An engagement that opted in to delegation: the gate below is only reached by one. */
 	const eng = (over: Partial<EngagementScope> = {}): EngagementScope => ({
 		v: 1, engagement: "e", authorized: true, mode: "enforce", targets: { domains: ["app.e.test"] }, maxAgents: 8, ...over,
 	});
@@ -671,11 +645,8 @@ describe("the subagent gate", () => {
 		expect(decide(gate, { ...launch(), id: "next" }).reason).toMatch(/budget spent/);
 	});
 
-	it("says delegation is disabled at maxAgents=0 and maxVerifiers=0, before looking at anything else", () => {
-		// Both caps: since ADR-038 a scope that names no maxVerifiers keeps two
-		// verifier launches, so maxAgents 0 alone is a verify-only session, whose
-		// gate does read the launch's keys.
-		const gate = at({ maxAgents: 0, maxVerifiers: 0 });
+	it("says delegation is disabled at maxAgents=0, before looking at anything else", () => {
+		const gate = at({ maxAgents: 0 });
 		const denied = decide(gate, launch({ gate: "true" }));
 		expect(denied.allow).toBe(false);
 		expect(denied.reason).toMatch(/disabled/i);
@@ -753,11 +724,8 @@ describe("the subagent gate", () => {
 			expect(decide(gate, { ...launch(), id: "w2" })).toEqual({ allow: true });
 		});
 
-		it("charges verifiers to maxAgents as before when the scope sets maxVerifiers to 0", () => {
-			// This was the behaviour of a scope that named no maxVerifiers; since
-			// ADR-038 that scope gets two verifier launches of its own, and 0 is how
-			// an engagement puts verifiers back on the work cap.
-			const gate = at({ maxAgents: 1, maxVerifiers: 0 });
+		it("charges verifiers to maxAgents as before when the scope sets no maxVerifiers", () => {
+			const gate = at({ maxAgents: 1 });
 			expect(decide(gate, verify("v1"))).toEqual({ allow: true });
 			gate.settle(ran("v1"));
 			expect(decide(gate, launch()).reason).toMatch(/Subagent budget spent: 1 per session/);

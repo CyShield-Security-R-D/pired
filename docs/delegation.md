@@ -2,8 +2,8 @@
 
 pired delegates through [pi-subagents](https://github.com/nicobailon/pi-subagents). When
 the package is present, pired registers four security-operator agents at session start. An
-engagement authorizes the model to use them, up to `maxAgents` per session: 8 by default
-([ADR-038](decisions.md)), and 0 turns delegation off. pired has no worker of its own and no delegation CLI. See
+engagement that opts in by setting `maxAgents` in its scope file authorizes the model to use them;
+by default delegation is off ([ADR-029](decisions.md)). pired has no worker of its own and no delegation CLI. See
 [ADR-027](decisions.md).
 
 ## Versions
@@ -104,17 +104,14 @@ trusted. pi runs the tool calls of one assistant message in parallel, and `subag
 declare itself sequential, so two launches in one message used to run two workers at once. The
 gate refuses a launch while another is running.
 
-**Delegation is on by default.** `maxAgents` in the scope file caps how many workers a session may
-launch. It defaults to `8`, with `maxVerifiers` defaulting to `2`, the configuration the v6 trial
-measured ([ADR-038](decisions.md)). `0` disables delegation: the model sees a one-line block saying
-so, and neither `subagent` nor `subagents_enable`.
-
-The default has moved twice:
-- **On at 8 at first.** v5's pre-registered trial found delegation matched the single agent's true
-  positives at a higher cost and lower precision, so [ADR-029](decisions.md) made it opt-in.
-- **On again (ADR-038).** On GLM-5.3 Flash, v6's redesigned workers found 33 of 39 advisory
-  opportunities against the solo build's 29, at about 1.17× its tokens. That missed the trial's cost
-  rule, and the operator made it the default anyway while Luna's stage 2 runs.
+**Delegation is opt-in.** `maxAgents` in the scope file caps how many workers a session may launch.
+It defaults to `0`, which disables delegation: the model sees a one-line block saying so, and neither
+`subagent` nor `subagents_enable`. `8` is the suggested cap for an engagement that opts in. The
+default was 8 until the pre-registered trial found delegation matched the single agent's true
+positives at a higher cost and lower precision ([ADR-029](decisions.md), ADR-026 outcome). It was on
+again from 2026-10-01 to 2026-10-06 (ADR-038). On GPT-6 Luna the delegating build then stopped after
+a median 20 minutes and found 16 of 52 advisory opportunities against 22 solo, so it is opt-in again
+([ADR-039](decisions.md)).
 The delegation block states the number. Each launch the gate allows counts against it. A launch
 that pi-subagents rejects before any worker starts is refunded. A launch past the cap is refused
 with wrap-up guidance, not a stop: the rest is the parent's, starting with what the ledger already
