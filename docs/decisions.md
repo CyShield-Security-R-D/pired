@@ -3427,7 +3427,7 @@ chose a better harness in use over waiting for a verdict that cannot come back w
 ### Outcome: Luna's stage 1 (2026-10-02)
 
 GPT-6 Luna's stage 1 failed rules 1 and 3. Grid `v6-stage1-luna`, 192/192, official:
-- **Rule 1:** −0.146 [−0.375, +0.083] advisories per pair. S found 24 of 52 against A's 30.
+- **Rule 1:** −0.146 [−0.375, +0.083] advisories per pair. S found 23 of 52 against A's 30.
 - **Rule 3:** median log token ratio +0.371, pooled 1.31×.
 - **Time and cost:** S's median run took 218 minutes against A's 53, at $34.56 against $22.17.
 
