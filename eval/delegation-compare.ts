@@ -3050,9 +3050,13 @@ const zaiCode = (code: string): RegExp => new RegExp(`"code"\\s*:\\s*"?${code}"?
  * has been reached", 222 times in ~/.pi/agent/sessions; "You have hit your
  * ChatGPT usage limit"). zai 1310 ("Weekly/Monthly Limit Exhausted", 611 times)
  * does not match pi's list and would read as a retryable 429, so it is anchored
- * by code before pi's rule runs.
+ * by code before pi's rule runs. commandcode reports a spent balance as a 400, "You have
+ * insufficient credits to make this request. Please purchase more credits to continue using
+ * the service." (v6-stage1-ds, 2026-10-02: 11 runs ended on it, every one in flight at once),
+ * which matched nothing, so the breaker read it as the run's own failure and stopped an
+ * official grid that only needed a top-up.
  */
-const QUOTA_TEXT = /insufficient_quota|quota exceeded|out of budget|billing|available balance|usage limit/i;
+const QUOTA_TEXT = /insufficient_quota|quota exceeded|out of budget|billing|available balance|usage limit|insufficient credits/i;
 /**
  * A provider that tells the client to retry. pi's list misses one such message: v5b's
  * luna filebrowser pass 3 baseline (2026-09-24) failed on "Codex error: Unable to verify

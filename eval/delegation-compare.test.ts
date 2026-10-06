@@ -183,6 +183,7 @@ describe("classifyInfra", () => {
 		['429: {"code":"1308","message":"Usage limit reached for 5 hour. Your limit will reset at 2026-09-15 21:21:07"}', "zai 1308 five-hour usage window"],
 		["429: insufficient_quota", "provider quota exhausted"],
 		["Codex error: The usage limit has been reached", "provider quota exhausted"],
+		['400: {"message":"You have insufficient credits to make this request. Please purchase more credits to continue using the service.","type":"invalid_request_error","code":"BAD_REQUEST"}', "provider quota exhausted"],
 	])("classes %j as an exhausted quota the runner must wait out", (text, reason) => {
 		expect(classifyInfra(parentFails(text), false)).toMatchObject({ infra: true, reason, exhausted: true });
 	});
