@@ -433,7 +433,7 @@ export function findDuplicate<T extends Fields>(kind: IdentityKind, patch: Field
 // --- merging ----------------------------------------------------------------
 
 /** Fields where a second sighting adds to the first rather than replacing it. */
-const UNION_FIELDS = ["tech", "params", "evidence", "options", "blocks"];
+const UNION_FIELDS = ["tech", "params", "evidence", "options", "blocks", "basis"];
 
 /** Prose the report reads. A terser re-recording must not shorten the deliverable. */
 const PROSE_FIELDS = ["description", "repro"];
@@ -538,7 +538,7 @@ export function mergeRecord(kind: IdentityKind, existing: Fields, patch: Fields,
 }
 
 /** What a hypothesis says about its cell beyond the outcome and the sentence. */
-const CLAIM_DETAIL = ["method", "evidence"] as const;
+const CLAIM_DETAIL = ["method", "evidence", "basis"] as const;
 
 /**
  * Take the method and evidence from the side whose claim the row keeps.

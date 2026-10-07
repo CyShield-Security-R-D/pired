@@ -272,11 +272,17 @@ the surface elements coverage is computed over.
   "method":"Swapped id to another user's; observed response",
   "outcome":"refuted",           // "proposed" | "testing" | "confirmed" | "refuted" | "inconclusive"
   "evidence":"evidence/y7-idor.txt",
-  "findingId":"f3a9"             // set when outcome=confirmed and a finding was created
+  "basis":["api/user.go:41: if req.ID != session.UserID"],  // the grounds the claim cites (ADR-040)
+  "findingId":"f3a9"             // the finding that writes this up; set on either end of the link
 }
 ```
 
 Refuted and inconclusive hypotheses are **retained** (no-retest + report rigor).
+
+`basis` is what the reviewer cited for the claim, as given — not checked on write. It travels with
+the claim it grounds: a re-record of the same claim adds to it, and an outcome moved by id without a
+basis drops it with `method` and `evidence`. A second look's grounds are written to the row's
+`verification`, never here. Rows written before ADR-040 have no `basis`; the write path dropped it.
 
 ### 8.3 `findings.jsonl` — the defect ledger
 
@@ -305,9 +311,14 @@ Refuted and inconclusive hypotheses are **retained** (no-retest + report rigor).
     "basis":["evidence/f3a9-anon.txt"],
     "live":true
   },
-  "hypothesisId":"y7"
+  "hypothesisId":"y7"            // the hypothesis this writes up; set on either end of the link
 }
 ```
+
+A link between a finding and its hypothesis is written on both rows: recording either one with the
+other's id (`hypothesisId` on the finding, `findingId` on the hypothesis) also sets the other end,
+unless that end already names a different record, which is left as it was (ADR-040). Rows written
+before ADR-040 may carry only the end that was named.
 
 `status` is one of `suspected`, `open`, `confirmed`, `triaged`, `reported`,
 `refuted`, `false-positive`, `accepted-risk`, `ignored`. The last four are

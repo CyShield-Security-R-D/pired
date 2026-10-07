@@ -41,6 +41,15 @@ describe("oneRow", () => {
 });
 
 describe("recordResultLine", () => {
+	it("leads with what was recorded and names the fields the write did not keep after it", () => {
+		const ink = (_tone: RecordTone, text: string): string => text;
+		const summary = "Not stored:\n- basis (kept only by id)\n- note (no note)\nThe rest of this call was recorded.\nRecorded hypothesis y7 (refuted) on e1\nmore for the model";
+		expect(recordResultLine({ kind: "hypothesis", notStored: ["basis (kept only by id)", "note (no note)"] }, summary, ink))
+			.toBe("Recorded hypothesis y7 (refuted) on e1 · not stored: basis, note");
+		expect(recordResultLine({ kind: "finding", severity: "high", title: "IDOR", notStored: ['status="Confirmed" (not one of …)'] }, "Not stored: x. The rest of this call was recorded.\nRecorded", ink))
+			.toBe("⦿ HIGH  IDOR · not stored: status");
+	});
+
 	it("leads a finding with its severity, which is the engagement's actual product", () => {
 		const line = recordResultLine(
 			{ kind: "finding", severity: "high", title: "SQL injection in the login handler" },

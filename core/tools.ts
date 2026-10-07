@@ -49,6 +49,7 @@ import { renderAreas } from "./areas.ts";
 import { budgetState, renderBudgetLine } from "./budget.ts";
 import { lastSettle, readSettleLedger, renderLastSettle, renderSettleReply, settleAreas, settleRemainder, standingSettle } from "./settle.ts";
 import type { JsonSchema, ToolContext, ToolDefinition, ToolResult } from "./ports.ts";
+import { keptReport, type KindsOf, needsLedger, notKept, RECORD_KINDS, type RecordKind, readRecordCall, refusalMemory, trackReads } from "./record-args.ts";
 import type { Workspace } from "./workspace.ts";
 
 export interface ToolDeps {
@@ -110,10 +111,6 @@ export interface ToolDeps {
 	sourceDirs?: () => string[] | undefined;
 }
 
-const RECORD_KINDS = [
-	"note", "evidence", "model", "host", "service", "endpoint", "param", "tech", "hypothesis", "finding", "blocker", "loot", "settle",
-] as const;
-type RecordKind = (typeof RECORD_KINDS)[number];
 type LedgerKind = Exclude<RecordKind, "note" | "evidence" | "model" | "settle">;
 
 const RECALL_QUERIES = [
@@ -168,6 +165,27 @@ const REQUIRED: Record<LedgerKind, string[]> = {
 };
 
 const DEFAULT_SURFACE_KINDS: InventoryKind[] = ["endpoint", "host"];
+
+/** The refusal for a required field a create did not carry. */
+function missingField(kind: string, field: string, a: Record<string, unknown>): Error {
+	// Name what did arrive. The old message said only that a field was
+	// required, which reads as the model's mistake even when the field
+	// was stripped from the schema before the model could send it.
+	const got = Object.keys(a).filter((k) => k !== "kind").join(", ") || "nothing";
+	// Tell the agent how to resolve it. A missing target is not an
+	// operator decision — the agent records the surface element itself,
+	// or names a raw one — and an error that only states a rule invites
+	// it to stop and ask, or to give up and write a note.
+	const how = field === "target"
+		? " A target is a recorded element id, or a raw string when nothing fits — a file path, a module, a component." +
+			" Record the surface element first (kind=endpoint/host/service/param/tech) and pass its id, or pass the raw string." +
+			" Do not ask the operator for it, and do not drop the record."
+		: "";
+	return new Error(
+		`record ${kind}: '${field}' is required, but was not received. Fields received: ${got}.` +
+		`${how} If you did send '${field}', the tool schema dropped it — report this rather than working around it.`,
+	);
+}
 
 // --- small typed accessors --------------------------------------------------
 
@@ -270,7 +288,7 @@ function extractFields(kind: LedgerKind, a: Record<string, unknown>): Record<str
 		case "hypothesis":
 			// `verification` is written by the challenge path below, never taken
 			// from the caller — same rule as a finding's, and for the same reason.
-			return defined({ statement: str(a.statement), target: asList(a.target)[0], class: asList(a.class)[0], method: str(a.approach) ?? str(a.method), outcome: oneOf(a.outcome, HYPOTHESIS_OUTCOMES), evidence: str(a.evidence), findingId: str(a.findingId), verification: a.verification as HypothesisRecord["verification"] });
+			return defined({ statement: str(a.statement), target: asList(a.target)[0], class: asList(a.class)[0], method: str(a.approach) ?? str(a.method), outcome: oneOf(a.outcome, HYPOTHESIS_OUTCOMES), evidence: str(a.evidence), basis: strArr(a.basis), findingId: str(a.findingId), verification: a.verification as HypothesisRecord["verification"] });
 		case "finding":
 			return defined({ title: str(a.title), severity: oneOf(a.severity, SEVERITIES), target: str(a.target), class: str(a.class), cwe: str(a.cwe), cvss: str(a.cvss), description: str(a.description), impact: str(a.impact), remediation: str(a.remediation), repro: str(a.repro), evidence: strArr(a.evidence), status: oneOf(a.status, FINDING_STATUSES), reason: str(a.reason), hypothesisId: str(a.hypothesisId), source: oneOf(a.source, FINDING_SOURCES), verification: a.verification as FindingRecord["verification"] });
 		case "blocker":
@@ -449,14 +467,14 @@ const RECORD_DESCRIPTION = `Record engagement state to the durable workspace. On
 - evidence: name, content — saves raw output to the workspace and returns the path to cite (this is how you create the file that 'evidence' fields reference)
 - host: value (+ip, tech[]); service: host, port (+proto, name); endpoint: path (+host, method, params[], auth, file); param: name (+endpoint, location, file)
   'file' is where the element lives in the source — the handler a route dispatches to. Reviewing code, give it: coverage is classes x the surface you recorded, so a matrix of routes alone can never point at a file, and a finding on that element inherits a location the report can cite.; tech: name (+host, version)
-- hypothesis: statement, target (surface id), class (checklist id) (+approach, outcome[proposed|testing|confirmed|refuted|inconclusive], evidence). One test case: the class you tested, the element you tested it against, and what came back. 'target' and 'class' also accept lists, recording the cross product in one call — use it when one piece of reasoning settles several test cases at once.
-- finding: title, severity[info|low|medium|high|critical] (+target, class, cwe, cvss, description, repro, evidence[], status)
+- hypothesis: statement, target (surface id), class (checklist id) (+approach, outcome[proposed|testing|confirmed|refuted|inconclusive], evidence, basis[] — the grounds it cites). One test case: the class you tested, the element you tested it against, and what came back. 'target' and 'class' also accept lists, recording the cross product in one call — use it when one piece of reasoning settles several test cases at once.
+- finding: title, severity[info|low|medium|high|critical] (+target, class, cwe, cvss, description, repro, evidence[], status, hypothesisId — the id of the hypothesis it writes up)
   A finding is anything worth carrying into the report, not only a proven vulnerability. Use severity=info for an observation that costs nothing now but may matter later — a missing dependency pin, an unpinned base image, a permissive default, a lead you could not finish. 'target' is optional and accepts a recorded element id OR a raw string (a file path, a module, a component) when no element fits; give one when you can, and record the finding either way rather than leaving it in notes.
   A finding is a section of a document a client pays for, so it is written as one: 'description' says what the flaw is and where, 'impact' says what it costs THEM — the records exposed, the money moved, the service lost, the obligation breached — and 'remediation' says the concrete change that fixes it (the control to add, the call to replace; never "sanitize input"). 'repro' is numbered steps a third party can follow. Write impact in the client's terms, not the tool's: "any logged-in customer can read all 40k customer records, including national IDs" beats "confidentiality impact is high".
   status[suspected|open|confirmed|triaged|reported|refuted|false-positive|accepted-risk|ignored] is how a finding is settled without losing it. New findings are 'suspected': recorded, not yet challenged. 'confirmed' is earned, not asserted — pass 'control' (the case that had to FAIL for this to mean anything: the unauthenticated request, the false payload, the absent guard) and, for access-control classes, 'entitlement' (how you established the caller was not MEANT to reach the resource — reading another user's object is a bug when the reader was not entitled and a feature when they were, and the response looks identical). To refute, pass 'basis' (file:line, an evidence path, or the model section that settles it), and 'live' when the engagement has a live target — a review of source has none to reach, and there the basis is the whole bar. On a review of source the proof is quoted, not named: a confirmation carries 'path' (the source hop to the sink hop) and a refutation quotes the guard that makes it not a finding (in 'basis' or 'guards'), each as 'file:line: verbatim text'. pired checks every quote against the file; one that is not there within 3 lines, or that the file repeats more than 3 times, settles nothing, and the reply shows what the line does say. A challenge that could not settle it is a result too: status=suspected with 'basis' or 'control' on the finding's id, and nothing about the claim itself, keeps its status and writes your grounds on it ('reason' alone is a note, not a look). Short of either bar the status does not move and nothing is lost. 'recall challenge' lists what no challenge has settled — findings nobody has examined first, then those examined but unsettled; 'recall challenge id=<id>' returns the brief for any finding, including one already examined. When the operator says a finding is not real, set status=false-positive; when they say the risk is accepted, status=accepted-risk; when they want it set aside, status=ignored. All three keep the row and its history, drop it out of the open-findings count, and take a 'reason' — which is what a client asks for three months later. Prefer them to deleting.
 - blocker: question (+blockerType, priority[low|medium|high], options[], blocks[] (work ids this gates), status[open|answered|dismissed], answer)
   A parked question stays open until someone closes it, and an open blocker is one you keep routing around. When the operator answers it — in a dialog, or just by telling you in chat that it is decided or already handled — write that down: \`recall blockers\` gives you the id, then \`record kind=blocker id=<id> status=answered answer=<what they said>\`. Answers given in the UI arrive on their own; you do not need a tool call to read them.
-- loot: handle (e.g. cred:web-admin), secret (+lootType, username, target, source)
+- loot: handle (a name for the credential, e.g. cred:web-admin — not a record id), secret (+lootType, username, target, source)
 - settle: outcome[finished|paused|blocked] (+note) — where this session leaves the engagement: finished (the work you were given is done), paused (work remains that you could still do) or blocked (what remains needs something only the operator can give). pired computes what remains from the ledger — open test cases, unmapped areas, unchallenged findings, inconclusive hypotheses, open blockers, budget spent — and records it with your note. It does not end the session.
 Pass 'id' to update an existing record. Pass 'id' with delete=true (and a 'reason') to retire one: it disappears from every view, the superseded lines stay in the file, and the tombstone records why. Delete only what should never have been recorded — a mistake, a row the operator asked you to remove. A finding that is real but will not be acted on is a status, not a deletion; deleting it removes it from the report the client reads.
 
@@ -465,16 +483,26 @@ Recording something twice is safe. Every kind has an identity — an endpoint is
 How these connect (this is what makes coverage work, not ceremony):
 - Coverage is your checklist's classes x the surface *you have recorded* — a TEST PLAN. Each cell of it is one test case: this weakness class, asked of this element ("is POST /api/login vulnerable to SQL injection?"). A host or endpoint you never recorded has no test cases at all, so it can never show as tested and 'recall gaps' cannot route you to it. Record the surface as you discover it.
 - A hypothesis IS that test case, executed and given a verdict — which is why a cell is settled by a hypothesis outcome and never by a finding: 'confirmed' marks it vulnerable, 'refuted' marks it clear. Ruling a class out is a result, not a non-event: an unrecorded refutation leaves the test case looking un-run no matter how carefully you looked. Running one case per call would be hundreds of calls, so record refutations in the shape you reasoned in: one call with a list of classes (and/or targets) and the single reason they share.
-- A confirmed hypothesis should also be recorded as a finding, tagged with the same 'class' so the finding maps back to the test case that proved it.
-- 'evidence' is a workspace-relative PATH, not inline text. Create it with record kind=evidence (which returns the path), then cite that exact path. Paths are verified on write: a finding or hypothesis citing a path that does not resolve is rejected, so cite only what you actually saved, or omit the field.`;
+- A confirmed hypothesis should also be recorded as a finding, tagged with the same 'class' so the finding maps back to the test case that proved it, and with hypothesisId=<the hypothesis id>, which links the two both ways.
+- 'evidence' is a workspace-relative PATH, not inline text. Create it with record kind=evidence (which returns the path), then cite that exact path. Paths are verified on write: a finding or hypothesis citing a path that does not resolve is rejected, so cite only what you actually saved, or omit the field.
+
+Every reply says what happened. A refused call is an error that names the field to fix and, where it can, the call to send instead — resending the same call gets the same refusal. A reply that starts 'Not stored:' recorded the rest of the call and names what it did not keep and why; nothing else was lost.`;
 
 const RECORD_PARAMETERS: JsonSchema = {
 	type: "object",
 	additionalProperties: true,
-	required: ["kind"],
+	// `kind` is not in `required`. It still is in practice, and the description
+	// says so; but declared required, a call that left it out was refused by the
+	// host's schema check before the tool could see that its fields name one kind.
+	// 2,168 of the grids' 4,397 refused record calls were exactly that.
 	properties: {
-		kind: { enum: RECORD_KINDS, description: "What is being recorded." },
-		id: { type: "string", description: "Existing record id to update; omit to create." },
+		kind: { enum: RECORD_KINDS, description: "What is being recorded. Always send it; a call without it is read only when its fields fit exactly one kind." },
+		id: { type: "string", description: "Existing record id to update; omit to create. A record's id goes here, never in 'handle'." },
+		// Undeclared, these two were known to the model only from a hint in a reply,
+		// while `handle` sat in the schema looking like a name for a record — so a
+		// finding's link to its hypothesis was sent as `handle` and dropped unread.
+		hypothesisId: { type: "string", description: "kind=finding: the id of the hypothesis this finding writes up. Links the two both ways." },
+		findingId: { type: "string", description: "kind=hypothesis: the id of the finding that writes this hypothesis up. Links the two both ways." },
 		text: { type: "string" },
 		section: { enum: MODEL_SECTIONS, description: "For kind=model: which section of the target model this replaces." },
 		value: { type: "string" }, ip: { type: "string" }, tech: { type: "array", items: { type: "string" } },
@@ -515,12 +543,12 @@ const RECORD_PARAMETERS: JsonSchema = {
 		content: { type: "string", description: "For kind=evidence: the raw output to save to the file." },
 		title: { type: "string" }, severity: { enum: SEVERITIES }, cwe: { type: "string" }, cvss: { type: "string", description: `CVSS vector. v4.0 by default, e.g. "${CVSS_EXAMPLE["4.0"]}"; a v3.1 vector is accepted when the engagement requires one.` }, description: { type: "string", description: "What the flaw is and where: the mechanism, in plain language." }, impact: { type: "string", description: "What it costs the client in their terms — records exposed, money moved, service lost, obligation breached." }, remediation: { type: "string", description: "The concrete change that fixes it: the control to add, the call to replace. Not \"sanitize input\"." }, repro: { type: "string" }, status: { type: "string" }, evidence: { type: "array", items: { type: "string" }, description: "Workspace-relative paths to evidence files you wrote (e.g. [\"evidence/sqli-login.txt\"]). Not inline text." },
 		control: { type: "string", description: "For kind=finding: the control case you ran and what it returned — the request that had to FAIL for the finding to mean anything." },
-		basis: { type: "array", items: { type: "string" }, description: "The grounds for a refutation, a severity change, or a second look at a cleared cell — file:line, an evidence path, or the model section that settles it. Written as 'file:line: verbatim text', an entry is a quote and is checked against the file: the text must be on that line or within 3 of it, and rare enough in the file (at most 3 times) to identify it. On kind=hypothesis with an id, this is what marks the row as independently re-checked. On kind=finding with an id and status=suspected (and no claim fields), it records a challenge that could not settle the claim." },
+		basis: { type: "array", items: { type: "string" }, description: "The grounds for a refutation, a severity change, or a second look at a cleared cell — file:line, an evidence path, or the model section that settles it. Written as 'file:line: verbatim text', an entry is a quote and is checked against the file: the text must be on that line or within 3 of it, and rare enough in the file (at most 3 times) to identify it. On a new kind=hypothesis it is stored as the grounds the claim cites; on kind=hypothesis with an id, this is what marks the row as independently re-checked. On kind=finding with an id and status=suspected (and no claim fields), it records a challenge that could not settle the claim." },
 		guards: { type: "array", items: { type: "string" }, description: "For a kind=finding verdict: the checks you examined — validation, an authorization test, escaping, a parameterised call — each as 'file:line: verbatim text', checked against the file. On a review of source a refutation quotes the guard (here or in basis) that makes the claim not a finding." },
 		live: { type: "boolean", description: "For an engagement with a live target: was it reachable, and the session valid, when you challenged it? A refutation against a dead session refutes nothing. When there is no running target, leave it out: a review of source has no target to reach, and there the cited basis carries the refutation. Applies to kind=finding and to a re-checked kind=hypothesis." },
 		entitlement: { type: "string", description: "For kind=finding: how you established the caller was (or was not) meant to reach the resource. Required to confirm an access-control finding." },
 		question: { type: "string" }, blockerType: { enum: BLOCKER_TYPES }, priority: { enum: PRIORITIES }, options: { type: "array", items: { type: "string" } }, blocks: { type: "array", items: { type: "string" } }, context: { type: "string" },
-		handle: { type: "string" }, lootType: { enum: LOOT_TYPES }, username: { type: "string" }, secret: { type: "string" }, source: { type: "string" }, notes: { type: "string" },
+		handle: { type: "string", description: "kind=loot only: a name for the credential, e.g. cred:web-admin. Not a record id." }, lootType: { enum: LOOT_TYPES }, username: { type: "string" }, secret: { type: "string" }, source: { type: "string" }, notes: { type: "string" },
 		delete: { type: "boolean", description: "With 'id': retire that record. For something that should never have been recorded — ask the operator first." },
 		reason: { type: "string", description: "Why a record is being deleted or its status changed. Stored on the record." },
 	},
@@ -913,7 +941,7 @@ async function macroDigest(deps: ToolDeps, surfaceKinds: InventoryKind[]): Promi
 const MODEL_PROMPT_AFTER = 3;
 
 export function createRecordTool(deps: ToolDeps): ToolDefinition {
-	return {
+	const tool: ToolDefinition = {
 		name: "record",
 		label: "record",
 		description: RECORD_DESCRIPTION,
@@ -1111,6 +1139,9 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 						...(typeof a.live === "boolean" ? { live: a.live } : {}),
 						...(str(a.reason) ? { notes: str(a.reason) } : {}),
 					} satisfies HypothesisRecord["verification"];
+					// The second look's grounds, not the claim's: written over the row's
+					// own basis they would read as what the first reviewer cited.
+					delete a.basis;
 				}
 			}
 
@@ -1131,6 +1162,18 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 				}
 			}
 
+
+			// Refused before the targets below are resolved, because resolving creates
+			// the surface elements they name: a hypothesis refused for a missing
+			// statement used to leave those elements behind, so the refusal was not
+			// a no-op, and an agent resending it was writing each time it failed.
+			if (kind === "hypothesis") {
+				const id = str(a.id);
+				const updating = id !== undefined && (await deps.workspace.read("hypotheses")).some((h) => h.id === id);
+				const carried: Record<string, boolean> = { statement: str(a.statement) !== undefined, target: asList(a.target).length > 0, class: asList(a.class).length > 0 };
+				const missing = updating ? undefined : REQUIRED.hypothesis.find((field) => !carried[field]);
+				if (missing) throw missingField("hypothesis", missing, a);
+			}
 
 			// Targets are resolved before anything is written: the model names what it
 			// is looking at, and the ledger keys on ids.
@@ -1226,7 +1269,7 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 						for (const c of classes) {
 							const patch = defined({
 								statement, target: t, class: c, outcome,
-								method: str(a.approach) ?? str(a.method), evidence: str(a.evidence),
+								method: str(a.approach) ?? str(a.method), evidence: str(a.evidence), basis: strArr(a.basis),
 							});
 							const dup = findDuplicate("hypothesis", patch, working);
 							if (dup) {
@@ -1741,25 +1784,7 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 			if (!existing) {
 				const complete = { ...(DEFAULTS[kind] ?? {}), ...patch };
 				for (const field of REQUIRED[kind]) {
-					if (complete[field] === undefined) {
-						// Name what did arrive. The old message said only that a field was
-						// required, which reads as the model's mistake even when the field
-						// was stripped from the schema before the model could send it.
-						const got = Object.keys(a).filter((k) => k !== "kind").join(", ") || "nothing";
-						// Tell the agent how to resolve it. A missing target is not an
-						// operator decision — the agent records the surface element itself,
-						// or names a raw one — and an error that only states a rule invites
-						// it to stop and ask, or to give up and write a note.
-						const how = field === "target"
-							? " A target is a recorded element id, or a raw string when nothing fits — a file path, a module, a component." +
-								" Record the surface element first (kind=endpoint/host/service/param/tech) and pass its id, or pass the raw string." +
-								" Do not ask the operator for it, and do not drop the record."
-							: "";
-						throw new Error(
-							`record ${kind}: '${field}' is required, but was not received. Fields received: ${got}.` +
-							`${how} If you did send '${field}', the tool schema dropped it — report this rather than working around it.`,
-						);
-					}
+					if (complete[field] === undefined) throw missingField(kind, field, a);
 				}
 			}
 
@@ -1891,7 +1916,7 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 			let linkage = "";
 			// A single hypothesis does not take the cross-product return above, so the
 			// same thing has to be said on the way out of the general path.
-			if (kind === "hypothesis" && written.kind === "hypothesis" && written.outcome === "confirmed") {
+			if (kind === "hypothesis" && written.kind === "hypothesis" && written.outcome === "confirmed" && !written.findingId) {
 				linkage = confirmedOwes(written.id);
 			}
 			if (kind === "finding" && written.kind === "finding" && !written.hypothesisId) {
@@ -1937,11 +1962,104 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 				const advisory = gaps.filter((g) => !g.blocking).map((g) => `- ${g.detail}`);
 				if (advisory.length > 0) unverified += `\nAlso worth fixing:\n${advisory.join("\n")}`;
 			}
+			const linked = await linkOtherEnd(deps, ctx, written, a);
 			const digest = await macroDigest(deps, deps.surfaceKinds ?? DEFAULT_SURFACE_KINDS);
 			return text((downgrade !== "" && (outcome as WriteOutcome) === "unchanged" && existingId !== undefined ? `Nothing was written on ${kind} ${written.id}.` : recordSummary(kind, written, outcome, existingId !== undefined)) + leadsLeftOpen(heldOpen) + leadsReopened(reopened) +
-				clearancesKept(kept, "it was re-checked by id with a basis, and a lead that does not name it by id does not undo that") + warning + unlocated + pulled + incomplete + linkage + downgrade + heldVerdict + unverified + digest, recordDetails(written, outcome));
+				clearancesKept(kept, "it was re-checked by id with a basis, and a lead that does not name it by id does not undo that") + warning + unlocated + pulled + incomplete + linkage + linked + downgrade + heldVerdict + unverified + digest, recordDetails(written, outcome));
 		},
 	};
+	return checkedRecord(deps, tool);
+}
+
+/**
+ * The record tool as agents meet it: the call read the way it was meant
+ * (core/record-args.ts), the write run on it, and the reply saying what of it
+ * was not kept — or, when it is refused, what to send instead.
+ */
+function checkedRecord(deps: ToolDeps, tool: ToolDefinition): ToolDefinition {
+	const memory = refusalMemory();
+	return {
+		...tool,
+		async execute(args: unknown, ctx: ToolContext): Promise<ToolResult> {
+			const raw = asRecord(args);
+			let call: ReturnType<typeof readRecordCall>;
+			try {
+				call = readRecordCall(raw, needsLedger(raw) ? await recordedKinds(deps) : undefined);
+			} catch (error) {
+				throw memory.refused(raw, error);
+			}
+			// The call as sent, before the write deletes and rewrites fields on it.
+			const sent = { ...call.args };
+			const { args: tracked, reads } = trackReads(call.args);
+			let result: ToolResult;
+			try {
+				result = await tool.execute(tracked, ctx);
+			} catch (error) {
+				throw memory.refused(sent, error, call.readAs);
+			}
+			memory.accepted();
+			const dropped = notKept(sent, reads, call.kind);
+			if (dropped.length === 0 && call.readAs.length === 0) return result;
+			const report = keptReport(call.readAs, dropped);
+			const single = result.content.length === 1;
+			const content = result.content.map((block, i) => (i === 0 && block.type === "text"
+				? { ...block, text: report.before + block.text + (single ? report.after : "") }
+				: block));
+			if (!single && report.after) content.push({ type: "text", text: report.after.trimStart() });
+			const details = result.details && typeof result.details === "object" ? result.details as Record<string, unknown> : {};
+			return {
+				...result,
+				content,
+				details: { ...details, ...(dropped.length > 0 ? { notStored: dropped } : {}), ...(call.readAs.length > 0 ? { readAs: call.readAs } : {}) },
+			};
+		},
+	};
+}
+
+/** Which kind each recorded id belongs to, for reading the ids a call names. */
+async function recordedKinds(deps: ToolDeps): Promise<KindsOf> {
+	const index = new Map<string, Set<string>>();
+	for (const store of ["inventory", "hypotheses", "findings", "blockers", "loot"] as const) {
+		for (const row of await deps.workspace.read(store)) {
+			const kinds = index.get(row.id) ?? new Set<string>();
+			kinds.add(row.kind);
+			index.set(row.id, kinds);
+		}
+	}
+	return (id) => index.get(id) ?? new Set();
+}
+
+/**
+ * The other end of a finding↔hypothesis link. FORMAT.md gives a hypothesis a
+ * `findingId` and a finding a `hypothesisId`, and the tool wrote only the end
+ * the call named, so a reader starting from the other side found no link.
+ */
+async function linkOtherEnd(deps: ToolDeps, ctx: ToolContext, written: LedgerRecord, a: Record<string, unknown>): Promise<string> {
+	const end = written.kind === "finding" && str(a.hypothesisId) && written.hypothesisId
+		? { store: "hypotheses" as const, id: written.hypothesisId, field: "findingId", sent: "hypothesisId", noun: "hypothesis" }
+		: written.kind === "hypothesis" && str(a.findingId) && written.findingId
+			? { store: "findings" as const, id: written.findingId, field: "hypothesisId", sent: "findingId", noun: "finding" }
+			: undefined;
+	if (!end) return "";
+	let found = false;
+	let said = "";
+	await deps.workspace.upsert(end.store, (current) => {
+		const row = current.find((r) => r.id === end.id);
+		if (!row) return undefined;
+		found = true;
+		const theirs = str((row as unknown as Fields)[end.field]);
+		if (theirs === written.id) {
+			said = `\nLinked to ${end.noun} ${end.id}.`;
+			return undefined;
+		}
+		if (theirs) {
+			said = `\nLinked to ${end.noun} ${end.id}. It already names ${theirs} as its own link, which was left as it was.`;
+			return undefined;
+		}
+		said = `\nLinked to ${end.noun} ${end.id} both ways.`;
+		return [defined({ ...row, v: RECORD_VERSION, [end.field]: written.id, updatedAt: ctx.services.clock.nowIso() }) as unknown as typeof row];
+	});
+	return found ? said : `\n${end.sent}=${end.id} names no recorded ${end.noun}, so this link points nowhere. \`recall ${end.store}\` lists their ids.`;
 }
 
 // --- recall -----------------------------------------------------------------
@@ -2109,8 +2227,12 @@ export function createRecallTool(deps: ToolDeps): ToolDefinition {
 					}
 
 					const labels = new Map((await deps.workspace.read("inventory")).map((r) => [r.id, elementLabel(r)]));
+					// The grounds it cited, which are what a challenge tries to break. Until
+					// ADR-040 a new hypothesis's basis was dropped unread, so a clearance
+					// showed only its sentence.
 					const lines = open.slice(0, limit).map((h) =>
-						`${h.id} [${h.class}] ${labels.get(String(h.target)) ?? h.target}: ${h.statement}`);
+						`${h.id} [${h.class}] ${labels.get(String(h.target)) ?? h.target}: ${h.statement}` +
+						(h.basis?.length ? ` [grounds: ${h.basis.slice(0, 2).join("; ")}${h.basis.length > 2 ? `; +${h.basis.length - 2} more` : ""}]` : ""));
 					return text(
 						`${open.length} cleared cell(s) nothing has re-checked, oldest first` +
 						`${rechecked > 0 ? ` (${rechecked} already re-checked)` : ""}:\n${lines.join("\n")}` +

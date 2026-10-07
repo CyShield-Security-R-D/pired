@@ -3663,3 +3663,127 @@ makes primary, the default costs findings.
   findings.
 - **Fix the early-stop first, then decide.** That was offered. The operator chose to stop shipping a
   default measured as worse on the primary model while the fix is pending.
+
+## ADR-040 — A record call is read as it was meant, and every reply says what it kept
+
+**Status:** accepted · 2026-10-08 · operator decision: the full plan, with `kind` inferred only when
+the fields fit exactly one kind, and a new hypothesis's `basis` stored
+
+### Context
+
+The operator saw agents fail to record and retry without end. They could not tell when a record
+had failed or lost data. A finding's link to its hypothesis was refused, retried and lost.
+
+Mined from the 538 transcripts of the v6 stage-2 grids (GLM 5.3 Flash, GPT-6 Luna, DeepSeek V4.1
+Flash): 4,397 of 52,803 `record` calls were refused (8.3%), against 0 of 5,446 `recall` calls.
+
+- **`kind` left out: 2,168.** The host's schema check refused these (`required: ["kind"]`) before
+  the tool could see that the fields named one kind.
+- **An endpoint's route sent as `endpoint`: 990.** The schema declares `endpoint`, for a param's
+  endpoint.
+- **A hypothesis with no `statement`: 373.**
+- **A model section sent as `value` or `content`: 304.**
+- **`kind` set to `record`, `GET` or `POST`: 89.**
+
+The retrying was the same mistake on the next call, not the same call again. There were 394 runs
+of three or more consecutive refusals for one reason, 2,976 refused calls in 199 runs. The longest
+was 39 endpoints in a row, each sent with `endpoint` for `path`. Identical resends were rare: one
+run resent one call three times.
+
+Calls that went through could lose what they carried under a reply that said "Recorded":
+
+- **The link.** On filebrowser (2026-09-21), the tool told the agent to link finding `05763b` to
+  hypothesis `186e87` with `hypothesisId`. That name was not in the schema. `handle` was, with no
+  description. The agent sent `handle=186e87` three ways:
+  - the first two were refused for fields a link does not need;
+  - the third came back "Recorded finding 05763b", with the link dropped unread;
+  - the agent then wrote "Linked hypothesis: 186e87" into the finding's `notes`, which a finding
+    also does not keep.
+- **Refutation grounds.** `basis` on a new hypothesis is read only on a re-check by id. Replayed,
+  4,551 calls lost their grounds this way and 1,741 lost `path` hop quotes.
+- **Locations.** 464 finding calls put a location in `file` or `location`. 90 of them sent no
+  `target`, so the finding had no location to cite or score.
+
+Three writes were also wrong in ways no reply showed:
+
+- A hypothesis refused for its missing statement created the surface elements its targets named
+  before it was refused.
+- A finding sent with a hypothesis's id as its own `id` was minted under that id, in the other
+  store.
+- FORMAT.md's `findingId` on a hypothesis was never written.
+
+### Decision
+
+1. **Read the call as it was meant** (`core/record-args.ts`). A canonical field that was sent
+   always wins, and every reading is said back ("Read this call as: …").
+   - **`kind`:** inferred from fields that only one kind takes, or from an existing `id`.
+     Otherwise the call is refused, naming the kinds its fields fit.
+   - **Endpoint:** `endpoint` is read as `path`, and `POST /x` as `method` and `path`.
+   - **Model section:** `value` or `content` is read as `text`.
+   - **Finding:** `file` or `location` is read as `target`.
+   - **Ids under other names:** an id sent as `handle`, `hypothesis` or `finding`, or as a
+     `*_id` variant, is read by the kind of record it names. A foreign id is dropped rather than
+     minted across stores.
+2. **A failure state on every reply.**
+   - A refusal is a tool error. It names the field and, for a missing required field, gives the call
+     to send instead, built from the one sent.
+   - It says when the previous call was refused for the same reason, or was the same call.
+   - A reply that dropped fields starts `Not stored:` and names each field with its reason. The
+     fields go into `details.notStored`, and the operator's transcript row names them after what was
+     recorded. Dropped fields are found by tracking which arguments the write path reads, not from a
+     list that would drift from about 1,000 lines of conditional reads.
+3. **Writes.**
+   - A new hypothesis stores the `basis` it cites, on every row of a cross product. It merges like
+     `method` and `evidence`: a re-record of the same claim adds to it, and an outcome moved by id
+     without a basis drops it. A re-check's basis still goes only to `verification`. `recall cleared`
+     shows a clearance's grounds, which are what a challenge tries to break.
+   - A new hypothesis's required fields are checked before its targets are resolved, so a refused
+     call writes nothing.
+   - A link names the other end too (`findingId` / `hypothesisId`), unless that end already names
+     a different record.
+4. **Schema.**
+   - `kind` is out of `required`. Its description still says to always send it.
+   - `hypothesisId` and `findingId` are declared.
+   - `handle` is described as loot-only.
+5. **The child gate judges the call as the tool will read it.** Judged raw, a finder could leave
+   `kind` out and confirm its own finding: the gate saw "not a finding" and the tool wrote one. The
+   gate reads with the findings and hypotheses it knows. If that ledger cannot be read, a call the
+   tool takes as sent is judged as sent, as before.
+6. **Measured by replay, with no model calls.** Every executed record call was replayed, in order,
+   through the old tool and the new, each on a fresh in-memory workspace. Live ids were mapped to
+   the ids each replay minted. The replay refuses more than the live runs did (7,342 calls against
+   4,335): it has no target tree or checklist, and both arms share that.
+   - **Now recorded:** 3,168 calls the old tool refused. That is 1,862 missing `kind`, 992 `endpoint`
+     for `path`, 304 model `value`/`content`, and 10 others.
+   - **Unchanged:** 10,495 calls both tools recorded from an identical ledger. Every reply matched
+     once the added lines were removed, except two groups:
+     - 10 differ only in id labels, minted in another order after an earlier difference;
+     - 1 names a model section that an earlier kindless call, now recorded, had filled.
+
+     Fewer calls compare than without the stored `basis`: from the first hypothesis that cites
+     grounds, the two ledgers differ.
+   - **No longer recorded:** 10 calls, each after the two ledgers had already diverged at a call the
+     new tool recorded and the old one refused. Those 10 refusals come from the replay's id mapping;
+     none comes from how a call is read. No call made from an identical ledger was refused by the
+     new tool that the old one recorded.
+   - **Not stored:** 6,156 calls, about one in nine, kept the rest of what they sent but dropped at
+     least one field. The old tool said nothing about any of them. Before `basis` was stored it was
+     10,495. The largest remaining groups:
+     - hop quotes sent as `path` on a hypothesis: 1,741;
+     - `endpoint` beside a `path`: 989;
+     - `note` on a hypothesis: 852;
+     - `handle` naming no record: 466.
+
+### Rejected
+
+- **Infer `kind` on a best guess.** The operator chose fields that fit exactly one kind. A wrong
+  guess writes a row nobody asked for, in the wrong store.
+- **Derive a missing `statement` from `approach`.** The statement is the claim. Writing one for the
+  agent puts words in the ledger.
+- **Accept `record`/`GET` as kinds by dropping the enum from the schema.** The enum is how the model
+  sees the kinds in the function signature. It costs 89 calls, which the tool still reads when a
+  host lets them through.
+- **Loosen field types (`params` as an object, `basis` as a string).** That is 25 calls, and the
+  host's error already names the type.
+- **A per-kind list of accepted fields for the `Not stored` line.** It would drift from the write
+  path. Read-tracking reports what the write actually read.

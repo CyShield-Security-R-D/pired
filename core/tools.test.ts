@@ -2800,3 +2800,182 @@ describe("an id is never minted twice in one store", () => {
 		expect(findings.map((f) => [f.id, f.title])).toEqual([["zzzzzz", "IDOR on notes"]]);
 	});
 });
+
+/**
+ * Record calls as the grids' agents sent them (ADR-040). 4,397 of 52,803 record
+ * calls failed across the v6 stage-2 transcripts, and calls that went through
+ * could still drop what they carried under a reply that said "Recorded".
+ */
+describe("a record call is read as it was meant, and the reply says what it kept", () => {
+	it("records a hypothesis whose call left kind out, and says how it read it", async () => {
+		const { ws, ctx, record } = await setup();
+		const out = textOf(await record.execute({
+			class: "cmdi", target: "e1", outcome: "refuted",
+			statement: "Every subprocess call passes an argv list with shell=False, so no metacharacter is interpreted.",
+		}, ctx));
+		expect((await ws.read("hypotheses"))[0]).toMatchObject({ class: "cmdi", outcome: "refuted" });
+		expect(out).toContain("Read this call as: no kind → kind=hypothesis (from statement, outcome).");
+	});
+
+	it("records an endpoint sent as 'endpoint' with its method in the route", async () => {
+		const { ws, ctx, record } = await setup();
+		await record.execute({ kind: "endpoint", endpoint: "POST /api/login", auth: "none", file: "http/auth.go:128" }, ctx);
+		expect((await ws.read("inventory"))[0]).toMatchObject({ kind: "endpoint", method: "POST", path: "/api/login", file: "http/auth.go:128" });
+	});
+
+	it("records a model section sent as 'value'", async () => {
+		const { ws, ctx, record } = await setup();
+		await record.execute({ kind: "model", section: "what", value: "A Java multi-module Maven service." }, ctx);
+		expect((await ws.readModelSections()).get("what")).toContain("Maven service");
+	});
+
+	it("leaves the reply of a call that needed no reading as it was", async () => {
+		const { ctx, record } = await setup();
+		const res = await record.execute({ kind: "host", value: "app.acme.test" }, ctx);
+		expect(textOf(res)).not.toMatch(/Not stored|Read this call/);
+		expect(res.details).not.toHaveProperty("notStored");
+	});
+
+	/**
+	 * The shipped trace (filebrowser, 2026-09-21): told to link finding 05763b to
+	 * hypothesis 186e87, the agent sent handle=186e87 three ways. The first two
+	 * were refused for fields a link does not need, the third came back
+	 * "Recorded finding 05763b" with the link dropped unread, and the agent wrote
+	 * "Linked hypothesis: 186e87" into the finding's notes — dropped the same way.
+	 */
+	it("links a finding to its hypothesis through 'handle', both ways, and says so", async () => {
+		const { ws, ctx, record } = await setup();
+		const hyp = await record.execute({ kind: "hypothesis", statement: "Share root is not confined", target: "e1", class: "authz", outcome: "confirmed" }, ctx);
+		const hypId = (hyp.details as { id: string }).id;
+		const fnd = await record.execute({ kind: "finding", title: "Share exposes parent directory", severity: "high", target: "e1", class: "authz" }, ctx);
+		const findingId = (fnd.details as { id: string }).id;
+		expect(textOf(fnd)).toContain(`Link them with record id=${findingId} hypothesisId=${hypId}`);
+
+		const out = textOf(await record.execute({ kind: "finding", handle: hypId, id: findingId, title: "Share exposes parent directory", severity: "high" }, ctx));
+		expect(out).toContain(`Linked to hypothesis ${hypId} both ways.`);
+		expect(out).toContain(`handle=${hypId} → hypothesisId=${hypId}`);
+		expect((await ws.read("findings")).find((f) => f.id === findingId)?.hypothesisId).toBe(hypId);
+		expect((await ws.read("hypotheses")).find((h) => h.id === hypId)?.findingId).toBe(findingId);
+		expect(await ws.read("findings")).toHaveLength(1);
+
+		const notes = textOf(await record.execute({ kind: "finding", id: findingId, notes: `Linked hypothesis: ${hypId}` }, ctx));
+		expect(notes.startsWith("Not stored: notes (a finding has no notes")).toBe(true);
+	});
+
+	it("does not ask a confirmed hypothesis that already names its finding to go and record one", async () => {
+		const { ctx, record } = await setup();
+		const fnd = await record.execute({ kind: "finding", title: "SQLi in search", severity: "high", target: "e1", class: "sqli" }, ctx);
+		const findingId = (fnd.details as { id: string }).id;
+		const out = textOf(await record.execute({ kind: "hypothesis", statement: "search concatenates q into SQL", target: "e1", class: "sqli", outcome: "confirmed", findingId }, ctx));
+		expect(out).toContain(`Linked to finding ${findingId} both ways.`);
+		expect(out).not.toContain("record kind=finding for this");
+	});
+
+	it("records a finding sent under its hypothesis's id as a new finding linked to it", async () => {
+		const { ws, ctx, record } = await setup();
+		const hyp = await record.execute({ kind: "hypothesis", statement: "IDOR on notes", target: "e1", class: "authz", outcome: "confirmed" }, ctx);
+		const hypId = (hyp.details as { id: string }).id;
+		const out = textOf(await record.execute({ kind: "finding", id: hypId, title: "IDOR on notes", severity: "high", target: "e1" }, ctx));
+		const [finding] = await ws.read("findings");
+		expect(finding?.id).not.toBe(hypId);
+		expect(finding?.hypothesisId).toBe(hypId);
+		expect(out).toContain(`${hypId} is a hypothesis, not a finding`);
+	});
+
+	it("says a link to a hypothesis nobody recorded points nowhere, and keeps it as sent", async () => {
+		const { ws, ctx, record } = await setup();
+		const out = textOf(await record.execute({ kind: "finding", title: "Weak TLS", severity: "low", hypothesisId: "nope00" }, ctx));
+		expect(out).toContain("hypothesisId=nope00 names no recorded hypothesis, so this link points nowhere.");
+		expect((await ws.read("findings"))[0]?.hypothesisId).toBe("nope00");
+	});
+
+	it("names a status it did not keep, rather than dropping it under 'Recorded'", async () => {
+		const { ws, ctx, record } = await setup();
+		const res = await record.execute({ kind: "finding", title: "Open redirect", severity: "low", status: "Confirmed" }, ctx);
+		expect(textOf(res)).toMatch(/^Not stored: status="Confirmed" \(not one of suspected, /);
+		expect((res.details as { notStored: string[] }).notStored).toHaveLength(1);
+		expect((await ws.read("findings"))[0]?.status).toBe("suspected");
+	});
+
+	it("refuses a call whose kind cannot be told, and writes nothing", async () => {
+		const { ws, ctx, record } = await setup();
+		await expect(record.execute({ title: "t", statement: "s" }, ctx)).rejects.toThrow(/fit more than one kind.*Nothing was recorded/);
+		expect(await ws.read("findings")).toHaveLength(0);
+		expect(await ws.read("hypotheses")).toHaveLength(0);
+	});
+
+	/**
+	 * 46 times, in 45 runs, three or more hypotheses in a row were refused for a
+	 * missing statement, and each refusal could first create the surface
+	 * elements its targets named.
+	 */
+	it("refuses a hypothesis without a statement before writing anything, with the call to send instead", async () => {
+		const { ws, ctx, record } = await setup();
+		const call = { kind: "hypothesis", class: "authz", target: "app/server/api.py", outcome: "confirmed", approach: "Route registered without a permission check." };
+		const first = await record.execute(call, ctx).catch((e: Error) => e.message);
+		expect(first).toContain("record hypothesis: 'statement' is required, but was not received.");
+		expect(first).toContain('Send instead: record kind=hypothesis class="authz" target="app/server/api.py" outcome="confirmed"');
+		expect(first).toContain("statement=\"<one sentence");
+		expect(await ws.read("inventory")).toHaveLength(0);
+		const second = await record.execute(call, ctx).catch((e: Error) => e.message);
+		expect(second).toContain("This exact call has now been refused 2 times.");
+	});
+
+	it("tells the next endpoint refused for the same missing route that it is the same mistake", async () => {
+		const { ctx, record } = await setup();
+		await expect(record.execute({ kind: "endpoint", method: "GET", auth: "none" }, ctx)).rejects.toThrow(/'path' is required/);
+		await expect(record.execute({ kind: "endpoint", method: "POST", auth: "jwt" }, ctx)).rejects.toThrow(/The last 2 record calls were refused for this same reason/);
+	});
+
+	it("refuses a cross product without a statement before creating its targets' elements", async () => {
+		const { ws, ctx, record } = await setup();
+		await expect(record.execute({ kind: "hypothesis", class: ["sqli", "cmdi"], target: ["a.py", "b.py"], outcome: "refuted" }, ctx))
+			.rejects.toThrow(/'statement' is required/);
+		expect(await ws.read("inventory")).toHaveLength(0);
+	});
+
+	/**
+	 * Replayed, 4,551 calls sent a new hypothesis its grounds in `basis`, and the
+	 * write path read it only on a re-check by id: every one was dropped.
+	 */
+	it("keeps the basis a new hypothesis cites, and shows it where clearances are listed", async () => {
+		const { ws, ctx, record, recall } = await setup();
+		const basis = ["app/api.py:1831: setattr(vi, f'has_{height}p', True)", "evidence/reflection-sweep.txt"];
+		await ws.writeEvidence("reflection-sweep.txt", "grep output");
+		const out = textOf(await record.execute({
+			kind: "hypothesis", class: "reflection", target: "e1", outcome: "refuted", basis,
+			statement: "The only reflection is setattr with an internal constant suffix; no request data selects a name.",
+		}, ctx));
+		expect(out).not.toContain("Not stored");
+		expect((await ws.read("hypotheses"))[0]?.basis).toEqual(basis);
+		expect(textOf(await recall.execute({ query: "cleared" }, ctx))).toContain(`[grounds: ${basis[0]}; ${basis[1]}]`);
+	});
+
+	it("keeps the basis on every row of a cross product, and unions it when the same claim comes back with more", async () => {
+		const { ws, ctx, record } = await setup();
+		const call = { kind: "hypothesis", class: ["sqli", "cmdi"], target: ["e1", "e2"], outcome: "refuted", statement: "Every query is parameterised and no handler spawns a process.", basis: ["db.go:10: db.Query(q, args...)"] };
+		await record.execute(call, ctx);
+		expect((await ws.read("hypotheses")).map((h) => h.basis)).toEqual(Array(4).fill(call.basis));
+		await record.execute({ ...call, class: "sqli", target: "e1", basis: ["db.go:22: db.Exec(q, args...)"] }, ctx);
+		const cell = (await ws.read("hypotheses")).find((h) => h.class === "sqli" && h.target === "e1");
+		expect(cell?.basis).toEqual(["db.go:10: db.Query(q, args...)", "db.go:22: db.Exec(q, args...)"]);
+	});
+
+	it("writes a re-check's basis into its verification, not over the grounds the claim cited", async () => {
+		const { ws, ctx, record } = await setup();
+		const first = await record.execute({ kind: "hypothesis", class: "authz", target: "e1", outcome: "refuted", statement: "Every handler checks the owner before reading the note.", basis: ["notes.go:40: if n.Owner != user.ID"] }, ctx);
+		const id = (first.details as { id: string }).id;
+		await record.execute({ kind: "hypothesis", id, outcome: "refuted", basis: ["notes.go:41: return ErrForbidden"] }, ctx);
+		const [row] = await ws.read("hypotheses");
+		expect(row?.basis).toEqual(["notes.go:40: if n.Owner != user.ID"]);
+		expect(row?.verification?.basis).toEqual(["notes.go:41: return ErrForbidden"]);
+	});
+
+	it("still updates a hypothesis by id without the fields a new one needs", async () => {
+		const { ws, ctx, record } = await setup();
+		const hyp = await record.execute({ kind: "hypothesis", statement: "IDOR on notes", target: "e1", class: "authz" }, ctx);
+		const id = (hyp.details as { id: string }).id;
+		await record.execute({ id, outcome: "testing" }, ctx);
+		expect((await ws.read("hypotheses"))[0]?.outcome).toBe("testing");
+	});
+});

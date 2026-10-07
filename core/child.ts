@@ -23,6 +23,7 @@ import { type EngagementScope, type FindingRecord, type HypothesisRecord, type S
 import { parseLenses, passState, resolveLadder } from "./passes.ts";
 import type { Gate, GateDecision, ToolCall, ToolDefinition } from "./ports.ts";
 import { createScopeGate, isSourceOnly } from "./scope.ts";
+import { given, type KindsOf, needsLedger, RECORD_KINDS, readRecordCall } from "./record-args.ts";
 import { PIRED_AGENTS, type PiredAgent } from "./subagents.ts";
 import { createCoreTools } from "./tools.ts";
 import { Workspace, type WorkspaceServices } from "./workspace.ts";
@@ -641,6 +642,41 @@ function passed(args: Record<string, unknown>, key: string): boolean {
 }
 
 /**
+ * A record call as the record tool will read it (core/record-args.ts, ADR-040).
+ * Judged as sent, a finding whose call left `kind` out was "not a finding" here
+ * and a finding to the tool, so a finder could confirm its own claim by
+ * omitting a word. The gate knows findings and hypotheses, the only kinds it
+ * rules on, so its reading of a finding is never looser than the tool's.
+ */
+async function asRecorded(raw: Record<string, unknown>, ledger: ChildLedger): Promise<Record<string, unknown>> {
+	let kindsOf: KindsOf = () => new Set();
+	if (needsLedger(raw)) {
+		try {
+			const kinds = new Map<string, Set<string>>();
+			for (const row of [...await ledger.findings(), ...await ledger.hypotheses()]) {
+				kinds.set(row.id, (kinds.get(row.id) ?? new Set<string>()).add(row.kind));
+			}
+			kindsOf = (id) => kinds.get(id) ?? new Set();
+		} catch (error) {
+			// Unreadable, a call the tool takes as sent is judged as sent, as it was
+			// before ADR-040. One the tool would read differently cannot be judged.
+			if (!takenAsSent(raw)) throw error;
+		}
+	}
+	try {
+		return readRecordCall(raw, kindsOf).args;
+	} catch {
+		// A call whose kind cannot be told is refused by the tool, with this reading.
+		return raw;
+	}
+}
+
+/** A call naming a valid kind, with no field whose meaning depends on the ids in the ledger. */
+function takenAsSent(raw: Record<string, unknown>): boolean {
+	return (RECORD_KINDS as readonly unknown[]).includes(raw.kind) && !["handle", "hypothesis", "finding"].some((f) => given(raw[f]));
+}
+
+/**
  * What a role may not write, for a `record` call. Hypotheses, surface and notes
  * are open to every role; the rules are about findings, which are what the
  * report is made of.
@@ -653,7 +689,7 @@ function passed(args: Record<string, unknown>, key: string): boolean {
  * A verifier's rules are `verifierRefusal`'s, and read the ledger.
  */
 async function roleRefusal(agent: PiredAgent | undefined, rawArgs: unknown, ledger: ChildLedger): Promise<GateDecision | undefined> {
-	const args = argsOf(rawArgs);
+	const args = await asRecorded(argsOf(rawArgs), ledger);
 	// Settling is the session's own statement that its work is finished, paused
 	// or blocked (3.2). A worker's task ends in its handoff; its settle would be
 	// read as the lead's.

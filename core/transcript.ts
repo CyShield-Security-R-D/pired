@@ -26,6 +26,8 @@ export interface RecordResultDetails {
 	kind?: string;
 	severity?: Severity;
 	title?: string;
+	/** Fields the write did not keep, each with its reason (core/record-args.ts). */
+	notStored?: string[];
 }
 
 /**
@@ -57,7 +59,13 @@ export function recordResultLine(
 	ink: (tone: RecordTone, text: string) => string,
 ): string {
 	const d = details ?? {};
+	// The reply leads with what was not stored, for the model; the operator's row
+	// leads with what was recorded and names the dropped fields after it.
+	const dropped = Array.isArray(d.notStored) && d.notStored.length > 0
+		? ` · not stored: ${d.notStored.map((f) => f.split(/[ =]/, 1)[0]).join(", ")}`
+		: "";
+	const body = dropped ? summary.slice(summary.indexOf("The rest of this call was recorded.\n") + "The rest of this call was recorded.\n".length) : summary;
 	return d.kind === "finding" && d.severity && d.title
-		? `${ink(d.severity, `⦿ ${d.severity.toUpperCase()}`)}  ${ink("body", oneRow(d.title))}`
-		: ink("muted", oneRow(summary));
+		? `${ink(d.severity, `⦿ ${d.severity.toUpperCase()}`)}  ${ink("body", oneRow(d.title))}${dropped ? ink("muted", dropped) : ""}`
+		: ink("muted", oneRow(body) + dropped);
 }

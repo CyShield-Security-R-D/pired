@@ -563,7 +563,13 @@ export interface HypothesisRecord extends RecordBase {
 	outcome: HypothesisOutcome;
 	/** Workspace-relative evidence path. */
 	evidence?: string;
-	/** Set when outcome=confirmed and a finding was created. */
+	/**
+	 * The grounds the claim cites — 'file:line: verbatim text', an evidence path,
+	 * a model section — as the reviewer gave them. A re-check's grounds go in
+	 * `verification`, never here (ADR-040).
+	 */
+	basis?: string[];
+	/** The finding that writes this up; set on either end of the link (ADR-040). */
 	findingId?: string;
 	/**
 	 * What happened when this test case was looked at a second time.

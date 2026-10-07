@@ -489,6 +489,11 @@ describe("an update by id", () => {
 		expect(reopened.evidence).toBeUndefined();
 	});
 
+	it("drops a clearance's cited basis with its method when a reopen moves the outcome (ADR-040)", () => {
+		const reopened = updateById("hypothesis", { ...CLEARANCE, basis: ["upload.go:31: if !strings.HasPrefix(p, root)"] }, { outcome: "inconclusive" });
+		expect(reopened.basis).toBeUndefined();
+	});
+
 	it("keeps the method and evidence the reopening call sent", () => {
 		const reopened = updateById("hypothesis", CLEARANCE, { outcome: "inconclusive", method: "traced the export route", evidence: "evidence/export.txt" });
 		expect(reopened).toMatchObject({ method: "traced the export route", evidence: "evidence/export.txt" });

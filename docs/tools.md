@@ -18,16 +18,39 @@ One tool for all state; the `kind` picks the shape.
 | `endpoint` | `path` | `host`, `method`, `params[]`, `auth` |
 | `param` | `name` | `endpoint`, `location` |
 | `tech` | `name` | `host`, `version` |
-| `hypothesis` | `statement`, `target`, `class` | `approach`, `outcome`, `evidence` |
-| `finding` | `title`, `severity`, `target` | `class`, `cwe`, `cvss`, `description`, `repro`, `evidence[]`, `status`, `source` |
+| `hypothesis` | `statement`, `target`, `class` | `approach`, `outcome`, `evidence`, `basis[]`, `findingId` |
+| `finding` | `title`, `severity`, `target` | `class`, `cwe`, `cvss`, `description`, `repro`, `evidence[]`, `status`, `source`, `hypothesisId` |
 | `blocker` | `question` | `blockerType`, `priority`, `options[]`, `blocks[]`, `context` |
 | `loot` | `handle`, `secret` | `lootType`, `username`, `target`, `source` |
 
-Pass `id` to update an existing record.
+Pass `id` to update an existing record. `handle` belongs to loot only; it is never a record's id.
+A finding names the hypothesis it writes up with `hypothesisId`, and the link is written on both rows.
 
 - `severity`: `info` | `low` | `medium` | `high` | `critical`
 - `outcome`: `proposed` | `testing` | `confirmed` | `refuted` | `inconclusive`
 - `priority`: `low` | `medium` | `high`
+
+### When a call is wrong
+
+Every reply says what happened (ADR-040).
+
+- **Refused.** The call is a tool error. It names the field to fix and, for a missing required field, gives
+  the call to send instead, built from the one that was sent. Nothing is written by a refused call. A call
+  refused for the same reason as the one before it is told so, and one sent again unchanged is told it will
+  be refused again.
+- **Recorded, with fields dropped.** The reply starts `Not stored:` and names each field the write did not
+  keep, with the reason: a field the kind does not take, a value outside the set a field takes, a field
+  pired sets itself. Everything else in the call was recorded.
+- **Read under another name.** When the canonical field is absent, the call is read the way agents
+  commonly send it, and the reply ends `Read this call as: …`. A canonical field that was sent always wins.
+  - `kind` is inferred when the call leaves it out and its fields fit exactly one kind, or the call names an
+    existing record by `id`. Otherwise the call is refused, with the kinds its fields fit.
+  - On an endpoint, `endpoint` is read as `path`, and a request line (`POST /api/login`) as `method` and `path`.
+  - On a model section, `value` or `content` is read as `text`.
+  - On a finding, `file` or `location` is read as `target`, where a finding's location goes.
+  - A record id sent as `handle`, `hypothesis`, `hypothesis_id` or `finding` is read by the kind of record
+    it names. A finding sent with a hypothesis's id as its own `id` is recorded as a new finding linked to it.
+    Before ADR-040, it was minted under the hypothesis's id, in the other store.
 
 ### How the pieces connect
 

@@ -1254,3 +1254,38 @@ describe("a finder cannot undo the check it could not make (3.1 review)", () => 
 		expect(await guard.check({ name: "record", args: { kind: "finding", title: "t", severity: "high", target: "a.py:1" } })).toEqual({ allow: true });
 	});
 });
+
+/**
+ * The record tool reads a call without `kind` by its fields or its id
+ * (ADR-040). Judged raw, the same call was "not a finding" to the gate and a
+ * finding to the tool: a finder could confirm its own claim by leaving the
+ * kind out.
+ */
+describe("the gate judges a record call as the tool will read it (ADR-040)", () => {
+	const settled = findingRow({ id: "f-mine", by: "pired-investigate", status: "confirmed", verification: { verdict: "stands", at: AT, by: "pired-verify", control: "ran it" } });
+
+	it("refuses a finder's verdict sent without kind, by id or by the fields of a new finding", async () => {
+		const guard = worker("pired-investigate", 1, ledgerOf([settled]));
+		expect((await guard.check({ name: "record", args: { id: "f-mine", status: "suspected" } })).reason)
+			.toContain("has been verified by pired-verify, and its finder may not change");
+		const fresh = await guard.check({ name: "record", args: { title: "t", severity: "high", target: "a.py:1", status: "confirmed", control: "c" } });
+		expect(fresh.allow).toBe(false);
+		expect(fresh.reason).toContain("records findings and does not settle them");
+		expect((await guard.check({ name: "record", args: { kind: "Finding", id: "f-mine", status: "suspected" } })).allow).toBe(false);
+	});
+
+	it("still lets a call through that the tool will refuse anyway, or that is not a finding", async () => {
+		const guard = worker("pired-investigate", 1, ledgerOf([settled]));
+		expect(await guard.check({ name: "record", args: { title: "t", statement: "s" } })).toEqual({ allow: true });
+		expect(await guard.check({ name: "record", args: { statement: "s", target: "e1", class: "authz", outcome: "proposed" } })).toEqual({ allow: true });
+	});
+
+	it("refuses, rather than guesses at, a call it can read only through a ledger it cannot read", async () => {
+		const failing = async (): Promise<never> => {
+			throw new Error("EIO: findings.jsonl");
+		};
+		const broken = worker("pired-investigate", 1, { findings: failing, hypotheses: failing });
+		expect((await broken.check({ name: "record", args: { kind: "finding", handle: "f-mine", status: "suspected" } })).reason)
+			.toContain("could not read the shared ledger to check this record call");
+	});
+});
