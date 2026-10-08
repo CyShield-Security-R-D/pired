@@ -64,7 +64,13 @@ export function recordResultLine(
 	const dropped = Array.isArray(d.notStored) && d.notStored.length > 0
 		? ` · not stored: ${d.notStored.map((f) => f.split(/[ =]/, 1)[0]).join(", ")}`
 		: "";
-	const body = dropped ? summary.slice(summary.indexOf("The rest of this call was recorded.\n") + "The rest of this call was recorded.\n".length) : summary;
+	// The lines a reply leads with for the model (core/record-args.ts), taken off
+	// by their shape. Sliced at "The rest of this call was recorded.", a reply that
+	// wrote nothing — which does not say it — lost its first 35 characters.
+	const body = summary
+		.replace(/^The last \d+ calls on [^\n]* changed nothing\.[^\n]*\n/, "")
+		.replace(/^Not stored:\n(?:- [^\n]*\n)+(?:The rest of this call was recorded\.\n)?/, "")
+		.replace(/^Not stored: [^\n]*\n/, "");
 	return d.kind === "finding" && d.severity && d.title
 		? `${ink(d.severity, `⦿ ${d.severity.toUpperCase()}`)}  ${ink("body", oneRow(d.title))}${dropped ? ink("muted", dropped) : ""}`
 		: ink("muted", oneRow(body) + dropped);

@@ -15,16 +15,20 @@ One tool for all state; the `kind` picks the shape.
 | `evidence` | `name`, `content` | — writes the file and **returns the path to cite** |
 | `host` | `value` | `ip`, `tech[]` |
 | `service` | `host`, `port` | `proto`, `name` |
-| `endpoint` | `path` | `host`, `method`, `params[]`, `auth` |
-| `param` | `name` | `endpoint`, `location` |
+| `endpoint` | `path` | `host`, `method`, `params[]`, `auth`, `file` |
+| `param` | `name` | `endpoint`, `location`, `file` |
 | `tech` | `name` | `host`, `version` |
-| `hypothesis` | `statement`, `target`, `class` | `approach`, `outcome`, `evidence`, `basis[]`, `findingId` |
+| `hypothesis` | `statement`, `target`, `class` | `approach`, `outcome`, `evidence` (one path), `basis[]`, `findingId` |
 | `finding` | `title`, `severity`, `target` | `class`, `cwe`, `cvss`, `description`, `repro`, `evidence[]`, `status`, `source`, `hypothesisId` |
-| `blocker` | `question` | `blockerType`, `priority`, `options[]`, `blocks[]`, `context` |
-| `loot` | `handle`, `secret` | `lootType`, `username`, `target`, `source` |
+| `blocker` | `question` | `blockerType`, `priority`, `options[]`, `blocks[]`, `context`, `status`, `answer` |
+| `loot` | `handle`, `secret` | `lootType`, `username`, `target`, `source`, `notes` |
 
 Pass `id` to update an existing record. `handle` belongs to loot only; it is never a record's id.
 A finding names the hypothesis it writes up with `hypothesisId`, and the link is written on both rows.
+
+Every field above is listed in the tool's schema, with a description naming the kinds that keep it
+(ADR-041). Some models send no key the schema does not list: GLM 5.3 Flash sent none in 19,518 calls,
+so a field missing from the schema is one it can never send.
 
 - `severity`: `info` | `low` | `medium` | `high` | `critical`
 - `outcome`: `proposed` | `testing` | `confirmed` | `refuted` | `inconclusive`
@@ -38,9 +42,18 @@ Every reply says what happened (ADR-040).
   the call to send instead, built from the one that was sent. Nothing is written by a refused call. A call
   refused for the same reason as the one before it is told so, and one sent again unchanged is told it will
   be refused again.
+- **Refused for a value it cannot take.** A required field that was sent in a form it does not take —
+  `severity="urgent"`, a statement sent as a list — is told what it was sent as and what it takes, not
+  that it never arrived (ADR-041).
 - **Recorded, with fields dropped.** The reply starts `Not stored:` and names each field the write did not
   keep, with the reason: a field the kind does not take, a value outside the set a field takes, a field
-  pired sets itself. Everything else in the call was recorded.
+  pired sets itself. Everything else in the call was recorded. Also named there (ADR-041):
+  - a `hypothesisId` or `findingId` that names no record of the other kind — it is not stored;
+  - the paths past the first in a hypothesis's `evidence` list — a hypothesis keeps one;
+  - a field whose text is another field's assignment (`host="source=reproduced"`), with the field to send.
+- **Recorded, and nothing changed.** The reply says nothing was written, and does not say the rest was
+  recorded. When the calls before it on the same record also changed nothing, the reply starts
+  `The last N calls on <kind> <id> changed nothing` (ADR-041).
 - **Read under another name.** When the canonical field is absent, the call is read the way agents
   commonly send it, and the reply ends `Read this call as: …`. A canonical field that was sent always wins.
   - `kind` is inferred when the call leaves it out and its fields fit exactly one kind, or the call names an
@@ -48,6 +61,11 @@ Every reply says what happened (ADR-040).
   - On an endpoint, `endpoint` is read as `path`, and a request line (`POST /api/login`) as `method` and `path`.
   - On a model section, `value` or `content` is read as `text`.
   - On a finding, `file` or `location` is read as `target`, where a finding's location goes.
+  - A value of a closed set in the wrong case (`severity="High"`) is read as that value, and a service's
+    `port` sent as `"8080"` as the number.
+  - A hypothesis's `evidence` sent as a list is read as its first path.
+  - A link written as text in any field — `handle="hypothesisId=f742b8"`, `host="hypothesisId: f742b8"` —
+    is read as the link when the id is a recorded record of the other kind (ADR-041).
   - A record id sent as `handle`, `hypothesis`, `hypothesis_id` or `finding` is read by the kind of record
     it names. A finding sent with a hypothesis's id as its own `id` is recorded as a new finding linked to it.
     Before ADR-040, it was minted under the hypothesis's id, in the other store.
@@ -155,6 +173,10 @@ recall query=<query> [limit=50]
 | `blockers` | Open blockers only. |
 | `loot` | **Handles only** — never secrets. |
 | `notes` | The engagement notebook. |
+
+An argument the query does not read — `refs` sent to `hypotheses`, `class` to `coverage` — is named at
+the end of the reply, with the query that does read it, so a filter that was never applied does not
+pass for one that was (ADR-041).
 | `model` | The target model, or how to write one if there is none. |
 | `context` | A bounded snapshot of the shared state: the model, the checklist, surface, hypotheses, findings and open blockers. `refs=[…]` narrows it to exact ledger IDs or source paths. It is rebuilt from disk on every call, so a worker sees what another just recorded. It carries no transcript and no loot secrets. |
 

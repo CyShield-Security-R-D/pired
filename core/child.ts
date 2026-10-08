@@ -833,9 +833,13 @@ async function verifierRefusal(agent: PiredAgent, args: Record<string, unknown>,
 	}
 	const extra = Object.keys(args).filter((key) => passed(args, key) && !VERIFIER_FINDING_KEYS.has(key));
 	if (extra.length) {
+		// What to send comes first. 89 verifier verdicts in the grids were refused
+		// for carrying 'evidence', and 29 of the next calls were refused again: the
+		// way out was the last sentence of a 900-character reply.
+		const cite = extra.includes("evidence") ? " Cite the evidence path in 'control' or 'basis' instead." : "";
 		return {
 			allow: false,
-			reason: `pired: ${agent.name} may not change ${extra.map((k) => `'${k}'`).join(", ")} on a finding. ${VERDICT} Record again with only ${[...VERIFIER_FINDING_KEYS].join(", ")}.`,
+			reason: `pired: ${agent.name} may not change ${extra.map((k) => `'${k}'`).join(", ")} on a finding. Send the same verdict without ${extra.length === 1 ? "it" : "them"}: a verifier's write takes only ${[...VERIFIER_FINDING_KEYS].join(", ")}.${cite} ${VERDICT}`,
 		};
 	}
 	if (!passed(args, "status")) {

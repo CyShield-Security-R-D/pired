@@ -3787,3 +3787,134 @@ Three writes were also wrong in ways no reply showed:
   host's error already names the type.
 - **A per-kind list of accepted fields for the `Not stored` line.** It would drift from the write
   path. Read-tracking reports what the write actually read.
+
+## ADR-041 — Every field a reply asks for is one a model can send, and no reply contradicts itself
+
+**Status:** accepted · 2026-10-08 · operator request: "make sure the record tool usage is clear and
+all other tools … give proper feedback to help the agent correct itself properly", after an agent
+reported looping on a finding↔hypothesis link
+
+### Context
+
+ADR-040 read calls the way agents send them and made every reply say what it kept. The loop the
+operator reported had a cause neither covered: the model could not send the field it was asked for.
+
+- **GLM sends only the keys the schema lists.** In the stage-2 grids it sent a key the record
+  schema did not list in 0 of 19,518 calls. DeepSeek did in 342 of 7,108 and Luna in 1,189 of
+  26,115, nearly all `hypothesisId` (249 and 1,090) and `answer` (80 and 76).
+- **So before ADR-040 listed `hypothesisId`, GLM could not link a finding to its hypothesis.**
+  - On fireshare (run `8b868848`), it sent `{"handle":"","id":"cb5c2b","kind":"finding"}` 27 times
+    in a row, each reply a success that changed nothing, then wrote: "I've hit a serialization fault
+    repeating on one metadata call … ~20 attempts, same malformed output each time."
+  - On fatfreecrm (2026-09-20), told "Link them with record id=a23bd2 hypothesisId=f742b8", it sent
+    the link as the text of `host`, `statement` and `handle`, seven times: "My parameters keep coming
+    out wrong (handle/host instead of the intended fields)."
+- **Since ADR-040 it can.** Five GLM 5.3 Flash sessions on the installed `54055cc` recorded 54
+  findings: three on a three-bug test app, one each on fireshare and 3dp-manager. 51 of the
+  findings named a hypothesis that exists, and 49 were linked both ways.
+- **`answer` was still unlisted.** The write path reads it, and the tool's own description tells
+  the agent to send it to close a blocker.
+  - In the grids, GLM sent 325 blocker calls with `status=answered`. None carried `answer`, and 316
+    put text in `context`, `reason` or `notes` instead.
+  - The five live sessions answered 14 blockers, with no `answer` on any.
+
+The replies had their own faults, found by replaying the grids through `54055cc`:
+
+- **Silent loss:** the schema types `evidence` as a list, because a finding keeps one. A hypothesis
+  kept a string. 2,350 hypothesis calls sent the list (2,060 with one path), and each lost it under
+  "Recorded": the field was read, so `Not stored` did not name it.
+- **Contradictions:**
+  - 186 replies read "Recorded as confirmed. Before this can be confirmed:".
+  - 146 said "The rest of this call was recorded" above "nothing was written".
+  - A no-op said "every field this call sent already holds that value" when fields it sent had
+    been dropped.
+- **Wrong pointer:** a required field sent in a form it does not take (`severity: "High"`,
+  `port: "8080"`) was refused as "not received … the tool schema dropped it".
+- **Links to nothing:** in the grids' final ledgers, 8 of the 1,116 findings that named a
+  hypothesis named one that was not there. One was the literal `<unknown>`, and one a JSON list of
+  two ids. Each was stored under a success reply.
+- **No-op loops:** 365 writes changed nothing. 56 times, two or more came in a row, and the
+  longest run was 27. No reply said the last one had changed nothing too.
+- **recall** ignored an argument in 30 calls (`refs` sent to `hypotheses` or `surface`, `class`
+  to `coverage` or `gaps`, an `id` to `blockers`) and returned everything, with no word.
+- **The verifier gate** refused 89 verdicts for carrying `evidence`, and 29 of the next calls were
+  refused again. What to send was the last sentence of a 900-character reply.
+- **The other tools' gates** refused 85 of 86,539 non-record calls, with no run of three. They are
+  left as they are.
+
+### Decision
+
+1. **The schema lists every field the write path reads and the tool's description names, and
+   says which kinds keep it.** `answer` is added. Each property's description names its kinds,
+   and the closed sets of `status` and `source`. Tests hold the schema to `RECORD_FIELDS`, to the
+   write path's reads (but the fields pired stamps) and to the fields the description names.
+2. **Read as meant, and said back:**
+   - a closed value in the wrong case (`"High"` → `high`);
+   - a service's port sent as a numeric string;
+   - a hypothesis's `evidence` list, as its first path, with the rest named under `Not stored`;
+   - a link written as text in any field (`hypothesisId=f742b8`, `hypothesisId: f742b8`), only when
+     the id is a recorded record of the other kind.
+3. **Named under `Not stored`, rather than stored or dropped silently:**
+   - a `hypothesisId` or `findingId` that names no record of the other kind, which is not stored;
+   - a field whose text is another field's assignment, with the field to send.
+4. **No reply contradicts itself:**
+   - a call that wrote nothing does not say the rest was recorded;
+   - the no-op line speaks of what the kind keeps;
+   - a confirmed or reported finding is told what its proof lacks;
+   - a required field sent in an unusable form is told what it was sent as and what it takes,
+     with the corrected call still following.
+5. **A second call in a row that changes nothing on the same record** leads with "The last N
+   calls on <kind> <id> changed nothing". This is the note refusals already carry (ADR-040).
+6. **recall names the arguments a query did not read,** and which query reads them.
+7. **The verifier gate says what to send first:** the same verdict without the extra keys, with
+   evidence cited in `control` or `basis`.
+8. **A settle sent without `kind` is refused naming `kind=settle`.** It is still never inferred.
+9. **One skill example** taught a field no kind keeps (`kind_hint`); it is removed.
+10. **The operator's transcript row** takes the reply's leading lines off by their shape.
+    It had cut at "The rest of this call was recorded.", which a reply that wrote nothing no
+    longer says.
+
+### Validation
+
+- **Tests:** the schema is held to `RECORD_FIELDS`, to the fields the write path reads and to the
+  fields the tool's description names. Each new reading and reply has a test, among them the
+  fatfreecrm loop replayed: a link sent as `host: "hypothesisId: <id>"` is now linked both ways.
+  `npm run check` passes: 3,106 tests (3 skipped), coverage floors held, assay 101 pass.
+- **Replay:** the 538 transcripts were replayed through `54055cc` and this change, each on its
+  own in-memory workspace.
+  - **Same replies:** 32,743 calls ran from identical ledgers, and only 2 replies differ in more
+    than the lines this change adds. Both are intended: a link sent as
+    `handle: "hypothesisId=f67ea1"` is now read, and a re-recorded hypothesis keeps its evidence.
+  - **Hypothesis evidence:** 2,006 calls keep the evidence path they used to lose. 234 name the
+    extra paths they did not keep.
+  - **Other replies:** 187 confirmed findings are told what their proof lacks instead of what
+    comes "before this can be confirmed", and 93 replies lead with the no-op loop line.
+  - **Newly refused: 278.** All are explained by the replay, or by a citation that was never a file:
+    - 258 cite evidence that existed in the live run, written there by bash, which the replay's
+      workspace does not have;
+    - 15 come after the two ledgers had diverged;
+    - 5 cite quotes of the source as evidence paths. They were dropped unread before, and are
+      now refused with the hint that a quote goes in `basis`.
+- **Live:** three GLM 5.3 Flash sessions on this change: two on the test app, and one on
+  tugtainer, capped at an hour.
+  - **Record calls:** 223, of which 3 were refused. Each was fixed in the agent's next message,
+    and none ran longer than the batch it was sent in.
+  - **No-ops:** no call changed nothing.
+  - **Blockers:** 6 answered, all with `answer`.
+  - **Findings:** 28 recorded, and 25 named a hypothesis that exists, 24 of them linked both ways.
+    The other 3 (a hardening note, an SCA summary and a secrets observation) had no confirmed
+    hypothesis to name.
+
+### Rejected
+
+- **Hints as JSON arguments instead of `key=value`.** The GLM loops came from the schema, not the
+  notation: the model knew the key and could not emit it. The notation is shared with the prompt
+  and 39 skills.
+- **A hypothesis keeping an evidence list.** That is a format change for 286 calls. The paths past
+  the first are named, so they can be cited in `basis`.
+- **Moving extra evidence paths into `basis`.** On an update by id, `basis` marks a re-check.
+- **Refusing a call whose link names nothing.** The rest of the call was right. The link is not
+  stored, and the reply says so.
+- **Inferring a settle from its outcome.** A settle closes the session's account of itself, and
+  ADR-040 keeps it explicit.
+- **pi's "output token limit" refusal.** It is pi's, not pired's.

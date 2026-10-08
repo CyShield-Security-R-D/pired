@@ -16,14 +16,35 @@
  * canonical name only when that name is absent, a kind is inferred only when
  * the fields fit exactly one, and every such reading is said back so the next
  * call uses the right name.
+ *
+ * A model may also be unable to send a field at all. GLM 5.3 Flash sent a key
+ * the schema did not list in 0 of its 19,518 record calls, where DeepSeek and
+ * Luna sent `hypothesisId` 1,339 times before the schema listed it. So until it
+ * was listed GLM could not link a finding to its hypothesis: it sent the link
+ * as `handle: ""`, or as the text `"hypothesisId=f742b8"` in whatever field the
+ * schema did list, and one run spent 27 calls in a row on one link before it
+ * gave up. RECORD_FIELDS is the schema's list, and tools.test.ts holds the
+ * schema and every field the write path reads to it.
  */
 
-import { BLOCKER_STATUSES, FINDING_SOURCES, FINDING_STATUSES, HYPOTHESIS_OUTCOMES } from "./ontology.ts";
+import {
+	BLOCKER_STATUSES, BLOCKER_TYPES, FINDING_SOURCES, FINDING_STATUSES, HYPOTHESIS_OUTCOMES, LOOT_TYPES, MODEL_SECTIONS,
+	PRIORITIES, SETTLE_OUTCOMES, SEVERITIES,
+} from "./ontology.ts";
 
 export const RECORD_KINDS = [
 	"note", "evidence", "model", "host", "service", "endpoint", "param", "tech", "hypothesis", "finding", "blocker", "loot", "settle",
 ] as const;
 export type RecordKind = (typeof RECORD_KINDS)[number];
+
+/** Every field the record tool's schema lists: the only names some models can send. */
+export const RECORD_FIELDS = [
+	"kind", "id", "hypothesisId", "findingId", "text", "section", "value", "ip", "tech", "host", "port", "proto", "name", "version",
+	"endpoint", "method", "path", "params", "auth", "location", "file", "statement", "target", "class", "approach", "outcome", "note",
+	"content", "title", "severity", "cwe", "cvss", "description", "impact", "remediation", "repro", "status", "evidence", "control",
+	"basis", "guards", "live", "entitlement", "question", "blockerType", "priority", "options", "blocks", "context", "answer", "handle",
+	"lootType", "username", "secret", "source", "notes", "delete", "reason",
+] as const;
 
 /** The kinds of record that carry an id, as `workspace.read` reports them. */
 export type KindsOf = (id: string) => ReadonlySet<string>;
@@ -34,6 +55,46 @@ export interface ReadCall {
 	kind: RecordKind;
 	/** Each reading that departed from the call as sent, as "sent → read as". */
 	readAs: string[];
+	/** What the reading took out of the call, each as "field (why)", for the reply's "Not stored". */
+	dropped: string[];
+}
+
+/** Fields that take one of a fixed set of values, by kind. */
+export const CLOSED_VALUES: Partial<Record<RecordKind, Record<string, readonly string[]>>> = {
+	finding: { severity: SEVERITIES, status: FINDING_STATUSES, source: FINDING_SOURCES },
+	hypothesis: { outcome: HYPOTHESIS_OUTCOMES },
+	blocker: { status: BLOCKER_STATUSES, priority: PRIORITIES, blockerType: BLOCKER_TYPES },
+	loot: { lootType: LOOT_TYPES },
+	settle: { outcome: SETTLE_OUTCOMES },
+	model: { section: MODEL_SECTIONS },
+};
+
+/**
+ * A field's value written as a field of its own: "hypothesisId=f742b8",
+ * "source: reproduced". The text of the `key=value` hints a reply gives,
+ * copied into a value.
+ */
+const ASSIGNMENT = /^\s*([A-Za-z][\w-]*)\s*[:=]\s*["'<[]?([^\s"'<>[\]]+?)["'>\]]?\s*$/;
+
+/** The link field a name in such an assignment means, if it means one. */
+function linkField(name: string): "hypothesisId" | "findingId" | undefined {
+	const n = name.toLowerCase().replace(/[-_]/g, "");
+	if (n === "hypothesisid" || n === "hypothesis") return "hypothesisId";
+	if (n === "findingid" || n === "finding") return "findingId";
+	return undefined;
+}
+
+/** A list however it arrived: an array, or a JSON array sent as a string. */
+function listOf(v: unknown): string[] | undefined {
+	let raw = v;
+	if (typeof v === "string" && /^\s*\[.*\]\s*$/s.test(v)) {
+		try {
+			raw = JSON.parse(v);
+		} catch {
+			return undefined;
+		}
+	}
+	return Array.isArray(raw) ? raw.filter((x): x is string => typeof x === "string" && x.trim().length > 0) : undefined;
 }
 
 const HTTP_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
@@ -95,7 +156,8 @@ function kindSignals(a: Record<string, unknown>): Array<[RecordKind, string[]]> 
 /** Does a call need the ledger to be read? Only when an id, or a missing kind, has to be resolved against it. */
 export function needsLedger(raw: Record<string, unknown>): boolean {
 	return !(typeof raw.kind === "string" && isKind(raw.kind))
-		|| ["id", "handle", "hypothesis", "finding"].some((f) => given(raw[f]));
+		|| ["id", "handle", "hypothesis", "finding", "hypothesisId", "findingId"].some((f) => given(raw[f]))
+		|| Object.values(raw).some((v) => typeof v === "string" && linkField(ASSIGNMENT.exec(v)?.[1] ?? "") !== undefined);
 }
 
 function rename(a: Record<string, unknown>, from: string, to: string, readAs: string[]): void {
@@ -138,7 +200,13 @@ export function readRecordCall(raw: Record<string, unknown>, kindsOf: KindsOf = 
 			kind = only;
 			readAs.push(`no kind → kind=${kind} (from ${fields.join(", ")})`);
 		} else {
-			const why = signals.length === 0
+			// A settle is never inferred: it ends the session's account of itself.
+			// But an outcome only a settle takes says which kind was meant, and the
+			// refusal names it rather than saying no field belongs to one kind.
+			const settling = typeof a.outcome === "string" && (SETTLE_OUTCOMES as readonly string[]).includes(a.outcome.trim().toLowerCase());
+			const why = settling
+				? `outcome=${a.outcome} is a settle's, and a settle is only recorded when the call says kind=settle`
+				: signals.length === 0
 				? "no field in it belongs to one kind only"
 				: `its fields fit more than one kind: ${signals.map(([k, f]) => `${k} (${f.join(", ")})`).join("; ")}`;
 			throw new Error(
@@ -164,6 +232,37 @@ export function readRecordCall(raw: Record<string, unknown>, kindsOf: KindsOf = 
 		rename(a, "content", "text", readAs);
 	}
 
+	// A closed value in the wrong case: severity "High" is high. Read any other
+	// way it was refused as "'severity' is required, but was not received" — and
+	// the call had sent it.
+	for (const [field, allowed] of Object.entries(CLOSED_VALUES[kind] ?? {})) {
+		const v = a[field];
+		if (typeof v !== "string" || allowed.includes(v)) continue;
+		const low = v.trim().toLowerCase();
+		if (!allowed.includes(low)) continue;
+		a[field] = low;
+		readAs.push(`${field} '${v}' → ${field}=${low}`);
+	}
+	if (kind === "service" && typeof a.port === "string" && /^\s*\d{1,5}\s*$/.test(a.port)) {
+		readAs.push(`port '${a.port.trim()}' → port=${Number(a.port)}`);
+		a.port = Number(a.port);
+	}
+
+	const dropped: string[] = [];
+	if (kind === "hypothesis") {
+		// The schema lists `evidence` as a list, because a finding keeps one; a
+		// hypothesis keeps a single path. 2,350 of the grids' hypothesis calls sent
+		// the list the schema asked for, and every one was dropped unread under a
+		// reply that said "Recorded".
+		const paths = listOf(a.evidence);
+		if (paths && paths.length > 0) {
+			a.evidence = paths[0];
+			if (paths.length > 1) {
+				dropped.push(`evidence ${JSON.stringify(paths.slice(1))} (a hypothesis keeps one evidence path, so only ${paths[0]} was kept; cite the others in basis, or on the finding)`);
+			}
+		}
+	}
+
 	// The two ends of a finding↔hypothesis link, under whatever name the id came in.
 	const link = kind === "finding" ? { self: "finding", other: "hypothesis", field: "hypothesisId" }
 		: kind === "hypothesis" ? { self: "hypothesis", other: "finding", field: "findingId" } : undefined;
@@ -176,6 +275,17 @@ export function readRecordCall(raw: Record<string, unknown>, kindsOf: KindsOf = 
 				delete a[field];
 				readAs.push(`${field}=${v} → ${link.field}=${v} (${v} is ${some(link.other)})`);
 			}
+		}
+		// The link written as text into a field: handle="hypothesisId=f742b8",
+		// host="hypothesisId: f742b8". Read only when the id is one the ledger
+		// holds as the other kind, so no other text is ever taken for a link.
+		for (const [field, value] of Object.entries(a)) {
+			const m = typeof value === "string" ? ASSIGNMENT.exec(value) : null;
+			if (!m || linkField(m[1]!) !== link.field || !owns(m[2]!, link.other)) continue;
+			if (field !== link.field && given(a[link.field])) continue;
+			a[link.field] = m[2];
+			if (field !== link.field) delete a[field];
+			readAs.push(`${field} '${String(value).trim()}' → ${link.field}=${m[2]}`);
 		}
 		const id = text(a.id);
 		if (id && !owns(id, link.self) && owns(id, link.other)) {
@@ -216,7 +326,26 @@ export function readRecordCall(raw: Record<string, unknown>, kindsOf: KindsOf = 
 		readAs.push(`id=${id} dropped (${id} is ${some([...kindsOf(id)].join("/"))}, not ${some(kind)}; this records a new ${kind})`);
 	}
 
-	return { args: a, kind, readAs };
+	return { args: a, kind, readAs, dropped };
+}
+
+/**
+ * Take out a finding↔hypothesis link that names no record of the other kind,
+ * and say why. Kept, it was stored as written — a placeholder, a typo, a
+ * finding's own id — and the row claimed a link that led nowhere.
+ *
+ * Applied by the record tool only. The child gate reads the call without it,
+ * because its own refusal for a verifier naming no hypothesis says more.
+ */
+export function unknownLinks(args: Record<string, unknown>, kind: RecordKind, kindsOf: KindsOf): string[] {
+	const link = kind === "finding" ? { field: "hypothesisId", other: "hypothesis", list: "recall hypotheses" }
+		: kind === "hypothesis" ? { field: "findingId", other: "finding", list: "recall findings" } : undefined;
+	const v = link ? text(args[link.field]) : undefined;
+	if (!link || v === undefined || kindsOf(v).has(link.other)) return [];
+	delete args[link.field];
+	const is = [...kindsOf(v)];
+	const why = is.length > 0 ? `${v} is ${some(is.join("/"))}, not ${some(link.other)}` : `no ${link.other} has the id ${v}`;
+	return [`${link.field}=${JSON.stringify(v)} (${why}; \`${link.list}\` lists their ids)`];
 }
 
 /** What the write path did with a call's fields: read them, or threw them away first. */
@@ -253,12 +382,6 @@ const HARNESS_FIELDS: Record<string, string> = {
 	verification: "a verdict is earned by the challenge checks, not sent",
 };
 
-/** Values the write path keeps only when they are one of a fixed set; anything else it drops. */
-const CLOSED_VALUES: Partial<Record<RecordKind, Record<string, readonly string[]>>> = {
-	finding: { status: FINDING_STATUSES, source: FINDING_SOURCES },
-	blocker: { status: BLOCKER_STATUSES },
-};
-
 /** What a finding's verdict is judged on (tools.ts). */
 const VERDICT_INPUTS = ["control", "entitlement", "live", "basis", "path", "guards"];
 
@@ -273,12 +396,17 @@ function whyNotKept(field: string, kind: RecordKind): string {
 	if (kind === "finding" && field === "approach") return "approach belongs to a hypothesis; say how it was found in description or repro";
 	if (kind === "finding" && ["file", "location", "host"].includes(field)) return "a finding's location goes in target, as file:line";
 	if (kind === "endpoint" && field === "endpoint") return "an endpoint's route goes in path, which this call also sent; 'endpoint' is the endpoint a param belongs to";
-	if (kind === "hypothesis" && field === "note") return "a hypothesis has no note; put it in statement or approach";
+	// A hypothesis keeps its grounds in basis (ADR-040). These are the fields the
+	// grids sent it most that it does not keep: path 1,741 times, note 852,
+	// control 242, reason 145, notes 78.
+	if (kind === "hypothesis" && (field === "note" || field === "notes")) return "a hypothesis has no notes; what you checked goes in statement, and the lines it rests on in basis";
+	if (kind === "hypothesis" && field === "reason") return "a hypothesis keeps no reason; say it in statement, and put the lines it rests on in basis";
 	// Verdict inputs, read only on the paths that judge a verdict (tools.ts). A
 	// call that takes none of them keeps none of them.
 	if (kind === "finding" && VERDICT_INPUTS.includes(field)) return "read only when this call settles the finding's status, or records a challenge on it by id";
 	if (kind === "hypothesis" && field === "live") return "kept only when re-checking a recorded hypothesis by id";
-	if (kind === "hypothesis" && VERDICT_INPUTS.includes(field)) return "a verdict input for a finding; a hypothesis carries its grounds in statement and approach";
+	if (kind === "hypothesis" && VERDICT_INPUTS.includes(field)) return "a verdict input for a finding; a hypothesis keeps the lines it rests on in basis, each as 'file:line: verbatim text'";
+	if (field === "answer") return "only kind=blocker keeps an answer";
 	return `not a field a kind=${kind} call keeps`;
 }
 
@@ -292,7 +420,13 @@ export function notKept(args: Record<string, unknown>, reads: Reads, kind: Recor
 	for (const field of Object.keys(args)) {
 		if (field === "kind" || !given(args[field])) continue;
 		if (!reads.read.has(field) || reads.discarded.has(field)) {
-			out.push(`${field} (${whyNotKept(field, kind)})`);
+			// A field whose text is another field's assignment — host="source=reproduced"
+			// — was meant as that field, and the reply says so by name.
+			const m = typeof args[field] === "string" ? ASSIGNMENT.exec(args[field] as string) : null;
+			const meant = m && (RECORD_FIELDS as readonly string[]).includes(m[1]!) && m[1] !== field ? m[1]! : undefined;
+			out.push(meant
+				? `${field} (its text ${JSON.stringify(String(args[field]).trim())} is a field of its own: send ${meant} as its own field, ${meant}=${m![2]})`
+				: `${field} (${whyNotKept(field, kind)})`);
 			continue;
 		}
 		const allowed = CLOSED_VALUES[kind]?.[field];
@@ -303,12 +437,18 @@ export function notKept(args: Record<string, unknown>, reads: Reads, kind: Recor
 	return out;
 }
 
-/** The lines a successful write adds: what was not kept goes first, where it cannot be missed. */
-export function keptReport(readAs: readonly string[], dropped: readonly string[]): { before: string; after: string } {
+/**
+ * The lines a successful write adds: what was not kept goes first, where it
+ * cannot be missed. `wrote` is false when the call changed nothing, and then
+ * the reply does not say the rest was recorded: 146 replies in the grids said
+ * both that and "nothing was written".
+ */
+export function keptReport(readAs: readonly string[], dropped: readonly string[], wrote = true): { before: string; after: string } {
+	const rest = wrote ? "The rest of this call was recorded.\n" : "";
 	return {
 		before: dropped.length === 0 ? ""
-			: dropped.length === 1 ? `Not stored: ${dropped[0]}. The rest of this call was recorded.\n`
-			: `Not stored:\n${dropped.map((d) => `- ${d}`).join("\n")}\nThe rest of this call was recorded.\n`,
+			: dropped.length === 1 ? `Not stored: ${dropped[0]}.${rest ? ` ${rest}` : "\n"}`
+			: `Not stored:\n${dropped.map((d) => `- ${d}`).join("\n")}\n${rest}`,
 		after: readAs.length > 0 ? `\nRead this call as: ${readAs.join("; ")}. Use the names on the right next time.` : "",
 	};
 }
@@ -336,9 +476,12 @@ function shown(v: unknown): { text: string; cut: boolean } {
 	return { text: typeof v === "string" ? JSON.stringify(body) : body, cut };
 }
 
+/** A required field that did not arrive, or arrived in a form its kind cannot use. */
+const REQUIRED_REFUSAL = /^record (\w+): '(\w+)' (?:is required|was sent as)/;
+
 /** For "'<field>' is required": the call to send instead, built from the one that was sent. */
 export function correctedCall(message: string, args: Record<string, unknown>): string {
-	const m = /^record (\w+): '(\w+)' is required/.exec(message);
+	const m = REQUIRED_REFUSAL.exec(message);
 	if (!m) return "";
 	const [, kind, field] = m as unknown as [string, string, string];
 	let cut = false;
@@ -364,7 +507,7 @@ function canonical(v: unknown): string {
 /** A refusal's reason without the parts that change from call to call. */
 function reasonOf(message: string): string {
 	const first = message.split("\n")[0] ?? "";
-	return (/^record \w+: '\w+' is required/.exec(first)?.[0] ?? first.replace(/Fields received:.*$/, "")).trim();
+	return (REQUIRED_REFUSAL.exec(first)?.[0] ?? first.replace(/Fields received:.*$/, "")).trim();
 }
 
 /**
@@ -376,15 +519,23 @@ function reasonOf(message: string): string {
  * refused calls in all, the longest 39 endpoints in a row each sent with
  * `endpoint` for `path`. Each refusal read as news; none said it was the last
  * one again.
+ *
+ * A call that goes through can loop too, when it changes nothing: one GLM run
+ * sent the same id-only update on one finding 27 times, each reply a success.
+ * 56 runs of two or more such calls in a row came back from the grids'
+ * replay, and no reply said the last one had changed nothing either.
  */
 export function refusalMemory(): {
 	refused(args: Record<string, unknown>, error: unknown, readAs?: readonly string[]): Error;
-	accepted(): void;
+	/** A call went through. Pass the record it left unchanged, if it changed nothing; returns the line to add. */
+	accepted(unchangedOn?: string): string;
 } {
 	let lastCall = "";
 	let lastReason = "";
 	let same = 0;
 	let times = 0;
+	let idleOn = "";
+	let idle = 0;
 	return {
 		refused(args, error, readAs = []) {
 			const message = error instanceof Error ? error.message : String(error);
@@ -404,11 +555,21 @@ export function refusalMemory(): {
 			if (error instanceof Error && error.stack) out.stack = error.stack;
 			return out;
 		},
-		accepted() {
+		accepted(unchangedOn) {
 			lastCall = "";
 			lastReason = "";
 			same = 0;
 			times = 0;
+			if (unchangedOn === undefined) {
+				idleOn = "";
+				idle = 0;
+				return "";
+			}
+			idle = unchangedOn === idleOn ? idle + 1 : 1;
+			idleOn = unchangedOn;
+			return idle > 1
+				? `The last ${idle} calls on ${unchangedOn} changed nothing. Sent the same way, the next will change nothing too: send what this reply names, under the name it gives.\n`
+				: "";
 		},
 	};
 }

@@ -65,7 +65,7 @@ A vhost that renders a different app than the default is new surface — record 
 ```
 record kind=host value=admin.TARGET ip=203.0.113.5 tech=["apache","php"]
 record kind=endpoint host=h1 method=GET path=/login auth=none
-record kind=finding kind_hint=info title="Staging panel exposed to internet" severity=info target=h2 class=secrets description="dev.TARGET serves an unauthenticated admin build" evidence=["evidence/shots/dev.png"]
+record kind=finding title="Staging panel exposed to internet" severity=info target=h2 class=secrets description="dev.TARGET serves an unauthenticated admin build" evidence=["evidence/shots/dev.png"]
 ```
 - Calibrate, don't discard: a 200 from `httpx` can be a soft-404 / WAF splash — open the screenshot or fetch once to confirm real content. If you can't classify a host yet, keep it as a lead (`record kind=host` / note) for `recall gaps`, don't drop it.
 - Treat `nuclei -l evidence/resolved.txt` output as leads only; confirm each hit by hand before it becomes a finding — verification sets confidence, it doesn't delete the lead. An unconfirmed-but-plausible hit stays a `status=open` finding at low severity or an `inconclusive` hypothesis.

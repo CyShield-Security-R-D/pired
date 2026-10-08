@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { Checklist, EndpointRecord } from "./ontology.ts";
 import type { ToolContext, ToolDefinition } from "./ports.ts";
@@ -5,6 +6,7 @@ import { makeFakeServices, type FakeServices } from "./testing/fakes.ts";
 import { computeEngagementStats } from "./stats.ts";
 import { createRecallTool, createRecordTool } from "./tools.ts";
 import { isIndependent } from "./challenge.ts";
+import { RECORD_FIELDS } from "./record-args.ts";
 import { Workspace } from "./workspace.ts";
 
 async function setup(): Promise<{ svc: FakeServices; ws: Workspace; ctx: ToolContext; record: ToolDefinition; recall: ToolDefinition }> {
@@ -1317,12 +1319,13 @@ describe("joining a finding to the reasoning behind it", () => {
 	});
 
 	it("says nothing when the finding already carries the link", async () => {
-		const { ctx, record } = await setup();
+		const { ws, ctx, record } = await setup();
 		await record.execute({
 			kind: "hypothesis", statement: "dag_id is not scoped", target: "e1", class: "authz", outcome: "confirmed",
 		}, ctx);
+		const hyp = (await ws.read("hypotheses"))[0]!;
 		const res = await record.execute({
-			kind: "finding", title: "IDOR", severity: "high", target: "e1", class: "authz", hypothesisId: "whatever",
+			kind: "finding", title: "IDOR", severity: "high", target: "e1", class: "authz", hypothesisId: hyp.id,
 		}, ctx);
 		expect(textOf(res)).not.toContain("Link them with");
 	});
@@ -2882,19 +2885,81 @@ describe("a record call is read as it was meant, and the reply says what it kept
 		expect(out).toContain(`${hypId} is a hypothesis, not a finding`);
 	});
 
-	it("says a link to a hypothesis nobody recorded points nowhere, and keeps it as sent", async () => {
+	/**
+	 * Stored as sent, a link to nothing was a placeholder or a typo the row then
+	 * claimed as a link — "<unknown>", a finding's own id — with a success reply.
+	 */
+	it("does not store a link to a hypothesis nobody recorded, and says which ids exist where", async () => {
 		const { ws, ctx, record } = await setup();
-		const out = textOf(await record.execute({ kind: "finding", title: "Weak TLS", severity: "low", hypothesisId: "nope00" }, ctx));
-		expect(out).toContain("hypothesisId=nope00 names no recorded hypothesis, so this link points nowhere.");
-		expect((await ws.read("findings"))[0]?.hypothesisId).toBe("nope00");
+		const res = await record.execute({ kind: "finding", title: "Weak TLS", severity: "low", hypothesisId: "nope00" }, ctx);
+		expect(textOf(res)).toMatch(/^Not stored: hypothesisId="nope00" \(no hypothesis has the id nope00; `recall hypotheses` lists their ids\)\. The rest of this call was recorded\./);
+		expect((res.details as { notStored: string[] }).notStored).toHaveLength(1);
+		const [finding] = await ws.read("findings");
+		expect(finding?.title).toBe("Weak TLS");
+		expect(finding?.hypothesisId).toBeUndefined();
+	});
+
+	it("names a link to a record of the wrong kind by what that record is", async () => {
+		const { ws, ctx, record } = await setup();
+		const first = await record.execute({ kind: "finding", title: "Weak TLS", severity: "low" }, ctx);
+		const findingId = (first.details as { id: string }).id;
+		const out = textOf(await record.execute({ kind: "finding", title: "Open redirect", severity: "low", hypothesisId: findingId }, ctx));
+		expect(out).toContain(`hypothesisId="${findingId}" (${findingId} is a finding, not a hypothesis;`);
+		expect((await ws.read("findings")).find((f) => f.title === "Open redirect")?.hypothesisId).toBeUndefined();
 	});
 
 	it("names a status it did not keep, rather than dropping it under 'Recorded'", async () => {
 		const { ws, ctx, record } = await setup();
-		const res = await record.execute({ kind: "finding", title: "Open redirect", severity: "low", status: "Confirmed" }, ctx);
-		expect(textOf(res)).toMatch(/^Not stored: status="Confirmed" \(not one of suspected, /);
+		const res = await record.execute({ kind: "finding", title: "Open redirect", severity: "low", status: "verified" }, ctx);
+		expect(textOf(res)).toMatch(/^Not stored: status="verified" \(not one of suspected, /);
 		expect((res.details as { notStored: string[] }).notStored).toHaveLength(1);
 		expect((await ws.read("findings"))[0]?.status).toBe("suspected");
+	});
+
+	/**
+	 * Read any other way, severity "High" was refused as "'severity' is required,
+	 * but was not received" — on a call that had sent it — and pointed the agent
+	 * at the schema instead of at its value.
+	 */
+	it("reads a closed value sent in the wrong case, and says how it read it", async () => {
+		const { ws, ctx, record } = await setup();
+		const res = await record.execute({ kind: "finding", title: "Open redirect", severity: "High", source: "Inferred" }, ctx);
+		const [finding] = await ws.read("findings");
+		expect(finding?.severity).toBe("high");
+		expect(finding?.source).toBe("inferred");
+		expect(textOf(res)).toContain("Read this call as: severity 'High' → severity=high; source 'Inferred' → source=inferred.");
+	});
+
+	it("says a required field arrived in a form it cannot take, instead of saying it never arrived", async () => {
+		const { ctx, record } = await setup();
+		const refused = record.execute({ kind: "finding", title: "Open redirect", severity: "urgent" }, ctx);
+		await expect(refused).rejects.toThrow(/^record finding: 'severity' was sent as "urgent", and it takes one of info, low, medium, high, critical\. Fields received: title, severity\./);
+		await expect(record.execute({ kind: "finding", title: "Open redirect", severity: "urgent" }, ctx)).rejects.toThrow(/Send instead: record kind=finding title="Open redirect" severity=<info\|low\|medium\|high\|critical>/);
+		await expect(record.execute({ kind: "hypothesis", target: "e1", class: "sqli", statement: ["a", "b"] }, ctx)).rejects.toThrow(/'statement' was sent as \["a","b"\], and it takes text\./);
+	});
+
+	it("reads a port sent as a number in a string", async () => {
+		const { ws, ctx, record } = await setup();
+		const out = textOf(await record.execute({ kind: "service", host: "h", port: "8080" }, ctx));
+		expect((await ws.read("inventory"))[0]).toMatchObject({ kind: "service", port: 8080 });
+		expect(out).toContain("port '8080' → port=8080");
+	});
+
+	/**
+	 * The schema lists `evidence` as a list, because a finding keeps one, and a
+	 * hypothesis keeps one path: 2,350 of the grids' hypothesis calls sent the
+	 * list the schema asked for, and every one was dropped under "Recorded".
+	 */
+	it("keeps a hypothesis's evidence sent as a list, and names the paths past the first that it did not keep", async () => {
+		const { ws, ctx, record } = await setup();
+		await record.execute({ kind: "evidence", name: "a.txt", content: "app.js:3 db.query(q)\n" }, ctx);
+		await record.execute({ kind: "evidence", name: "b.txt", content: "app.js:9 db.query(r)\n" }, ctx);
+		const one = await record.execute({ kind: "hypothesis", target: "e1", class: "sqli", statement: "parameterised at app.js:3, so no input reaches the SQL text", outcome: "refuted", evidence: ["evidence/a.txt"] }, ctx);
+		expect(textOf(one)).not.toContain("Not stored");
+		const two = await record.execute({ kind: "hypothesis", target: "e1", class: "cmdi", statement: "no shell is spawned anywhere in app.js or its imports", outcome: "refuted", evidence: '["evidence/a.txt", "evidence/b.txt"]' }, ctx);
+		expect(textOf(two)).toMatch(/^Not stored: evidence \["evidence\/b\.txt"\] \(a hypothesis keeps one evidence path, so only evidence\/a\.txt was kept;/);
+		const rows = await ws.read("hypotheses");
+		expect(rows.map((h) => h.evidence)).toEqual(["evidence/a.txt", "evidence/a.txt"]);
 	});
 
 	it("refuses a call whose kind cannot be told, and writes nothing", async () => {
@@ -2979,3 +3044,126 @@ describe("a record call is read as it was meant, and the reply says what it kept
 		expect((await ws.read("hypotheses"))[0]?.outcome).toBe("testing");
 	});
 });
+
+/**
+ * GLM 5.3 Flash sent a key the record schema did not list in 0 of its 19,518
+ * record calls in the grids. A field the write path reads, or a reply asks
+ * for, that the schema does not list is one such a model can never send:
+ * `hypothesisId` was one until ADR-040 (one run spent 27 calls on one link),
+ * and `answer` was one after it (GLM answered a blocker with it 0 times, where
+ * DeepSeek and Luna did 143 times).
+ */
+describe("the record schema lists every field the tool reads or asks for", () => {
+	const source = readFileSync(new URL("./tools.ts", import.meta.url), "utf8");
+
+	it("lists exactly the fields record-args knows by name, each with a description", async () => {
+		const { record } = await setup();
+		const properties = (record.parameters as { properties: Record<string, { description?: string }> }).properties;
+		expect(Object.keys(properties).sort()).toEqual([...RECORD_FIELDS].sort());
+		const undescribed = Object.entries(properties).filter(([, p]) => !p.description?.trim()).map(([k]) => k);
+		expect(undescribed).toEqual([]);
+	});
+
+	it("lists every field the write path reads, but the ones pired stamps itself", () => {
+		const writePath = source.slice(source.indexOf("function extractFields"), source.indexOf("export function createRecallTool"));
+		const read = new Set([...writePath.matchAll(/\ba\.(\w+)/g)].map((m) => m[1]!));
+		const unlisted = [...read].filter((f) => !(RECORD_FIELDS as readonly string[]).includes(f)).sort();
+		// pass, by and verification are stamped by pired and deleted from a call;
+		// remainder is computed by a settle, and a sent one is only said back.
+		expect(unlisted).toEqual(["by", "pass", "remainder", "verification"]);
+	});
+
+	it("lists every field its own description tells an agent to send", async () => {
+		const { record } = await setup();
+		const named = new Set<string>();
+		for (const m of record.description.matchAll(/record ((?:\w+=[^ `]+ ?)+)/g)) {
+			for (const f of m[1]!.matchAll(/(\w+)=/g)) named.add(f[1]!);
+		}
+		expect(named.size).toBeGreaterThan(3);
+		expect([...named].filter((f) => !(RECORD_FIELDS as readonly string[]).includes(f))).toEqual([]);
+	});
+
+	it("keeps a blocker's answer", async () => {
+		const { ws, ctx, record } = await setup();
+		const parked = await record.execute({ kind: "blocker", question: "Is the staging host in scope?" }, ctx);
+		const id = (parked.details as { id: string }).id;
+		const res = await record.execute({ kind: "blocker", id, status: "answered", answer: "Yes, staging is in scope until Friday." }, ctx);
+		expect(textOf(res)).not.toContain("Not stored");
+		expect((await ws.read("blockers"))[0]).toMatchObject({ status: "answered", answer: "Yes, staging is in scope until Friday." });
+	});
+});
+
+describe("a reply says what to do next, and says when calls are going round in circles", () => {
+	/**
+	 * The shipped loop, replayed: a GLM agent told "Link them with record
+	 * id=a23bd2 hypothesisId=f742b8" could not send the key, and sent the link
+	 * as text in the fields it could — host, statement, handle — seven times.
+	 */
+	it("reads a link sent as text in another field, when the id is a recorded hypothesis", async () => {
+		const { ws, ctx, record } = await setup();
+		const hyp = await record.execute({ kind: "hypothesis", statement: "Comment.find is not scoped to the owner", target: "e1", class: "authz", outcome: "confirmed" }, ctx);
+		const hypId = (hyp.details as { id: string }).id;
+		const made = await record.execute({ kind: "finding", title: "IDOR on comments", severity: "high", target: "e1", class: "authz" }, ctx);
+		const id = (made.details as { id: string }).id;
+		const out = textOf(await record.execute({ kind: "finding", id, host: `hypothesisId: ${hypId}` }, ctx));
+		expect(out).toContain(`Read this call as: host 'hypothesisId: ${hypId}' → hypothesisId=${hypId}.`);
+		expect(out).toContain(`Linked to hypothesis ${hypId} both ways.`);
+		expect((await ws.read("hypotheses"))[0]?.findingId).toBe(id);
+	});
+
+	it("names the field a dropped field's text was meant for", async () => {
+		const { ctx, record } = await setup();
+		const out = textOf(await record.execute({ kind: "finding", title: "Open redirect", severity: "low", host: "source=reproduced" }, ctx));
+		expect(out).toMatch(/^Not stored: host \(its text "source=reproduced" is a field of its own: send source as its own field, source=reproduced\)\./);
+	});
+
+	it("does not say the rest was recorded when the call changed nothing, and names a run of such calls", async () => {
+		const { ctx, record } = await setup();
+		const made = await record.execute({ kind: "finding", title: "Open redirect", severity: "low" }, ctx);
+		const id = (made.details as { id: string }).id;
+		const first = textOf(await record.execute({ kind: "finding", id, handle: "F2" }, ctx));
+		expect(first).toMatch(/^Not stored: handle \(only kind=loot has a handle;[^\n]*\)\.\nNothing to change on finding/);
+		expect(first).not.toContain("The rest of this call was recorded");
+		expect(first).toContain("everything in this call that a finding keeps already holds that value");
+		const second = textOf(await record.execute({ kind: "finding", id, handle: "F2" }, ctx));
+		expect(second).toMatch(new RegExp(`^The last 2 calls on finding ${id} changed nothing\\.`));
+		const third = textOf(await record.execute({ kind: "finding", id, handle: "F2" }, ctx));
+		expect(third).toMatch(/^The last 3 calls on finding/);
+		await record.execute({ kind: "finding", id, severity: "medium" }, ctx);
+		expect(textOf(await record.execute({ kind: "finding", id, handle: "F2" }, ctx))).not.toContain("changed nothing.");
+	});
+
+	it("tells a confirmed finding what its proof lacks, not what it needs before it can be confirmed", async () => {
+		const { ctx, record } = await setup();
+		const made = await record.execute({ kind: "finding", title: "SQLi in search", severity: "high", target: "search.py:9", class: "sqli" }, ctx);
+		const id = (made.details as { id: string }).id;
+		const out = textOf(await record.execute({ kind: "finding", id, status: "confirmed", control: "the false payload returned the empty result set" }, ctx));
+		expect(out).toContain("Recorded as confirmed. Its proof still lacks:\n- no evidence cited.");
+		expect(out).not.toContain("Before this can be confirmed");
+	});
+});
+
+describe("evidence that is a quote, not a file", () => {
+	it("says a quote of the source sent as evidence goes in basis", async () => {
+		const { ctx, record } = await setup();
+		const refused = record.execute({ kind: "hypothesis", target: "e1", class: "misconfig", statement: "debug mode is on in the shipped ASGI app", outcome: "confirmed", evidence: ["app/starlette_app.py:81: APP = Starlette(debug=True)"] }, ctx);
+		await expect(refused).rejects.toThrow(/Some of these read as quotes of the source, not saved files: a quote goes in basis, as 'file:line: verbatim text'\./);
+		await expect(record.execute({ kind: "finding", title: "t", severity: "low", evidence: ["evidence/none.txt"] }, ctx)).rejects.not.toThrow(/read as quotes/);
+	});
+});
+
+describe("recall says which arguments a query did not read", () => {
+	it("names an argument the query ignored, and where it is read", async () => {
+		const { ctx, record, recall } = await setup();
+		await record.execute({ kind: "host", value: "app.acme.test" }, ctx);
+		const out = textOf(await recall.execute({ query: "inventory", refs: ["h1"], class: "sqli", colour: "red" }, ctx));
+		expect(out).toContain("(query=inventory did not read refs: only query=context reads refs, and returns just those records; class: only query=cleared reads a class; colour: not a recall parameter.)");
+	});
+
+	it("adds nothing when every argument was read", async () => {
+		const { ctx, recall } = await setup();
+		expect(textOf(await recall.execute({ query: "finding", id: "nope" }, ctx))).not.toContain("did not read");
+		expect(textOf(await recall.execute({ query: "context", refs: ["x"] }, ctx))).not.toContain("did not read");
+	});
+});
+

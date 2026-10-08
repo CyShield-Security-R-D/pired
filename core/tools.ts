@@ -49,7 +49,9 @@ import { renderAreas } from "./areas.ts";
 import { budgetState, renderBudgetLine } from "./budget.ts";
 import { lastSettle, readSettleLedger, renderLastSettle, renderSettleReply, settleAreas, settleRemainder, standingSettle } from "./settle.ts";
 import type { JsonSchema, ToolContext, ToolDefinition, ToolResult } from "./ports.ts";
-import { keptReport, type KindsOf, needsLedger, notKept, RECORD_KINDS, type RecordKind, readRecordCall, refusalMemory, trackReads } from "./record-args.ts";
+import {
+	CLOSED_VALUES, given, keptReport, type KindsOf, needsLedger, notKept, RECORD_KINDS, type RecordKind, readRecordCall, refusalMemory, trackReads, unknownLinks,
+} from "./record-args.ts";
 import type { Workspace } from "./workspace.ts";
 
 export interface ToolDeps {
@@ -181,6 +183,15 @@ function missingField(kind: string, field: string, a: Record<string, unknown>): 
 			" Record the surface element first (kind=endpoint/host/service/param/tech) and pass its id, or pass the raw string." +
 			" Do not ask the operator for it, and do not drop the record."
 		: "";
+	// Sent, but not in a form the field takes: severity "urgent", a statement
+	// sent as a list. Told it was "not received", the agent had sent it and was
+	// pointed at the schema instead of at its value.
+	if (given(a[field])) {
+		const allowed = CLOSED_VALUES[kind as RecordKind]?.[field];
+		const takes = allowed ? `one of ${allowed.join(", ")}` : field === "port" ? "a whole number" : field === "target" || field === "class" ? "an id, or a list of ids" : "text";
+		const sent = typeof a[field] === "string" ? JSON.stringify(a[field]) : JSON.stringify(a[field]) ?? String(a[field]);
+		return new Error(`record ${kind}: '${field}' was sent as ${sent.length > 80 ? `${sent.slice(0, 80)}…` : sent}, and it takes ${takes}. Fields received: ${got}.${how}`);
+	}
 	return new Error(
 		`record ${kind}: '${field}' is required, but was not received. Fields received: ${got}.` +
 		`${how} If you did send '${field}', the tool schema dropped it — report this rather than working around it.`,
@@ -318,6 +329,7 @@ function recordDetails(record: LedgerRecord, outcome: WriteOutcome): Record<stri
 		kind: record.kind,
 		ids: [record.id],
 		created: outcome === "created" ? [record.id] : [],
+		...(outcome === "unchanged" ? { unchanged: true } : {}),
 	};
 	if (record.kind === "finding") return { ...base, severity: record.severity, title: record.title };
 	return base;
@@ -448,7 +460,7 @@ function recordSummary(kind: string, record: LedgerRecord, outcome: WriteOutcome
 			`Pass id=${record.id} to change it further.`;
 	}
 	if (outcome === "unchanged" && byId) {
-		return `Nothing to change on ${kind} ${record.id} (${recordLabel(record)}): every field this call sent already holds that value, so nothing was written.`;
+		return `Nothing to change on ${kind} ${record.id} (${recordLabel(record)}): everything in this call that a ${kind} keeps already holds that value, so nothing was written.`;
 	}
 	if (outcome === "unchanged") {
 		return `Already recorded as ${kind} ${record.id} (${recordLabel(record)}) — nothing new in this call, so nothing was written. ` +
@@ -467,7 +479,7 @@ const RECORD_DESCRIPTION = `Record engagement state to the durable workspace. On
 - evidence: name, content — saves raw output to the workspace and returns the path to cite (this is how you create the file that 'evidence' fields reference)
 - host: value (+ip, tech[]); service: host, port (+proto, name); endpoint: path (+host, method, params[], auth, file); param: name (+endpoint, location, file)
   'file' is where the element lives in the source — the handler a route dispatches to. Reviewing code, give it: coverage is classes x the surface you recorded, so a matrix of routes alone can never point at a file, and a finding on that element inherits a location the report can cite.; tech: name (+host, version)
-- hypothesis: statement, target (surface id), class (checklist id) (+approach, outcome[proposed|testing|confirmed|refuted|inconclusive], evidence, basis[] — the grounds it cites). One test case: the class you tested, the element you tested it against, and what came back. 'target' and 'class' also accept lists, recording the cross product in one call — use it when one piece of reasoning settles several test cases at once.
+- hypothesis: statement, target (surface id), class (checklist id) (+approach, outcome[proposed|testing|confirmed|refuted|inconclusive], evidence (one path), basis[] — the grounds it cites). One test case: the class you tested, the element you tested it against, and what came back. 'target' and 'class' also accept lists, recording the cross product in one call — use it when one piece of reasoning settles several test cases at once.
 - finding: title, severity[info|low|medium|high|critical] (+target, class, cwe, cvss, description, repro, evidence[], status, hypothesisId — the id of the hypothesis it writes up)
   A finding is anything worth carrying into the report, not only a proven vulnerability. Use severity=info for an observation that costs nothing now but may matter later — a missing dependency pin, an unpinned base image, a permissive default, a lead you could not finish. 'target' is optional and accepts a recorded element id OR a raw string (a file path, a module, a component) when no element fits; give one when you can, and record the finding either way rather than leaving it in notes.
   A finding is a section of a document a client pays for, so it is written as one: 'description' says what the flaw is and where, 'impact' says what it costs THEM — the records exposed, the money moved, the service lost, the obligation breached — and 'remediation' says the concrete change that fixes it (the control to add, the call to replace; never "sanitize input"). 'repro' is numbered steps a third party can follow. Write impact in the client's terms, not the tool's: "any logged-in customer can read all 40k customer records, including national IDs" beats "confidentiality impact is high".
@@ -486,7 +498,7 @@ How these connect (this is what makes coverage work, not ceremony):
 - A confirmed hypothesis should also be recorded as a finding, tagged with the same 'class' so the finding maps back to the test case that proved it, and with hypothesisId=<the hypothesis id>, which links the two both ways.
 - 'evidence' is a workspace-relative PATH, not inline text. Create it with record kind=evidence (which returns the path), then cite that exact path. Paths are verified on write: a finding or hypothesis citing a path that does not resolve is rejected, so cite only what you actually saved, or omit the field.
 
-Every reply says what happened. A refused call is an error that names the field to fix and, where it can, the call to send instead — resending the same call gets the same refusal. A reply that starts 'Not stored:' recorded the rest of the call and names what it did not keep and why; nothing else was lost.`;
+Every reply says what happened. A refused call is an error that names the field to fix and, where it can, the call to send instead — resending the same call gets the same refusal. A reply that starts 'Not stored:' names what it did not keep and why, and says whether the rest was recorded. A reply that starts 'The last N calls … changed nothing' means sending it the same way again will change nothing again.`;
 
 const RECORD_PARAMETERS: JsonSchema = {
 	type: "object",
@@ -503,21 +515,21 @@ const RECORD_PARAMETERS: JsonSchema = {
 		// finding's link to its hypothesis was sent as `handle` and dropped unread.
 		hypothesisId: { type: "string", description: "kind=finding: the id of the hypothesis this finding writes up. Links the two both ways." },
 		findingId: { type: "string", description: "kind=hypothesis: the id of the finding that writes this hypothesis up. Links the two both ways." },
-		text: { type: "string" },
+		text: { type: "string", description: "kind=note and kind=model: the text itself." },
 		section: { enum: MODEL_SECTIONS, description: "For kind=model: which section of the target model this replaces." },
-		value: { type: "string" }, ip: { type: "string" }, tech: { type: "array", items: { type: "string" } },
-		host: { type: "string" }, port: { type: "integer" }, proto: { type: "string" }, name: { type: "string", description: "Name for param/tech; for kind=evidence, the filename to save under (e.g. \"sqli-login.txt\")." }, version: { type: "string" },
-		endpoint: { type: "string" }, method: { type: "string" },
+		value: { type: "string", description: "kind=host: the hostname or IP." }, ip: { type: "string", description: "kind=host: its IP, when value is a name." }, tech: { type: "array", items: { type: "string" }, description: "kind=host: what it runs, e.g. [\"nginx 1.18\"]." },
+		host: { type: "string", description: "kind=service, endpoint or tech: the host it runs on. A finding's location goes in target." }, port: { type: "integer", description: "kind=service: the port number." }, proto: { type: "string", description: "kind=service: its protocol." }, name: { type: "string", description: "Name for a param, tech or service; for kind=evidence, the filename to save under (e.g. \"sqli-login.txt\")." }, version: { type: "string", description: "kind=tech: its version." },
+		endpoint: { type: "string", description: "kind=param: the endpoint it belongs to. An endpoint's own route goes in path." }, method: { type: "string", description: "kind=endpoint: the HTTP method." },
 		// Two meanings, told apart by kind. The verification's hop list is called
 		// `path` in the ledger (FORMAT.md §8.3) and the endpoint's route always
 		// was; a second name for either would be the one a model guesses wrong.
 		path: {
 			anyOf: [{ type: "string" }, { type: "array", items: { type: "string" } }],
-			description: "kind=endpoint: the route (a string). kind=finding verdict: the path untrusted input takes, as a list of 'file:line: verbatim text' — the first hop where it enters (the source), the last where it is used (the sink). Each quote is checked against the file; confirming on a review of source needs both ends.",
+			description: "kind=endpoint: the route (a string). kind=finding verdict: the path untrusted input takes, as a list of 'file:line: verbatim text' — the first hop where it enters (the source), the last where it is used (the sink). Each quote is checked against the file; confirming on a review of source needs both ends. A hypothesis does not keep path: the lines it rests on go in basis.",
 		},
-		params: { type: "array", items: { type: "string" } }, auth: { type: "string" }, location: { type: "string" },
-		file: { type: "string" },
-		statement: { type: "string" },
+		params: { type: "array", items: { type: "string" }, description: "kind=endpoint: its parameter names." }, auth: { type: "string", description: "kind=endpoint: what calling it requires — none, a session, a role." }, location: { type: "string", description: "kind=param: where it is sent — query, body, header, cookie or path." },
+		file: { type: "string", description: "kind=endpoint and kind=param: where it is implemented, as file or file:line. A finding's location goes in target." },
+		statement: { type: "string", description: "kind=hypothesis, required on a new one: the weakness you suspect or ruled out, and where; on a refutation, what you checked and why it holds." },
 		// `anyOf`, not a bare description. These two were the only properties in the
 		// schema with no type at all, and a typeless property is not something a
 		// provider can render into a function signature — the field was dropped
@@ -532,25 +544,29 @@ const RECORD_PARAMETERS: JsonSchema = {
 		// coverage mechanism was never idle, it was unreachable.
 		target: {
 			anyOf: [{ type: "string" }, { type: "array", items: { type: "string" } }],
-			description: "Surface element id, or a list of ids to settle together.",
+			description: "kind=hypothesis (required): the surface element id, or a list of ids to settle together. kind=finding: where it is — an element id, or file:line. kind=loot: what it opens.",
 		},
 		class: {
 			anyOf: [{ type: "string" }, { type: "array", items: { type: "string" } }],
-			description: "Checklist class id, or a list of class ids to settle together.",
+			description: "kind=hypothesis (required) and kind=finding: the checklist class id; a hypothesis takes a list of class ids to settle together.",
 		},
-		approach: { type: "string" }, outcome: { enum: [...HYPOTHESIS_OUTCOMES, ...SETTLE_OUTCOMES], description: "For kind=hypothesis: proposed|testing|confirmed|refuted|inconclusive. For kind=settle: finished|paused|blocked." },
-		note: { type: "string", description: "For kind=settle: what you would say about where the session leaves the work." },
+		approach: { type: "string", description: "kind=hypothesis: how you tested it." }, outcome: { enum: [...HYPOTHESIS_OUTCOMES, ...SETTLE_OUTCOMES], description: "For kind=hypothesis: proposed|testing|confirmed|refuted|inconclusive. For kind=settle: finished|paused|blocked." },
+		note: { type: "string", description: "kind=settle only: what you would say about where the session leaves the work. A note of its own is kind=note with text." },
 		content: { type: "string", description: "For kind=evidence: the raw output to save to the file." },
-		title: { type: "string" }, severity: { enum: SEVERITIES }, cwe: { type: "string" }, cvss: { type: "string", description: `CVSS vector. v4.0 by default, e.g. "${CVSS_EXAMPLE["4.0"]}"; a v3.1 vector is accepted when the engagement requires one.` }, description: { type: "string", description: "What the flaw is and where: the mechanism, in plain language." }, impact: { type: "string", description: "What it costs the client in their terms — records exposed, money moved, service lost, obligation breached." }, remediation: { type: "string", description: "The concrete change that fixes it: the control to add, the call to replace. Not \"sanitize input\"." }, repro: { type: "string" }, status: { type: "string" }, evidence: { type: "array", items: { type: "string" }, description: "Workspace-relative paths to evidence files you wrote (e.g. [\"evidence/sqli-login.txt\"]). Not inline text." },
-		control: { type: "string", description: "For kind=finding: the control case you ran and what it returned — the request that had to FAIL for the finding to mean anything." },
+		title: { type: "string", description: "kind=finding, required on a new one: a short title of the flaw." }, severity: { enum: SEVERITIES, description: "kind=finding, required on a new one." }, cwe: { type: "string", description: "kind=finding: e.g. CWE-89." }, cvss: { type: "string", description: `CVSS vector. v4.0 by default, e.g. "${CVSS_EXAMPLE["4.0"]}"; a v3.1 vector is accepted when the engagement requires one.` }, description: { type: "string", description: "What the flaw is and where: the mechanism, in plain language." }, impact: { type: "string", description: "What it costs the client in their terms — records exposed, money moved, service lost, obligation breached." }, remediation: { type: "string", description: "The concrete change that fixes it: the control to add, the call to replace. Not \"sanitize input\"." }, repro: { type: "string", description: "kind=finding: numbered steps a third party can follow." }, status: { type: "string", description: `kind=finding: ${FINDING_STATUSES.join("|")}. kind=blocker: ${BLOCKER_STATUSES.join("|")}.` }, evidence: { type: "array", items: { type: "string" }, description: "Workspace-relative paths to evidence files you wrote (e.g. [\"evidence/sqli-login.txt\"]). Not inline text. A finding keeps the list; a hypothesis keeps one path." },
+		control: { type: "string", description: "For kind=finding: the control case you ran and what it returned — the request that had to FAIL for the finding to mean anything. A hypothesis keeps its grounds in basis." },
 		basis: { type: "array", items: { type: "string" }, description: "The grounds for a refutation, a severity change, or a second look at a cleared cell — file:line, an evidence path, or the model section that settles it. Written as 'file:line: verbatim text', an entry is a quote and is checked against the file: the text must be on that line or within 3 of it, and rare enough in the file (at most 3 times) to identify it. On a new kind=hypothesis it is stored as the grounds the claim cites; on kind=hypothesis with an id, this is what marks the row as independently re-checked. On kind=finding with an id and status=suspected (and no claim fields), it records a challenge that could not settle the claim." },
 		guards: { type: "array", items: { type: "string" }, description: "For a kind=finding verdict: the checks you examined — validation, an authorization test, escaping, a parameterised call — each as 'file:line: verbatim text', checked against the file. On a review of source a refutation quotes the guard (here or in basis) that makes the claim not a finding." },
 		live: { type: "boolean", description: "For an engagement with a live target: was it reachable, and the session valid, when you challenged it? A refutation against a dead session refutes nothing. When there is no running target, leave it out: a review of source has no target to reach, and there the cited basis carries the refutation. Applies to kind=finding and to a re-checked kind=hypothesis." },
 		entitlement: { type: "string", description: "For kind=finding: how you established the caller was (or was not) meant to reach the resource. Required to confirm an access-control finding." },
-		question: { type: "string" }, blockerType: { enum: BLOCKER_TYPES }, priority: { enum: PRIORITIES }, options: { type: "array", items: { type: "string" } }, blocks: { type: "array", items: { type: "string" } }, context: { type: "string" },
-		handle: { type: "string", description: "kind=loot only: a name for the credential, e.g. cred:web-admin. Not a record id." }, lootType: { enum: LOOT_TYPES }, username: { type: "string" }, secret: { type: "string" }, source: { type: "string" }, notes: { type: "string" },
+		question: { type: "string", description: "kind=blocker, required: what you need decided." }, blockerType: { enum: BLOCKER_TYPES, description: "kind=blocker." }, priority: { enum: PRIORITIES, description: "kind=blocker." }, options: { type: "array", items: { type: "string" }, description: "kind=blocker: the choices to pick from." }, blocks: { type: "array", items: { type: "string" }, description: "kind=blocker: ids of the work it holds up." }, context: { type: "string", description: "kind=blocker: what the operator needs to know to answer." },
+		// Read by the write path and named in this tool's own description, and not
+		// listed: GLM answered a blocker 0 times with it in the grids, where DeepSeek
+		// and Luna did 143 times, and put the answer in context, reason or notes.
+		answer: { type: "string", description: "kind=blocker: the operator's answer, with status=answered." },
+		handle: { type: "string", description: "kind=loot only: a name for the credential, e.g. cred:web-admin. Not a record id." }, lootType: { enum: LOOT_TYPES, description: "kind=loot." }, username: { type: "string", description: "kind=loot." }, secret: { type: "string", description: "kind=loot, required: the secret itself." }, source: { type: "string", description: `kind=finding: where the claim comes from — ${FINDING_SOURCES.join("|")}. kind=loot: where the credential was found.` }, notes: { type: "string", description: "kind=loot only: what it opens and where it works. A finding's text goes in description; a hypothesis's in statement." },
 		delete: { type: "boolean", description: "With 'id': retire that record. For something that should never have been recorded — ask the operator first." },
-		reason: { type: "string", description: "Why a record is being deleted or its status changed. Stored on the record." },
+		reason: { type: "string", description: "kind=finding: why its status changed. With delete=true, why the record is retired (any kind). A hypothesis keeps one only as the note on a re-check by id." },
 	},
 };
 
@@ -1762,12 +1778,16 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 					resolved.push(rel);
 				}
 				if (missing.length > 0) {
+					// A quote of the source sent as evidence — "app.py:81: APP = Starlette(debug=True)" —
+					// is not a missing file but a field mix-up: 5 of the grids' 95 live refusals here.
+					const quoted = missing.some((rel) => /:\d+(?:-\d+)?:?\s+\S/.test(rel));
 					throw new Error(
 						`record ${kind}: evidence path(s) do not resolve: ${missing.join(", ")}. ` +
 							`Looked in the engagement workspace (${deps.workspace.dir}) and under the working directory (${ctx.cwd}). ` +
 							"Create each with record kind=evidence (it returns the path to cite), write it into " +
 							`"${deps.workspace.dir}/evidence/" from bash, or omit the evidence field. ` +
-							"Citing a file that does not exist is an unsupported claim.",
+							"Citing a file that does not exist is an unsupported claim." +
+							(quoted ? " Some of these read as quotes of the source, not saved files: a quote goes in basis, as 'file:line: verbatim text'." : ""),
 					);
 				}
 				if (adopted.length > 0) {
@@ -1954,8 +1974,12 @@ export function createRecordTool(deps: ToolDeps): ToolDefinition {
 				});
 				const blocking = gaps.filter((g) => g.blocking);
 				if (blocking.length > 0) {
+					// 186 replies in the grids read "Recorded as confirmed. Before this can
+					// be confirmed:", and an agent that took it at its word sent the
+					// confirmation again. A confirmed finding is told what its proof lacks.
+					const settled = written.status === "confirmed" || written.status === "reported";
 					unverified =
-						`\nRecorded as ${written.status}. Before this can be confirmed:\n` +
+						(settled ? `\nRecorded as ${written.status}. Its proof still lacks:\n` : `\nRecorded as ${written.status}. Before this can be confirmed:\n`) +
 						blocking.map((g) => `- ${g.detail}`).join("\n") +
 						`\nChallenge it with \`recall challenge id=${written.id}\`, which returns the brief for this class.`;
 				}
@@ -1982,12 +2006,14 @@ function checkedRecord(deps: ToolDeps, tool: ToolDefinition): ToolDefinition {
 		...tool,
 		async execute(args: unknown, ctx: ToolContext): Promise<ToolResult> {
 			const raw = asRecord(args);
+			const kinds = needsLedger(raw) ? await recordedKinds(deps) : undefined;
 			let call: ReturnType<typeof readRecordCall>;
 			try {
-				call = readRecordCall(raw, needsLedger(raw) ? await recordedKinds(deps) : undefined);
+				call = readRecordCall(raw, kinds);
 			} catch (error) {
 				throw memory.refused(raw, error);
 			}
+			const lost = kinds ? unknownLinks(call.args, call.kind, kinds) : [];
 			// The call as sent, before the write deletes and rewrites fields on it.
 			const sent = { ...call.args };
 			const { args: tracked, reads } = trackReads(call.args);
@@ -1997,16 +2023,17 @@ function checkedRecord(deps: ToolDeps, tool: ToolDefinition): ToolDefinition {
 			} catch (error) {
 				throw memory.refused(sent, error, call.readAs);
 			}
-			memory.accepted();
-			const dropped = notKept(sent, reads, call.kind);
-			if (dropped.length === 0 && call.readAs.length === 0) return result;
-			const report = keptReport(call.readAs, dropped);
+			const details = result.details && typeof result.details === "object" ? result.details as Record<string, unknown> : {};
+			const unchangedOn = details.unchanged === true ? `${call.kind} ${String(details.id)}` : undefined;
+			const loop = memory.accepted(unchangedOn);
+			const dropped = [...call.dropped, ...lost, ...notKept(sent, reads, call.kind)];
+			if (dropped.length === 0 && call.readAs.length === 0 && loop === "") return result;
+			const report = keptReport(call.readAs, dropped, unchangedOn === undefined);
 			const single = result.content.length === 1;
 			const content = result.content.map((block, i) => (i === 0 && block.type === "text"
-				? { ...block, text: report.before + block.text + (single ? report.after : "") }
+				? { ...block, text: loop + report.before + block.text + (single ? report.after : "") }
 				: block));
 			if (!single && report.after) content.push({ type: "text", text: report.after.trimStart() });
-			const details = result.details && typeof result.details === "object" ? result.details as Record<string, unknown> : {};
 			return {
 				...result,
 				content,
@@ -2136,7 +2163,7 @@ export function createRecallTool(deps: ToolDeps): ToolDefinition {
 		return { plan, rows: { inventory, hypotheses, findings } };
 	}
 
-	return {
+	const tool: ToolDefinition = {
 		name: "recall",
 		label: "recall",
 		description:
@@ -2556,6 +2583,39 @@ export function createRecallTool(deps: ToolDeps): ToolDefinition {
 					return text(`Next test case: ${next.element} for ${next.class}. Record the verdict as a hypothesis either way — a refutation counts.`);
 				}
 			}
+		},
+	};
+	return checkedRecall(tool);
+}
+
+/** Where recall reads each argument a query might be sent. */
+const RECALL_READS: Record<string, string> = {
+	refs: "only query=context reads refs, and returns just those records",
+	id: "only query=finding and query=challenge read an id",
+	class: "only query=cleared reads a class",
+};
+
+/**
+ * recall as agents meet it: an argument the query did not read is said back.
+ * 30 recall calls in the grids sent one — refs to query=hypotheses or surface,
+ * a class to query=coverage or gaps, an id to query=blockers — and got the
+ * whole list back, with nothing to say the filter was never applied.
+ */
+function checkedRecall(tool: ToolDefinition): ToolDefinition {
+	return {
+		...tool,
+		async execute(args: unknown, ctx: ToolContext): Promise<ToolResult> {
+			const raw = asRecord(args);
+			const { args: tracked, reads } = trackReads({ ...raw });
+			const result = await tool.execute(tracked, ctx);
+			const unread = Object.keys(raw).filter((k) => given(raw[k]) && !reads.read.has(k));
+			if (unread.length === 0) return result;
+			const note = `\n(query=${String(raw.query)} did not read ${unread.map((k) => `${k}: ${RECALL_READS[k] ?? "not a recall parameter"}`).join("; ")}.)`;
+			const last = result.content.length - 1;
+			return {
+				...result,
+				content: result.content.map((block, i) => (i === last && block.type === "text" ? { ...block, text: block.text + note } : block)),
+			};
 		},
 	};
 }

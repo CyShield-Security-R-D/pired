@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { correctedCall, keptReport, needsLedger, notKept, readRecordCall, refusalMemory, trackReads } from "./record-args.ts";
+import { correctedCall, keptReport, needsLedger, notKept, readRecordCall, refusalMemory, trackReads, unknownLinks } from "./record-args.ts";
 
 /** A ledger lookup over a fixed set of ids. */
 function ledger(rows: Record<string, string>): (id: string) => ReadonlySet<string> {
@@ -215,3 +215,74 @@ describe("refusals", () => {
 		expect(out.message).toBe("nope\nRead this call as: no kind → kind=endpoint (from auth).");
 	});
 });
+
+describe("a link, a list or a value sent in the wrong shape", () => {
+	it("reads a link written as text in any field, only when the id is a record of the other kind", () => {
+		const kinds = ledger({ h1: "hypothesis", f1: "finding" });
+		const finding = readRecordCall({ kind: "finding", id: "f1", statement: "hypothesisId=h1" }, kinds);
+		expect(finding.args).toEqual({ kind: "finding", id: "f1", hypothesisId: "h1" });
+		expect(finding.readAs).toEqual(["statement 'hypothesisId=h1' → hypothesisId=h1"]);
+		const hyp = readRecordCall({ kind: "hypothesis", id: "h1", note: "finding_id: <f1>" }, kinds);
+		expect(hyp.args).toMatchObject({ findingId: "f1" });
+		// Text that names no recorded hypothesis is left for the reply to report.
+		expect(readRecordCall({ kind: "finding", id: "f1", host: "hypothesisId=zz9" }, kinds).args).toMatchObject({ host: "hypothesisId=zz9" });
+		// Nor does it overwrite a link the call did send by name.
+		expect(readRecordCall({ kind: "finding", id: "f1", hypothesisId: "h2", host: "hypothesisId=h1" }, ledger({ h1: "hypothesis", h2: "hypothesis" })).args)
+			.toMatchObject({ hypothesisId: "h2", host: "hypothesisId=h1" });
+	});
+
+	it("reads the ledger for a call that names a link, by field or in text", () => {
+		expect(needsLedger({ kind: "finding", title: "t", severity: "low", hypothesisId: "h1" })).toBe(true);
+		expect(needsLedger({ kind: "finding", title: "t", severity: "low", host: "hypothesis: h1" })).toBe(true);
+		expect(needsLedger({ kind: "finding", title: "t", severity: "low", host: "nginx" })).toBe(false);
+	});
+
+	it("takes out a link to nothing, or to the wrong kind, and says which", () => {
+		const kinds = ledger({ h1: "hypothesis", f1: "finding" });
+		const args: Record<string, unknown> = { kind: "finding", title: "t", hypothesisId: "f1" };
+		expect(unknownLinks(args, "finding", kinds)).toEqual(['hypothesisId="f1" (f1 is a finding, not a hypothesis; `recall hypotheses` lists their ids)']);
+		expect(args).not.toHaveProperty("hypothesisId");
+		const hyp: Record<string, unknown> = { kind: "hypothesis", findingId: "<unknown>" };
+		expect(unknownLinks(hyp, "hypothesis", kinds)).toEqual(['findingId="<unknown>" (no finding has the id <unknown>; `recall findings` lists their ids)']);
+		const kept: Record<string, unknown> = { kind: "finding", hypothesisId: "h1" };
+		expect(unknownLinks(kept, "finding", kinds)).toEqual([]);
+		expect(kept.hypothesisId).toBe("h1");
+		expect(unknownLinks({ kind: "endpoint", hypothesisId: "x" }, "endpoint", kinds)).toEqual([]);
+	});
+
+	it("keeps the first path of a hypothesis's evidence list, and leaves a bracketed string that is not a list alone", () => {
+		expect(readRecordCall({ kind: "hypothesis", evidence: ["evidence/a.txt"] }).args.evidence).toBe("evidence/a.txt");
+		const two = readRecordCall({ kind: "hypothesis", evidence: ["evidence/a.txt", "evidence/b.txt"] });
+		expect(two.args.evidence).toBe("evidence/a.txt");
+		expect(two.dropped).toHaveLength(1);
+		expect(readRecordCall({ kind: "hypothesis", evidence: "[not json" }).args.evidence).toBe("[not json");
+		// A finding keeps the list as sent.
+		expect(readRecordCall({ kind: "finding", evidence: ["evidence/a.txt", "evidence/b.txt"] }).args.evidence).toEqual(["evidence/a.txt", "evidence/b.txt"]);
+	});
+
+	it("reads a closed value in the wrong case, and leaves one outside the set for the write to refuse or report", () => {
+		expect(readRecordCall({ kind: "blocker", question: "q", status: "Answered", priority: " HIGH " }).args).toMatchObject({ status: "answered", priority: "high" });
+		expect(readRecordCall({ kind: "settle", outcome: "Finished" }).args.outcome).toBe("finished");
+		expect(readRecordCall({ kind: "finding", severity: "severe" }).args.severity).toBe("severe");
+	});
+
+	it("says a call changed nothing only once it has happened twice in a row on the same record", () => {
+		const memory = refusalMemory();
+		expect(memory.accepted("finding f1")).toBe("");
+		expect(memory.accepted("finding f1")).toMatch(/^The last 2 calls on finding f1 changed nothing\./);
+		expect(memory.accepted("finding f2")).toBe("");
+		expect(memory.accepted()).toBe("");
+		expect(memory.accepted("finding f2")).toBe("");
+	});
+
+	it("names kind=settle when a call left the kind out of a settle, and still does not settle", () => {
+		expect(() => readRecordCall({ note: "review complete", outcome: "finished" }))
+			.toThrow(/^record: 'kind' is missing, and outcome=finished is a settle's, and a settle is only recorded when the call says kind=settle\. Send kind=/);
+	});
+
+	it("does not say the rest was recorded when nothing was written", () => {
+		expect(keptReport([], ["handle (h)"], false).before).toBe("Not stored: handle (h).\n");
+		expect(keptReport([], ["a (x)", "b (y)"], false).before).toBe("Not stored:\n- a (x)\n- b (y)\n");
+	});
+});
+

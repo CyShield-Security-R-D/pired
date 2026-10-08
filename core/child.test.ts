@@ -674,7 +674,7 @@ describe("what each role may record", () => {
 	it("limits a verifier's status to a verdict and refuses the operator's dispositions by name", async () => {
 		const guard = worker("pired-verify");
 		expect([...VERIFIER_STATUSES].sort()).toEqual(["confirmed", "refuted", "suspected"]);
-		for (const status of ["false-positive", "ignored", "accepted-risk", "reported", "triaged", "open", "Refuted", "verified"]) {
+		for (const status of ["false-positive", "ignored", "accepted-risk", "reported", "triaged", "open", "verified"]) {
 			const refused = await guard.check({ name: "record", args: { kind: "finding", id: "f-1", status, reason: "not real" } });
 			expect(refused.allow).toBe(false);
 			expect(refused.reason).toContain(`not '${status}'`);
@@ -683,6 +683,8 @@ describe("what each role may record", () => {
 		// On a finding it creates as well, and whatever type the model sent.
 		expect((await guard.check({ name: "record", args: { kind: "finding", hypothesisId: "h-1", title: "t", severity: "high", status: "reported" } })).allow).toBe(false);
 		expect((await guard.check({ name: "record", args: { kind: "finding", id: "f-1", status: ["refuted"] } })).reason).toContain(`not '["refuted"]'`);
+		// The record tool reads "Refuted" as refuted, so the gate judges it as one.
+		expect((await guard.check({ name: "record", args: { kind: "finding", id: "f-1", status: "Refuted", reason: "not real" } })).reason ?? "").not.toContain("not 'Refuted'");
 	});
 
 	/**
@@ -691,6 +693,21 @@ describe("what each role may record", () => {
 	 * last-write-wins, so the investigator's text and cited locations were
 	 * replaced, and the replayed ledger went from 4 true positives to 2.
 	 */
+	/**
+	 * 89 verifier verdicts in the grids were refused for carrying 'evidence', and
+	 * 29 of the next calls were refused again: what to send was the last sentence
+	 * of a 900-character reply.
+	 */
+	it("tells a verifier refused for an extra key what to send, before why", async () => {
+		const guard = worker("pired-verify");
+		const refused = await guard.check({ name: "record", args: { kind: "finding", id: "f-1", status: "confirmed", control: "anonymous got 401", evidence: ["evidence/v.txt"] } });
+		expect(refused.allow).toBe(false);
+		expect(refused.reason).toMatch(/^pired: pired-verify may not change 'evidence' on a finding\. Send the same verdict without it: a verifier's write takes only [^.]*\. Cite the evidence path in 'control' or 'basis' instead\./);
+		const two = await guard.check({ name: "record", args: { kind: "finding", id: "f-1", status: "confirmed", control: "c", title: "t", severity: "low" } });
+		expect(two.reason).toContain("Send the same verdict without them:");
+		expect(two.reason).not.toContain("Cite the evidence path");
+	});
+
 	it("refuses a verifier's id-update that rewrites the description, and names the key", async () => {
 		const guard = worker("pired-verify");
 		const refused = await guard.check({ name: "record", args: { kind: "finding", id: "f-1", status: "confirmed", description: "a different mechanism" } });

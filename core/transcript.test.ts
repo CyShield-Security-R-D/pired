@@ -50,6 +50,15 @@ describe("recordResultLine", () => {
 			.toBe("⦿ HIGH  IDOR · not stored: status");
 	});
 
+	it("takes the model's leading lines off a reply that wrote nothing, without cutting into the summary", () => {
+		const ink = (_tone: RecordTone, text: string): string => text;
+		const summary = "The last 2 calls on finding f1 changed nothing. Sent the same way, the next will change nothing too: send what this reply names, under the name it gives.\n" +
+			"Not stored: handle (only kind=loot has a handle).\nNothing to change on finding f1 (IDOR): everything in this call that a finding keeps already holds that value, so nothing was written.";
+		expect(recordResultLine({ kind: "finding", notStored: ["handle (only kind=loot has a handle)"] }, summary, ink))
+			.toBe("Nothing to change on finding f1 (IDOR): everything in this call that a finding keeps already holds that value, so nothing was written. · not stored: handle");
+		expect(recordResultLine({ kind: "finding" }, "Not stored:\n- a (x)\n- b (y)\nNothing to change on finding f1 (IDOR).", ink)).toBe("Nothing to change on finding f1 (IDOR).");
+	});
+
 	it("leads a finding with its severity, which is the engagement's actual product", () => {
 		const line = recordResultLine(
 			{ kind: "finding", severity: "high", title: "SQL injection in the login handler" },

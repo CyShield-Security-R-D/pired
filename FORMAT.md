@@ -271,7 +271,7 @@ the surface elements coverage is computed over.
   "class":"authz",               // checklist class id
   "method":"Swapped id to another user's; observed response",
   "outcome":"refuted",           // "proposed" | "testing" | "confirmed" | "refuted" | "inconclusive"
-  "evidence":"evidence/y7-idor.txt",
+  "evidence":"evidence/y7-idor.txt",  // one path; a list sent for it is read as its first (ADR-041)
   "basis":["api/user.go:41: if req.ID != session.UserID"],  // the grounds the claim cites (ADR-040)
   "findingId":"f3a9"             // the finding that writes this up; set on either end of the link
 }
@@ -318,7 +318,8 @@ basis drops it with `method` and `evidence`. A second look's grounds are written
 A link between a finding and its hypothesis is written on both rows: recording either one with the
 other's id (`hypothesisId` on the finding, `findingId` on the hypothesis) also sets the other end,
 unless that end already names a different record, which is left as it was (ADR-040). Rows written
-before ADR-040 may carry only the end that was named.
+before ADR-040 may carry only the end that was named. A link that names no record of the other kind
+is not written (ADR-041); rows written before ADR-041 may hold one.
 
 `status` is one of `suspected`, `open`, `confirmed`, `triaged`, `reported`,
 `refuted`, `false-positive`, `accepted-risk`, `ignored`. The last four are
