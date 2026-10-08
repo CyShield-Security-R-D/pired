@@ -369,6 +369,41 @@ describe("the subagent budget", () => {
 		expect(decide(createScopeGate(eng({ maxAgents: -3 })), spawn).allow).toBe(DEFAULT_MAX_AGENTS > 0);
 	});
 
+	/**
+	 * ADR-042: `/agents` changes the cap mid-session. Rebuilding the gate would
+	 * have handed a session that had spent its budget a fresh one.
+	 */
+	it("changes its caps mid-session and keeps what was already launched", () => {
+		const gate = createScopeGate(eng());
+		expect(decide(gate, spawn).allow).toBe(false);
+		gate.setCaps(2, 0);
+		expect(decide(gate, spawn).allow).toBe(true);
+		expect(gate.launched()).toEqual({ workers: 1, verifiers: 0 });
+		gate.setCaps(0, 0);
+		expect(decide(gate, spawn).reason).toMatch(/Delegation is disabled/);
+		gate.setCaps(1, 0);
+		expect(decide(gate, spawn).reason).toMatch(/budget spent: 1 per session, 1 already launched/);
+	});
+
+	it("counts launches from a verifier budget against the one cap left when verifiers stop having their own", () => {
+		const gate = createScopeGate(eng({ maxAgents: 2, maxVerifiers: 1 }), { cwd: "/work" });
+		expect(decide(gate, { name: "subagent", args: { agent: "pired-verify", task: "check" } }).allow).toBe(true);
+		gate.settle({ name: "subagent", isError: false, result: { details: { results: [{}] } } });
+		expect(gate.launched()).toEqual({ workers: 0, verifiers: 1 });
+		gate.setCaps(1, 0);
+		expect(gate.launched()).toEqual({ workers: 1, verifiers: 0 });
+		expect(decide(gate, { name: "subagent", args: { agent: "pired-scout", task: "map" } }).reason).toMatch(/budget spent: 1 per session/);
+	});
+
+	it("refunds a launch that was running under the verifier budget to the shared one", () => {
+		const gate = createScopeGate(eng({ maxAgents: 1, maxVerifiers: 1 }), { cwd: "/work" });
+		expect(decide(gate, { name: "subagent", args: { agent: "pired-verify", task: "check" } }).allow).toBe(true);
+		gate.setCaps(1, 0);
+		// It never started a child, so its charge comes back off the cap it now counts against.
+		gate.settle({ name: "subagent", isError: true, result: { details: { results: [] } } });
+		expect(gate.launched()).toEqual({ workers: 0, verifiers: 0 });
+	});
+
 	it("tells a parent past the cap how to finish, the same way whichever tool hit it", () => {
 		const spawned = createScopeGate(eng({ maxAgents: 1 }));
 		decide(spawned, spawn);

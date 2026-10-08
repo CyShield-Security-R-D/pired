@@ -3919,3 +3919,54 @@ The replies had their own faults, found by replaying the grids through `54055cc`
 - **Inferring a settle from its outcome.** A settle closes the session's account of itself, and
   ADR-040 keeps it explicit.
 - **pi's "output token limit" refusal.** It is pi's, not pired's.
+
+## ADR-042 — Delegation can be switched on for one run, at launch or in the TUI, and stays off by default
+
+**Status:** accepted · 2026-10-08 · operator decision: a launch option and a TUI command, one number
+with verifiers included, lasting for the session only. The default stays off (ADR-039).
+
+### Context
+
+Since ADR-029 the only way to let a session delegate was to write `maxAgents` (and `maxVerifiers`)
+into the engagement's scope file. That is a decision about the engagement. A run that wanted workers
+changed every later run with it, and it was easy to forget the setting was still there. The operator
+asked for delegation to be switchable from outside the TUI, at launch, and from within it, mid-session.
+
+The number never meant "launch this many". The main agent decides whether to delegate, to which of
+the four workers and when, as the prompt's `<delegation>` block and the `ops-delegation` skill guide
+it. `maxAgents` is a permission and a ceiling. `maxVerifiers` reserves a separate budget for
+`pired-verify`; at 0, verifiers share `maxAgents` with the other workers.
+
+### Decision
+
+1. **`pired --agents <n>`** sets this run's worker cap. The launcher passes it as the pi flag
+   `--pired-agents`, as `--no-panel` becomes `--pired-panel off`, so `pi -e … --pired-agents 8` works
+   too. A value the launcher cannot read is refused before anything starts, as an unknown profile is
+   (ADR-006).
+2. **`/agents`** in the TUI says what is set, how much is used and where it came from.
+   - `/agents <n>` changes the cap.
+   - `/agents off` stops further launches; `/agents on` is the suggested 8.
+3. **One number.** It sets `maxAgents` and puts verifiers in the same budget (`maxVerifiers: 0`).
+   The agent spends it on the mix it judges best. A reserved verifier budget stays a scope-file
+   setting.
+4. **For this run only.** It overrides the scope file while the run lasts, across new sessions in
+   the same process, and is never written to the scope file. The next plain `pired` starts from
+   the engagement's own setting, which by default is off.
+5. **At most 32.** A typo such as `/agents 80` cannot start a run ten times the size meant. A larger
+   cap goes in the scope file, where it is a decision rather than a keystroke.
+6. **A change mid-session keeps what was spent.** The gate takes the new caps in place
+   (`setCaps`) rather than being rebuilt, which would have handed a spent session a fresh budget.
+   - Launches charged to a verifier budget move into the shared one when that budget goes away.
+   - The `subagent` launcher (or pi-subagents' `subagents_enable` loader) is shown or hidden at
+     once.
+   - The prompt's delegation block follows on the agent's next turn, built from the same scope as
+     the gate.
+
+### Rejected
+
+- **A `pired agents` subcommand.** The launcher takes options, not subcommands, and everything else
+  it does is an option.
+- **A separate verifier option.** The operator chose one number; the main agent picks the mix.
+- **Writing the setting to the scope file.** That is the engagement-level switch that already
+  exists. A per-run switch that persisted would leave delegation on for runs that did not ask.
+- **A picker dialog for `/agents`.** It is more to build and test than arguments, for one number.

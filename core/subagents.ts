@@ -225,6 +225,82 @@ export function verifierCap(scope: EngagementScope | undefined): number {
 }
 
 /**
+ * Delegation for one session, chosen by the operator rather than written into
+ * the engagement (ADR-042): `pired --agents 8` at launch, or `/agents 8` in the
+ * TUI. Until then the only switch was `maxAgents` in the scope file, which is
+ * a decision about the engagement and stays one — a later plain run is back to
+ * whatever the file says, which by default is off (ADR-039).
+ *
+ * One number. It allows launches, it does not order them: the main agent still
+ * decides whether, which worker and when. Verifiers share it, so the agent
+ * spends one budget on the mix it judges best; a reserved verifier budget is a
+ * scope-file setting.
+ *
+ * Capped at MAX_AGENTS_SETTING, so a typo — `/agents 80` — cannot start a run
+ * twenty times the size the operator meant. A larger cap is written into the
+ * scope file, where it is a decision rather than a keystroke. bin/launch.mjs
+ * checks `--agents` against the same bound before anything starts.
+ */
+export const MAX_AGENTS_SETTING = 32;
+
+/** A worker cap the operator asked for, or why the request is not one. */
+export type AgentsSetting = { cap: number } | { error: string };
+
+/** `8`, `off` (0) or `on` (SUGGESTED_MAX_AGENTS): a whole number from 0 to MAX_AGENTS_SETTING. */
+export function parseAgentsSetting(raw: string): AgentsSetting {
+	const v = raw.trim().toLowerCase();
+	if (v === "off") return { cap: 0 };
+	if (v === "on") return { cap: SUGGESTED_MAX_AGENTS };
+	if (/^\d+$/.test(v) && Number(v) <= MAX_AGENTS_SETTING) return { cap: Number(v) };
+	return { error: `agents takes a whole number from 0 to ${MAX_AGENTS_SETTING}, or on (${SUGGESTED_MAX_AGENTS}) or off — not "${raw.trim()}". A larger cap goes in the scope file as maxAgents.` };
+}
+
+/** The scope a session runs under once the operator set its worker cap: one budget, verifiers included. */
+export function withAgentsCap(scope: EngagementScope, cap: number): EngagementScope {
+	return { ...scope, maxAgents: cap, maxVerifiers: 0 };
+}
+
+export type AgentsCommand = { kind: "show" } | { kind: "set"; cap: number } | { kind: "error"; message: string };
+
+/** `/agents`, `/agents 8`, `/agents on`, `/agents off`. */
+export function parseAgentsCommand(args: string): AgentsCommand {
+	if (args.trim() === "") return { kind: "show" };
+	const setting = parseAgentsSetting(args);
+	return "cap" in setting ? { kind: "set", cap: setting.cap } : { kind: "error", message: `/${setting.error}` };
+}
+
+export interface AgentsStatus {
+	scope: EngagementScope | undefined;
+	/** Launches the gate has charged this session. */
+	launched: { workers: number; verifiers: number };
+	/** false once pi-subagents was found absent; undefined before anyone looked. */
+	available: boolean | undefined;
+	/** Whether this session's cap came from `--agents` or `/agents` rather than the scope file. */
+	overridden: boolean;
+}
+
+/** What `/agents` says: the cap, what is spent, where the cap came from, and how to change it. */
+export function renderAgentsStatus(s: AgentsStatus): string {
+	if (s.available === false) {
+		return "Delegation is unavailable: pi-subagents is not installed, so there are no workers to launch. " +
+			"Install it with `pi install npm:pi-subagents` (>= 0.71, on pi >= 0.86.1), then start pired with --agents 8.";
+	}
+	const cap = workerCap(s.scope);
+	const verifiers = verifierCap(s.scope);
+	const from = s.overridden ? "set for this session; the next pired run starts from the engagement's setting" : "from the engagement's scope file";
+	if (cap === 0 && verifiers === 0) {
+		return `Delegation is off (${s.overridden ? "set for this session" : "the default"}). ` +
+			`/agents ${SUGGESTED_MAX_AGENTS} lets the main agent launch up to ${SUGGESTED_MAX_AGENTS} workers this session when it judges one useful; it decides which and when.`;
+	}
+	const used = s.launched.workers + (verifiers > 0 ? 0 : s.launched.verifiers);
+	const workers = cap > 0
+		? `up to ${cap} worker launch${cap === 1 ? "" : "es"} this session, ${used} used${verifiers > 0 ? "" : " (verifiers included)"}`
+		: "no work launches";
+	const reserved = verifiers > 0 ? `; ${verifiers} pired-verify launch${verifiers === 1 ? "" : "es"} reserved, ${s.launched.verifiers} used` : "";
+	return `Delegation: ${workers}${reserved} — ${from}. The main agent decides whether, which worker and when. /agents off turns it off; /agents <n> changes the cap.`;
+}
+
+/**
  * The scope's `verifier.model`, when it names one as `provider/id`; otherwise
  * undefined, and the verifier runs on the parent's model like every worker.
  * Checked for the shape only: whether the provider is configured is pi's to

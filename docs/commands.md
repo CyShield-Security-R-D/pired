@@ -19,6 +19,7 @@ Everything pired adds to pi. pi's own commands (`/model`, `/reload`, sessions, �
 | `/report` | Write findings to Markdown in the engagement workspace, with a Coverage section: what was settled, what was refuted, and what nobody reached. Prints the absolute path. |
 | `/challenge` | What is still unverified: the queue of findings no challenge has settled, or `/challenge <id>` for the brief on one — the brief a fresh subagent can be handed. |
 | `/pass` | Which pass is open, the lens it runs under and what that lens can still reach. `/pass next` opens the next rung; `/pass <lens>` opens a named one. Only on engagements that turned passes on. |
+| `/agents` | Delegation for this session: how many worker launches the agent may make, and how many it has. `/agents <n>` lets it launch up to n (`on` is 8), `/agents off` stops it. The agent still decides whether, which worker and when. See [Subagent budget](#subagent-budget). |
 | `/blockers` | Browse what needs you: every parked question, waiting ones first, with `a` to answer the one under the cursor. |
 | `/scribe` | Write the review into the ledger now — findings, surface, and a verdict on every checklist class. |
 | `/scribe on` \| `off` \| `status` | Let it run by itself after every reply (off by default), or report its state. |
@@ -294,7 +295,7 @@ Extension shortcuts are registered by literal key, not as named keybinding actio
 ```bash
 pired [--profile review|recon|pentest] [--provider NAME] [--model ID]
       [--target DIR] [--thinking off|low|medium|high|max] [--no-theme]
-      [--no-panel] [--prompt "one-shot"] [-- <extra pi args>]
+      [--no-panel] [--agents N] [--prompt "one-shot"] [-- <extra pi args>]
 ```
 
 | Flag | Default | Meaning |
@@ -306,6 +307,7 @@ pired [--profile review|recon|pentest] [--provider NAME] [--model ID]
 | `--thinking` | `high` | Reasoning depth. |
 | `--no-theme` | — | Keep your own pi theme instead of pired's. |
 | `--no-panel` | — | Start without the engagement panel (it is shown by default). |
+| `--agents` | off | Let the agent launch up to N workers this session, when it judges one useful. `on` is 8, `off` is 0, at most 32. See [Subagent budget](#subagent-budget). |
 | `--prompt` | — | One-shot prompt (pi's `-p`), for scripted runs. |
 | `--help` | — | pired's own flags. `pired -- --help` still reaches pi's. |
 | `-- …` | — | Everything after `--` is passed to pi verbatim. |
@@ -320,6 +322,7 @@ The launcher always passes `--approve`. To run pired without it, invoke pi direc
 ```bash
 pi -e /path/to/pired/extensions/pired.ts -e /path/to/pired/extensions/hosts.ts --pired-profile pentest
 pi -e /path/to/pired/extensions/pired.ts --pired-panel off   # what --no-panel maps to  (hosts.ts is the second -e)
+pi -e /path/to/pired/extensions/pired.ts --pired-agents 8     # what --agents 8 maps to
 ```
 
 ## `pired-state`
@@ -354,6 +357,17 @@ The parent keeps the plan, cross-component reasoning and final severity judgment
 ```
 
 Delegation is **opt-in**. `maxAgents` defaults to **0**, which disables it: the launcher is hidden from the model and the gate refuses every launch. Set it, 8 is the suggested cap, to let a session delegate. It was on at 8 by default until the pre-registered trial that was to justify that did not ([ADR-029](decisions.md)). It was on again briefly after GLM's v6 stage 2 (ADR-038), and turned off when Luna's helpers sessions stopped after about 20 minutes and found fewer bugs ([ADR-039](decisions.md)). Each launch the gate allows counts against it, and one that pi-subagents rejects before a worker starts is refunded. Past the budget the gate refuses with a reason, and the work continues in the current session. It is per session rather than per engagement because the gate is built at session start, so a restarted run gets a fresh budget.
+
+To opt in for one run without touching the engagement, start with `pired --agents 8`, or type `/agents 8` in the TUI ([ADR-042](decisions.md)):
+
+```
+pired --agents 8     # up to 8 worker launches this session
+/agents              # what is set, and how much of it is used
+/agents 4            # change the cap; launches already made still count
+/agents off          # no more launches this session
+```
+
+The number allows launches; it orders none. The agent still decides whether to delegate, to which worker and when, and verifiers share the number with the other workers. It applies for this run only and overrides the scope file's `maxAgents` and `maxVerifiers` while it does; the next plain `pired` starts from whatever the scope file says, which by default is off. The cap is at most 32, so a typo cannot start a run many times the size meant; a larger one goes in the scope file. A change made with `/agents` reaches the agent on its next turn, and the `subagent` launcher is shown or hidden to match at once. Without pi-subagents installed, `/agents` says so, and there is nothing to launch.
 
 The parent gate allows a `subagent` launch in one shape only: `{agent, task}`, where `agent` is one of the four pired agents. The only additions it accepts are a `cwd` inside the engagement directory, and `async: false` or `context: "fresh"`, which restate the definition. Every other field is refused with a reason that names it. That covers `gate` and `acceptance`, whose verify commands run on the host outside the scope gate. It also covers `model` and thinking overrides, `context: "fork"`, `sessionDir`, per-call limits, fan-outs and workflow scripts. Workers run one at a time: a launch while another is still running is refused. Agent and config management is refused. Read-only `list`/`status`/`doctor` are allowed and uncounted. External runner agents (claude-code, codex-exec, cursor-agent, …) are therefore refused.
 

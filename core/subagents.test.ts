@@ -8,14 +8,19 @@ import {
 	delegationBlock,
 	eagerSubagentSchema,
 	hiddenParentTools,
+	MAX_AGENTS_SETTING,
+	parseAgentsCommand,
+	parseAgentsSetting,
 	PIRED_AGENT_NAMES,
 	PIRED_AGENTS,
+	renderAgentsStatus,
 	SUBAGENTS_ABSENT_NOTICE,
 	SUBAGENTS_EAGER_NOTICE,
 	SUGGESTED_MAX_AGENTS,
 	VERIFIER_AGENT_NAMES,
 	verifierModel,
 	verifierCap,
+	withAgentsCap,
 	WORKER_TOOLS,
 	workerCap,
 	workerPrompt,
@@ -504,3 +509,53 @@ describe("the verifier's model (3.1)", () => {
 		expect(verifierModel(undefined)).toBeUndefined();
 	});
 });
+
+/**
+ * Delegation for one session, set with `pired --agents` or `/agents` (ADR-042).
+ * One number: it allows launches and orders none, and verifiers share it.
+ */
+describe("the worker cap an operator sets for a session", () => {
+	const eng = (over: Partial<EngagementScope> = {}): EngagementScope => ({
+		v: 1, engagement: "e", authorized: true, mode: "off", targets: {}, ...over,
+	});
+
+	it("reads a whole number up to the bound, on and off, and refuses anything else by name", () => {
+		expect(parseAgentsSetting("8")).toEqual({ cap: 8 });
+		expect(parseAgentsSetting(" OFF ")).toEqual({ cap: 0 });
+		expect(parseAgentsSetting("on")).toEqual({ cap: SUGGESTED_MAX_AGENTS });
+		expect(parseAgentsSetting(String(MAX_AGENTS_SETTING))).toEqual({ cap: MAX_AGENTS_SETTING });
+		for (const bad of ["80", "-1", "2.5", "eight", ""]) {
+			expect(parseAgentsSetting(bad)).toMatchObject({ error: expect.stringContaining("whole number from 0 to 32") });
+		}
+	});
+
+	it("parses /agents into show, set or a refusal", () => {
+		expect(parseAgentsCommand("")).toEqual({ kind: "show" });
+		expect(parseAgentsCommand("  ")).toEqual({ kind: "show" });
+		expect(parseAgentsCommand("3")).toEqual({ kind: "set", cap: 3 });
+		expect(parseAgentsCommand("off")).toEqual({ kind: "set", cap: 0 });
+		expect(parseAgentsCommand("lots")).toMatchObject({ kind: "error", message: expect.stringMatching(/^\/agents takes/) });
+	});
+
+	it("puts verifiers in the one budget, whatever the scope file reserved", () => {
+		const scope = withAgentsCap(eng({ maxAgents: 1, maxVerifiers: 3, agentTools: ["x"] }), 5);
+		expect(scope).toMatchObject({ maxAgents: 5, maxVerifiers: 0, agentTools: ["x"] });
+		expect(delegationBlock(scope)).toContain("This engagement allows 5 worker launches per session");
+		expect(delegationBlock(withAgentsCap(eng({ maxAgents: 8 }), 0))).toContain("Delegation is turned off");
+	});
+
+	it("says what is set, what is spent, where it came from and how to change it", () => {
+		const launched = { workers: 2, verifiers: 0 };
+		expect(renderAgentsStatus({ scope: eng(), launched, available: true, overridden: false }))
+			.toBe(`Delegation is off (the default). /agents ${SUGGESTED_MAX_AGENTS} lets the main agent launch up to ${SUGGESTED_MAX_AGENTS} workers this session when it judges one useful; it decides which and when.`);
+		expect(renderAgentsStatus({ scope: eng({ maxAgents: 0 }), launched, available: undefined, overridden: true })).toMatch(/^Delegation is off \(set for this session\)/);
+		expect(renderAgentsStatus({ scope: eng({ maxAgents: 4 }), launched, available: true, overridden: true }))
+			.toBe("Delegation: up to 4 worker launches this session, 2 used (verifiers included) — set for this session; the next pired run starts from the engagement's setting. The main agent decides whether, which worker and when. /agents off turns it off; /agents <n> changes the cap.");
+		expect(renderAgentsStatus({ scope: eng({ maxAgents: 1, maxVerifiers: 2 }), launched: { workers: 1, verifiers: 1 }, available: true, overridden: false }))
+			.toMatch(/^Delegation: up to 1 worker launch this session, 1 used; 2 pired-verify launches reserved, 1 used — from the engagement's scope file\./);
+		expect(renderAgentsStatus({ scope: eng({ maxVerifiers: 1 }), launched: { workers: 0, verifiers: 0 }, available: true, overridden: false }))
+			.toMatch(/^Delegation: no work launches; 1 pired-verify launch reserved, 0 used/);
+		expect(renderAgentsStatus({ scope: eng({ maxAgents: 8 }), launched, available: false, overridden: true })).toMatch(/^Delegation is unavailable: pi-subagents is not installed/);
+	});
+});
+

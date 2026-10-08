@@ -36,7 +36,10 @@ import { buildSystemPrompt, PIRED_PROFILES, type PiredProfile } from "../core/pr
 import { publishParentScope } from "../core/child.ts";
 import { createMcpDenials, gateMcpCall, MCP_APPROVAL_EVENT } from "../core/mcp.ts";
 import { createScopeGate, isSourceOnly, pickTargetType, type ScopeGate, scopeGuidance, summarizeScope } from "../core/scope.ts";
-import { buildPiredAgentDefinitions, eagerSubagentSchema, hiddenParentTools, SUBAGENTS_ABSENT_NOTICE, SUBAGENTS_EAGER_NOTICE, verifierCap, verifierModel, workerCap } from "../core/subagents.ts";
+import {
+	buildPiredAgentDefinitions, eagerSubagentSchema, hiddenParentTools, parseAgentsCommand, parseAgentsSetting, renderAgentsStatus, SUBAGENTS_ABSENT_NOTICE, SUBAGENTS_EAGER_NOTICE,
+	verifierCap, verifierModel, withAgentsCap, workerCap,
+} from "../core/subagents.ts";
 import { renderCoveragePanel, type Tone } from "../core/coverage-panel.ts";
 import { complete } from "@earendil-works/pi-ai/compat";
 import type { AssistantMessage, Message, UserMessage } from "@earendil-works/pi-ai/compat";
@@ -403,6 +406,14 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	let eagerSchemaNotified = false;
 	/** Withdraws the scope this session published for its workers (core/child.ts publishParentScope). */
 	let withdrawScope: (() => void) | undefined;
+	/**
+	 * The worker cap the operator set for this run, with --agents or /agents
+	 * (ADR-042). Held by the process, so a new session in the same run keeps it,
+	 * and never written to the scope file, so the next run starts from the
+	 * engagement's own setting — off, unless the file says otherwise.
+	 */
+	let agentsOverride: number | undefined;
+	let agentsFlagRead = false;
 	let registeredSignature: string | undefined;
 	/** The most recent context, so a pi.events lifecycle callback (which carries none) can refresh the panel. */
 	let liveCtx: ExtensionContext | undefined;
@@ -501,6 +512,9 @@ export default function piredExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.registerFlag("pired-panel", { description: "show the engagement panel on start: on | off", type: "string", default: "on" });
+	// `pired --agents 8` arrives as this. Unset leaves the engagement's own
+	// setting; `/agents` changes it mid-session. ADR-042.
+	pi.registerFlag("pired-agents", { description: "worker launches the agent may make this session: a number, on (8) or off", type: "string", default: "" });
 	registerPiredProviders(pi);
 
 	// Contribute pired's bundled methodology skills to pi's resource loader. pi
@@ -1416,6 +1430,16 @@ export default function piredExtension(pi: ExtensionAPI): void {
 		const flag = pi.getFlag("pired-profile");
 		profile = typeof flag === "string" && (PIRED_PROFILES as readonly string[]).includes(flag) ? (flag as PiredProfile) : "review";
 		scope = loadScope(ctx.cwd, profile, ctx.isProjectTrusted());
+		if (!agentsFlagRead) {
+			agentsFlagRead = true;
+			const raw = pi.getFlag("pired-agents");
+			if (typeof raw === "string" && raw.trim() !== "") {
+				const setting = parseAgentsSetting(raw);
+				if ("cap" in setting) agentsOverride = setting.cap;
+				else ctx.ui.notify(`pired: ${setting.error} Delegation stays as the engagement sets it.`, "warning");
+			}
+		}
+		if (agentsOverride !== undefined) scope = withAgentsCap(scope, agentsOverride);
 		// The subagent gate needs the engagement directory to refuse a worker cwd
 		// outside it; a launch of anything but the four pired workers is refused too.
 		gate = createScopeGate(scope, { cwd: ctx.cwd });
@@ -2939,6 +2963,49 @@ export default function piredExtension(pi: ExtensionAPI): void {
 				}
 			}
 			ctx.ui.notify(view.text, view.tone);
+		},
+	});
+
+	/**
+	 * Set this run's worker cap, and put the session in step with it now: the
+	 * gate keeps what was launched, workers see the scope it changed, and the
+	 * launcher tool is shown or hidden before the next turn rather than after it.
+	 * The prompt's delegation block follows on that turn, built from `scope`.
+	 */
+	const applyAgents = async (ctx: ExtensionContext, cap: number): Promise<void> => {
+		agentsOverride = cap;
+		scope = withAgentsCap(scope, cap);
+		gate.setCaps(workerCap(scope), verifierCap(scope));
+		if (workspace) {
+			withdrawScope?.();
+			withdrawScope = publishParentScope(globalThis, workspace.dir, scope, ctx.cwd);
+			await workspace.writeScope(scope).catch(() => {});
+		}
+		try {
+			const hidden = hiddenParentTools(scope);
+			const all = typeof pi.getAllTools === "function" ? pi.getAllTools().map((t) => t.name) : [];
+			let active = pi.getActiveTools().filter((name) => !hidden.has(name));
+			// Turned on mid-session: the tool that loads `subagent` was hidden while
+			// the cap was 0, and pi-subagents does not put it back on its own.
+			const loader = all.includes("subagents_enable") ? "subagents_enable" : all.includes("subagent") ? "subagent" : undefined;
+			if (cap > 0 && loader && !active.includes(loader) && !active.includes("subagent")) active = [...active, loader];
+			pi.setActiveTools(active);
+		} catch {}
+	};
+
+	pi.registerCommand("agents", {
+		description: "Delegation this session: /agents shows it, /agents <n> lets the agent launch up to n workers, /agents off stops it",
+		handler: async (args, ctx) => {
+			const command = parseAgentsCommand(args ?? "");
+			if (command.kind === "error") {
+				ctx.ui.notify(command.message, "warning");
+				return;
+			}
+			if (command.kind === "set") await applyAgents(ctx, command.cap);
+			ctx.ui.notify(
+				renderAgentsStatus({ scope, launched: gate.launched(), available: subagentsPresent, overridden: agentsOverride !== undefined }),
+				subagentsPresent === false ? "warning" : "info",
+			);
 		},
 	});
 

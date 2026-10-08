@@ -26,7 +26,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { argValue, buildPiArgs, findPi, launchPlan, PIRED_USAGE, resolveProfile, wantsHelp } from "./launch.mjs";
+import { argValue, buildPiArgs, findPi, launchPlan, PIRED_USAGE, resolveAgents, resolveProfile, wantsHelp } from "./launch.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const EXT = join(ROOT, "extensions", "pired.ts");
@@ -49,6 +49,11 @@ if (wantsHelp(argv)) {
 const asked = resolveProfile(argv);
 if (asked.error) {
 	process.stderr.write(`${asked.error}\n`);
+	process.exit(2);
+}
+const agents = resolveAgents(argv);
+if (agents.error) {
+	process.stderr.write(`${agents.error}\n`);
 	process.exit(2);
 }
 

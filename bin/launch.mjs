@@ -20,7 +20,7 @@
 import { dirname, join } from "node:path";
 
 /** Flags pired owns that take a value; everything else is pi's. */
-export const OWN_VALUE_FLAGS = ["profile", "provider", "model", "thinking", "target", "prompt"];
+export const OWN_VALUE_FLAGS = ["profile", "provider", "model", "thinking", "target", "prompt", "agents"];
 /** Flags pired owns that do not. */
 export const OWN_BOOL_FLAGS = ["no-theme", "no-panel", "fullscreen"];
 export const PROFILES = ["review", "recon", "pentest"];
@@ -48,6 +48,9 @@ Options:
   --model <id>           Model id, e.g. qwen3.8-27b
   --thinking <level>     off | low | medium | high | max (default: high)
   --prompt <text>        Run one prompt non-interactively and exit
+  --agents <n>           Let the agent launch up to n workers this session,
+                         when it judges one useful (default: off). Also
+                         /agents in the TUI. on = 8, off = 0, at most 32.
   --no-panel             Start without the engagement panel
   --no-theme             Start without the pired theme
   --fullscreen           Take the alternate screen instead of rendering inline
@@ -97,6 +100,32 @@ export function resolveProfile(argv) {
 	return {
 		profile: "review",
 		error: `pired: unknown profile "${asked}" — expected ${PROFILES.join(", ")}`,
+	};
+}
+
+/**
+ * The most worker launches `--agents` sets: core/subagents.ts MAX_AGENTS_SETTING,
+ * which launch.test.ts holds this to. Repeated here rather than imported, because
+ * this file runs before anything can strip types (see the header).
+ */
+export const MAX_AGENTS_SETTING = 32;
+
+/**
+ * `--agents <n>`: the worker cap for this session (ADR-042), checked before
+ * anything starts — for the reason the profile is: `--agents eight` would
+ * otherwise start a session with delegation off and say so only inside it.
+ *
+ * @param {string[]} argv
+ * @returns {{ agents?: string; error?: string }}
+ */
+export function resolveAgents(argv) {
+	if (!hasFlag(argv, "agents")) return {};
+	const asked = argValue(argv, "agents");
+	const v = asked?.trim().toLowerCase();
+	if (v === "on" || v === "off" || (v !== undefined && /^\d+$/.test(v) && Number(v) <= MAX_AGENTS_SETTING)) return { agents: v };
+	return {
+		error: `pired: --agents takes a whole number from 0 to ${MAX_AGENTS_SETTING}, or on (8) or off${asked === undefined ? "" : ` — not "${asked}"`}. ` +
+			"A larger cap goes in the scope file as maxAgents.",
 	};
 }
 
@@ -230,6 +259,8 @@ export function buildPiArgs({ exts, theme, argv, exists = () => true }) {
 	if (model) args.push("--model", model);
 	if (!hasFlag(argv, "no-theme") && exists(theme)) args.push("--theme", theme, "--use-theme", "pired");
 	if (hasFlag(argv, "no-panel")) args.push("--pired-panel", "off");
+	const agents = resolveAgents(argv).agents;
+	if (agents !== undefined) args.push("--pired-agents", agents);
 	// pi renders inline in the scrollback by default, so the editor sits after the
 	// last output rather than on the terminal's final row and the screen has blank
 	// space beneath it. `fullscreen` takes the alternate screen and pins the layout

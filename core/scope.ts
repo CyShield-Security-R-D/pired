@@ -635,6 +635,14 @@ export interface ToolCallEnd {
  */
 export type ScopeGate = ((call: GatedToolCall) => GateDecision) & {
 	settle(end: ToolCallEnd): void;
+	/**
+	 * Change the caps for the rest of the session, keeping what was launched:
+	 * `/agents` (ADR-042). Rebuilding the gate instead would hand a session that
+	 * had spent its budget a fresh one.
+	 */
+	setCaps(maxAgents: number, maxVerifiers: number): void;
+	/** Launches charged so far this session, to each cap. */
+	launched(): { workers: number; verifiers: number };
 };
 
 /** How many children a `subagent` result says ran; 0 when it lists none. */
@@ -664,8 +672,8 @@ function childrenInResult(result: unknown): number {
  * none.
  */
 export function createScopeGate(scope: EngagementScope, options: ScopeGateOptions = {}): ScopeGate {
-	const maxAgents = workerCap(scope);
-	const maxVerifiers = verifierCap(scope);
+	let maxAgents = workerCap(scope);
+	let maxVerifiers = verifierCap(scope);
 	// Custom external tools extend the defaults; they never uncap the built-ins.
 	const agentTools = new Set([...AGENT_TOOLS, ...(scope.agentTools ?? [])]);
 	const piredAgents = options.agents ?? PIRED_AGENT_NAMES;
@@ -764,7 +772,20 @@ export function createScopeGate(scope: EngagementScope, options: ScopeGateOption
 		running = undefined;
 	};
 
-	return Object.assign(gate, { settle });
+	const setCaps = (agents: number, verifiers: number): void => {
+		// Verifiers that had their own budget now share the work budget, so the
+		// launches charged to it count against the one cap that is left.
+		if (verifiers === 0 && verifiersSpawned > 0) {
+			spawned += verifiersSpawned;
+			if (running?.verifier) running = { ...running, verifier: false };
+			verifiersSpawned = 0;
+		}
+		maxAgents = agents;
+		maxVerifiers = verifiers;
+	};
+	const launched = (): { workers: number; verifiers: number } => ({ workers: spawned, verifiers: verifiersSpawned });
+
+	return Object.assign(gate, { settle, setCaps, launched });
 }
 
 // --- Summary ----------------------------------------------------------------

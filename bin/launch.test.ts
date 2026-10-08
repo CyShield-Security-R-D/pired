@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { join } from "node:path";
-import { argValue, buildPiArgs, findPi, hasFlag, launchPlan, partition, PIRED_USAGE, quoteForWindows, resolveProfile, wantsHelp } from "./launch.mjs";
+import { MAX_AGENTS_SETTING as CORE_MAX_AGENTS } from "../core/subagents.ts";
+import { argValue, buildPiArgs, findPi, hasFlag, launchPlan, MAX_AGENTS_SETTING, partition, PIRED_USAGE, quoteForWindows, resolveAgents, resolveProfile, wantsHelp } from "./launch.mjs";
 
 /**
  * The launcher, which until now was the only shipping code in the project with
@@ -313,6 +314,38 @@ describe("asking for help", () => {
 		}
 		// And it points at pi for everything it does not own.
 		expect(PIRED_USAGE).toContain("pi --help");
+	});
+});
+
+/**
+ * `--agents <n>` (ADR-042): this session's worker cap, passed to the extension as
+ * --pired-agents, and checked before anything starts, for the reason the profile is.
+ */
+describe("--agents", () => {
+	const base = { exts: ["/pired/extensions/pired.ts"], theme: "/pired/themes/pired.json" };
+
+	it("passes the cap to the extension, and nothing when it was not asked for", () => {
+		const args = buildPiArgs({ ...base, argv: ["--agents", "8", "--prompt", "go"] });
+		expect(args.join(" ")).toContain("--pired-agents 8");
+		expect(args).not.toContain("--agents");
+		expect(buildPiArgs({ ...base, argv: [] })).not.toContain("--pired-agents");
+		expect(buildPiArgs({ ...base, argv: ["--agents", "OFF"] }).join(" ")).toContain("--pired-agents off");
+	});
+
+	it("refuses a value it cannot read before anything starts, naming it", () => {
+		expect(resolveAgents([])).toEqual({});
+		expect(resolveAgents(["--agents", "on"])).toEqual({ agents: "on" });
+		expect(resolveAgents(["--agents", "32"])).toEqual({ agents: "32" });
+		expect(resolveAgents(["--agents", "33"]).error).toMatch(/^pired: --agents takes a whole number from 0 to 32, or on \(8\) or off — not "33"\./);
+		expect(resolveAgents(["--agents", "--prompt", "x"]).error).toMatch(/or off\. A larger cap/);
+	});
+
+	it("holds the same bound as the extension, which cannot be imported before types are stripped", () => {
+		expect(MAX_AGENTS_SETTING).toBe(CORE_MAX_AGENTS);
+	});
+
+	it("is in the help", () => {
+		expect(PIRED_USAGE).toMatch(/--agents <n> {11}Let the agent launch up to n workers this session/);
 	});
 });
 

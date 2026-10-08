@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -45,6 +45,8 @@ describe("pired extension registration", () => {
 			"surface", "hypotheses", "report",
 			// The scribe, the name it had before, and the way back to a dismissed blocker.
 			"scribe", "extract", "blockers",
+			// Delegation for this session (ADR-042).
+			"agents",
 		]));
 	});
 
@@ -431,7 +433,7 @@ describe("delegation in a live session", () => {
 	 * `subagents` is what the host has: nothing (`absent`), 0.71's lazy loader on
 	 * a pi >= 0.86.1 (`lazy`), or an eager `subagent` with no loader (`eager`).
 	 */
-	function sessionHost(subagents: "absent" | "lazy" | "eager", optIn: { maxAgents?: number } = { maxAgents: 8 }) {
+	function sessionHost(subagents: "absent" | "lazy" | "eager", optIn: { maxAgents?: number } = { maxAgents: 8 }, flags: Record<string, string> = {}) {
 		const root = mkdtempSync(join(tmpdir(), "pired-session-"));
 		const target = join(root, "target");
 		const ws = join(root, "ws");
@@ -441,18 +443,20 @@ describe("delegation in a live session", () => {
 			targets: { domains: ["app.live.test"] }, ...optIn,
 		}));
 		const handlers = new Map<string, Handler[]>();
+		const commands = new Map<string, (args: string, ctx: unknown) => unknown>();
 		const notices: string[] = [];
 		const all = new Set<string>(["read", "bash"]);
 		if (subagents !== "absent") all.add("subagent");
 		if (subagents === "lazy") all.add("subagents_enable");
 		let active = subagents === "eager" ? ["read", "bash", "subagent"] : ["read", "bash"];
 		const api = {
-			registerCommand: () => {},
+			registerCommand: (n: string, o: { handler: (a: string, c: unknown) => unknown }) => commands.set(n, o.handler),
 			registerShortcut: () => {},
 			registerTool: (t: { name: string }) => all.add(t.name),
 			registerFlag: () => {},
 			registerProvider: () => {},
-			getFlag: (name: string) => (name === "pired-profile" ? "review" : "off"),
+			// pi hands back a flag's default when it was not passed: "" for pired-agents.
+			getFlag: (name: string) => (name === "pired-profile" ? "review" : flags[name] ?? (name === "pired-agents" ? "" : "off")),
 			on: (e: string, h: Handler) => handlers.set(e, [...(handlers.get(e) ?? []), h]),
 			getAllTools: () => [...all].map((name) => ({ name })),
 			getActiveTools: () => active,
@@ -483,7 +487,8 @@ describe("delegation in a live session", () => {
 			(await fire("tool_call", { type: "tool_call", toolCallId: id, toolName: "subagent", input: { agent, task: "map src/" } }))[0] as { block?: boolean; reason?: string } | undefined;
 		const end = (id: string, isError = false, results: unknown[] = [{ agent: "pired-scout", exitCode: 0 }], on: unknown = ctx()) =>
 			fire("tool_execution_end", { type: "tool_execution_end", toolCallId: id, toolName: "subagent", isError, result: { content: [], details: { results } } }, on);
-		return { root, target, ws, notices, fire, ctx, launch, end, active: () => active };
+		const run = async (name: string, args = "", on: unknown = ctx()) => await commands.get(name)?.(args, on);
+		return { root, target, ws, notices, fire, ctx, launch, end, run, active: () => active };
 	}
 
 	let host: ReturnType<typeof sessionHost> | undefined;
@@ -594,5 +599,77 @@ describe("delegation in a live session", () => {
 		expect(await host.launch("w1")).toBeUndefined();
 		await host.end("w1", false, [{ agent: "pired-scout", exitCode: 0 }], host.ctx("tui"));
 		expect(host.notices.some((n) => /1 new question needs your input/.test(n))).toBe(true);
+	});
+
+	/**
+	 * ADR-042. Opting in was an edit to the engagement's scope file, so a run
+	 * that wanted workers changed every later run with it. `--agents` (the
+	 * launcher passes it as --pired-agents) opts in this session only.
+	 */
+	it("opts a session in with --agents, without touching the engagement's scope file", async () => {
+		host = sessionHost("eager", {}, { "pired-agents": "2" });
+		const file = join(host.target, "pired.scope.json");
+		const before = readFileSync(file, "utf8");
+		await host.fire("session_start", { type: "session_start" });
+		const [prompt] = await host.fire("before_agent_start", { systemPrompt: "base" }) as Array<{ systemPrompt: string }>;
+		expect(prompt?.systemPrompt).toContain("This engagement allows 2 worker launches per session");
+		expect(host.active()).toContain("subagent");
+		expect(await host.launch("w1")).toBeUndefined();
+		await host.end("w1");
+		expect(await host.launch("w2", "pired-verify")).toBeUndefined();
+		await host.end("w2", false, [{ agent: "pired-verify", exitCode: 0 }]);
+		expect((await host.launch("w3"))?.reason).toMatch(/budget spent: 2 per session, 2 already launched/i);
+		expect(readFileSync(file, "utf8")).toBe(before);
+	});
+
+	it("warns about an --agents value it cannot read, and leaves delegation as the engagement sets it", async () => {
+		host = sessionHost("lazy", {}, { "pired-agents": "eight" });
+		await host.fire("session_start", { type: "session_start" });
+		expect(host.notices.some((n) => n.includes('not "eight"') && n.includes("Delegation stays as the engagement sets it."))).toBe(true);
+		expect((await host.launch("w1"))?.block).toBe(true);
+	});
+
+	it("turns delegation on and off from the TUI, keeping what was launched, with the launcher shown and hidden to match", async () => {
+		host = sessionHost("lazy", {});
+		await host.fire("session_start", { type: "session_start" });
+		await host.fire("before_agent_start", { systemPrompt: "base" });
+		expect(host.active()).not.toContain("subagents_enable");
+
+		await host.run("agents", "2");
+		expect(host.notices.at(-1)).toMatch(/^Delegation: up to 2 worker launches this session, 0 used \(verifiers included\) — set for this session;/);
+		expect(host.active()).toContain("subagents_enable");
+		const [on] = await host.fire("before_agent_start", { systemPrompt: "base" }) as Array<{ systemPrompt: string }>;
+		expect(on?.systemPrompt).toContain("This engagement allows 2 worker launches per session");
+		expect(await host.launch("w1")).toBeUndefined();
+		await host.end("w1");
+
+		await host.run("agents", "off");
+		expect(host.active()).not.toContain("subagents_enable");
+		expect((await host.launch("w2"))?.reason).toMatch(/Delegation is disabled/);
+		const [off] = await host.fire("before_agent_start", { systemPrompt: "base" }) as Array<{ systemPrompt: string }>;
+		expect(off?.systemPrompt).toContain("Delegation is turned off");
+
+		// Back on at a cap already spent: the launch made earlier still counts.
+		await host.run("agents", "1");
+		expect((await host.launch("w3"))?.reason).toMatch(/budget spent: 1 per session, 1 already launched/i);
+		await host.run("agents");
+		expect(host.notices.at(-1)).toMatch(/up to 1 worker launch this session, 1 used/);
+	});
+
+	it("refuses a cap it cannot read, and says plainly when pi-subagents is missing", async () => {
+		host = sessionHost("lazy", {});
+		await host.fire("session_start", { type: "session_start" });
+		await host.run("agents", "80");
+		expect(host.notices.at(-1)).toMatch(/^\/agents takes a whole number from 0 to 32/);
+
+		const bare = sessionHost("absent", {});
+		try {
+			await bare.fire("session_start", { type: "session_start" });
+			await bare.run("agents", "8");
+			expect(bare.notices.at(-1)).toMatch(/^Delegation is unavailable: pi-subagents is not installed/);
+		} finally {
+			await bare.fire("session_shutdown", {});
+			rmSync(bare.root, { recursive: true, force: true });
+		}
 	});
 });
