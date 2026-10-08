@@ -468,6 +468,12 @@ function recordSummary(kind: string, record: LedgerRecord, outcome: WriteOutcome
 	}
 	if (record.kind === "finding") return `Recorded finding ${record.id} [${record.severity}] ${record.title}`;
 	if (record.kind === "hypothesis") return `Recorded hypothesis ${record.id} (${record.outcome}) on ${record.target}`;
+	// An answer is not a parking. 206 answers and dismissals in the grids came
+	// back "Parked blocker …", the reply to opening one (ADR-041).
+	if (record.kind === "blocker" && record.status === "answered") {
+		return `Answered blocker ${record.id}: ${record.question}${record.answer ? ` — ${record.answer.length > 160 ? `${record.answer.slice(0, 160)}…` : record.answer}` : " (no answer text: send it as answer=\"...\")"}`;
+	}
+	if (record.kind === "blocker" && record.status === "dismissed") return `Dismissed blocker ${record.id}: ${record.question}`;
 	if (record.kind === "blocker") return `Parked blocker ${record.id} [${record.priority}]: ${record.question}`;
 	if (record.kind === "loot") return `Recorded loot ${record.id} ${record.handle}`;
 	return `Recorded ${kind} ${record.id}`;

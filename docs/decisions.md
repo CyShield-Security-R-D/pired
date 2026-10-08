@@ -3861,6 +3861,7 @@ The replies had their own faults, found by replaying the grids through `54055cc`
    - a call that wrote nothing does not say the rest was recorded;
    - the no-op line speaks of what the kind keeps;
    - a confirmed or reported finding is told what its proof lacks;
+   - an answered or dismissed blocker is not told it was parked, as 206 were in the grids;
    - a required field sent in an unusable form is told what it was sent as and what it takes,
      with the corrected call still following.
 5. **A second call in a row that changes nothing on the same record** leads with "The last N

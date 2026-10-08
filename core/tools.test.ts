@@ -3083,12 +3083,20 @@ describe("the record schema lists every field the tool reads or asks for", () =>
 		expect([...named].filter((f) => !(RECORD_FIELDS as readonly string[]).includes(f))).toEqual([]);
 	});
 
-	it("keeps a blocker's answer", async () => {
+	it("keeps a blocker's answer, and says it was answered rather than parked", async () => {
 		const { ws, ctx, record } = await setup();
 		const parked = await record.execute({ kind: "blocker", question: "Is the staging host in scope?" }, ctx);
 		const id = (parked.details as { id: string }).id;
+		expect(textOf(parked)).toMatch(/^Parked blocker /);
 		const res = await record.execute({ kind: "blocker", id, status: "answered", answer: "Yes, staging is in scope until Friday." }, ctx);
 		expect(textOf(res)).not.toContain("Not stored");
+		expect(textOf(res)).toMatch(new RegExp(`^Answered blocker ${id}: Is the staging host in scope\\? — Yes, staging is in scope until Friday\\.`));
+		const other = await record.execute({ kind: "blocker", question: "Run the load test?" }, ctx);
+		const otherId = (other.details as { id: string }).id;
+		expect(textOf(await record.execute({ kind: "blocker", id: otherId, status: "dismissed" }, ctx))).toMatch(/^Dismissed blocker /);
+		const bare = await record.execute({ kind: "blocker", question: "Rotate the key?" }, ctx);
+		const bareId = (bare.details as { id: string }).id;
+		expect(textOf(await record.execute({ kind: "blocker", id: bareId, status: "answered" }, ctx))).toContain('(no answer text: send it as answer="...")');
 		expect((await ws.read("blockers"))[0]).toMatchObject({ status: "answered", answer: "Yes, staging is in scope until Friday." });
 	});
 });
