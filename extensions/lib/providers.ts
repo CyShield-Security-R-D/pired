@@ -7,10 +7,16 @@ import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { guardedOpenAICompletions } from "./context-guard.ts";
+import { guardedOpenAICompletions, guardedOpenAIResponses } from "./context-guard.ts";
 
 /** pi's own provider-config shape, taken from the API rather than restated. */
 export type PiProviderConfig = Parameters<ExtensionAPI["registerProvider"]>[1];
+
+/** The APIs pired can guard. Any other API keeps pi's own stream. */
+const GUARDED_STREAMS = new Map<string, typeof guardedOpenAICompletions>([
+	["openai-completions", guardedOpenAICompletions],
+	["openai-responses", guardedOpenAIResponses],
+]);
 
 export interface LocalModelDef {
 	id: string;
@@ -77,13 +83,14 @@ export function registerPiredProviders(pi: ExtensionAPI, path = piredModelsPath(
  * silently returns nothing tomorrow.
  */
 export function toPiProvider(cfg: LocalProviderConfig): PiProviderConfig {
+	const api = cfg.api ?? "openai-completions";
+	const guarded = cfg.contextGuard === false ? undefined : GUARDED_STREAMS.get(api);
 	return {
 		name: cfg.name ?? cfg.id,
 		baseUrl: cfg.baseUrl,
 		apiKey: cfg.apiKey ?? "local",
-		api: cfg.api ?? "openai-completions",
-		...((cfg.api ?? "openai-completions") === "openai-completions" && cfg.contextGuard !== false
-			? { streamSimple: guardedOpenAICompletions } : {}),
+		api,
+		...(guarded ? { streamSimple: guarded } : {}),
 		// Pass compat through at both levels. It is optional in the config and
 		// absent for most providers, but for a reasoning model it is the
 		// difference between working and silently producing nothing.

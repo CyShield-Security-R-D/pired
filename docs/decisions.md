@@ -3970,3 +3970,80 @@ it. `maxAgents` is a permission and a ceiling. `maxVerifiers` reserves a separat
 - **Writing the setting to the scope file.** That is the engagement-level switch that already
   exists. A per-run switch that persisted would leave delegation on for runs that did not ask.
 - **A picker dialog for `/agents`.** It is more to build and test than arguments, for one number.
+
+## ADR-043 — The context guard bounds what the server has not counted yet, and covers the Responses API
+
+**Status:** accepted · 2026-10-31 · reproduced against the operator's Bifrost → SGLang gateway in the
+pi TUI under tmux, before and after the change.
+
+### Context
+
+The operator reported that with a self-hosted model behind Bifrost, compaction "always fails showing
+status 400", for automatic compaction and for `/compact`.
+
+It was reproduced with pi 1.4.0 and qwen3.8-27b on SGLang (262,144-token window). A session was
+grown one dense tool result at a time, and every request went through a logging proxy.
+
+- **The summary request was never what failed.** `/compact` succeeded in every configuration tried,
+  from a two-message session to a real 224k-token engagement. pi cuts tool results to 2,000
+  characters for the summary, and the summary requests measured 3,924–10,731 tokens.
+- **The turn that crosses the window fails, and pi cannot tell why.** Bifrost hides SGLang's
+  overflow on both OpenAI APIs:
+
+  | API | SGLang counts | What pi receives |
+  |---|---|---|
+  | `openai-completions` | input + `max_tokens` | HTTP 400 `provider API error (status 400)` |
+  | `openai-responses`, streamed | input | HTTP 200, then `response.failed` with `"message": ""` |
+
+  Neither matches pi's overflow patterns, so pi neither compacts nor retries. The 400 appears where
+  compaction should have, every time the window fills.
+- **pi gets there because it charges new content at chars/4.** Each 48,002-byte file of
+  scanner-like output (hex dumps, hashed tokens, minified JS) added 34,072–34,764 tokens; chars/4
+  says 12,000. Plain pi on `openai-completions` sent about 243,000 input tokens with
+  `max_tokens: 32768` while its footer read 84.2%.
+- **pired's guard had two gaps.**
+  - It wrapped only `openai-completions`. The operator's host uses `openai-responses`, and there an
+    over-window streamed request ended with `Error: {"message":""}` and no compaction.
+  - It counted content after the usage anchor at chars/4 too. So a dense result arriving just under
+    the threshold slipped through: 200,000 anchored + 12,001 estimated + 32,768 output + 16,384
+    margin = 261,153, which passed, while the server would have counted about 234,500 input tokens.
+
+### Decision
+
+1. **Bound what the server has not counted.** When the context is anchored to server usage, every
+   message after the anchor is charged its serialized UTF-8 size. A byte-level BPE token never
+   covers less than one byte, so this is an upper bound, not an estimate. Images keep pi's estimate,
+   because their base64 length says nothing about their tokens.
+2. **Estimate only what cannot be anchored.** A first request, the first request after a summary,
+   and the summary request itself keep pi's estimate. Charged by bytes, a 363,803-character summary
+   request that SGLang counted at 92,438 tokens would be refused for its own size.
+3. **Guard `openai-responses` as well as `openai-completions`.** The guard reads
+   `max_output_tokens` beside `max_tokens` and `max_completion_tokens`.
+
+After the change, the same forced sequence (six files, a pad that puts the anchor near 230k, then
+dense files) ran to completion on both APIs. Each run made 17 requests: three compactions (two
+automatic and one `/compact`), every request HTTP 200, and no failures inside the stream.
+
+### Rejected
+
+- **Relabel the gateway's opaque errors as overflow.** The wording is Bifrost's and varies by API.
+  An empty `response.failed` carries no cause at all, so any failure that reached pi that way would
+  become a compaction. The guard's earlier rule stands: it never labels arbitrary gateway errors as
+  overflow.
+- **Calibrate chars/4 from the density seen so far.** It follows the content already seen, and
+  slips the first time a denser result arrives. That is the case that fails.
+- **Move the host to `openai-responses`.** Measured: while streaming, it fails the same way, with
+  an empty message. The difference is only that the window there counts input alone.
+- **Mirror a smaller `contextWindow` into pi's `models.json`, so plain pi leaves room.** That
+  misstates the model to every consumer, and the room would still be sized by chars/4.
+
+### Consequences
+
+- On prose output, the guard can compact up to one tool result early (at most 50 KB under pi's bash
+  truncation). On the measured dense output, it stopped a request that by the per-file cost would
+  have been about 210,700 tokens, against the 212,992 budget.
+- Plain `pi` with no pired extension loaded has no guard, and still fails this way on either API.
+  The fix there belongs in the gateway: pass SGLang's message through
+  ([Bifrost #3131](https://github.com/maximhq/bifrost/issues/3131)).
+- Unanchored contexts are still estimated. A single prompt larger than the window is still the
+  server's to refuse.

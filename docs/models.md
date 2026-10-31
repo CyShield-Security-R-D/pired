@@ -133,7 +133,7 @@ or start `pired` and pick from `/model`.
 | `apiKey` | `"local"` | Sent as the bearer token. `$VAR` / `${VAR}` is read from the environment instead of stored. |
 | `api` | `openai-completions` | pi's API adapter. |
 | `compat` | — | Compatibility switches; see below. |
-| `contextGuard` | `true` | Reserve output and safety headroom for `openai-completions` requests while pired is loaded. |
+| `contextGuard` | `true` | Reserve output and safety headroom for `openai-completions` and `openai-responses` requests while pired is loaded. |
 | `models[]` | required | The models this provider serves. |
 
 ### Model fields
@@ -159,18 +159,32 @@ history. With `contextWindow: 262144` and `maxTokens: 32768`, at most 229,376
 tokens remain for input before allowing for any safety margin.
 
 For providers registered from `~/.pired/models.json` using
-`openai-completions`, pired checks each request before HTTP. It budgets the
-requested output plus a safety margin of `min(16384, contextWindow / 16)`
-(rounded down, at least one token). With the limits above, pired asks pi to
-compact at approximately **212,992 input tokens**, including new tool results.
-It leaves the advertised window and your global pi settings unchanged.
+`openai-completions` or `openai-responses`, pired checks each request before
+HTTP. It budgets the requested output plus a safety margin of
+`min(16384, contextWindow / 16)` (rounded down, at least one token). With the
+limits above, pired asks pi to compact at **212,992 input tokens**, including
+new tool results. It leaves the advertised window and your global pi settings
+unchanged.
+
+Input is counted from the server's own usage for everything it has already
+seen, plus an upper bound for what it has not: each new message is charged its
+UTF-8 size, because a byte-level BPE token never covers less than one byte.
+pi's own chars/4 estimate is not a bound. Measured through Bifrost to SGLang,
+each 48,002-byte file of scanner-like output (hex dumps, hashed tokens,
+minified JS) added 34,072–34,764 tokens where chars/4 gives 12,000, and plain
+pi sent a request past the window while its footer read 84%. The bound can
+compact up to one tool result early on prose; on that dense output it stopped a
+request that, by the measured per-file cost, would have been about 210,700
+tokens against the 212,992 budget.
+A context with no usage to anchor to — the first request, the first after a
+summary, and the summary request itself — is estimated instead, so a long
+summary is not refused for its own size.
 
 The guard emits a local `context_length_exceeded` error that pi recognizes.
 With auto-compaction enabled, pi owns the summary and bounded retry; with it
 disabled, the error suggests `/compact`. It never silently drops messages.
 A very large single prompt or a summary that itself cannot fit may still need
-a smaller input or output limit. Token counts are estimates, not the server's
-tokenizer, so this is headroom rather than a guarantee against every overflow.
+a smaller input or output limit.
 
 Set `"contextGuard": false` on the provider in `~/.pired/models.json` to
 opt out, then reload/restart pi. The guard works in both `pired` and plain
@@ -180,11 +194,21 @@ Other API adapters are unchanged.
 
 ### SGLang behind Bifrost
 
-Bifrost can hide SGLang's detailed overflow error behind
-`provider api error (status 400)`; see
-[Bifrost #3131](https://github.com/maximhq/bifrost/issues/3131).
-The local guard avoids sending requests already known to exceed its budget; it
-does not label arbitrary gateway 400s as context overflow.
+Bifrost hides SGLang's overflow error from pi on both OpenAI APIs; see
+[Bifrost #3131](https://github.com/maximhq/bifrost/issues/3131). Measured on
+SGLang with a 262,144-token window:
+
+| API | SGLang counts | What pi receives |
+|---|---|---|
+| `openai-completions` | input + `max_tokens` | HTTP 400 `provider API error (status 400)` |
+| `openai-responses`, streamed | input | HTTP 200, then `response.failed` with an empty message |
+
+Neither matches pi's overflow patterns, so pi neither compacts nor retries; the
+turn ends with the error, every time the window fills. (A buffered
+`/v1/responses` call does carry SGLang's text, but pi streams.) The local guard
+keeps such requests from being sent; it does not label arbitrary gateway errors
+as context overflow. Plain `pi` without a pired extension loaded has no guard
+and fails this way on either API.
 
 The gateway-side correction is to preserve SGLang's upstream message and map
 genuine context overflows to `context_length_exceeded`. That lets pi recognize

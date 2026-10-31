@@ -6,6 +6,7 @@ import {
 	apiKeyForProvider, mirrorProvidersToPi, piredModelsPath, readProviderFile, removeProvider, removeProviderFromPi,
 	resolveKeyRef, toPiProvider, upsertProvider, writeProviderFile,
 } from "./providers.ts";
+import { guardedOpenAICompletions, guardedOpenAIResponses } from "./context-guard.ts";
 
 const workspace = (): string => mkdtempSync(join(tmpdir(), "pired-providers-"));
 
@@ -150,7 +151,15 @@ describe("toPiProvider", () => {
 		expect(registered.models?.[0]).toMatchObject({ contextWindow: 262144, maxTokens: 32768 });
 		expect(toPiProvider({ ...cfg, contextGuard: false }).streamSimple).toBeUndefined();
 		expect(toPiProvider({ ...cfg, api: "anthropic-messages" }).streamSimple).toBeUndefined();
-		expect(toPiProvider({ ...cfg, api: "openai-responses" }).streamSimple).toBeUndefined();
+	});
+
+	it("guards the Responses API too, because Bifrost blanks its streamed overflow error", () => {
+		// Measured: an over-window streamed /v1/responses request came back as
+		// `response.failed` with `"message": ""`, and pi never compacted.
+		const cfg = provider({ api: "openai-responses" });
+		expect(toPiProvider(cfg).streamSimple).toBe(guardedOpenAIResponses);
+		expect(toPiProvider(provider()).streamSimple).toBe(guardedOpenAICompletions);
+		expect(toPiProvider({ ...cfg, contextGuard: false }).streamSimple).toBeUndefined();
 	});
 
 	it("does not serialize runtime guards or alter limits in the plain-pi model mirror", () => {
