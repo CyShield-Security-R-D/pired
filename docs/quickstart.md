@@ -45,25 +45,18 @@ Nothing runs as root, there is no daemon and no service, and everything written 
 
 Windows has its own script, and expects Node.js ≥ 22.19 to be installed already — it does not fetch one for you. npm puts its global shims in the prefix itself rather than `prefix/bin` there, and PATH is a registry value rather than a line in a dotfile, so it offers to add the prefix to your user PATH instead of printing an `export` line for you to paste. It also checks for `bash`: pired drives the tools already on the box and pi runs them through `bash`, which a bare Windows install does not have, so the script points you at Git for Windows when none is found.
 
-### Beta access
+### From a clone
 
-The repository is private for now, so `curl` cannot fetch the script anonymously — the one-liner above starts working when the repo goes public. **If you have been granted repository access**, both of these work today over your GitHub SSH key:
+Clone first to read the installer before it runs. `./install.sh` installs the checkout it is sitting in, so the same route installs a branch you are working on:
 
 ```bash
-# one command, if you already have pi
-npm install -g --ignore-scripts github:mamgad/pired
-pi install "$(npm root -g)/pired"        # optional: opt a bare `pi` in too
-
-# or clone — ./install.sh installs the checkout it is sitting in
-git clone git@github.com:mamgad/pired.git && cd pired && ./install.sh
+git clone https://github.com/mamgad/pired.git && cd pired && ./install.sh
 ```
 
 ```powershell
-# the same clone route on Windows — .\install.ps1 installs the checkout beside it
-git clone git@github.com:mamgad/pired.git; cd pired; .\install.ps1
+# .\install.ps1 installs the checkout beside it
+git clone https://github.com/mamgad/pired.git; cd pired; .\install.ps1
 ```
-
-Both authenticate with your GitHub SSH key; check it with `ssh -T git@github.com`. Over HTTPS instead, use `npm install -g git+https://github.com/mamgad/pired.git` with a credential helper or token.
 
 <details>
 <summary>Other ways to install</summary>

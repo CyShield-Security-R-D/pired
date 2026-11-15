@@ -10,7 +10,7 @@
 set -uo pipefail
 CORPUS="${1:-/tmp/corpus-all}"
 SESSION="${2:-pired}"
-REPO=/home/mamgad/pired
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
 LOG=/tmp/pired-scan-$(date +%H%M%S).log
 
 tmux kill-session -t "$SESSION" 2>/dev/null

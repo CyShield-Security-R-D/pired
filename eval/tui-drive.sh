@@ -20,7 +20,7 @@ cleanup() { tmux kill-session -t "${SESSION:-pired}" 2>/dev/null; pkill -x pi 2>
 trap cleanup EXIT INT TERM
 CORPUS="${1:-/tmp/corpus-apps}"
 SESSION="${2:-pired}"
-REPO=/home/mamgad/pired
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
 RESULTS=/tmp/pired-tui-results.txt
 QUIET_S="${QUIET_S:-600}"     # 10 min of no ledger writes = turn finished
 GRACE_S="${GRACE_S:-3600}"    # a run that writes nothing at all in an hour never got going

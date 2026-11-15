@@ -9,9 +9,9 @@
 # guessed the way it was the first time.
 set -uo pipefail
 
-HOST="${HOST:-http://192.168.1.15:1234}"
+HOST="${HOST:-http://localhost:1234}"
 MODEL="${MODEL:-qwen3.8-27b}"
-REPO=/home/mamgad/pired
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
 
 probe() {  # tiny request; prints http code
   curl -s -m 90 -o /tmp/lmprobe.json -w '%{http_code}' \

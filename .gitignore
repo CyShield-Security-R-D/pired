@@ -6,3 +6,6 @@ dist/
 *.tmp
 eval/artifacts/
 eval/coverage/
+# Scanner output from running pired with this checkout as its target belongs
+# in the engagement workspace, never in the repository.
+/evidence/

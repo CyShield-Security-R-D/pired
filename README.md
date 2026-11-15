@@ -129,24 +129,17 @@ pired --profile pentest                                                 # launch
 pi --pired-profile pentest --thinking high --use-theme pired --approve   # bare pi
 ```
 
-### Beta access
+### From a clone
 
-The repository is private for now, so the `curl` line above cannot fetch anonymously — it starts working when the repo goes public. **If you have been granted repository access**, both of these work today over your GitHub SSH key:
+Piping a script into a shell asks you to trust what you have not read. Clone first and you can read `install.sh` before it runs; each script installs the checkout it sits in, so the same route installs a branch you are working on:
 
 ```bash
-# already have pi — install straight from the private repo
-pi install git:git@github.com:mamgad/pired
-
-# no pi yet, or you want the launchers — clone and run the installer
-git clone git@github.com:mamgad/pired.git && cd pired && ./install.sh
+git clone https://github.com/mamgad/pired.git && cd pired && ./install.sh
 ```
 
 ```powershell
-# the same, on Windows
-git clone git@github.com:mamgad/pired.git; cd pired; .\install.ps1
+git clone https://github.com/mamgad/pired.git; cd pired; .\install.ps1
 ```
-
-Both need `ssh -T git@github.com` to authenticate. Over HTTPS instead, use `pi install https://github.com/mamgad/pired` or `npm install -g git+https://github.com/mamgad/pired.git` with a credential helper or token.
 
 <details>
 <summary>Other ways to install</summary>
