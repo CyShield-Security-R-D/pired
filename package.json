@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Security assessment harness for consultants, as a pi package: engagement workspace, scope gate, security prompt, and record/recall tools, reusing a harness-agnostic core.",
   "license": "MIT",
-  "author": "Mohamed Amgad",
+  "author": "CyShield",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/CyShield-Security-R-D/pired.git"
