@@ -8,12 +8,12 @@ It is a **security layer on top of [pi](https://pi.dev)** — an engagement work
 
 ```bash
 # macOS and Linux
-curl -fsSL https://raw.githubusercontent.com/mamgad/pired/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/CyShield-Security-R-D/pired/main/install.sh | sh
 ```
 
 ```powershell
 # Windows
-powershell -c "irm https://raw.githubusercontent.com/mamgad/pired/main/install.ps1 | iex"
+powershell -c "irm https://raw.githubusercontent.com/CyShield-Security-R-D/pired/main/install.ps1 | iex"
 ```
 
 Then, in the project you want reviewed:

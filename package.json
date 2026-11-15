@@ -8,11 +8,11 @@
   "author": "Mohamed Amgad",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/mamgad/pired.git"
+    "url": "git+https://github.com/CyShield-Security-R-D/pired.git"
   },
-  "homepage": "https://github.com/mamgad/pired#readme",
+  "homepage": "https://github.com/CyShield-Security-R-D/pired#readme",
   "bugs": {
-    "url": "https://github.com/mamgad/pired/issues"
+    "url": "https://github.com/CyShield-Security-R-D/pired/issues"
   },
   "bin": {
     "pired": "./bin/pired.mjs",

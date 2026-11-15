@@ -101,12 +101,12 @@ On a machine without pi or Node.js, one command installs everything:
 
 ```bash
 # macOS and Linux
-curl -fsSL https://raw.githubusercontent.com/mamgad/pired/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/CyShield-Security-R-D/pired/main/install.sh | sh
 ```
 
 ```powershell
 # Windows
-powershell -c "irm https://raw.githubusercontent.com/mamgad/pired/main/install.ps1 | iex"
+powershell -c "irm https://raw.githubusercontent.com/CyShield-Security-R-D/pired/main/install.ps1 | iex"
 ```
 
 Both scripts check the machine, print what they will install and where, ask once, and then install it: Node.js if it is missing or older than 22.19, pi, pired, and the PATH entry for the `pired` command. **They do not register pired with pi.** `pi` stays the pi you already had, and the security layer loads only when you run `pired`, which passes it to pi with `-e` for that run (ADR-017). They do register two third-party packages with pi, each a separate row in the plan with its own opt-out: [pi-subagents](#sub-agents) and [pi-mcp-adapter](#mcp). On macOS and Linux, `--dry-run` prints the plan and stops, and `-y` skips the question; on Windows these are `PIRED_DRY_RUN=1` and `PIRED_YES=1`, because the documented `irm | iex` install cannot pass arguments.
@@ -122,11 +122,11 @@ pired          # review the current directory
 **If you already have pi,** pired installs as an ordinary pi package, with no npm global install and no launcher:
 
 ```bash
-pi install git:github.com/mamgad/pired
+pi install git:github.com/CyShield-Security-R-D/pired
 pi                                       # the security layer is loaded
 ```
 
-That registers it in `~/.pi/agent/settings.json`, and every later `pi` starts with the security layer. It brings no dependencies of its own (pi supplies the modules the extension imports), and `pi config` lists what it added (the extension and the `pired` theme) if you want to switch either off. `pi remove git:github.com/mamgad/pired` removes it.
+That registers it in `~/.pi/agent/settings.json`, and every later `pi` starts with the security layer. It brings no dependencies of its own (pi supplies the modules the extension imports), and `pi config` lists what it added (the extension and the `pired` theme) if you want to switch either off. `pi remove git:github.com/CyShield-Security-R-D/pired` removes it.
 
 ### Which route
 
@@ -137,7 +137,7 @@ That registers it in `~/.pi/agent/settings.json`, and every later `pi` starts wi
 | `pi -e <src>` | one session, from a temporary clone | nothing |
 | `install.sh` / `install.ps1` | the `pired` and `pired-state` launchers on top of the package, plus Node.js itself when the machine has none; a bare `pi` is left untouched | npm global + PATH |
 
-`<src>` is any pi package source: `git:github.com/mamgad/pired`, an npm spec, or a path to a checkout (`pi install ~/src/pired` is recorded as a path, not copied, so your edits are live on the next start).
+`<src>` is any pi package source: `git:github.com/CyShield-Security-R-D/pired`, an npm spec, or a path to a checkout (`pi install ~/src/pired` is recorded as a path, not copied, so your edits are live on the next start).
 
 The launcher is the only difference in behaviour. `pired` starts pi with the profile, thinking level, `--approve`, the `pired` theme and the target directory already set; with a package install you pass these yourself:
 
@@ -151,11 +151,11 @@ pi --pired-profile pentest --thinking high --use-theme pired --approve   # bare 
 To read the installer before running it, or to install a branch you are working on, clone first. Each script installs the checkout it sits in:
 
 ```bash
-git clone https://github.com/mamgad/pired.git && cd pired && ./install.sh
+git clone https://github.com/CyShield-Security-R-D/pired.git && cd pired && ./install.sh
 ```
 
 ```powershell
-git clone https://github.com/mamgad/pired.git; cd pired; .\install.ps1
+git clone https://github.com/CyShield-Security-R-D/pired.git; cd pired; .\install.ps1
 ```
 
 <details>
@@ -163,11 +163,11 @@ git clone https://github.com/mamgad/pired.git; cd pired; .\install.ps1
 
 ```bash
 # npm global: the launchers, without the installer script
-npm install -g --ignore-scripts github:mamgad/pired
+npm install -g --ignore-scripts github:CyShield-Security-R-D/pired
 pi install "$(npm root -g)/pired"        # optional: opt a bare `pi` in too
 
 # project-local, for one engagement
-pi install -l git:github.com/mamgad/pired
+pi install -l git:github.com/CyShield-Security-R-D/pired
 
 # one session, from a clone, installing nothing
 pi -e ./extensions/pired.ts -e ./extensions/hosts.ts --pired-profile review
@@ -345,4 +345,4 @@ To report a vulnerability in pired itself, see [SECURITY.md](SECURITY.md).
 
 MIT. See [LICENSE](LICENSE).
 
-pired is an independent project. It is not affiliated with or endorsed by the pi project or by any vendor, model provider or open-source project named in the research.
+pired is not affiliated with or endorsed by the pi project, or by any vendor, model provider or open-source project named in the research.

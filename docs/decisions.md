@@ -1142,7 +1142,7 @@ theme for that session without their settings file being edited behind them.
 
 ### Consequences
 
-- `pi install git:github.com/mamgad/pired` still exists and still works. It moved from something the
+- `pi install git:github.com/CyShield-Security-R-D/pired` still exists and still works. It moved from something the
   installer did on your behalf to something you type — which is the difference between a default and
   a choice.
 - A box that ran an older installer is still registered, and its `~/.pi/agent/settings.json` still

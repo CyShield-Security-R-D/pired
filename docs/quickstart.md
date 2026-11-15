@@ -4,12 +4,12 @@
 
 ```bash
 # macOS and Linux
-curl -fsSL https://raw.githubusercontent.com/mamgad/pired/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/CyShield-Security-R-D/pired/main/install.sh | sh
 ```
 
 ```powershell
 # Windows
-powershell -c "irm https://raw.githubusercontent.com/mamgad/pired/main/install.ps1 | iex"
+powershell -c "irm https://raw.githubusercontent.com/CyShield-Security-R-D/pired/main/install.ps1 | iex"
 ```
 
 Either one installs [pi](https://pi.dev) if it is missing (or upgrades one older than 0.86.1), installs pired, and puts the `pired` command on your PATH. Neither registers pired with pi. A bare `pi` does not load the security layer. That arrives only through `pired`, which passes it to pi with `-e` for that run ([ADR-017](decisions.md)).
@@ -23,7 +23,7 @@ On macOS and Linux the script starts by surveying the box and printing the plan 
 
     + node       ~/.local/share/pired/node     v22 from nodejs.org, checksum-verified
     + pi         ~/.local/share/pired/bin      @earendil-works/pi-coding-agent
-    + pired      ~/.local/share/pired/bin      from github:mamgad/pired
+    + pired      ~/.local/share/pired/bin      from github:CyShield-Security-R-D/pired
     + subagents  ~/.pi                         npm:pi-subagents — delegation, loads in every pi
     + PATH       ~/.bashrc                     export PATH="$HOME/.local/share/pired/bin:$PATH"
 
@@ -50,12 +50,12 @@ Windows has its own script. When Node.js ≥ 22.19 is missing it fetches the per
 Clone first to read the installer before it runs. `./install.sh` installs the checkout it is sitting in, so the same route installs a branch you are working on:
 
 ```bash
-git clone https://github.com/mamgad/pired.git && cd pired && ./install.sh
+git clone https://github.com/CyShield-Security-R-D/pired.git && cd pired && ./install.sh
 ```
 
 ```powershell
 # .\install.ps1 installs the checkout beside it
-git clone https://github.com/mamgad/pired.git; cd pired; .\install.ps1
+git clone https://github.com/CyShield-Security-R-D/pired.git; cd pired; .\install.ps1
 ```
 
 <details>
@@ -64,14 +64,14 @@ git clone https://github.com/mamgad/pired.git; cd pired; .\install.ps1
 **npm, directly:**
 
 ```bash
-npm install -g --ignore-scripts github:mamgad/pired
+npm install -g --ignore-scripts github:CyShield-Security-R-D/pired
 pi install "$(npm root -g)/pired"     # optional: opt a bare `pi` in too
 ```
 
 **As a pi package only** (no `pired` launcher):
 
 ```bash
-pi install git:github.com/mamgad/pired
+pi install git:github.com/CyShield-Security-R-D/pired
 ```
 
 **Without installing anything** — one session, from a clone:
@@ -84,7 +84,7 @@ pi -e ./extensions/pired.ts -e ./extensions/hosts.ts --pired-profile review
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `PIRED_SOURCE` | `github:mamgad/pired` | npm spec to install from — a fork, a tag, a local path. |
+| `PIRED_SOURCE` | `github:CyShield-Security-R-D/pired` | npm spec to install from — a fork, a tag, a local path. |
 | `NPM_PREFIX` | npm's global root | Install somewhere else. When the script brings its own Node the default is `~/.local/share/pired`; when npm's root is not writable — a root-owned system node — it falls back to `~/.local` on its own and says so. |
 | `PIRED_SKIP_PI` | unset | `1` to not install or upgrade pi. A pi kept below 0.86.1 this way also holds back the pi-subagents row, since pi-subagents 0.71 needs pi ≥ 0.86.1. |
 | `PIRED_SKIP_SUBAGENTS` | unset | `1` to not install or upgrade pi-subagents. pired then runs without delegation. |

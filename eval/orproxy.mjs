@@ -122,7 +122,7 @@ const server = createServer((req, res) => {
 			headers: {
 				authorization: `Bearer ${KEY}`,
 				"content-type": "application/json",
-				"http-referer": "https://github.com/mamgad/pired",
+				"http-referer": "https://github.com/CyShield-Security-R-D/pired",
 				"x-title": "pired-eval",
 			},
 			body: JSON.stringify(body),

@@ -1,12 +1,12 @@
 #!/bin/sh
 # pired installer for macOS and Linux — from a vanilla box to a first engagement.
 #
-#   curl -fsSL https://raw.githubusercontent.com/mamgad/pired/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/CyShield-Security-R-D/pired/main/install.sh | sh
 #
 # Windows has its own script, because npm lays a global install out differently
 # there and PATH lives in the registry:
 #
-#   powershell -c "irm https://raw.githubusercontent.com/mamgad/pired/main/install.ps1 | iex"
+#   powershell -c "irm https://raw.githubusercontent.com/CyShield-Security-R-D/pired/main/install.ps1 | iex"
 #
 # It surveys the box, prints exactly what it will do and where, asks once, and
 # then does all of it: Node.js (when missing or too old), pi (when missing or
@@ -41,7 +41,7 @@
 #   install.sh [-y|--yes] [--dry-run] [-h|--help]
 #
 # Environment:
-#   PIRED_SOURCE          npm spec to install from   (default github:mamgad/pired)
+#   PIRED_SOURCE          npm spec to install from   (default github:CyShield-Security-R-D/pired)
 #   NPM_PREFIX            prefix to install into     (default npm's own global root;
 #                         ~/.local/share/pired when this script brings its own Node,
 #                         ~/.local when npm's root is not writable)
@@ -74,7 +74,7 @@ NODE_LINE=22
 NODE_MIN_MAJOR=22
 NODE_MIN_MINOR=19
 NODE_DIST="https://nodejs.org/dist/latest-v${NODE_LINE}.x"
-DEFAULT_REPO="mamgad/pired"
+DEFAULT_REPO="CyShield-Security-R-D/pired"
 
 ASSUME_YES=${PIRED_YES:-0}
 DRY_RUN=0
@@ -99,7 +99,7 @@ pired installer — installs Node.js (if needed), pi, pired and the extension.
 
   PIRED_SOURCE / NPM_PREFIX / PIRED_SKIP_PI / PIRED_SKIP_SUBAGENTS
   PIRED_SKIP_MCP / PIRED_YES / PIRED_NO_ANIM
-  https://github.com/mamgad/pired/tree/main/docs
+  https://github.com/CyShield-Security-R-D/pired/tree/main/docs
 USAGE
 }
 

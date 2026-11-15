@@ -1,14 +1,14 @@
 #!/usr/bin/env pwsh
 # pired installer for Windows - the launcher and the pi extension.
 #
-#   powershell -c "irm https://raw.githubusercontent.com/mamgad/pired/main/install.ps1 | iex"
+#   powershell -c "irm https://raw.githubusercontent.com/CyShield-Security-R-D/pired/main/install.ps1 | iex"
 #
 # macOS and Linux have their own script. npm lays a global install out
 # differently here (shims sit in the prefix itself, not in prefix/bin) and PATH
 # is a registry value rather than a line in a dotfile, so the two do not merge
 # into one script worth reading:
 #
-#   curl -fsSL https://raw.githubusercontent.com/mamgad/pired/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/CyShield-Security-R-D/pired/main/install.sh | sh
 #
 # It surveys the box, prints exactly what it will do and where, asks once, and
 # then does all of it: Node.js (when missing or too old), pi (when missing or
@@ -41,7 +41,7 @@
 # does not need, teaches the wrong habit on the very first command.
 #
 # Environment:
-#   PIRED_SOURCE   npm spec to install from      (default github:mamgad/pired)
+#   PIRED_SOURCE   npm spec to install from      (default github:CyShield-Security-R-D/pired)
 #   NPM_PREFIX     prefix to install into        (default npm's own global
 #                  prefix, %LOCALAPPDATA%\pired when this script brings its own
 #                  Node, or %APPDATA%\npm when npm's prefix is not writable)
@@ -61,7 +61,7 @@
 
 $ErrorActionPreference = "Stop"
 
-$PiredDefaultSource = "github:mamgad/pired"
+$PiredDefaultSource = "github:CyShield-Security-R-D/pired"
 $PiPackage = "@earendil-works/pi-coding-agent"
 # The package pired delegates through: `spawn a subagent` is a thing the
 # operator can ask for on a fresh box, rather than a README step they find out
@@ -221,7 +221,7 @@ function Get-ComparablePath {
 	return $Path.Replace([char]47, [char]92).TrimEnd([char]92).ToLowerInvariant()
 }
 
-# The source may be an npm spec such as github:mamgad/pired, and "github:" looks
+# The source may be an npm spec such as github:CyShield-Security-R-D/pired, and "github:" looks
 # enough like a PowerShell drive that Test-Path throws instead of answering.
 function Test-Directory {
 	param([string]$Path)
@@ -1426,7 +1426,7 @@ function Write-PackageKept {
 function Invoke-PiredInstaller {
 	if ([System.Environment]::OSVersion.Platform -ne [System.PlatformID]::Win32NT) {
 		Write-Host "This installer is for Windows. On macOS and Linux, use:"
-		Write-Host "  curl -fsSL https://raw.githubusercontent.com/mamgad/pired/main/install.sh | sh"
+		Write-Host "  curl -fsSL https://raw.githubusercontent.com/CyShield-Security-R-D/pired/main/install.sh | sh"
 		exit 1
 	}
 
@@ -1654,7 +1654,7 @@ function Invoke-PiredInstaller {
 				# network, a proxy, a missing ref or a missing git is at fault.
 				# Installing from a clone takes the fetch out of the picture.
 				Write-Note "If the fetch failed, check the network or proxy, and that git is installed (winget install --id Git.Git -e). Or clone the repository and run the installer from the checkout:"
-				Write-Host "    git clone https://github.com/mamgad/pired.git; cd pired; .\install.ps1"
+				Write-Host "    git clone https://github.com/CyShield-Security-R-D/pired.git; cd pired; .\install.ps1"
 			}
 			Stop-Pired "could not install from $source"
 		}
@@ -1751,7 +1751,7 @@ function Invoke-PiredInstaller {
 		Write-Host "    pired --profile pentest  $($script:Dim)blackbox testing (needs an authorized scope)$($script:Off)"
 		Write-Host "    /panel                   $($script:Dim)the engagement panel - alt+p toggles it$($script:Off)"
 		Write-Say
-		Write-Note "docs: https://github.com/mamgad/pired/tree/main/docs"
+		Write-Note "docs: https://github.com/CyShield-Security-R-D/pired/tree/main/docs"
 		Write-Say
 	} finally {
 		if (Test-Path -LiteralPath $script:LogPath) {
