@@ -1,5 +1,5 @@
 {
-	"about": "Inputs and the outputs of eval/delegation-compare-lib.ts at b8ba1e8 (the v5 extractor), captured by a scratch script. A current extractor given no retry option must reproduce every output byte for byte.",
+	"about": "Inputs and the outputs of eval/delegation-compare-lib.ts at da1ed58 (the v5 extractor), captured by a scratch script. A current extractor given no retry option must reproduce every output byte for byte.",
 	"cases": [
 		{
 			"name": "plain run with a threshold compaction",

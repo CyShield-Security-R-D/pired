@@ -3,7 +3,7 @@
  * the run's last `record kind=settle` with the ledger writes that followed it.
  *
  * It lives beside the pinned scorer, not in it. eval/dvbank/score.ts must stay
- * byte-identical to the research-pinned dde9bfa implementation, and the first
+ * byte-identical to the research-pinned 7d43f0d implementation, and the first
  * v6 dry run refused to start because these readers had been added to it. The
  * harness merges this module's result into engagementTelemetry's.
  */

@@ -1858,7 +1858,7 @@ are the corpus's own `<name>.truth.json`, hashed in `eval/delegation-compare.md`
 The candidate that follows the v3 grids is accepted only if both of these hold:
 - ADR-026's gate approves it on the official grid, both models, each by either path.
 - A held-out grid shows no quality regression on either model. The grid is the four applications
-  above, run on the same harness, baseline (496b190), models and effort, with three passes per
+  above, run on the same harness, baseline (64479f0), models and effort, with three passes per
   target. No regression means:
   - candidate pass-mean pooled true positives are at least **85%** of the baseline's;
   - grid-pooled precision is at least **85%** of the baseline's.
@@ -1874,7 +1874,7 @@ applications to resample.
 ### Amendment — the luna official grid is re-run with a 4-hour run limit (2026-09-24, before the re-run)
 
 The v5 official luna grid could not be decided. Its LinkAce pass 3 **baseline** (the unchanged
-pired@496b190) ran past the 2-hour per-run limit with 322 requests made, still working. The harness
+pired@64479f0) ran past the 2-hour per-run limit with 322 requests made, still working. The harness
 classes a timeout as non-infrastructure, so the pair was blocked, and an official grid with a
 blocked pair cannot approve. OpenAI answered about four times slower per request that night than in
 v4: about 30 s against about 8 s, so a baseline that finished in 41 minutes in v4 did not finish in
@@ -1888,7 +1888,7 @@ apply to both arms and are fixed here before it runs:
   (`eval/delegation-compare-bash-timeout.ts`). A timeout the model sets itself is kept.
 
 Everything else is unchanged: the candidate is snapshot v4 (digest `826bd8d0…`), the baseline is
-496b190, and the grid is the five research targets, three passes, at medium effort. The v5 official
+64479f0, and the grid is the five research targets, three passes, at medium effort. The v5 official
 luna pairs are reported as indicative only and are not pooled with the re-run. GLM keeps its v5
 grid, which has had no timeout.
 
@@ -1902,7 +1902,7 @@ medium effort.
 
 DeepSeek runs both grids in the v5b environment:
 - the official five research targets and the four held-out applications, three passes each;
-- candidate snapshot v4 (`826bd8d0…`) against baseline 496b190, at medium effort;
+- candidate snapshot v4 (`826bd8d0…`) against baseline 64479f0, at medium effort;
 - a 4-hour per-run limit and a 900 s default for `bash` calls that name no timeout, in both arms.
 
 Its official grid is judged by this gate (either path) and its held-out grid by the held-out guard.
@@ -1920,7 +1920,7 @@ to weigh.
 ### Amendment — luna's official grid runs a third time, with a try-again infrastructure class (2026-09-24, before the v5c grid)
 
 The v5b luna re-run was blocked after 7 matched pairs. Its filebrowser pass 3 baseline, the
-unchanged 496b190, failed after two minutes on "Codex error: Unable to verify Daybreak Blue access.
+unchanged 64479f0, failed after two minutes on "Codex error: Unable to verify Daybreak Blue access.
 Please try again." That is an entitlement check on OpenAI's side; the four other luna runs in flight
 at the time kept working. pi's retry list does not match the message, so the harness classed it as
 the run's own failure and blocked the pair, and a blocked pair keeps an official grid from approving.
@@ -1933,7 +1933,7 @@ pi already retries, and this one access check. The quota patterns run first, so 
 message says "try again later" still stops the grid.
 
 Everything else is v5b's:
-- candidate snapshot v4 (`826bd8d0…`) against baseline 496b190;
+- candidate snapshot v4 (`826bd8d0…`) against baseline 64479f0;
 - the five research targets, three passes each, at medium effort;
 - the 4-hour per-run limit and the 900 s `bash` default;
 - the same gate.
@@ -2000,15 +2000,15 @@ different models and are not used.
 
 The held-out GLM grid runs fresh on it now:
 - the four held-out applications, three passes each;
-- candidate snapshot v4 against baseline 496b190, at medium effort;
+- candidate snapshot v4 against baseline 64479f0, at medium effort;
 - the same harness as GLM's official grid, with its 2-hour per-run limit;
 - the same 200,000-token context window and 16,000-token output cap as the `zai` entry.
 
 The earlier held-out GLM grid, `heldout-2026-09-24-v5/glm`, never completed a pair and is superseded.
 
 GLM's official grid stays on z.ai's Coding Plan, keeps its 7 pairs, and resumes after the reset. The
-two GLM grids therefore run on different serving paths: z.ai directly, and a reseller whose upstream
-is not known. The guard remains sound, because it compares candidate and baseline within its own
+two GLM grids therefore run on different serving paths: z.ai directly, and a third-party provider
+whose upstream is not disclosed. The guard remains sound, because it compares candidate and baseline within its own
 grid, and both arms share the endpoint. The two grids' absolute numbers are not pooled or compared.
 
 ### Amendment — GLM's official grid also moves to commandcode.ai (2026-09-25, before it runs)
@@ -2019,14 +2019,14 @@ held-out GLM grid, so GLM's two grids now share one serving path.
 
 The grid itself is unchanged from the official protocol:
 - the five research targets, three passes each;
-- candidate snapshot v4 against baseline 496b190, at medium effort;
+- candidate snapshot v4 against baseline 64479f0, at medium effort;
 - this ADR's gate.
 
 The 7 official pairs already run on z.ai (`compare-2026-09-24-v5/glm`) become indicative only and are
 not pooled. They are reported as GLM's z.ai reference, as luna's v5 and v5b pairs are for luna.
 
-This moves GLM's verdict onto a reseller whose upstream serving is not known. One matched grid decides
-GLM, with both arms on that endpoint, so the comparison stays fair within it. It is not comparable with
+This moves GLM's verdict onto a third-party provider whose upstream serving is not disclosed. One
+matched grid decides GLM, with both arms on that endpoint, so the comparison stays fair within it. It is not comparable with
 GLM's research history or with the earlier z.ai grids.
 
 ### Outcome — snapshot v4 is not accepted (2026-09-26)
@@ -2226,7 +2226,7 @@ What those runs established:
 - pired still imports nothing from pi-subagents; the cooperation is the event contract and
   the `extensions: [child.ts]` path, nothing more.
 - ADR-026's acceptance comparison re-runs **both** arms on 0.87.1: baseline is pired at
-  `496b190` without pi-subagents, candidate is pired + pinned pi-subagents 0.71.0, both on
+  `64479f0` without pi-subagents, candidate is pired + pinned pi-subagents 0.71.0, both on
   pi 0.87.1 with cacheWarming off. The candidate is a snapshot of the current tree. Its digest
   goes into `eval/delegation-compare.pins.json` before any scored run, and until then every grid
   is exploratory. The native-worker snapshot pinned for ADR-025 (`675bd2ef…`) does not apply.
@@ -2914,7 +2914,7 @@ What pi 0.87.1 does:
   - Each attempt is marked recovered or not. A streak pi gave up on keeps its attempts in the count,
     so a failed run does not lose them.
   - With the flag absent, the extractors reproduce, byte for byte, the output of the extractor at
-    b8ba1e8 on 16 fixed parent streams and worker sessions (`eval/fixtures/delegation-compare-lib.v5-golden.json`).
+    da1ed58 on 16 fixed parent streams and worker sessions (`eval/fixtures/delegation-compare-lib.v5-golden.json`).
 - **An estimate for attempts that reported nothing** (`estimateBasis` on each attempt).
   - **`recovering-prompt`.** pi omits the failed reply and resends the same context, so the prompt
     of the reply that recovered the streak is the failed attempt's prompt. For a summary call it is
@@ -3293,7 +3293,7 @@ find what the candidate found?
 ### Context
 
 The v5 trial graded delegation on the five official targets and guarded it with four held-out
-ones. Every project in the pool those came from (`/home/mamgad/corpus`, 46 CVEs in 15 repositories)
+ones. Every project in the pool those came from (the author's `~/corpus`, 46 CVEs in 15 repositories)
 is now either one of those nine or named in `research/10` as part of the corpus pired was built
 against. A v6 verdict measured there would partly measure how well pired was fitted to it, and
 hand-picking replacements would carry the picker's knowledge of each project into the result.
@@ -3402,7 +3402,7 @@ chose a better harness in use over waiting for a verdict that cannot come back w
     matched arm M) is the test of whether workers earn the default. Its GLM grid is running.
   - A later ADR citing that result is what turns delegation on by default.
 - **The trial continues unchanged, and its verdicts are still reported as pre-registered.**
-  - Every arm runs from a snapshot pinned by digest. A is `snapshot-main-5573ec4`, S, D and M are
+  - Every arm runs from a snapshot pinned by digest. A is `snapshot-main-5573ec4` (built from the commit now 160bcfa), S, D and M are
     `candidate-v6-2026-09-27`, and the harness re-checks the pins before every launch. Moving
     `main` changes nothing a running or future v6 grid measures.
   - If Luna's stage 1 fails, that is recorded in `docs/delegation-v6-results.md` beside this
@@ -3432,7 +3432,7 @@ GPT-6 Luna's stage 1 failed rules 1 and 3. Grid `v6-stage1-luna`, 192/192, offic
 - **Time and cost:** S's median run took 218 minutes against A's 53, at $34.56 against $22.17.
 
 The operator decided to keep Phase 3 on `main` (2026-10-02). The record is in
-`docs/delegation-v6-results.md` on `plan/delegation-v6`. This entry stands as an operator decision
+the research repository's `v6/docs/results.md`. This entry stands as an operator decision
 taken against the pre-registered verdict, not one supported by it.
 
 ---
@@ -3455,7 +3455,7 @@ The adapter reaches every MCP server through a few tools it registers:
 
 pired's scope gate runs in pi's `tool_call` hook. It already scans any tool's arguments: a full
 http(s) URL anywhere, and a bare host or IP under a target-like key. That covers a proxy call
-with a URL in plain sight. It does not cover two routes, both measured on `main` at 82331ac, in
+with a URL in plain sight. It does not cover two routes, both measured on `main` at f85d340, in
 a sandbox with:
 - the real adapter 3.3.0, installed by `pi install`;
 - a stdio MCP server that logs every call reaching it;
@@ -3551,7 +3551,7 @@ that it was overridden
 The v6 pre-registration made delegation the default again only when the delegating build (D)
 passed all three rules against both the same build solo (S) and the solo build given D's tokens
 (M). GLM-5.3 Flash's stage 2 finished on 2026-10-01: grid `v6-stage2-glm`, 180/180 runs, official,
-decisions in pired-research under `v6/decisions/`.
+decisions in the research repository (not yet public) under `v6/decisions/`.
 
 - **Finding:** D found 33 of 39 advisory opportunities, S 29 and M 29. Rule 1 was non-inferior
   against both: +0.111 [−0.056, +0.278] against S, and +0.111 [−0.083, +0.306] against M. It was
@@ -3628,8 +3628,8 @@ opt-in default is back
 ADR-038 made delegation the default on GLM-5.3 Flash's stage-2 evidence (D 33, S 29, M 29 of 39
 advisory opportunities). It named Luna's stage 2 as the evidence that would revert it. That grid
 ran as an **exploratory** grid, `v6-stage2-luna-c8`, because Luna's stage 1 had failed. It was
-complete on 2026-10-05, with 240 arms planned and 48 pairs paired; decisions are in pired-research
-under `v6/decisions/`.
+complete on 2026-10-05, with 240 arms planned and 48 pairs paired; decisions are in the research
+repository (not yet public) under `v6/decisions/`.
 
 - **D vs S fails:**
   - **Finding:** −0.125 [−0.333, +0.083] advisories per pair. D found 16 of 52 opportunities and
@@ -3809,7 +3809,7 @@ operator reported had a cause neither covered: the model could not send the fiel
   - On fatfreecrm (2026-09-20), told "Link them with record id=a23bd2 hypothesisId=f742b8", it sent
     the link as the text of `host`, `statement` and `handle`, seven times: "My parameters keep coming
     out wrong (handle/host instead of the intended fields)."
-- **Since ADR-040 it can.** Five GLM 5.3 Flash sessions on the installed `54055cc` recorded 54
+- **Since ADR-040 it can.** Five GLM 5.3 Flash sessions on the installed `5217c29` recorded 54
   findings: three on a three-bug test app, one each on fireshare and 3dp-manager. 51 of the
   findings named a hypothesis that exists, and 49 were linked both ways.
 - **`answer` was still unlisted.** The write path reads it, and the tool's own description tells
@@ -3818,7 +3818,7 @@ operator reported had a cause neither covered: the model could not send the fiel
     put text in `context`, `reason` or `notes` instead.
   - The five live sessions answered 14 blockers, with no `answer` on any.
 
-The replies had their own faults, found by replaying the grids through `54055cc`:
+The replies had their own faults, found by replaying the grids through `5217c29`:
 
 - **Silent loss:** the schema types `evidence` as a list, because a finding keeps one. A hypothesis
   kept a string. 2,350 hypothesis calls sent the list (2,060 with one path), and each lost it under
@@ -3881,7 +3881,7 @@ The replies had their own faults, found by replaying the grids through `54055cc`
   fields the tool's description names. Each new reading and reply has a test, among them the
   fatfreecrm loop replayed: a link sent as `host: "hypothesisId: <id>"` is now linked both ways.
   `npm run check` passes: 3,106 tests (3 skipped), coverage floors held, assay 101 pass.
-- **Replay:** the 538 transcripts were replayed through `54055cc` and this change, each on its
+- **Replay:** the 538 transcripts were replayed through `5217c29` and this change, each on its
   own in-memory workspace.
   - **Same replies:** 32,743 calls ran from identical ledgers, and only 2 replies differ in more
     than the lines this change adds. Both are intended: a link sent as
@@ -3910,7 +3910,7 @@ The replies had their own faults, found by replaying the grids through `54055cc`
 
 - **Hints as JSON arguments instead of `key=value`.** The GLM loops came from the schema, not the
   notation: the model knew the key and could not emit it. The notation is shared with the prompt
-  and 39 skills.
+  and every skill.
 - **A hypothesis keeping an evidence list.** That is a format change for 286 calls. The paths past
   the first are named, so they can be cited in `basis`.
 - **Moving extra evidence paths into `basis`.** On an update by id, `basis` marks a re-check.
@@ -4047,3 +4047,51 @@ automatic and one `/compact`), every request HTTP 200, and no failures inside th
   ([Bifrost #3131](https://github.com/maximhq/bifrost/issues/3131)).
 - Unanchored contexts are still estimated. A single prompt larger than the window is still the
   server's to refuse.
+
+## ADR-044 — The published history is a rewrite; the research's ids and digests verify against the original
+
+**Status:** accepted · 2026-11-15
+
+### Context
+
+Before this repository was made public its history was rewritten to remove material that could not
+be published. Every commit id changed, and so did the trees of most commits: removed files are gone
+from every commit, and some lines in docs, comments and tests read differently. The research
+recorded ids and digests against the original history — grid manifests pin the scorer's commit,
+the baseline commit and the harness files' digests, and the pre-registrations are frozen by commit.
+
+### Decision
+
+- **Ids cited in this repository are remapped.** Each names the same change under its new id; ids
+  inside commit messages were remapped by the rewrite itself. The ones cited in files:
+
+| cited before | now | commit |
+|---|---|---|
+| `dde9bfa` | `7d43f0d` | fix(score): grade every location a finding cites, not the first one w… |
+| `496b190` | `64479f0` | fix(install): load context guard through pi's supported entrypoint |
+| `3ec47b7` | `7f52327` | docs: close the v5 delegation trial (ADR-026 outcome) and plan v6 |
+| `84c7965` | `2a84d0d` | feat(delegation): opt-in by default until a design beats the single a… |
+| `b8ba1e8` | `da1ed58` | eval: Phase 1 instruments — multi-level re-scorer, paired analysis, c… |
+| `d347d3f` | `ecb04b6` | docs(adr-030..032): stop reason, circuit breaker and explicit worker… |
+| `5cac587` | `59bb95d` | feat(eval): pre-register the fresh-application draw for delegation v6… |
+| `63fe54a` | `6c890bc` | feat(eval): draw the fresh v6 applications, seed 20260926 (ADR-033) |
+| `ee5c9c8` | `1ed4a59` | Merge branch 'plan/delegation-v6' into p3/candidate-v5 |
+| `7c772a6` | `bb79392` | feat(eval): draw variant 2 of the fresh v6 applications under rules v… |
+| `5573ec4` | `160bcfa` | fix(ledger): never mint the id of a deleted row |
+| `babcd32` | `39d5040` | docs(eval): pausing a grid, and the ADR draft for the drain |
+| `ca8a97a` | `598a57d` | fix(eval): v6-decision expects an amended pass's pairs, from the late… |
+| `82331ac` | `f85d340` | docs(adr-036): Phase 3 ships to main on the operator's decision; dele… |
+| `54055cc` | `5217c29` | fix(record): say what every record call kept, and read calls as agent… |
+
+- **The original history is kept privately.** Ids and digests the research recorded verify against
+  it, not against this history, and a reviewer of the research is pointed there.
+- **The `harness/*` tags mark the three amendments the Luna and DeepSeek grids ran on.** Their code
+  names commits by original id (for example `git rev-parse dde9bfa`), so it runs only against the
+  original history.
+
+### Consequences
+
+- `eval/delegation-compare.ts` reads the scorer from 7d43f0d. The scorer blob there is byte-identical
+  to the one the research pinned (`b0f25f3`), so the check it guards still holds.
+- A grid whose pins name an original commit reads as exploratory here ("baseline could not be
+  checked against git") until it is re-checked against the original history.

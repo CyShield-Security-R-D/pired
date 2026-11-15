@@ -11,7 +11,7 @@ Tools run via `bash` and may be absent. If a scanner is missing, use the grep re
 
 ## 1. Run the scanners
 ```bash
-mkdir -p evidence
+mkdir -p "$PIRED_WORKSPACE/evidence"
 checkov -d . -o sarif --output-file-path evidence 2>/dev/null || true          # multi-IaC: TF, CFN, K8s, Dockerfile, Helm, ARM, GitHub Actions
 trivy config --format sarif -o "$PIRED_WORKSPACE/evidence/trivy-config.sarif" . 2>/dev/null || true # misconfig: TF/CFN/K8s/Dockerfile/Helm (tfsec's engine — tfsec is EOL, merged into Trivy)
 tfsec . --format sarif --out "$PIRED_WORKSPACE/evidence/tfsec.sarif" 2>/dev/null || true            # legacy Terraform-only (if trivy absent)

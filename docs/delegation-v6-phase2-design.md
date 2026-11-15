@@ -1,7 +1,7 @@
 # Delegation v6 — Phase 2 design (benchmark operations)
 
 *Design for Phase 2 of [`delegation-v6-plan.md`](delegation-v6-plan.md). It comes from a read-only
-review of the harness on 2026-09-26, at 3ec47b7. Each item still needs its own ADR before it
+review of the harness on 2026-09-26, at 7f52327. Each item still needs its own ADR before it
 lands. Line numbers are as of that commit.*
 
 The arms of a pair run **one after the other** today: `runGrid` loops `for (const arm of

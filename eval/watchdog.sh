@@ -17,6 +17,13 @@
 # affected targets rather than reporting them as measured zeros.
 
 set -u
+# When tripped it runs `pkill -9 -f bin/pired.mjs`, which kills every pired on the box, a real
+# engagement's included. Refuse unless the caller has said this account is disposable.
+if [ "${PIRED_EVAL_OK:-}" != "1" ]; then
+	echo "eval/watchdog.sh kills every pired process on the box when it trips." >&2
+	echo "Run it as a throwaway user, in a container or VM, with PIRED_EVAL_OK=1." >&2
+	exit 64
+fi
 PREFIX=""; STALL=480; MAX_SPEND=""; PROXY="http://127.0.0.1:8787/status"; INTERVAL=60
 while [ $# -gt 0 ]; do
 	case "$1" in

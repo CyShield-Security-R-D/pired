@@ -147,7 +147,7 @@ Press `⏎` on a class to open it **down the surface**: one row per element, tha
 ╰─────────────────────────────────────────────────────────────────────╯
 ```
 
-`tab` cycles coverage → surface → hypotheses → findings, so all four are one view with one chrome. The same matrix, laid out to fit a fixed number of rows and counting what it dropped, is what fills the [welcome screen](#the-welcome-screen) and what `pired-state` prints.
+`tab` cycles coverage → surface → hypotheses → findings, so all four are one view with one chrome. The same matrix, laid out to fit a fixed number of rows and counting what it dropped, is what fills the [welcome screen](#the-welcome-banner) and what `pired-state` prints.
 
 Two empty states are worth knowing, because they are diagnostic:
 
@@ -265,7 +265,7 @@ From the maximized panel, `⏎` hands off here. The panel is a dashboard — it 
 ```
 ⦿ blockers · acme-webapp                                 3 open · 1 answered
 ──────────────────────────────────────────────────────────────────────────
-▸ ? high    scope clarification Is payments.acme.io in scope? It resolves …
+▸ ? high    scope clarification Is payments.acme.example in scope? It resolves …
   ? high    approval            Run the destructive delete PoC on /api/v2…
   ? medium  decision            Staging replica or prod?
   ✓ high    credential request  Admin credentials for the panel?
@@ -390,7 +390,7 @@ Turn it off with `--pired-banner off`.
 
 ### A clean start
 
-pi prints a startup header listing every skill, prompt, extension and theme it loaded. pired ships 39 skills, so that header is a wall of text — and because the panel is a floating overlay anchored top-right, the wall ends up **behind** it, leaving both unreadable:
+pi prints a startup header listing every skill, prompt, extension and theme it loaded. pired ships 45 skills, so that header is a wall of text — and because the panel is a floating overlay anchored top-right, the wall ends up **behind** it, leaving both unreadable:
 
 ```
 [Skills]                     │  0 of 76 cells · 76 gaps             │

@@ -1954,7 +1954,7 @@ describe("summarizeRetries", () => {
 });
 
 describe("the v5 reading, without a retry policy", () => {
-	// Inputs and outputs captured from the extractor at b8ba1e8, before any retry
+	// Inputs and outputs captured from the extractor at da1ed58, before any retry
 	// code existed. Comparing the option-off path with itself would pass however
 	// the retry work changed it; comparing with v5 pins what every old grid read.
 	const golden = JSON.parse(readFileSync(new URL("./fixtures/delegation-compare-lib.v5-golden.json", import.meta.url), "utf8")) as {

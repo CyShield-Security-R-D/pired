@@ -14,7 +14,10 @@ runtime.
 
 ## Protocol
 
-- **Baseline:** pired commit `496b1900c2fae2d63ba8378b3c3f56a4b49f317c`, run **without** pi-subagents,
+Commit ids below are those of the published history. The research pinned the original ids, and its
+digests verify against the original history, which is kept privately ([ADR-044](../docs/decisions.md#adr-044--the-published-history-is-a-rewrite-the-researchs-ids-and-digests-verify-against-the-original)).
+
+- **Baseline:** pired commit `64479f095a414d28a5f1d406e1760d4aad905625`, run **without** pi-subagents,
   so the baseline arm has no delegation available at all. The runner compares every staged file
   against that commit with `git show`, so a drifted baseline is exploratory.
 - **Candidate:** a frozen snapshot of the current working tree **plus pinned `pi-subagents@0.71.0`**,
@@ -35,7 +38,7 @@ runtime.
   Children inherit the parent's model and effort, and the runner invalidates a run in which they did
   not. Earlier research used GPT-5.6 Luna, and its results are not a baseline for GPT-6 Luna.
 - **Inputs:** the five research applications and their 24 labelled locations, from
-  [pired-research](https://github.com/mamgad/pired-research). The manifest and every truth file are
+  the research repository (not public yet). The manifest and every truth file are
   pinned by hash. Each run gets a fresh private copy.
 - **Fixed passes:** three complete passes per model and version, 60 target sessions in all. There
   are no extra repetitions after seeing results.
@@ -116,8 +119,8 @@ also checked on four corpus applications no diagnosis read. They are listed in
 | CVE-2025-67502 | remram44_taguette-3awrde | `1bf97202260fa60c73636a6d8b384feffe6e521efd9bbbeba2fcdeefd1998b56` |
 
 Run it with the same harness, baseline, models and effort as the official grid, three passes, and
-`--manifest eval/heldout/manifest-2026-09-24.json --corpus /home/mamgad/corpus/targets --truth
-/home/mamgad/corpus/targets --only <the four ids>`. It is exploratory, so it can only veto.
+(with `CORPUS` set to your copy of the corpus) `--manifest eval/heldout/manifest-2026-09-24.json --corpus $CORPUS/targets --truth
+$CORPUS/targets --only <the four ids>`. It is exploratory, so it can only veto.
 
 On each model it vetoes when either of these holds:
 - the candidate's pass-mean pooled true positives fall below 85% of the baseline's;
@@ -345,11 +348,12 @@ Then run each model's grid against that snapshot:
 
 ```sh
 cc -O2 -Wall -Wextra -o /tmp/pired-fs-seal eval/corpus/fs-seal.c
+CORPUS=<your copy of the corpus>
 H=eval/artifacts/claude-handoff-2026-09-23
 C=eval/artifacts/candidate-<date>                  # the snapshot frozen above
 node --experimental-strip-types eval/delegation-compare.ts \
   --baseline $H/snapshots/baseline --candidate "$C" \
-  --corpus /home/mamgad/corpus/targets \
+  --corpus $CORPUS/targets \
   --truth $H/research/corpus/truth --manifest $H/research/corpus/manifest.json \
   --provider zai --model glm-5.3-flash --thinking medium \
   --passes 3 --concurrency 5 --timeout 7200000 --out <new-dir> [--dry-run]

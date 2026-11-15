@@ -1143,7 +1143,7 @@ install_pired() {
 		printf 'Fetching %s@%s\n' "$spec" "$ref"
 		fetch "https://codeload.github.com/$spec/tar.gz/$ref" "$WORKDIR/src.tar.gz" || {
 			printf 'Could not fetch https://codeload.github.com/%s/tar.gz/%s\n' "$spec" "$ref"
-			printf 'The repository is private, does not exist, or has no %s.\n' "$ref"
+			printf 'Check the network or proxy, and that the repository and %s exist.\n' "$ref"
 			return 1
 		}
 		printf 'Unpacking\n'
@@ -1170,13 +1170,13 @@ else
 	spill
 	case "$SOURCE" in
 		github:*)
-			# A private repo 404s for an unauthenticated fetch, which npm reports as
-			# a missing package and codeload as a missing ref. Name the likely cause
-			# rather than the symptom.
+			# npm reports a failed fetch as a missing package and codeload as a
+			# missing ref, whether the network, a proxy or the ref is at fault.
+			# Installing from a clone takes the fetch out of the picture.
 			say ""
-			say "  ${DIM}A private repository cannot be fetched anonymously. Clone it over your${OFF}"
-			say "  ${DIM}SSH key and run the installer from the checkout:${OFF}"
-			say "    git clone git@github.com:${DEFAULT_REPO}.git && cd pired && ./install.sh"
+			say "  ${DIM}If the fetch failed, check the network or proxy, or clone the repository${OFF}"
+			say "  ${DIM}and run the installer from the checkout:${OFF}"
+			say "    git clone https://github.com/${DEFAULT_REPO}.git && cd pired && ./install.sh"
 			;;
 	esac
 	die "could not install from $SOURCE"

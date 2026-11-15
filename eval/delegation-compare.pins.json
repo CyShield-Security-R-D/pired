@@ -1,5 +1,5 @@
 {
-	"baselineCommit": "496b1900c2fae2d63ba8378b3c3f56a4b49f317c",
+	"baselineCommit": "64479f095a414d28a5f1d406e1760d4aad905625",
 	"candidateDigest": "826bd8d0c5aab758be93cb94dddd9107297f7c835b3f9d733d195552fd07b397",
 	"candidateFrozenAt": "2026-09-24",
 	"candidateMaxAgents": 8,
@@ -86,7 +86,7 @@
 			"_comment": "To be frozen. Arm A (main at the freeze, single agent, its own defaults) against arm S (the candidate snapshot, maxAgents 0, maxVerifiers 0, budget line on). Patched twins in both arms. Retry and breaker required; run limit 4 h; run validity v6 (a run that reaches the limit, or ends fast and empty, is valid). Passes: the internal pilot runs pilotPasses (2); one amendment, --resume <dir> --extend-passes <n> --extend-reason <text>, fixes the count the pilot's rule gives, at most maxPasses (10), keeping the pilot's pairs, or keeps 2 when the rule gives 2 or fewer.",
 			"corpus": "v6-fresh",
 			"baseline": {
-				"commit": "5573ec4db66c7a1188be286604c33d45802cda4f"
+				"commit": "160bcfad77ff682eec53b6602d0fc7934aa33f95"
 			},
 			"candidate": {
 				"digest": "8f29c26cb8f03cab087e9c2022ebd89cc3270a341c741c6c76e2bbcbaa41bac7",

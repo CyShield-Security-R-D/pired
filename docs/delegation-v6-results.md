@@ -3,7 +3,10 @@
 This file holds each verdict of the trial pre-registered in
 [delegation-v6-preregistration.md](delegation-v6-preregistration.md), in the order the verdicts
 arrive. Every number is copied from `eval/v6-decision.ts`'s output. That output, and the complete
-run data behind it, are in `pired-research` under `v6/decisions/` and `v6/grids/`.
+run data behind it, are in the research repository under `v6/decisions/` and `v6/grids/`. That
+repository is not public yet: its raw run data names vulnerabilities in the benchmarked projects,
+and it is held back until those are disclosed to their maintainers. Only the first verdict was
+copied into this file; the other four are recorded with the run data.
 
 A verdict is added here only when its grid is complete and official. A later model's verdict
 never changes Luna's.
@@ -14,9 +17,9 @@ Grid `v6-stage1-glm`:
 
 - Official, 144/144 runs: 12 apps and 12 patched twins, 3 passes. The blind pilot fixed the pass
   count by the one amendment.
-- Run from `p2/drain` at babcd32, on z.ai.
+- Run from 39d5040 (the `p2/drain` harness), on z.ai.
 - The decision script was run from the same worktree.
-- The data is in pired-research at 24eaf2a.
+- The data is in the research repository under `v6/grids/v6-stage1-glm/`.
 
 | rule | measured | threshold | |
 |---|---|---|---|
@@ -65,5 +68,5 @@ present and none was abandoned.
 The slip matters only in one case. Abandoned pairs are read from the summary, so they are always
 listed. A pair of an amended pass that was neither paired nor abandoned, however, would not be
 listed as excluded. The fix reads the expected cells from the latest resume manifest, which lists
-all 36. It landed as ca8a97a (`p2/decision-expected`, on `main` with ADR-036). Rerun on this grid,
+all 36. It landed as 598a57d (`p2/decision-expected`, on `main` with ADR-036). Rerun on this grid,
 only the header line changes, to "36 paired of 36 expected". Every later decision uses it.

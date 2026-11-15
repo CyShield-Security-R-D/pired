@@ -162,7 +162,7 @@ const HARNESS_FILES = [
  * key edited afterwards no longer matches and cannot approve.
  */
 /**
- * The intended baseline is git 496b190 and the candidate is a frozen snapshot of
+ * The intended baseline is git 64479f0 and the candidate is a frozen snapshot of
  * the pi-subagents implementation (ADR-027). The baseline is verified against
  * the commit's own blobs at staging time (git can rebuild them); the candidate
  * has no commit, so its snapshot digest is pinned, and so is the pi-subagents
@@ -1216,18 +1216,18 @@ async function runtimePins(fsSeal: string, piSubagents: PiSubagentsInstall): Pro
 	const runtime = await treeManifest(PI_NODE_MODULES, "runtime");
 	const sealStat = await lstat(fsSeal).catch(() => undefined);
 	if (!sealStat?.isFile()) throw new Error(`Landlock wrapper is not a regular file: ${fsSeal}`);
-	// The research numbers were graded by the scorer at dde9bfa. A byte-level blob
+	// The research numbers were graded by the scorer at 7d43f0d. A byte-level blob
 	// comparison, not a version string, is what makes "same grader" checkable.
-	const expectedScoreBlob = execFileSync("git", ["rev-parse", "dde9bfa:eval/dvbank/score.ts"], { cwd: ROOT, encoding: "utf8" }).trim();
+	const expectedScoreBlob = execFileSync("git", ["rev-parse", "7d43f0d:eval/dvbank/score.ts"], { cwd: ROOT, encoding: "utf8" }).trim();
 	const actualScoreBlob = execFileSync("git", ["hash-object", SCORE_PATH], { cwd: ROOT, encoding: "utf8" }).trim();
-	if (expectedScoreBlob !== actualScoreBlob) throw new Error("Current pired ledger scorer is not byte-identical to the research-pinned dde9bfa implementation.");
+	if (expectedScoreBlob !== actualScoreBlob) throw new Error("Current pired ledger scorer is not byte-identical to the research-pinned 7d43f0d implementation.");
 	const harnessSha256: Record<string, string> = {};
 	for (const rel of HARNESS_FILES) harnessSha256[rel] = await hashFile(join(ROOT, rel));
 	return {
 		node: process.version, nodeExecutable: await realpath(process.execPath), piPackageVersion: packageJson.version ?? "unknown",
 		piRuntimeSha256: runtime.digest, piRuntimeFiles: runtime.files, piNodeModules: PI_NODE_MODULES,
 		harnessSha256, landlockWrapper: fsSeal, landlockWrapperSha256: await hashFile(fsSeal),
-		graderSourceCommit: execFileSync("git", ["rev-parse", "dde9bfa"], { cwd: ROOT, encoding: "utf8" }).trim(),
+		graderSourceCommit: execFileSync("git", ["rev-parse", "7d43f0d"], { cwd: ROOT, encoding: "utf8" }).trim(),
 		graderSourceGitBlob: actualScoreBlob,
 		graderSourceSha256: await hashFile(SCORE_PATH), workspaceDecoderSha256: await hashFile(WORKSPACE_PATH),
 		externalGraderScript: GRADER_SCRIPT, externalGraderSha256: await hashFile(GRADER_SCRIPT),
@@ -1856,7 +1856,7 @@ function baselineCommitRows(commit: string): Map<string, string> {
 }
 
 /**
- * Why the baseline snapshot is not git 496b190's staged content, or "" when it
+ * Why the baseline snapshot is not git 64479f0's staged content, or "" when it
  * is. The handoff forbids mixing candidates; this catches a --baseline that was
  * edited or points at the working tree. git can rebuild the commit's blobs, so
  * the baseline needs no pinned digest of its own, unlike the candidate.
@@ -3795,7 +3795,7 @@ async function runPreflight(options: Options, manifest: JsonRecord, saveManifest
 			if (staged[arm].sourceDigest !== source[arm].digest) throw new Error(`Staged ${arm} snapshot's pre-redaction digest does not match its input.`);
 		}
 		if (!sameSnapshot && staged.baseline.stagedDigest === staged.candidate.stagedDigest) throw new Error("Redacted baseline and candidate snapshots are identical.");
-		// Pin identity: the baseline must be git 496b190's staged content and the
+		// Pin identity: the baseline must be git 64479f0's staged content and the
 		// candidate the frozen handoff snapshot, or the grid is exploratory.
 		const { kind } = inputs;
 		let baselineReason = "";
@@ -3868,7 +3868,7 @@ async function runPreflight(options: Options, manifest: JsonRecord, saveManifest
 	manifest.exploratoryReasons = exploratoryReasons;
 	await saveManifest();
 
-	// 3. Runtime, harness and grader pins, including the dde9bfa scorer blob guard.
+	// 3. Runtime, harness and grader pins, including the 7d43f0d scorer blob guard.
 	const pins = await stage("pins", async () => {
 		const runtime = await runtimePins(options.fsSeal, staging.piSubagents);
 		const frozen: FrozenPins = { ...runtime };

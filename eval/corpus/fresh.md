@@ -17,7 +17,7 @@ on record in `selection.json` and `fresh/variant-1/`; nothing about it was chang
 
 ## Why not the existing pool
 
-`/home/mamgad/corpus` holds 46 CVEs in 15 repositories. All 15 are excluded under the rules below:
+The author's earlier pool (`~/corpus`) holds 46 CVEs in 15 repositories. All 15 are excluded under the rules below:
 five are the official v5 targets, four are the held-out targets, and the other six (YOURLS, goshs,
 cloudcmd, archivy, django-helpdesk, alerta) are named in `research/10` as members of the corpus pired
 was built against. Excluding every repository any of pired's work touched leaves nothing there to
@@ -98,7 +98,7 @@ takes any N and the v6 power analysis sets the final count), 2 controls, 3 tries
 
 ### One implementation change after pre-registration
 
-The draw was started at `5cac587` and stopped by hand after 102 repositories, before it had written
+The draw was started at `59bb95d` and stopped by hand after 102 repositories, before it had written
 anything, because a full checkout was downloading files no rule reads — one project's card images
 held a single checkout for over eleven minutes. Every rule reads a path or a code file, so the walk
 now takes paths from `git ls-tree` and checks out code only. The rules did not change and
@@ -106,6 +106,13 @@ now takes paths from `git ls-tree` and checks out code only. The rules did not c
 verdicts from scratch with the new code — the one eligible verdict and 39 ineligible ones across
 five filters — and all 40 came back identical, detail strings included. The draw then resumed from
 the verdict cache; the walk's decisions depend only on those verdicts.
+
+## Data source
+
+`fresh/pool.json` is derived from [OSV](https://osv.dev)'s `GIT` export (advisory ids, aliases,
+publication dates, CWE, severity and fix commits only — no advisory text). Credit for the underlying
+records belongs to OSV and to the advisory sources it aggregates, including the CVE program, NVD and
+the GitHub Advisory Database.
 
 ## Label hygiene
 
@@ -150,7 +157,9 @@ node --experimental-strip-types eval/corpus/select-fresh.ts materialise --work /
 ```
 
 The committed `pool.json` and `exclusions.json` are the inputs of record; a new OSV snapshot makes a
-different pool, and so a different draw. `materialise` writes `<corpus>/<name>.pristine`, the reviewed
+different pool, and so a different draw. The `exclusions` step reads the author's local checkouts and manifests
+(`OFFICIAL_MANIFEST`, `HELDOUT_MANIFEST`, `OLD_POOL` and `DEV_CHECKOUTS` in `select-fresh.ts`), so on any other machine skip it and draw from the
+committed `exclusions.json`. `materialise` writes `<corpus>/<name>.pristine`, the reviewed
 commit as a plain tree with history and release notes stripped under every credited advisory's ids,
 which is what the runner copies from. The manifests use the official `PLACEHOLDER/corpus` paths.
 
@@ -232,7 +241,7 @@ cached verdicts with all six eligible ones included, found all 30 identical.
 
 ## Results (variant 2) — what v6 uses
 
-*Added after the second walk (`7c772a6`) and its truth step.*
+*Added after the second walk (`bb79392`) and its truth step.*
 
 **Counts.** The metadata filters are unchanged (23,279 → 6,387 advisories, 6,642 → 2,107
 repositories; table under *Results (variant 1)*). The walk examined 314 repositories and 12 were
@@ -301,7 +310,7 @@ removed 0 to 5 files per tree and no labelled or fixed-region file.
 
 ## Results (variant 1)
 
-*Added after the draw (`63fe54a`) and the truth step. Nothing above this heading was changed by them.*
+*Added after the draw (`6c890bc`) and the truth step. Nothing above this heading was changed by them.*
 
 ### Counts at each filter
 

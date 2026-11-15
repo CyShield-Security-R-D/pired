@@ -4,7 +4,7 @@
  *
  * The v5 trial graded delegation on five official targets and guarded it with
  * four held-out ones. Every one of those, and every other project the pool in
- * /home/mamgad/corpus holds, has since been named in pired's research, diagnosed
+ * ~/corpus holds, has since been named in pired's research, diagnosed
  * or tuned against. A v6 verdict measured on them would partly measure how well
  * the harness was fitted to them. So the acceptance run draws applications
  * pired has never been graded on, by a procedure written down before the draw:
@@ -65,7 +65,7 @@ import type { Advisory, TruthEntry } from "./lib.ts";
  * be replayed into a newer draw.
  */
 export const RULES_VERSION = 2;
-// v1 (5cac587): the draw recorded as variant 1 in selection.json.
+// v1 (59bb95d): the draw recorded as variant 1 in selection.json.
 // v2: an independent review of variant 1, before any model run, found
 // non-applications admitted and import-only edits labelled. v2 adds the
 // service rules (isService), the vendored-file rule (isVendoredFile), server-

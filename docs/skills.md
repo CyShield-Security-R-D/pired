@@ -16,7 +16,7 @@ skills/
   ...
 ```
 
-### Code review — 15
+### Code review — 14
 
 | Skill | For |
 |---|---|
@@ -56,7 +56,7 @@ skills/
 
 `recon-passive`, `recon-active-web`, `recon-attack-surface`, `network-host-discovery`, `network-service-enum`, `network-post-exploit-notes`.
 
-### Operations — 7
+### Operations — 8
 
 | Skill | For |
 |---|---|
@@ -90,7 +90,7 @@ Two conventions matter. Each section names the **checklist class** it settles (`
 
 ## Checklists
 
-Four templates in `checklists/`, one per target type. They define the classes on the coverage matrix's vertical axis.
+Five templates in `checklists/`, one per target type. They define the classes on the coverage matrix's vertical axis.
 
 | Template | Classes | Used for |
 |---|---|---|

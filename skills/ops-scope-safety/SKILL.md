@@ -38,12 +38,12 @@ Check it early: `recall` surfaces scope; when in doubt, read the file. If no sco
 ## 4. Handling out-of-scope discoveries
 Recon leaks neighbors — a passive source lists a sibling domain, a foothold can reach another subnet. Rules:
 - **Do not touch it.** No requests, scans, or logins against anything not matching `targets` (and not in `exclude`).
-- **Record it as a note** so the lead isn't lost: `record kind=note text="Passive DNS shows acme-internal.net (out of scope) co-hosted on 203.0.113.5"`.
+- **Record it as a note** so the lead isn't lost: `record kind=note text="Passive DNS shows acme-internal.example (out of scope) co-hosted on 203.0.113.5"`.
 - If it looks in-mission (clearly the client's, likely meant to be in scope), raise a **scope-clarification blocker** and keep working elsewhere:
 ```
 record kind=blocker blockerType=scope-clarification priority=medium \
-  question="acme-internal.net resolves to an in-scope IP but isn't listed in targets. Is it in scope?" \
-  context="Found via reverse DNS on 203.0.113.5 during passive recon." blocks=["acme-internal.net"]
+  question="acme-internal.example resolves to an in-scope IP but isn't listed in targets. Is it in scope?" \
+  context="Found via reverse DNS on 203.0.113.5 during passive recon." blocks=["acme-internal.example"]
 ```
 
 ## 5. Authorization gate for intrusive / destructive actions

@@ -1,5 +1,8 @@
 # Delegation v6 — pre-registration (DRAFT)
 
+> **This copy stops at 2026-09-30.** Later amendments — the Luna and DeepSeek harness amendments and
+> the exploratory stage-2 grids — are in the research repository's copy, which is not public yet.
+
 *Plan item 4.2 of [`delegation-v6-plan.md`](delegation-v6-plan.md). **Draft, not frozen;** the operator's decisions were recorded 2026-09-27. It is
 frozen, by commit and hash, before the first v6 model call. Any change after that is an amendment,
 dated and logged, and it is written before the results it could affect are read. Operator decisions
@@ -19,7 +22,7 @@ are marked with their date.*
 
 | arm | snapshot | configuration | role |
 |---|---|---|---|
-| **A · incumbent** | `main` at the freeze, currently 84c7965 | single agent: delegation off by default (ADR-029) | what users get today |
+| **A · incumbent** | `main` at the freeze, currently 2a84d0d | single agent: delegation off by default (ADR-029) | what users get today |
 | **S · candidate solo** | `p3/candidate-v5` at the freeze | `maxAgents: 0`, `maxVerifiers: 0`, budget line on | Phase 3's single-agent changes alone |
 | **D · candidate delegating** | same as S | `maxAgents: 8`, `maxVerifiers: 2` (operator, 2026-09-27), budget line on | the full candidate |
 | **M · matched compute** | same as S | delegation off, k = 3 sessions, total tokens capped at D's realised tokens for the same pair (follow mode, ADR-034), findings unioned | D's compute without delegation |

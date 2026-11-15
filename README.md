@@ -2,7 +2,7 @@
 
 <img src="docs/banner.svg" alt="pired — security assessment harness: review, recon and pentest profiles, with a live coverage panel" width="100%">
 
-**A security assessment harness for consultants — whitebox review and blackbox testing in one workspace, with coverage tracking that won't let an engagement end early.**
+**A security assessment harness for consultants — whitebox review and blackbox testing in one workspace, with coverage tracking that lists what an engagement has not yet tested.**
 
 *Runs on your own hardware, so client code never leaves the box. An AI agent, not a toolbox: it ships no scanners; it drives the ones you already have.*
 
@@ -18,14 +18,16 @@ A consultant under NDA often *cannot* paste client source into a frontier API �
 
 Three claims:
 
-- **It runs on your hardware.** Tuned for ~30B open-weight models (Qwen3.8 27B, Gemma 3 27B, DeepSeek), so client code never leaves the engagement box — and it still beats a frontier agent on recall and critical coverage (below). Frontier and subscription models work too, where the engagement allows them.
-- **Coverage discipline, not vibes.** `checklist × inventory = coverage → hypotheses → findings`. That matrix is a **test plan**: one cell — one weakness class asked of one recorded element — is one test case, a hypothesis is that case run and given a verdict, and `recall gaps` is the list still outstanding, keeping the agent testing while any remain — and *ruling a class out* recorded as real work, which a findings list cannot express. What the benchmark shows is the security prompt lifting a 27B model past a frontier agent on recall; whether the ledger compounds on top of that is stated as open, below.
+- **It runs on your hardware.** Tuned for ~30B open-weight models and measured on Qwen3.8 27B, so client code never leaves the engagement box — and on the teaching-app benchmark below it out-recalled a single run of a frontier agent, while trailing it on precision. Frontier and subscription models work too, where the engagement allows them.
+- **Coverage discipline, not vibes.** `checklist × inventory = coverage → hypotheses → findings`. That matrix is a **test plan**: one cell — one weakness class asked of one recorded element — is one test case, a hypothesis is that case run and given a verdict, and `recall gaps` is the list still outstanding, keeping the agent testing while any remain — and *ruling a class out* recorded as real work, which a findings list cannot express. What the benchmark shows is the security prompt lifting a 27B model past a frontier agent on recall; whether the ledger adds anything on top was measured separately, and so far it has not (below).
 - **One workspace, both halves of the engagement.** `review` for whitebox, `recon`/`pentest` for blackbox, over a single engagement ontology, so findings, evidence, and coverage correlate across the whole job instead of living in two disconnected tools.
 
 **What pired is not.** Not a scanner: it owns no detection engines and makes no claim to reproducible, rule-count-comparable output. Not the assessment: it drafts findings for an operator to verify, and the operator signs the report. Two principles keep it that way:
 
 - **An AI agent, not a toolbox.** No bundled scanners. Heavy tooling is opt-in; missing tools are *requested*, not carried.
 - **Built to last.** A harness-agnostic **ports & adapters** core with *zero* host imports, so the security engine outlives any single agent frontend.
+
+**Authorized use only.** `recon` and `pentest` act on live systems: point them only at systems you have written permission to test. The scope gate prevents accidents; it is not a containment boundary and not a substitute for that permission ([Security & authorized use](#security--authorized-use)).
 
 ---
 
@@ -36,7 +38,7 @@ A **ground-truth-labeled vulnerable banking app** (53 CWE/OWASP-tagged vulnerabi
 | | Recall | Precision | F1 | Critical recall | Cost/scan |
 |---|:--:|:--:|:--:|:--:|:--:|
 | **pired + Qwen3.8 27B** *(local)* | **0.74** <sub>[0.70, 0.79]</sub> | 0.65 | 0.69 | **100%** | ~$0.26 |
-| codex + gpt-5.6-sol *(frontier)* | 0.68 | **0.80** | **0.74** | 93% | ~$0.19 |
+| codex CLI 0.147.0 + gpt-5.6-sol *(frontier)* | 0.68 | **0.80** | **0.74** | 93% | ~$0.19 |
 | vanilla pi + Qwen3.8 27B *(no pired)* | 0.59 | 0.56 | 0.57 | 79% | ~$0.16 |
 
 pired's row is **n=5 with a 95% interval**, from an independent re-run ([`research/05`](./research/05-rerun-2026-08.md)) that reproduced the original single-run figures. The baselines are single runs. Scored on the same key, pired's precision rises to 0.73 and F1 to 0.74 once the arms stop being penalised for reporting real frontend bugs the key cannot score.
@@ -53,7 +55,7 @@ The trade-off is honest: pired leads on **recall and critical coverage**, the fr
 
 **That the `record`/`recall` machinery caused the lift.** The re-run graded the ledger alongside the report and found it essentially unused — **0.8 records per run** against 61 findings emitted. The engagement apparatus was bypassed, and detection held anyway. So the supported attribution is the *prompt*, not the coverage ledger.
 
-That is not evidence the ledger is worthless; it is evidence that **this benchmark never tested it**. A one-shot detection scan is the task least likely to need durable cross-session state. The experiment that would settle it — persisted versus wiped ledger across k sessions — is built and has not been run.
+That is not evidence the ledger is worthless; it is evidence that **this benchmark never tested it**. A one-shot detection scan is the task least likely to need durable cross-session state. The experiment that tests it — persisted versus wiped ledger across three sessions — has since been run. Once both arms were scored the same way, the persisted ledger bought no recall, and its last session stopped in about half the time: the agent opened a full ledger and took the work as done ([`research/06`](./research/06-compounding-2026-08.md)).
 
 One further caveat we would rather state than have found: a later prompt revision (*explore-first + coverage floor*) scored **0.81 recall / 0.76 F1** in a **single** run ([`research/03 §5d`](./research/03-results.md)). It is promising, not replicated, and the contamination control above was never re-run against it — so it is not the number in the table.
 
@@ -63,14 +65,14 @@ Measured against **real CVEs in real software** — 17 targets built from mainta
 
 | | teaching app *(DVBank)* | real CVEs *(corpus)* |
 |---|:--:|:--:|
-| **pired + Qwen3.8 27B** | 0.71–0.74 | **0.25–0.30** |
+| **pired + Qwen3.8 27B** | 0.70–0.74 | **0.25–0.30** |
 | codex + gpt-5.6-sol | 0.68 | 0.26 |
 
 **Any claim built on the teaching-app number overstates real-world capability by about 2×**, for both harnesses equally. That gap is the single most important calibration in this project.
 
 The ranges are not decoration. Run pired three times over the same targets and it changes its answer on **half of them**; run codex three times and it reproduces on **5 of 6**. Recall differences of a few points sit inside pired's own run-to-run spread, so we do not claim a ranking.
 
-One caveat matters more than the ranking, and it generalises beyond this project: **a network-capable agent can retrieve the answer.** The corpus is built from pre-patch commits, so the released version *is* the key — and the transcripts show up to 34 `pip download` / `git clone` / `diff -ru` attempts per target. `.git` and changelog stripping cannot prevent that.
+One caveat matters more than the ranking, and it generalises beyond this project: **a network-capable agent can retrieve the answer.** The corpus is built from pre-patch commits, so the released version *is* the key — and the run transcripts (not published) show up to 34 `pip download` / `git clone` / `diff -ru` attempts per target. `.git` and changelog stripping cannot prevent that.
 
 Re-run with the network denied through pired's own scope gate and targets restored from pristine snapshots, **pooled recall held at 0.250** — but the two hits took ~1000 seconds of genuine analysis each, against ~150 seconds for the runs that gave up. The score survives the seal; the *method* changes completely. `jinja-1475` is the clean result: full recall, sealed, on a bug codex missed 3/3. See [`research/07`](./research/07-corpus-2026-08.md).
 
@@ -94,7 +96,7 @@ powershell -c "irm https://raw.githubusercontent.com/mamgad/pired/main/install.p
 
 Both scripts survey the box, print exactly what they will install and where, ask once, and then do all of it — Node.js when it is missing or older than 22.19, pi, pired, and the PATH entry that makes the command typeable. **They do not register pired with pi**: `pi` stays the pi you already had, and the security layer arrives only when you type `pired`, which passes it to pi with `-e` for that run (ADR-017). What they do register with pi is two third-party packages, each a row in the plan with its own opt-out: [pi-subagents](#sub-agents) and [pi-mcp-adapter](#mcp). On macOS and Linux `--dry-run` prints the plan and stops and `-y` skips the question; on Windows those are `PIRED_DRY_RUN=1` and `PIRED_YES=1`, because the documented `irm | iex` install has no way to pass arguments.
 
-**It never asks for root.** A vanilla Ubuntu has neither Node nor git, and neither absence is worth a `sudo`: Node comes from nodejs.org as a checksum-verified user-owned tarball under `~/.local/share/pired`, and a `github:` source is fetched over HTTPS when there is no git to clone with. Everything it writes lives in `~/.local/share/pired` and `~/.pired` — `rm -rf` those two and the box is as it was. `~/.pi` is pi's own: the installer writes there only to register pi-subagents and pi-mcp-adapter, and the plan's undo line says how to take each back out. No daemon, no service, no shell hooks beyond the one PATH line it shows you first.
+**It never asks for root.** A vanilla Ubuntu has neither Node nor git, and neither absence is worth a `sudo`: Node comes from nodejs.org as a checksum-verified user-owned tarball under `~/.local/share/pired`, and a `github:` source is fetched over HTTPS when there is no git to clone with. Where it installs is in the plan before it asks: `~/.local/share/pired` when it brings its own Node; otherwise npm's global prefix, or `~/.local` when that prefix is not writable (`NPM_PREFIX` overrides both). pired keeps engagements in `~/.pired`, and the plan's undo line removes both. `~/.pi` is pi's own: the installer writes there only to register pi-subagents and pi-mcp-adapter, and the plan says how to take each back out. No daemon, no service, no shell hooks beyond the one PATH line it shows you first.
 
 Windows gets its own script because npm lays a global install out differently there and PATH is a registry value, not a line in a dotfile. **It never needs administrator either.** The MSI from nodejs.org does, so it is not used: Node arrives as the per-user `.zip`, checksum-verified against the same `SHASUMS256.txt`, unpacked under `%LOCALAPPDATA%\pired` and pointed at by a directory junction — none of which needs elevation, and neither does the `HKCU` PATH entry. The one thing it will not install for you is `bash`: pi runs the tools through it, but Git for Windows is a ~250MB install with shell integration and file associations, so the script reports it and points you at `winget` or pi's own managed copy.
 
@@ -282,7 +284,7 @@ checklist × inventory = coverage → hypotheses → findings
 A harness-agnostic **`core/`** (zero pi imports, fully unit-tested) behind a thin pi adapter, so the security logic survives a change of host.
 
 ```
-core/          security engine — no host imports, test-first (162 tests)
+core/          security engine — no host imports, test-first (1,530 tests)
   ontology · workspace · scope · redaction · coverage · tools · prompts · stats
   export · panel · coverage-panel · statusline   (renderers are pure too)
 extensions/
@@ -330,7 +332,7 @@ Like pi-subagents, it is registered with pi, so it loads in every `pi` run rathe
 Built **test-first** with vitest and fake ports (in-memory `Fs`, controllable `Clock`, deterministic `Ids`) — the entire core is exercised with no real I/O.
 
 ```bash
-npm run check      # tsc --noEmit && vitest run && assay   (162 tests, 87 probes)
+npm run check      # tsc --noEmit && vitest run && assay   (3,131 tests, 102 probes)
 npm run assay      # the harness's own probes — see docs/evaluation.md
 ```
 
@@ -338,6 +340,10 @@ npm run assay      # the harness's own probes — see docs/evaluation.md
 
 pired is for **authorized** security work only. The scope gate is focus/accident-prevention, not a containment boundary — run pired inside a container or VM scoped to the engagement, and only against systems you are authorized to test.
 
+To report a vulnerability in pired itself, see [SECURITY.md](SECURITY.md).
+
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).
+
+pired is an independent project. It is not affiliated with or endorsed by the pi project or by any vendor, model provider or open-source project named in the research.

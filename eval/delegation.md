@@ -17,7 +17,7 @@ node --experimental-strip-types eval/delegation.ts --provider localqwen --model 
 Use `--out <dir>` to choose an artifact directory, `--keep` to retain the
 temporary fixture/workspace, `--timeout <ms>` to change the run deadline, and
 `--max-return-chars <n>` to tighten the worker result bound. The run writes a
-transcript and JSON report under `eval/artifacts/delegation-<stamp>/`; the report
+transcript and JSON report under `eval/artifacts/delegation-<stamp>/` (gitignored: the runs cited below are not in the repository); the report
 includes the worker's artifact and the ledger state used for assertions. It
 returns nonzero if any behavior check fails. No global pi extensions, skills, or
 project context files are loaded; the runner explicitly loads only pired.
@@ -36,15 +36,15 @@ the fixture contains no live service.
 | `zai/glm-5.3-flash`, latest | 20/20 checks | completed, 6 | 15,785 tokens | 1,732 chars |
 | `localqwen/qwen3.8-27b`, latest | 20/20 checks | completed, 5 | 9,936 tokens | 1,015 chars |
 
-The latest [Qwen run](artifacts/delegation-2026-09-23T13-12-14-890Z/report.json)
-and [GLM run](artifacts/delegation-2026-09-23T13-14-43-172Z/report.json) completed
+The latest Qwen run (`delegation-2026-09-23T13-12-14-890Z`)
+and GLM run (`delegation-2026-09-23T13-14-43-172Z`) completed
 after workers were changed to inherit the parent's reasoning level and told to
 hand back unresolved verification instead of repeatedly rewriting saved findings.
 The earlier incomplete run remains below for comparison; these small fixtures
 do not establish full-review quality or token savings.
 
 The later Luna artifact at
-[`delegation-2026-09-23T13-14-44-336Z`](artifacts/delegation-2026-09-23T13-14-44-336Z/report.json)
+`delegation-2026-09-23T13-14-44-336Z`
 retains its raw 19/20 report. Manual inspection confirmed that the sole failure
 was in the assay's evidence formatter check: the worker saved a numbered
 `routes.js` listing whose line 2 exactly matches the fixture's SQL sink, while
@@ -53,16 +53,14 @@ accepts that numbered listing only when it names `routes.js` and matches the
 exact fixture source line. This was an assay false failure, not a worker finding
 failure; the original report is unchanged.
 
-Luna's [report](artifacts/delegation-2026-09-23T12-54-57-254Z/report.json) and
-[event transcript](artifacts/delegation-2026-09-23T12-54-57-254Z/transcript.txt)
+Luna's report and event transcript (`delegation-2026-09-23T12-54-57-254Z`)
 show the parent recording surface and a hypothesis before delegation, the child
 retrieving a shared target-model sentinel through recall, incremental record
 updates before the worker returned, resolvable source evidence, and parent recall
 of the worker's unique finding. The sentinel check proves the worker can read
 shared state; the parent may already see that model in its own context, so the
 sentinel does not prove information transfer from child to parent. Qwen's
-[report](artifacts/delegation-2026-09-23T12-56-35-108Z/report.json) and
-[event transcript](artifacts/delegation-2026-09-23T12-56-35-108Z/transcript.txt)
+report and event transcript (`delegation-2026-09-23T12-56-35-108Z`)
 show the same durable writes and parent recall, but the child repeatedly updated
 the same finding ID and reached its 12-turn limit without producing its own final
 summary. The failed `workerCompleted` assertion is retained; the parent identified
@@ -70,7 +68,7 @@ the incomplete status and completed normally.
 
 The first Luna trace used an 8-turn limit and also ended incomplete after writing
 records. That trace motivated a 12-turn fixture budget and remains available in
-[its report](artifacts/delegation-2026-09-23T12-45-35-607Z/report.json). The live
+its report (`delegation-2026-09-23T12-45-35-607Z`). The live
 runs also exposed two lifecycle issues: the headless runner needed to close pi's
 stdin before startup, and the worker needed to release provider session resources
 after each worker session. Workers now use the provider's simple stream interface

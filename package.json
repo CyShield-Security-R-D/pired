@@ -5,6 +5,15 @@
   "type": "module",
   "description": "Security assessment harness for consultants, as a pi package: engagement workspace, scope gate, security prompt, and record/recall tools, reusing a harness-agnostic core.",
   "license": "MIT",
+  "author": "Mohamed Amgad",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mamgad/pired.git"
+  },
+  "homepage": "https://github.com/mamgad/pired#readme",
+  "bugs": {
+    "url": "https://github.com/mamgad/pired/issues"
+  },
   "bin": {
     "pired": "./bin/pired.mjs",
     "pired-state": "./bin/pired-state.mjs",

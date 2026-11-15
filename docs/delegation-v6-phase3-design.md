@@ -1,7 +1,7 @@
 # Delegation v6 — Phase 3 design (verification tier, budget and coverage)
 
 *Design for items 3.1 and 3.2 of [`delegation-v6-plan.md`](delegation-v6-plan.md), from a read-only
-review of the code on 2026-09-26 (d347d3f). No run data was read, so nothing here is fitted to the
+review of the code on 2026-09-26 (ecb04b6). No run data was read, so nothing here is fitted to the
 corpus. Each item still needs its own ADR, and none of it merges to `main` until the Phase 4 trial
 passes.*
 

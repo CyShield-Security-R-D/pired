@@ -1,6 +1,6 @@
 # Coverage
 
-Coverage is pired's rigor layer, and the reason an engagement does not end early. It is the answer to *"what have we actually looked at?"* — and, more usefully, *"what have we not?"*
+Coverage is pired's rigor layer: the record of what an engagement has and has not tested. It is the answer to *"what have we actually looked at?"* — and, more usefully, *"what have we not?"*
 
 ```
 checklist classes × recorded surface elements = the coverage matrix

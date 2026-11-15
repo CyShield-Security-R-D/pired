@@ -13,7 +13,7 @@ Tools run via `bash` and may be absent. If `gitleaks`/`trufflehog` are missing, 
 
 ## 1. Dedicated scanners
 ```bash
-mkdir -p evidence
+mkdir -p "$PIRED_WORKSPACE/evidence"
 # gitleaks — v8.19+ subcommands: `dir` scans a filesystem, `git` scans commit history
 gitleaks dir . --report-format sarif --report-path "$PIRED_WORKSPACE/evidence/gitleaks-fs.sarif" || true
 gitleaks git . --report-format sarif --report-path "$PIRED_WORKSPACE/evidence/gitleaks-history.sarif" || true   # every commit

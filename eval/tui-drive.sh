@@ -13,6 +13,13 @@
 # has stopped changing for QUIET_S the turn is done. Screen-scraping a spinner is
 # brittle; the ledger is what the run is actually for.
 set -uo pipefail
+# Each target deletes ~/.pired/engagements/<target name>, and exit kills every `pi` process on the
+# box. Refuse unless the caller has said this account is disposable.
+if [ "${PIRED_EVAL_OK:-}" != "1" ]; then
+  echo "eval/tui-drive.sh deletes ~/.pired/engagements/<target name> and kills every pi process." >&2
+  echo "Run it as a throwaway user, in a container or VM, with PIRED_EVAL_OK=1." >&2
+  exit 2
+fi
 # Killing this script must kill the agent it spawned. Without this the `pi`
 # child outlives its parent, is reparented to systemd, and keeps writing to the
 # engagement directory the next run is about to use.

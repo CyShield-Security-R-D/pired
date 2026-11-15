@@ -38,7 +38,7 @@ A page reachable without the intended role = access-control gap.
 - Add unexpected fields to a JSON/form body the client never sends:
 ```bash
 curl -s -b 'session=<B>' -H 'Content-Type: application/json' \
-  -d '{"email":"b@x.com","role":"admin","isAdmin":true,"verified":true}' \
+  -d '{"email":"b@example.com","role":"admin","isAdmin":true,"verified":true}' \
   https://TARGET/api/profile -o "$PIRED_WORKSPACE/evidence/massassign.json"
 ```
 Confirm the privileged field actually stuck (re-fetch the profile, check `role`). Source field names from the GET response, API docs, or JS.

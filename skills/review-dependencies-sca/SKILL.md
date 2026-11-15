@@ -21,7 +21,7 @@ Lockfiles pin the **exact installed version** — that's what you match against 
 
 ## 2. Run the ecosystem SCA tool(s) — run every one that applies
 ```bash
-mkdir -p evidence
+mkdir -p "$PIRED_WORKSPACE/evidence"
 # --- Node (pick by the lockfile that exists) ---
 npm audit --json > "$PIRED_WORKSPACE/evidence/npm-audit.json" 2>/dev/null || true
 pnpm audit --json > "$PIRED_WORKSPACE/evidence/pnpm-audit.json" 2>/dev/null || true

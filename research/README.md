@@ -12,6 +12,14 @@ consultants, built on the pi coding agent) and a controlled benchmark measuring 
 | 02 | [Benchmark Methodology](./02-benchmark-methodology.md) | The three arms, DVBank ground-truth benchmark, fairness controls, contamination controls (isolated targets + audit), environment issues and how they were handled, the grader. |
 | 03 | [Results](./03-results.md) | 3-way scores, the harness effect (A vs C), pired vs codex (A vs B), OWASP breakdown, the hard tail, exact token/cost accounting. |
 | 04 | [Findings & Conclusions](./04-findings-and-conclusions.md) | The central finding (harness > model for recall), where the harness helps, cost reality, business-logic frontier, threats to validity. |
+| 05 | [Re-run](./05-rerun-2026-08.md) | An independent replication at n=5, and the ledger grading that showed the workflow was never exercised. Supersedes 04 §6. |
+| 06 | [Compounding](./06-compounding-2026-08.md) | Persisted vs wiped ledger over k sessions: no measurable recall benefit, and the scoring artifact that first suggested otherwise. |
+| 07 | [Real-app corpus](./07-corpus-2026-08.md) | 17 real CVEs with maintainer patches as ground truth: recall halves against the teaching app. |
+| 08 | [Application corpus](./08-application-corpus-2026-08.md) | Why the library corpus measured ontology mismatch rather than the harness, and the application corpus built to replace it. |
+| 09 | [Misses](./09-misses-2026-08.md) | Every missed bug so far, per target: what it was, what the ledger shows, and what was reported instead. |
+| 10 | [Small-application corpus](./10-app-corpus-2026-09.md) | The 46-target application corpus; paused after 2 targets. |
+| 11 | [Three arms on the application corpus](./11-three-arm-2026-09.md) | pired, bare pi and codex on the same five targets, separating harness, model and benchmark. |
+| 12 | [The delegation trial](./12-delegation-trial-2026-09.md) | pi-subagents delegation against the single agent on three models, and what it says to change. |
 
 ## The three arms
 

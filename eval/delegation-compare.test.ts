@@ -429,7 +429,7 @@ describe("toolSurfaceErrors", () => {
 });
 
 describe("comparison pins", () => {
-	const valid = { baselineCommit: "496b1900c2fae2d63ba8378b3c3f56a4b49f317c", candidateDigest: null, candidateFrozenAt: null, piSubagents: { dir: "eval/artifacts/pi-subagents-0.71.0", version: "0.71.0", digest: "a".repeat(64) } };
+	const valid = { baselineCommit: "64479f095a414d28a5f1d406e1760d4aad905625", candidateDigest: null, candidateFrozenAt: null, piSubagents: { dir: "eval/artifacts/pi-subagents-0.71.0", version: "0.71.0", digest: "a".repeat(64) } };
 
 	it("parses the pins file the runner ships", async () => {
 		const pins = parseComparePins(await readFile(new URL("./delegation-compare.pins.json", import.meta.url), "utf8"));

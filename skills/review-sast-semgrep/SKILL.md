@@ -13,7 +13,7 @@ Tools run via `bash` and may be absent. If neither `semgrep` nor `opengrep` is i
 
 ## 1. Choose rulesets
 ```bash
-mkdir -p evidence
+mkdir -p "$PIRED_WORKSPACE/evidence"
 # broad, auto-detects languages (fetches the registry the first time → needs network)
 semgrep --config auto --sarif -o "$PIRED_WORKSPACE/evidence/semgrep.sarif" . 2>"$PIRED_WORKSPACE/evidence/semgrep.err"
 # curated security packs (verified registry slugs):

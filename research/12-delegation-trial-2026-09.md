@@ -1,6 +1,6 @@
 # 12 · The delegation trial, and what it says to change
 
-*September 2026 — pired with pi-subagents delegation (snapshot v4) against pired@496b190, on GPT-6 Luna, GLM-5.3 Flash and DeepSeek V4.1 Flash*
+*September 2026 — pired with pi-subagents delegation (snapshot v4) against pired@64479f0, on GPT-6 Luna, GLM-5.3 Flash and DeepSeek V4.1 Flash*
 
 ## The question
 

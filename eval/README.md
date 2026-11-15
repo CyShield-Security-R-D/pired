@@ -7,6 +7,15 @@ pure functions and the in-memory fakes. No model, no network, no target repo —
 whole suite runs in under 100ms, which is what lets it sit in CI beside the unit
 tests rather than in a nightly job nobody reads.
 
+## Scripts that touch your home directory
+
+`npm run assay` is pure. The model-driven runners beside it are not: `eval/corpus/run.ts`
+(`npm run assay:corpus-scan`) and `eval/tui-drive.sh` delete `~/.pired/engagements/<target name>`
+before each target, `tui-drive.sh` kills every `pi` process when it exits, and `eval/watchdog.sh`
+kills every pired process when it trips. A consultant whose real engagement shares a target's
+directory name would lose its ledger, and a running engagement would be killed. All three refuse
+to start unless `PIRED_EVAL_OK=1` is set; set it only as a throwaway user, in a container or VM.
+
 ## What it covers today
 
 | Family | Asks |

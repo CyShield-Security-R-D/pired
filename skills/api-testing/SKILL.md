@@ -36,7 +36,7 @@ Confirm sensitive fields are actually returned. Severity scales with data sensit
 Add fields the client shouldn't set:
 ```bash
 curl -s -H 'Authorization: Bearer <B>' -H 'Content-Type: application/json' \
-  -d '{"email":"b@x.com","role":"admin","balance":99999,"emailVerified":true}' \
+  -d '{"email":"b@example.com","role":"admin","balance":99999,"emailVerified":true}' \
   -X PATCH https://TARGET/api/v1/me
 ```
 Re-fetch and confirm the privileged field persisted. Source field names from GET responses / the OpenAPI schema.

@@ -22,7 +22,7 @@ Prove with a before/after showing the invariant broken (balance, order state, en
 - Check **every** state-changing request for an anti-CSRF token and whether it's *validated*: drop it, send an empty token, reuse another user's token, swap POST→GET, change `Content-Type`. Check `SameSite` on the session cookie (Lax/Strict largely mitigates form-CSRF; None does not).
 ```bash
 # does the action succeed with the token removed and only the cookie present?
-curl -s -X POST https://TARGET/account/email -b 'session=<victim>' -d 'email=attacker@x.com' -i
+curl -s -X POST https://TARGET/account/email -b 'session=<victim>' -d 'email=attacker@example.com' -i
 ```
 Confirm: the state change happens with no valid token under cross-origin-plausible conditions. JSON-only endpoints enforcing `Content-Type: application/json` are often not CSRFable — but verify a simple-request form/`text-plain` body isn't accepted before refuting; if unsure, keep it `inconclusive`.
 
@@ -31,20 +31,20 @@ Sinks (enumerate all): `?next=`, `?url=`, `?return=`, `?returnUrl=`, `?redirect=
 ```bash
 curl -sI "https://TARGET/login?next=https://evil.example" | grep -i location
 ```
-Confirm: `Location:` (or JS/meta-refresh) sends the browser to your external host. Bypasses to try: `//evil.com`, `https:evil.com`, `/\evil.com`, `\/\/evil.com`, `https://TARGET.evil.com`, `https://evil.com%2f@TARGET`, `https://TARGET@evil.com`, whitelisted-substring (`evil.com/TARGET`), CRLF, double-encoding. Impact rises when it aids OAuth token/code theft or credible phishing.
+Confirm: `Location:` (or JS/meta-refresh) sends the browser to your external host. Bypasses to try: `//evil.example`, `https:evil.example`, `/\evil.example`, `\/\/evil.example`, `https://TARGET.evil.example`, `https://evil.example%2f@TARGET`, `https://TARGET@evil.example`, whitelisted-substring (`evil.example/TARGET`), CRLF, double-encoding. Impact rises when it aids OAuth token/code theft or credible phishing.
 
 ## Host-header injection (WSTG-INPV-17 · CWE-644)
 ```bash
-curl -s https://TARGET/reset -H 'Host: evil.example' -d 'email=victim@x.com' -i
+curl -s https://TARGET/reset -H 'Host: evil.example' -d 'email=victim@example.com' -i
 curl -s https://TARGET/ -H 'X-Forwarded-Host: evil.example' -i
 ```
-Also try `X-Host`, `X-Forwarded-Server`, `X-HTTP-Host-Override`, absolute request-URI, duplicate `Host` headers, and `Host: TARGET:@evil.com`. Look for the injected host reflected in links, **password-reset emails (→ account takeover)**, cache keys (web cache poisoning), `<script>`/resource `src`, or absolute redirects.
+Also try `X-Host`, `X-Forwarded-Server`, `X-HTTP-Host-Override`, absolute request-URI, duplicate `Host` headers, and `Host: TARGET:@evil.example`. Look for the injected host reflected in links, **password-reset emails (→ account takeover)**, cache keys (web cache poisoning), `<script>`/resource `src`, or absolute redirects.
 
 ## CORS misconfiguration (WSTG-CLNT-07 · CWE-942; origin-reflection = CWE-346)
 ```bash
 curl -sI https://TARGET/api/me -H 'Origin: https://evil.example' | grep -i 'access-control-allow'
 ```
-Vulnerable if the response **reflects an arbitrary Origin** with `Access-Control-Allow-Credentials: true` (attacker reads authed responses), or trusts `null` (sandboxed-iframe origin), or a weak regex (`*.trusted` also matching `trusted.evil.com`, suffix/prefix, unescaped `.`). `ACAO: *` without credentials is usually low/info. Confirm by actually fetching authed data cross-origin; if the reflection is present but you can't prove data read, keep it `inconclusive`.
+Vulnerable if the response **reflects an arbitrary Origin** with `Access-Control-Allow-Credentials: true` (attacker reads authed responses), or trusts `null` (sandboxed-iframe origin), or a weak regex (`*.trusted` also matching `trusted.evil.example`, suffix/prefix, unescaped `.`). `ACAO: *` without credentials is usually low/info. Confirm by actually fetching authed data cross-origin; if the reflection is present but you can't prove data read, keep it `inconclusive`.
 
 ## Rate limiting / anti-automation (class=ratelimit · CWE-307 / CWE-799)
 - Endpoints that should throttle (test each): login, OTP/2FA verify, password reset, email/phone verification, coupon/gift-card redeem, signup, API keys, search/export, payment retry.

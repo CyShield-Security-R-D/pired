@@ -1650,10 +1650,11 @@ function Invoke-PiredInstaller {
 		if (-not (Invoke-NpmLogged $arguments)) {
 			Show-Log
 			if ($source -like "github:*") {
-				# A private repo 404s for an unauthenticated fetch, which npm
-				# reports as a missing package. Name the likely cause.
-				Write-Note "If the repository is private, clone it and run the installer from there:"
-				Write-Host "    git clone git@github.com:mamgad/pired.git; cd pired; .\install.ps1"
+				# npm reports a failed fetch as a missing package, whether the
+				# network, a proxy, a missing ref or a missing git is at fault.
+				# Installing from a clone takes the fetch out of the picture.
+				Write-Note "If the fetch failed, check the network or proxy, and that git is installed (winget install --id Git.Git -e). Or clone the repository and run the installer from the checkout:"
+				Write-Host "    git clone https://github.com/mamgad/pired.git; cd pired; .\install.ps1"
 			}
 			Stop-Pired "could not install from $source"
 		}

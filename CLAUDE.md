@@ -24,7 +24,7 @@ test. Host wiring lives in `extensions/`; node services live in `extensions/lib/
 
 | Put it here | Not here | Why |
 |---|---|---|
-| `core/*.ts` | `extensions/pired.ts` | The extension is ~2400 lines of TUI and pi wiring and drags the global coverage ratchet down. The stated remedy is to keep moving logic out, not to exclude the file. |
+| `core/*.ts` | `extensions/pired.ts` | The extension is ~3200 lines of TUI and pi wiring and drags the global coverage ratchet down. The stated remedy is to keep moving logic out, not to exclude the file. |
 | `bin/launch.mjs`, `bin/state.mjs` | `bin/pired.mjs`, `bin/pired-state.mjs` | The entry scripts are excluded from coverage on the grounds that every decision lives in the tested modules. See ADR-006. |
 
 ## Tests

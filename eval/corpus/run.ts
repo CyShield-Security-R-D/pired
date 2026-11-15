@@ -24,6 +24,14 @@ import { promisify } from "node:util";
 import { dedupe, engagementTelemetry, fromLedger, scoreFindings } from "../dvbank/score.ts";
 import { scopeClause } from "./lib.ts";
 
+// Every run deletes ~/.pired/engagements/<target directory name> first, so a real engagement that
+// shares a target's directory name would lose its ledger. Refuse unless the caller has said this
+// account is disposable.
+if (process.env.PIRED_EVAL_OK !== "1") {
+	process.stderr.write("eval/corpus/run.ts deletes ~/.pired/engagements/<target name> before each run.\nRun it as a throwaway user, in a container or VM, with PIRED_EVAL_OK=1.\n");
+	process.exit(2);
+}
+
 const run = promisify(execFile);
 const PIRED = new URL("../../bin/pired.mjs", import.meta.url).pathname;
 

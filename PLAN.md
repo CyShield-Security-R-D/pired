@@ -23,10 +23,9 @@
 > state decisions still holds. The §2/§3.1 "standalone on pi-agent-core + pi-ai"
 > framing is historical.
 
-> Status: **proposal for sign-off.** Every open decision below is resolved to a
-> recommended default; red-line anything you disagree with. No implementation
-> starts until this is agreed. (`lib/scope.ts` and `lib/prompts.ts` already exist
-> as a throwaway sketch of the approach and will be rewritten to match this doc.)
+> Status: **historical.** This is the v1 plan from August 2026, kept because
+> `FORMAT.md` and code comments cite its sections. Where it disagrees with
+> [`docs/decisions.md`](docs/decisions.md), the ADRs win.
 
 ## 1. Goal
 
@@ -344,7 +343,7 @@ prompt, model, thinking, tool set, soft caps.
 
 **Deferred (v1.1+):** optional `pi-coding-agent` convenience adapter; opt-in tool packs (separately-installable tools/roles/checklists/skills, incl. heavy security tooling); background job orchestration; SARIF export; report generation; autonomy loop with coverage-gated stop; parallel subagent fan-out.
 
-## 14. Decisions — resolved defaults (red-line these)
+## 14. Decisions — resolved defaults
 
 | # | Decision | Default |
 |---|----------|---------|
@@ -352,7 +351,7 @@ prompt, model, thinking, tool set, soft caps.
 | 2 | Headless authorization | Blocked unless scope file `authorized: true` |
 | 3 | Tool policy | No heavy/specialized tools in core. Default surface = host file/bash + record/recall/spawn (+ optional basic versatile tools if needed). Specialized tooling → opt-in tool packs later (principle 8) |
 | 4 | Smoke testing | Install pi locally and run pired end-to-end during build |
-| 5 | Location / name | `/home/mamgad/pired`; package name `pired` (npm `@pired/harness` if scoped) |
+| 5 | Location / name | `~/pired`; package name `pired` (npm `@pired/harness` if scoped) |
 | 6 | Workspace location | `~/.pired/engagements/<name>/` (out of target tree), overridable |
 | 7 | Tool granularity | Unified `record`/`recall` (+`spawn`) |
 | 8 | Credential redaction | Mask at export/share; TUI display masking off by default |

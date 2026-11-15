@@ -1,6 +1,6 @@
 # pired Documentation
 
-pired is a security assessment harness for consultants: a whitebox code review and a blackbox test in one workspace, with coverage tracking that will not let an engagement end early.
+pired is a security assessment harness for consultants: a whitebox code review and a blackbox test in one workspace, with coverage tracking that lists what an engagement has not yet tested.
 
 It is a **security layer on top of [pi](https://pi.dev)** — an engagement workspace, a scope gate, a security-operator prompt, and two tools (`record` / `recall`) — driving the tools already on your box (`nmap`, `ffuf`, `curl`, `sqlmap`, `semgrep`, …) through `bash`. It ships no scanners of its own.
 

@@ -9,3 +9,14 @@ eval/coverage/
 # Scanner output from running pired with this checkout as its target belongs
 # in the engagement workspace, never in the repository.
 /evidence/
+# Engagement state and credentials that running pired from this checkout can leave behind.
+.env
+.env.*
+/pired.scope.json
+/.pired/
+/.pi/
+*.tgz
+# Editors
+.vscode/
+.idea/
+*.swp

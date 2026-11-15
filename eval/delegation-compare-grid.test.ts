@@ -314,7 +314,7 @@ describe("grid kinds", () => {
 		const kinds = await shippedKinds();
 		const candidate = "8f29c26cb8f03cab087e9c2022ebd89cc3270a341c741c6c76e2bbcbaa41bac7";
 		expect(kinds["v6-stage1"]).toMatchObject({
-			corpus: "v6-fresh", baseline: { commit: "5573ec4db66c7a1188be286604c33d45802cda4f" }, candidate: { digest: candidate, stagedDigest: candidate }, baselineMaxAgents: null, candidateMaxAgents: 0,
+			corpus: "v6-fresh", baseline: { commit: "160bcfad77ff682eec53b6602d0fc7934aa33f95" }, candidate: { digest: candidate, stagedDigest: candidate }, baselineMaxAgents: null, candidateMaxAgents: 0,
 			maxVerifiers: { candidate: 0 }, budgetArms: ["candidate", "matched"], subagentsArms: ["candidate", "matched"], twinArms: ["baseline", "candidate"], matched: null, retry: true, timeoutMs: 14_400_000,
 		});
 		expect(kinds["v6-stage2"]).toMatchObject({
